@@ -258,16 +258,7 @@ public:
                                                          llvmElemTy, rewriter);
 
     // Get the shared memory layout and invert it
-    auto sharedEnc =
-        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-    LinearLayout sharedLayout;
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = toLinearLayout(memDescTy);
-    }
-
+    auto sharedLayout = toLinearLayout(memDescTy);
     LinearLayout invSharedLayout = sharedLayout.invert();
 
     // Get layout dimension names for all dims
@@ -361,16 +352,7 @@ public:
                                                          llvmElemTy, rewriter);
 
     // Get the shared memory layout and invert it
-    auto sharedEnc =
-        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-    LinearLayout sharedLayout;
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = toLinearLayout(memDescTy);
-    }
-
+    auto sharedLayout = toLinearLayout(memDescTy);
     LinearLayout invSharedLayout = sharedLayout.invert();
 
     // Get layout dimension names for all dims
