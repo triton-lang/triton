@@ -55,16 +55,16 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
     func.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
-        return WalkResult::advance();
+        return;
       // We only convert `tensor<tt.ptr<>>` load/store
       bool isPtrTensor = false;
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType()))
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
-        return WalkResult::advance();
+        return;
       // we only consider those with coalesced encoding
       if (!isCoalescedEncodingTensorType(ptr.getType()))
-        return WalkResult::advance();
+        return;
 
       // build a coalesced encoding
       int numWarps = ttg::lookupNumWarps(curr);
@@ -79,7 +79,6 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       // set seed value
       for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});
-      return WalkResult::advance();
     });
 
     // 2. propagate Coalesced Layout forward/backward
