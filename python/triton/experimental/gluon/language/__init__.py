@@ -123,6 +123,7 @@ from ._standard import (
     full_like,
     max,
     min,
+    ravel,
     reduce_or,
     sum,
     xor_sum,
