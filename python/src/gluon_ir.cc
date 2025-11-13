@@ -367,7 +367,16 @@ void init_gluon_ir(py::module &&m) {
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();
              auto linearLayout = ttg::toLinearLayout(shape, layout);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
+             Attribute attr;
+             if (isa<ttg::DistributedEncodingTrait>(layout)) {
+               attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
+             } else {
+               assert(isa<ttg::SharedEncodingTrait>(layout));
+               auto alignment =
+                   cast<ttg::SharedEncodingTrait>(layout).getAlignment();
+               attr = ttg::SharedLinearEncodingAttr::get(ctx, linearLayout,
+                                                         alignment);
+             }
              return layoutToGluon(attr);
            })
       .def("get_dot_operand_layout",
@@ -943,6 +952,28 @@ void init_gluon_ir(py::module &&m) {
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });
+
+  m.def(
+      "materialize_linear_layout",
+      [](py::object layoutObj, std::vector<int64_t> shape) -> tt::LinearLayout {
+        DialectRegistry registry;
+        registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                        ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+        MLIRContext context(MLIRContext::Threading::DISABLED);
+        context.appendDialectRegistry(registry);
+        context.loadAllAvailableDialects();
+
+        GluonOpBuilder builder(&context);
+        auto builderObj =
+            py::cast(&builder, py::return_value_policy::reference);
+
+        auto layoutAttr =
+            layoutObj.attr("_to_ir")(builderObj).cast<Attribute>();
+        if (auto shared = dyn_cast<ttg::SharedLinearEncodingAttr>(layoutAttr)) {
+          return shared.getLinearLayout();
+        }
+        return ttg::toLinearLayout(shape, layoutAttr);
+      });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

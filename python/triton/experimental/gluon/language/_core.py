@@ -8,8 +8,9 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, _materialize_linear_layout_builtin
 from triton._C.libtriton import ir
+from triton.runtime.jit import constexpr_function
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
@@ -597,3 +598,8 @@ def dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
+
+
+@constexpr_function
+def static_print_layout(layout, shape):
+    print(_materialize_linear_layout_builtin(layout, shape))
