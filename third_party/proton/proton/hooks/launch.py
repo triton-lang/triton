@@ -5,6 +5,7 @@ from triton._C.libproton import proton as libproton
 from contextvars import ContextVar
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
+TRITON_SCOPE_NAME = "__proton_triton_scope"
 
 op_name = ContextVar("op_name", default=None)
 id = ContextVar("id", default=None)
@@ -44,6 +45,8 @@ class LaunchHook(Hook):
         id.set(libproton.record_scope())
         libproton.enter_op(id.get(), lazy_metadata["name"])
         libproton.add_metrics(id.get(), fn_metrics)
+        enter_state(TRITON_SCOPE_NAME)
 
     def exit(self, metadata: LazyDict) -> None:
         libproton.exit_op(id.get(), op_name.get())
+        exit_state()
