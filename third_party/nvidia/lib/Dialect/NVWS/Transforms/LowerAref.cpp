@@ -923,7 +923,12 @@ public:
     mlir::ModuleOp m = getOperation();
 
     SmallVector<scf::ForOp> loops;
-    m.walk([&](scf::ForOp loop) { loops.push_back(loop); });
+    m.walk([&](scf::ForOp loop) {
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName)) {
+        loop->walk([&](scf::ForOp op) { loops.push_back(op); });
+      }
+    });
+
     for (scf::ForOp loop : loops) {
       combineArefs(loop);
     }
