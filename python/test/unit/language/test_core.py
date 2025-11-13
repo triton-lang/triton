@@ -5811,7 +5811,7 @@ def test_num_ctas_pre_sm90(device):
         msg = r"num_ctas > 1 requires NVIDIA SM90\+ \(Hopper\)"
     else:
         arch = "gfx942"
-        msg = r"num_ctas > 1 not supported for AMD GPUs"
+        msg = r"num_ctas > 1 not supported"
 
     with pytest.raises(ValueError, match=msg):
         _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)

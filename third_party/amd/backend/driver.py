@@ -465,7 +465,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
 
     HIP_LAUNCH_CONFIG config = {{
         gridX * num_ctas, gridY, gridZ, // Grid size
-        {warp_size}*num_warps, 1, 1, // Block size
+        {warp_size} * num_warps, 1, 1, // Block size
         shared_memory, stream,
         attributes, 2 // Number of attributes
     }};
