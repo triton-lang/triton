@@ -242,9 +242,7 @@ def make_launcher(constants, signature, warp_size, tensordesc_meta):
                 # If there is no descriptor's metadata, the descriptor has been decomposed to base pointer, shape and strides
                 if meta is None:
                     output.append("*" + dtype)
-                    for _ in range(ndim):
-                        output.append("i32")
-                    for _ in range(ndim):
+                    for _ in range(2 * ndim):
                         output.append("i64")
                     output.append("i1")
                 else:
