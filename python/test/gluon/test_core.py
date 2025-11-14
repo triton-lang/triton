@@ -248,13 +248,6 @@ def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.cons
     return has_cta_split(layout_a, [2, 1]) and has_cta_split(layout_b, [1, 2])
 
 
-@gluon.constexpr_function
-def constexpr_min(a, b):
-    if a < b:
-        return a
-    return b
-
-
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, mma_layout: ttgl.constexpr,
@@ -279,8 +272,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     fence_async_shared(cluster=two_ctas)
 
     if USE_TCGEN05:
-        tmem_shape: ttgl.constexpr = (constexpr_min(M // mma_layout.cta_split_num[0],
-                                                    128), N // mma_layout.cta_split_num[1])
+        tmem_shape: ttgl.constexpr = (min(M // mma_layout.cta_split_num[0], 128), N // mma_layout.cta_split_num[1])
         tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // acc_dtype.primitive_bitwidth,
                                                          cta_split_num=mma_layout.cta_split_num, two_ctas=two_ctas)
 
