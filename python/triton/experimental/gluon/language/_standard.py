@@ -20,6 +20,7 @@ cdiv = _import_from_triton(tl_standard.cdiv)
 sum = _import_from_triton(tl_standard.sum)
 max = _import_from_triton(tl_standard.max)
 min = _import_from_triton(tl_standard.min)
+ravel = _import_from_triton(tl_standard.ravel)
 reduce_or = _import_from_triton(tl_standard.reduce_or)
 xor_sum = _import_from_triton(tl_standard.xor_sum)
 

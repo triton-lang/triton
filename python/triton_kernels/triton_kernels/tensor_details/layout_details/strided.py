@@ -1,6 +1,8 @@
+from dataclasses import dataclass
 from .base import Layout
 
 
+@dataclass
 class StridedLayout(Layout):
     name: str = None
 

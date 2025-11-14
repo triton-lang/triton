@@ -3,6 +3,7 @@ from ._core import (
     base_type,
     block_type,
     broadcast,
+    cast,
     constexpr,
     dtype,
     void,
@@ -51,6 +52,7 @@ from ._core import (
     dot_fma,
     expand_dims,
     full,
+    fp4_to_fp,
     gather,
     num_warps,
     num_ctas,
@@ -96,6 +98,7 @@ from ._layouts import (
     SwizzledSharedLayout,
     PaddedSharedLayout,
     SharedLinearLayout,
+    CoalescedLayout,
 )
 from ._math import (
     umulhi,
@@ -121,6 +124,7 @@ from ._standard import (
     full_like,
     max,
     min,
+    ravel,
     reduce_or,
     sum,
     xor_sum,

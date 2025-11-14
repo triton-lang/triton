@@ -293,13 +293,14 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
       cast<RankedTensorType>(auxData.barriers[insertPoint].type);
   Value waitingVal = auxData.waiting[insertPoint].value;
   auto waitingType = cast<RankedTensorType>(auxData.waiting[insertPoint].type);
-  SmallVector<Value> args = {mbar, threadVal,   phase,
-                             pred, barriersVal, waitingVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64, threadVal,   phase,
+                             pred,    barriersVal, waitingVal};
   createCallToCachedFunction(
       b, "set_waiting", args,
       /*assertInfo=*/std::nullopt, {barriersType, waitingType},
       [barriersType, waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value mbarI64 = entryBlock->getArgument(0);
         Value baseThread = entryBlock->getArgument(1);
         Value phase = entryBlock->getArgument(2);
         Value pred = entryBlock->getArgument(3);
@@ -312,7 +313,6 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
 
         Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
                                                      waitingPtr, waitingType);
-        Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, mbarI64);
 
         Value bitsPerThread =
@@ -383,12 +383,13 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
   Value waitingVal = auxData.waiting[insertPoint].value;
   auto waitingType = cast<RankedTensorType>(auxData.waiting[insertPoint].type);
 
-  SmallVector<Value> args = {mbar, threadVal, pred, barriersVal, waitingVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64, threadVal, pred, barriersVal, waitingVal};
   createCallToCachedFunction(
       b, "clear_waiting", args,
       /*assertInfo=*/std::nullopt, {barriersType, waitingType},
       [barriersType, waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value mbarI64 = entryBlock->getArgument(0);
         Value baseThread = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
 
@@ -400,7 +401,6 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
 
         Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
                                                      waitingPtr, waitingType);
-        Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, mbarI64);
 
         Value bitsPerThread =
@@ -529,13 +529,14 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
   Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
-  SmallVector<Value> args = {mbar, countVal, barriersVal, barrierStatesVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64, countVal, barriersVal, barrierStatesVal};
   createCallToCachedFunction(
       b, "init_barrier_state", args,
       /*assertInfo=*/std::nullopt, {barriersType, barrierStatesType},
       [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value mbarI64 = entryBlock->getArgument(0);
         Value count = entryBlock->getArgument(1);
 
         Value barriers = entryBlock->getArgument(2);
@@ -543,7 +544,6 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
-        Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value mask = createCmpIntTensorScalar(fb, barriers, mbarI64);
 
         Value countMask =
@@ -584,7 +584,8 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
   Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
-  SmallVector<Value> args = {mbar, countVal, pred, barriersVal,
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64, countVal, pred, barriersVal,
                              barrierStatesVal};
   AssertInfo assertInfo{
       "Barrier arrive underflow: current count would become negative",
@@ -594,7 +595,7 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
       {barriersType, barrierStatesType},
       [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value mbarI64 = entryBlock->getArgument(0);
         Value count = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
 
@@ -603,7 +604,6 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
-        Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value mask = createCmpIntTensorScalar(fb, barriers, mbarI64);
 
         Value zero32 =
@@ -651,14 +651,15 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
   Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
-  SmallVector<Value> args = {mbar, countVal, pred, barriersVal,
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64, countVal, pred, barriersVal,
                              barrierStatesVal};
   createCallToCachedFunction(
       b, "update_barrier_state", args,
       /*assertInfo=*/std::nullopt, {barriersType, barrierStatesType},
       [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value mbarI64 = entryBlock->getArgument(0);
         Value count = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
 
@@ -670,7 +671,6 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
-        Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value mask = createCmpIntTensorScalar(fb, barriers, mbarI64);
 
         Value zero32 =
@@ -740,7 +740,8 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
       auxData.writeVisibility[(int)memType][insertPoint].value;
   auto writeVisibilityType = cast<RankedTensorType>(
       auxData.writeVisibility[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, threadMaskVal, buffersVal,
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, threadMaskVal, buffersVal,
                              writeVisibilityVal};
   createCallToCachedFunction(
       b, "set_write_visibility", args,
@@ -748,7 +749,7 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
       {buffersType, writeVisibilityType, (int)memType},
       [buffersType, writeVisibilityType](ImplicitLocOpBuilder &fb,
                                          Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadMaskVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -759,7 +760,6 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
 
         Value writeVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
         Value threadMaskElem = adjustIntegerWidth(fb, threadMaskVal, elemType);
@@ -790,7 +790,8 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
       auxData.readVisibility[(int)memType][insertPoint].value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, threadMaskVal, buffersVal,
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, threadMaskVal, buffersVal,
                              readVisibilityVal};
   createCallToCachedFunction(
       b, "set_read_visibility", args,
@@ -798,7 +799,7 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
       {buffersType, readVisibilityType, (int)memType},
       [buffersType, readVisibilityType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadMaskVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -809,7 +810,6 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
 
         Value readVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1,
                                            readVisibilityType);
@@ -846,14 +846,15 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
       auxData.writeTracking[(int)memType][insertPoint].value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, buffersVal, writeTrackingVal};
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, buffersVal, writeTrackingVal};
   createCallToCachedFunction(
       b, "clear_write_tracking", args,
       /*assertInfo=*/std::nullopt,
       {buffersType, writeTrackingType, (int)memType},
       [buffersType, writeTrackingType](ImplicitLocOpBuilder &fb,
                                        Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value buffers = entryBlock->getArgument(2);
         Value writeTrackingPtr = entryBlock->getArgument(3);
@@ -863,7 +864,6 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
 
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf =
             convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, writeTrackingType);
@@ -892,14 +892,15 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
       auxData.readVisibility[(int)memType][insertPoint].value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, buffersVal, readVisibilityVal};
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, buffersVal, readVisibilityVal};
   createCallToCachedFunction(
       b, "clear_read_visibility", args,
       /*assertInfo=*/std::nullopt,
       {buffersType, readVisibilityType, (int)memType},
       [buffersType, readVisibilityType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value buffers = entryBlock->getArgument(2);
         Value readVisibilityPtr = entryBlock->getArgument(3);
@@ -909,7 +910,6 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
 
         Value readVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1,
                                            readVisibilityType);
@@ -937,14 +937,15 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
   Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
   auto readTrackingType = cast<RankedTensorType>(
       auxData.readTracking[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, buffersVal, readTrackingVal};
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, buffersVal, readTrackingVal};
   createCallToCachedFunction(
       b, "clear_read_tracking", args,
       /*assertInfo=*/std::nullopt,
       {buffersType, readTrackingType, (int)memType},
       [buffersType, readTrackingType](ImplicitLocOpBuilder &fb,
                                       Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value buffers = entryBlock->getArgument(2);
         Value readTrackingPtr = entryBlock->getArgument(3);
@@ -954,7 +955,6 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
 
         Value readTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf =
             convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, readTrackingType);
@@ -988,15 +988,17 @@ void FunctionBuilder::createTrackVisibleWritesCall(ImplicitLocOpBuilder &b,
       auxData.writeTracking[(int)memType][insertPoint].value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType][insertPoint].type);
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {
-      mbar, pred, threadVal, barriersVal, writeVisibilityVal, writeTrackingVal};
+      mbarI64,         pred, threadVal, barriersVal, writeVisibilityVal,
+      writeTrackingVal};
   createCallToCachedFunction(
       b, "track_visible_writes", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, writeVisibilityType, writeTrackingType, (int)memType},
       [barriersType, writeVisibilityType,
        writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value bar = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
@@ -1010,7 +1012,6 @@ void FunctionBuilder::createTrackVisibleWritesCall(ImplicitLocOpBuilder &b,
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
-        Value bar = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, bar);
         barriersEqBar = convertAndBroadcast(fb, barriersEqBar, /*dim=*/0,
                                             writeTrackingType);
@@ -1057,15 +1058,17 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
   Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
   auto readTrackingType = cast<RankedTensorType>(
       auxData.readTracking[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {
-      mbar, pred, threadVal, barriersVal, readVisibilityVal, readTrackingVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64,           pred,
+                             threadVal,         barriersVal,
+                             readVisibilityVal, readTrackingVal};
   createCallToCachedFunction(
       b, "track_visible_reads", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, readVisibilityType, readTrackingType, (int)memType},
       [barriersType, readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value bar = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
@@ -1079,7 +1082,6 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
         Value readTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-        Value bar = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, bar);
         barriersEqBar =
             convertAndBroadcast(fb, barriersEqBar, /*dim=*/0, readTrackingType);
@@ -1121,19 +1123,17 @@ void FunctionBuilder::createTransferVisibleWritesCall(
       auxData.writeTracking[(int)memType][insertPoint].value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {mbar,
-                             pred,
-                             threadMaskVal,
-                             barriersVal,
-                             writeVisibilityVal,
-                             writeTrackingVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {
+      mbarI64,         pred, threadMaskVal, barriersVal, writeVisibilityVal,
+      writeTrackingVal};
   createCallToCachedFunction(
       b, "transfer_visible_writes", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, writeVisibilityType, writeTrackingType, (int)memType},
       [barriersType, writeVisibilityType,
        writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value bar = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadMaskVal = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
@@ -1147,7 +1147,6 @@ void FunctionBuilder::createTransferVisibleWritesCall(
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
-        Value bar = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, bar);
         barriersEqBar = convertAndBroadcast(fb, barriersEqBar, /*dim=*/0,
                                             writeTrackingType);
@@ -1199,16 +1198,17 @@ void FunctionBuilder::createTransferVisibleReadsCall(
   Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
   auto readTrackingType = cast<RankedTensorType>(
       auxData.readTracking[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {
-      mbar,           pred, threadMaskVal, barriersVal, readVisibilityVal,
-      readTrackingVal};
+  Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
+  SmallVector<Value> args = {mbarI64,           pred,
+                             threadMaskVal,     barriersVal,
+                             readVisibilityVal, readTrackingVal};
   createCallToCachedFunction(
       b, "transfer_visible_reads", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, readVisibilityType, readTrackingType, (int)memType},
       [barriersType, readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbar = entryBlock->getArgument(0);
+        Value bar = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadMaskVal = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
@@ -1222,7 +1222,6 @@ void FunctionBuilder::createTransferVisibleReadsCall(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
         Value readTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-        Value bar = tti::ExperimentalMemDescToI64Op::create(fb, mbar);
         Value barriersEqBar = createCmpIntTensorScalar(fb, barriers, bar);
         barriersEqBar =
             convertAndBroadcast(fb, barriersEqBar, /*dim=*/0, readTrackingType);
@@ -1260,7 +1259,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       auxData.writeVisibility[(int)memType][insertPoint].value;
   auto writeVisibilityType = cast<RankedTensorType>(
       auxData.writeVisibility[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, threadVal, buffersVal,
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, threadVal, buffersVal,
                              writeVisibilityVal};
   std::string message = "Buffer being accessed has outstanding writes.";
   if (!operandName.empty())
@@ -1272,7 +1272,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       {buffersType, writeVisibilityType, (int)memType},
       [buffersType, writeVisibilityType](ImplicitLocOpBuilder &fb,
                                          Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -1280,7 +1280,6 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
 
         Value writeVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         Value writeVisibilityZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
@@ -1324,7 +1323,8 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
       auxData.readVisibility[(int)memType][insertPoint].value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType][insertPoint].type);
-  SmallVector<Value> args = {buf, pred, threadVal, buffersVal,
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, threadVal, buffersVal,
                              readVisibilityVal};
   std::string message = "Buffer being accessed has outstanding reads";
   if (!operandName.empty())
@@ -1336,7 +1336,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
       {buffersType, readVisibilityType, (int)memType},
       [buffersType, readVisibilityType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -1344,7 +1344,6 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
 
         Value readVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1,
                                            readVisibilityType);
@@ -1509,13 +1508,14 @@ void FunctionBuilder::createStageAccessForCommitCall(
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  SmallVector<Value> args = {buf, pred, threadVal, buffers.value,
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
+  SmallVector<Value> args = {bufI64, pred, threadVal, buffers.value,
                              outstandingCommits.value};
   createCallToCachedFunction(
       b, "stage_access_for_commit", args,
       /*assertInfo=*/std::nullopt, {buffersType, commitsType},
       [buffersType, commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -1528,7 +1528,6 @@ void FunctionBuilder::createStageAccessForCommitCall(
 
         Value commits = tti::createLoadScratchMemory(
             fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf =
             convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, commitsType);
@@ -1756,12 +1755,13 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
     Operation *insertPoint) {
   assert(thread < NUM_THREADS &&
          "Commit-count tracking must operate on base threads");
+  Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  SmallVector<Value> args = {buf, pred, threadVal, buffers.value,
+  SmallVector<Value> args = {bufI64, pred, threadVal, buffers.value,
                              outstandingCommits.value};
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
@@ -1772,7 +1772,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
       b, "check_outstanding_commits", args, assertInfo,
       {buffersType, commitsType, (int)thread},
       [buffersType, commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value buf = entryBlock->getArgument(0);
+        Value bufI64 = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value buffers = entryBlock->getArgument(3);
@@ -1780,7 +1780,6 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
 
         Value outstandingCommits = tti::createLoadScratchMemory(
             fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
-        Value bufI64 = tti::ExperimentalMemDescToI64Op::create(fb, buf);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, bufI64);
         buffersEqBuf =
             convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, commitsType);

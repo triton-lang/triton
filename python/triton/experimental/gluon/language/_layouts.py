@@ -46,6 +46,20 @@ class AutoLayout(DistributedLayout):
 
 
 @dataclass(frozen=True)
+class CoalescedLayout(DistributedLayout):
+
+    def _to_ir(self, builder):
+        return builder.get_coalesced_layout()
+
+    def mangle(self):
+        return "CL"
+
+    @property
+    def rank(self):
+        raise ValueError("CoalescedLayout has no rank")
+
+
+@dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
     """
     Represents a blocked layout, partitioning a tensor across threads, warps, and CTAs.
