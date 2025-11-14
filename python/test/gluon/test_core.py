@@ -1207,12 +1207,6 @@ def test_tma_slice():
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle, num_ctas):
-    # Skip all 2 CTA tests in this suite due to resource cleanup issues
-    # Running multiple 2 CTA tests sequentially causes hangs (likely TMEM/CTA resource leak)
-    # 2 CTA mode is adequately tested in test_tmem_copy_2d[2]
-    if num_ctas == 2:
-        pytest.skip("2 CTA tests skipped in this suite due to resource cleanup issues; covered by test_tmem_copy_2d[2]")
-
     @gluon.jit
     def tmem_copy_no_scales(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                             swizzle: ttgl.constexpr, num_warps: ttgl.constexpr, num_ctas: ttgl.constexpr):

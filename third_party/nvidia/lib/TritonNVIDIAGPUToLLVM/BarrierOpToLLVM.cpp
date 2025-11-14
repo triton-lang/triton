@@ -27,6 +27,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
@@ -160,6 +161,13 @@ struct WaitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
     auto loc = op.getLoc();
+    
+    // Use module-level two-ctas attribute to determine barrier scope
+    bool twoCTAs = triton::nvidia_gpu::getModuleTwoCTAs(op);
+    
+    // Select scope: .relaxed.cluster for 2 CTA mode, .shared for 1 CTA mode
+    std::string scope = twoCTAs ? ".relaxed.cluster.shared" : ".shared";
+    
     bool predicated =
         adaptor.getPred() && !matchPattern(op.getPred(), m_NonZero());
     std::string ptx;
@@ -169,7 +177,7 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity)" + scope + R"(.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 }
@@ -180,7 +188,7 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity)" + scope + R"(.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 	skipWait:
@@ -193,7 +201,7 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" + scope + R"(.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 }
 )";
@@ -203,7 +211,7 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" + scope + R"(.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }

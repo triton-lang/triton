@@ -627,7 +627,18 @@ struct TensorMemoryCopyOpConversion
     assert((numCTAs == 1 || (numCTAs == 2 && twoCTAs)) &&
            "Only 1 or 2 CTAs supported for TMEMCopyOp.");
     Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+
+    // In 2-CTA mode, only the lead CTA (cluster_ctarank == 0) should issue
+    // tcgen05.cp and commit with multicast to signal both CTAs' mbarriers
+    if (twoCTAs) {
+      Value clusterRank = triton::nvgpu::ClusterCTAIdOp::create(
+          rewriter, loc, rewriter.getI32Type());
+      Value isLeadCTA = b.icmp_eq(clusterRank, b.i32_val(0));
+      pred = b.and_(pred, isLeadCTA);
+    }
+
     copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
                      adaptor.getDst(), pred);
 
