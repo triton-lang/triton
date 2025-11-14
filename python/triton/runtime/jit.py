@@ -1049,6 +1049,10 @@ class BoundConstexprFunction(JITCallable):
         self.__self__ = instance
         self.__func__ = fn
 
+    @property
+    def cache_key(self):
+        return self.__func__.cache_key
+
     def __call__(self, *args, **kwargs):
         return self.__func__(self.__self__, *args, **kwargs)
 

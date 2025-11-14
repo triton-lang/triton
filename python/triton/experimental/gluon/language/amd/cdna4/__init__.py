@@ -49,6 +49,13 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
 
 
+def _get_mfma_scale_layout_impl(*args, **kwargs):
+    return _get_mfma_scale_layout(*args, **kwargs)
+
+
+_get_mfma_scale_layout_impl.__triton_builtin__ = True
+
+
 @constexpr_function
 def get_mfma_scale_layout(dot_operand_layout, shape):
     """ Get the scale layout for MFMA scaled operands.
@@ -66,7 +73,7 @@ def get_mfma_scale_layout(dot_operand_layout, shape):
     mdim = parent.instr_shape[0]
     tiles_per_warp = parent.tiles_per_warp
     warps_per_cta = parent.warps_per_cta
-    return _get_mfma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
+    return _get_mfma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 """
