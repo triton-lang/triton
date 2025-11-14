@@ -196,8 +196,10 @@ def _matmul(
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
+        K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
         K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
+        K_X = K
 
 
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
@@ -284,7 +286,7 @@ def _matmul(
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     # compute output
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    x_k_limit = K + BLOCK_K * SPLIT_K
+    x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
     for ki in range(k_tiles):
         x_k_limit -= BLOCK_K * SPLIT_K
@@ -300,7 +302,7 @@ def _matmul(
             mask_k = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < x_k_limit
+                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR // 2 < w_k_limit
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
