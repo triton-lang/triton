@@ -3,22 +3,19 @@ from contextvars import ContextVar
 
 
 class Buffer(Protocol):
-
-    def data_ptr(self) -> int:
-        ...
+    def data_ptr(self) -> int: ...
 
 
 class Allocator(Protocol):
-
-    def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer:
-        ...
+    def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer: ...
 
 
 class NullAllocator:
-
     def __call__(self, size: int, alignment: int, stream: Optional[int]) -> Buffer:
-        raise RuntimeError("Kernel requires a runtime memory allocation, but no allocator was set. " +
-                           "Use triton.set_allocator to specify an allocator.")
+        raise RuntimeError(
+            "Kernel requires a runtime memory allocation, but no allocator was set. "
+            + "Use triton.set_allocator to specify an allocator."
+        )
 
 
 _NULL_ALLOCATOR = NullAllocator()
@@ -37,7 +34,8 @@ def set_allocator(allocator: Allocator) -> None:
 
 class _AllocatorWrapper:
     """
-    Wrapper to provide ContextVar-like .get()/.set() methods.
+    Wrapper to provide ContextVar-like .get()/.set() methods. profile_allocator is
+    used in same way as allocator so it is useful to maintain the interface.
     """
 
     def __init__(self, allocator: Allocator) -> None:
@@ -61,6 +59,4 @@ def set_profile_allocator(allocator: Optional[Allocator]) -> None:
     The profile allocator function is called before kernel launch for kernels
     that require additional global memory workspace.
     """
-    _profile_allocator.set(
-        allocator if allocator is not None else _NULL_ALLOCATOR
-    )
+    _profile_allocator.set(allocator if allocator is not None else _NULL_ALLOCATOR)
