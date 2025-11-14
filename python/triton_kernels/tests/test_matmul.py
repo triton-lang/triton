@@ -63,27 +63,12 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
     """
     D = A.size(1)
     out = []
-    cur = 0          # current output row index
-    src = 0          # current source row index
-    indices = sorted(indices)
-    for i in indices:
-        # 1. Emit all rows up to A[i]
-        if i > src:
-            block = A[src:i]
-            out.append(block)
-            cur += block.size(0)
-        # 2. Pad so that `cur` becomes a multiple of `multiple`
-        pad_needed = (-cur) % multiple
-        out.append(torch.full((pad_needed, D), pad_value,
-                               dtype=A.dtype, device=A.device))
-        cur += pad_needed
-        # 3. Emit A[i] itself
-        out.append(A[i:i+1])
-        cur += 1
-        src = i + 1
-    # Emit the remaining rows
-    if src < A.size(0):
-        out.append(A[src:])
+    for i_cur, i_next in zip(indices[:-1], indices[1:]):
+        size = (i_next - i_cur)
+        size_padded = ((size + multiple - 1) // multiple) * multiple
+        cur = torch.full((size_padded, D), pad_value, dtype=A.dtype, device=A.device)
+        cur[:size, :] = A[i_cur:i_next, :]
+        out.append(cur)
     return torch.vstack(out)
 
 
@@ -119,7 +104,7 @@ def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weigh
     batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
     a = alloc_rand(shape_a, device=device, dtype=act_dtype, requires_grad=requires_grad)
     if inner_expt_opt is not None and "pad_x" in inner_expt_opt:
-        a = pad_rows_to_multiples(a, ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0).T.contiguous()
+        a = pad_rows_to_multiples(a.T, ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0).T.contiguous()
     b = alloc_rand(batch_size + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
     if inner_expt_opt is not None and "pad_w" in inner_expt_opt:
         b = pad_rows_to_multiples(b, ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0)
@@ -483,7 +468,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     if expt_is_inner:
         w_ragged_metadata = replace(x_ragged_metadata)
         if "pad_w" in inner_expt_opt:
-            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+            w_ragged_metadata.slice_offs = w_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             w_ragged_metadata.slice_sizes_divisibility = padding_block_k
         if "pad_x" in inner_expt_opt:
             x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
@@ -502,7 +487,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         elif scatter_indx is not None:
             yT_shape = (n, scatter_indx.shape[0])
         elif expt_is_inner:
-            yT_shape = (n_slices, n, k)
+            yT_shape = (n_slices, n, m)
         else:
             n_rows = x_tri.shape[-2] if gather_indx is None else gather_indx.shape[0]
             yT_shape = (n, n_rows)
@@ -584,7 +569,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
             # [cdiv(K, 32), N] -> dedup to [cdiv(K, 32), cdiv(N, 32)]
             w_scale_tri_blocked = _pad_and_block(w_scale_tri)
             w_scale_tri_sampled = w_scale_tri_blocked[..., 0:1]
-            # [cdiv(N, 32), K] -> dedup to [cdiv(N, 32), cdiv(K, 32)]
+            # [cdiv(N, 32), K] -> dedup to [cdiv(N, 32), cdiv(K, 32)#]
             w_scale_tri_rowmajor_blocked = _pad_and_block(w_scale_tri_rowmajor)
             w_scale_tri_rowmajor_sampled = w_scale_tri_rowmajor_blocked[..., 0:1]
             assert torch.equal(w_scale_tri_sampled.expand_as(w_scale_tri_blocked), w_scale_tri_blocked)
