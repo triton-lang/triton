@@ -606,3 +606,49 @@ def test_constexpr_function_taking_list():
     a: tl.constexpr = function_taking_list(make_list(4, 8, 16))
     # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_8_
     anchor(a)
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_min_max():
+    a: tl.constexpr = min(1, 2)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_1_
+    anchor(a)
+
+    b: tl.constexpr = min(1, 2, -3)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_-3_
+    anchor(b)
+
+    c: tl.constexpr = max(3, 4)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    anchor(c)
+
+    d: tl.constexpr = max(3, 4, 5)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_5_
+    anchor(d)
+
+
+def test_constexpr_min_error():
+
+    @triton.jit
+    def min_kernel(a: tl.constexpr, b: tl.constexpr):
+        min(a, b)
+
+    with pytest.raises(CompilationError):
+        run_parser(min_kernel, args=(1.0, float("nan")))
+
+    with pytest.raises(CompilationError):
+        run_parser(min_kernel, args=(1.0, -0.0))
+
+
+def test_constexpr_max_error():
+
+    @triton.jit
+    def max_kernel(a: tl.constexpr, b: tl.constexpr):
+        max(a, b)
+
+    with pytest.raises(CompilationError):
+        run_parser(max_kernel, args=(1.0, float("nan")))
+
+    with pytest.raises(CompilationError):
+        run_parser(max_kernel, args=(1.0, -0.0))
