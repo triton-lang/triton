@@ -16,6 +16,7 @@ import functools
 import os
 import time
 import copy
+import inspect
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -244,6 +245,8 @@ def compile(src, target=None, options=None, _env_vars=None):
     # create cache manager
     env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
     key = get_cache_key(src, backend, options, env_vars=env_vars)
+    if knobs.runtime.add_stages_inspection_hook is not None:
+        key += inspect.getsource(knobs.runtime.add_stages_inspection_hook)
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
