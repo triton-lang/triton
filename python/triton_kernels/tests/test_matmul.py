@@ -141,7 +141,7 @@ def apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_config):
             assert x.ndim == 3
             assert scale.numel() == x.shape[0]
             x = x.float() * scale[:, None, None]
-        return x.detach()
+        return x
 
     return (
         apply(x_tri, flex_ctx.lhs_data.scale),
@@ -440,9 +440,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     x_ref, w_ref, bias_ref, gammas_ref = apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_opt)
 
     if x_transpose:
-        x_tri = x_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2)
+        x_tri = x_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
     if w_transpose:
-        w_tri = w_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2)
+        w_tri = w_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
     if y_transpose:
         if mode == "batched":
             yT_shape = (n_slices, n, x_tri.shape[-2])
@@ -457,10 +457,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     else:
         y_tri_in = None
 
-    if w_tri.shape[0] == 1 and mode != "batched":
-        # Test the case when weight has dim 2, i.e., shape (K, N).
-        w_tri = w_tri.squeeze(0).detach()
-        w_ref = w_ref.squeeze(0).detach()
 
     if weight_mxfp:
         mx_axis = w_tri.ndim - 2
