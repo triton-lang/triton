@@ -77,8 +77,10 @@ def kernel(
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr
 ):
-    a = gl.load(A)
-    gl.store(B, a)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[1], threads_per_warp=[64], warps_per_cta=[1], order=[0])
+    offs = gl.arange(0, 64, layout=layout)
+    a = gl.load(A + offs)
+    gl.store(B + offs, a)
 """
 
 test_utils_src = """

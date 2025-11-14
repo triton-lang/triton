@@ -192,6 +192,7 @@ def compile_kernel(args: CompileArgs):
         "gridY": grid[1],
         "gridZ": grid[2],
         "_placeholder": "",
+        "warp_size": target.warp_size,
     }
     output_files = []
     backend_name = target.backend
