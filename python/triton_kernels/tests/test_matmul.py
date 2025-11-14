@@ -72,34 +72,11 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
     return torch.vstack(out)
 
 
-def _apply_padding_and_fill_unused_part_with_nan(t, is_padded, ragged_metadata, padding_block_k):
-    nan_val = float("nan")
-    if t.element_size() == 1:
-        t = t.view(torch.int8)
-        nan_val = 127
-    start = 0
-    if is_padded:
-        for this_expt_nrows in ragged_metadata.slice_sizes.tolist():
-            end = start + this_expt_nrows
-            padding_end = start + triton.cdiv(this_expt_nrows, padding_block_k) * padding_block_k
-            t[end:padding_end, :] = 0
-            start = padding_end
-        assert start <= t.shape[0]
-        t[start:, :] = nan_val
-    else:
-        n_actual_rows = ragged_metadata.slice_sizes.sum().item()
-        if n_actual_rows + padding_block_k < t.shape[0]:
-            t[n_actual_rows+padding_block_k:, :] = nan_val
-
 def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda",
                       inner_expt_opt=None, padding_block_k=None):
     torch.manual_seed(0)
     assert mode in {'batched', "plain", 'ragged'}
-    # if inner_expt_opt is not None:
-    #     m, k = k, triton.cdiv(m + padding_block_k * n_slices, padding_block_k) * padding_block_k
-    # if inner_expt_opt is not None:
-    #     m, k = k, m
     shape_a = (n_slices, m, k) if mode == 'batched' else (m, k)
     batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
     a = alloc_rand(shape_a, device=device, dtype=act_dtype, requires_grad=requires_grad)
@@ -116,9 +93,6 @@ def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weigh
 
     if inner_expt_opt is not None:
         bias = None
-        # _apply_padding_and_fill_unused_part_with_nan(a.T, "pad_x" in inner_expt_opt, ragged_metadata, padding_block_k)
-        # _apply_padding_and_fill_unused_part_with_nan(b, "pad_w" in inner_expt_opt, ragged_metadata, padding_block_k)
-    # breakpoint()
 
     return a, b, bias, gammas
 
