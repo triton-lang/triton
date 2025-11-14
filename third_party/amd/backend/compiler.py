@@ -447,13 +447,6 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
-        # into loops to avoid register spills in the MachineSinking pass, while it
-        # can also lead to regression in some cases. But from current observation,
-        # the regression is not significant. It would be better to have some heuristics.
-        for hint in options.schedule_hint.split(","):
-            if hint == 'attention':
-                flags.append('sink-insts-to-avoid-spills')
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
