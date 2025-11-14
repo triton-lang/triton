@@ -92,8 +92,6 @@ class HeaderParser:
         # then see if it is followed by d or c
         for i in range(len(args)):
             pos = suffix.find(str(i))
-            if pos == -1:
-                raise LinkerError(f"{suffix} is not a valid kernel suffix")
             pos += len(str(i))
             if self.arg_suffix.match(suffix, pos):
                 num_specs += 1
