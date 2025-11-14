@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=3 global_prefetch=1 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_3_STAGES
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -99,33 +99,29 @@
 //       AMD:   ttg.local_dealloc %{{.*}}
 //       AMD:   ttg.local_dealloc %{{.*}}
 
-// Prefetch pipelining adds another stage in between global load and compute.
-// This stage will local_store, then local_load, creating a prefetch from shared
-// memory into a register buffer for compute.
-//
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     scf.yield
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.return
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   scf.for
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.dot
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     scf.yield
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.return
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
@@ -237,7 +233,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // AMD-COUNT-2:  ttg.local_dealloc
 //         AMD:  scf.yield %[[SEL1]]
 
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop_nested
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop_nested
 
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -332,21 +328,21 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  ttg.local_dealloc %[[LOCAL_ALLOC_12]]
 
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop_single_pipeline
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     scf.yield
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.return
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop_single_pipeline
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   scf.for
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.dot
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     scf.yield
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.return
 
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -466,10 +462,10 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD-DAG:     ttg.local_dealloc %[[LOCAL_ALLOC_1]]
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
-                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                    %75: !tt.ptr<i64>,
-                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
-                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+                   %78: tensor<16x16xi32, #AL> {tt.constancy = dense<[16, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> tensor<16x16xf32, #C> {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
   %c4_i32 = arith.constant 4 : i32
   %c1 = arith.constant 1 : index
@@ -518,14 +514,14 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 //       AMD:    ttg.local_store
 //       AMD:    scf.yield
 
-// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar_dist_one
+// AMD_3_STAGES-LABEL: tt.func @indirect_bmm_scalar_dist_one
 
 tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
-                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                    %75: !tt.ptr<i64>,
-                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
-                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+                   %78: tensor<16x16xi32, #AL> {tt.constancy = dense<[16, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> tensor<16x16xf32, #C> {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
   %c4_i32 = arith.constant 4 : i32
   %c1 = arith.constant 1 : index
@@ -617,14 +613,14 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 
-// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_vector
+// AMD_3_STAGES-LABEL: tt.func @indirect_bmm_vector
 
-tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[16, 16]> : tensor<2xi32>},
                    %76: index,
-                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                    %75: tensor<16x!tt.ptr<i64>, #BLs1>,
-                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
-                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+                   %78: tensor<16x16xi32, #AL> {tt.constancy = dense<[16, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> tensor<16x16xf32, #C> {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
   %c4_i32 = arith.constant 4 : i32
   %c1 = arith.constant 1 : index
@@ -692,7 +688,7 @@ tt.func @post_load_inv(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %116 = tt.load %arg12, %115, %cst_0 : tensor<32x32x!tt.ptr<f32>, #AL>
     %117 = ttg.convert_layout %112 : tensor<32x32xf32, #AL> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>>
     %118 = ttg.convert_layout %116 : tensor<32x32xf32, #AL> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>>
-    %119 = tt.dot %117, %118, %arg10 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
+    %119 = tt.dot %117, %118, %arg10, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
     %131 = arith.index_cast %arg9 : index to i32
     %120 = arith.addi %131, %c1_i32 : i32
     %121 = arith.muli %120, %c32_i32 : i32
@@ -750,7 +746,7 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %150 = tt.load %arg12, %149, %cst_1 : tensor<32x32x!tt.ptr<f32>, #AL>
     %151 = ttg.convert_layout %146 : tensor<32x32xf32, #AL> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>>
     %152 = ttg.convert_layout %150 : tensor<32x32xf32, #AL> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>>
-    %153 = tt.dot %151, %152, %arg10 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
+    %153 = tt.dot %151, %152, %arg10, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
     %162 = arith.index_cast %arg9 : index to i32
     %154 = arith.addi %162, %c2_i32 : i32
     %155 = arith.muli %154, %c32_i32 : i32
@@ -970,7 +966,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
         %30 = tt.load %29 : tensor<32x32x!tt.ptr<f32>, #blocked>
         %31 = ttg.convert_layout %30 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
         %32 = ttg.convert_layout %17 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-        %33 = tt.dot %31, %32, %cst : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+        %33 = tt.dot %31, %32, %cst, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
         %34 = tt.addptr %23, %28 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
         %35 = ttg.convert_layout %33 : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>
         tt.store %34, %35 : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -988,7 +984,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = ttg.memdesc_index {{.*}} : !ttg.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], #smem, mutable> -> !ttg.memdesc<16xi64, #[[$SHARED_LAYOUT]], #smem, mutable, 1x16>
+// CHECK: %[[IND_BUFFER_0:.*]] = ttg.memdesc_index {{.*}} : !ttg.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], #smem, mutable> -> !ttg.memdesc<16xi64, #[[$SHARED_LAYOUT]], #smem, mutable>
 // CHECK: %[[IND_BUFFER_1:.*]] = ttg.local_load %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
@@ -1068,12 +1064,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-tt.func @indirect_load_shared_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+tt.func @indirect_load_shared_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[16, 16]> : tensor<2xi32>},
                    %76: index,
-                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                    %75: tensor<16x!tt.ptr<i64>, #BLs1>,
-                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
-                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+                   %78: tensor<16x16xi32, #AL> {tt.constancy = dense<[16, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> tensor<16x16xf32, #C> {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
   %c4_i32 = arith.constant 4 : i32
   %c1 = arith.constant 1 : index
@@ -1149,7 +1145,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %50 = tt.broadcast %49 : tensor<32x1xi1, #blocked> -> tensor<32x32xi1, #blocked>
       %51 = tt.load %46, %50, %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked>
       %52 = ttg.convert_layout %51 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-      %53 = tt.dot %cst_1, %52, %arg8 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      %53 = tt.dot %cst_1, %52, %arg8, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
       %54 = ttg.convert_layout %53 : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>
       tt.store %34, %54 : tensor<32x32x!tt.ptr<f32>, #blocked>
       scf.yield %cst1 : tensor<32x32xf32, #mma>
@@ -1259,21 +1255,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // AMD:          scf.yield
 // AMD:        ttg.local_dealloc
 
-// AMD_PREFETCH-LABEL:  tt.func public @nested_loops
-// AMD_PREFETCH-NOT:  ttg.local_alloc
-// AMD_PREFETCH:      scf.for
-// AMD_PREFETCH:        ttg.local_alloc
-// AMD_PREFETCH:        tt.load
-// AMD_PREFETCH:        ttg.local_store
-// AMD_PREFETCH:        tt.load
-// AMD_PREFETCH:        ttg.local_load
-// AMD_PREFETCH:        scf.for
-// AMD_PREFETCH:          ttg.local_store
-// AMD_PREFETCH:          tt.load
-// AMD_PREFETCH:          tt.dot
-// AMD_PREFETCH:          ttg.local_load
-// AMD_PREFETCH:          scf.yield
-// AMD_PREFETCH:        ttg.local_dealloc
+// AMD_3_STAGES-LABEL:  tt.func public @nested_loops
+// AMD_3_STAGES-NOT:  ttg.local_alloc
+// AMD_3_STAGES:      scf.for
+// AMD_3_STAGES:        ttg.local_alloc
+// AMD_3_STAGES:        tt.load
+// AMD_3_STAGES:        ttg.local_store
+// AMD_3_STAGES:        tt.load
+// AMD_3_STAGES:        ttg.local_store
+// AMD_3_STAGES:        scf.for
+// AMD_3_STAGES:          tt.load
+// AMD_3_STAGES:          ttg.local_load
+// AMD_3_STAGES:          tt.dot
+// AMD_3_STAGES:          ttg.local_store
+// AMD_3_STAGES:          scf.yield
+// AMD_3_STAGES:        ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 2], instrShape = [16, 8]}>
@@ -1305,7 +1301,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
       scf.for %arg2 = %c0_i32 to %c2_i32 step %c1_i32  : i32 {
         %14 = tt.load %9 : tensor<16x16x!tt.ptr<f32>, #blocked>
         %15 = ttg.convert_layout %14 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-        %16 = tt.dot %15, %13, %cst : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf32, #mma>
+        %16 = tt.dot %15, %13, %cst, inputPrecision = tf32 : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf32, #mma>
         %17 = ttg.convert_layout %16 : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
         tt.store %9, %17 : tensor<16x16x!tt.ptr<f32>, #blocked>
       }
@@ -1400,12 +1396,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-tt.func @load_convert_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+tt.func @load_convert_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[16, 16]> : tensor<2xi32>},
                    %76: index,
-                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                    %75: tensor<16x!tt.ptr<i64>, #BLs1>,
-                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
-                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+                   %78: tensor<16x16xi32, #AL> {tt.constancy = dense<[16, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> tensor<16x16xf32, #C> {
   %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #BLs1>
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
   %cst_0 = arith.constant dense<2> : tensor<16xi32, #BLs1>
@@ -1473,7 +1469,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
       %20 = arith.addf %9, %19 : tensor<32x32xf32, #blocked>
       %21 = ttg.convert_layout %9 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %22 = ttg.convert_layout %20 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-      %23 = tt.dot %21, %22, %cst : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      %23 = tt.dot %21, %22, %cst, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
       %24 = ttg.convert_layout %23 : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>
       tt.store %11, %24 : tensor<32x32x!tt.ptr<f32>, #blocked>
     } {tt.num_stages = 3 : i32}
@@ -1614,18 +1610,18 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD: tt.store
 // AMD: tt.store
 
-// AMD_PREFETCH-LABEL: @masked_add_kernel
-// AMD_PREFETCH: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
-// AMD_PREFETCH-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH: scf.for
-// AMD_PREFETCH:   arith.select
-// AMD_PREFETCH:   arith.addf
-// AMD_PREFETCH:   tt.store
-// AMD_PREFETCH:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH:   scf.yield
-// AMD_PREFETCH: tt.store
-// AMD_PREFETCH: tt.store
+// AMD_3_STAGES-LABEL: @masked_add_kernel
+// AMD_3_STAGES: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
+// AMD_3_STAGES-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES: scf.for
+// AMD_3_STAGES:   arith.select
+// AMD_3_STAGES:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES:   arith.addf
+// AMD_3_STAGES:   tt.store
+// AMD_3_STAGES:   scf.yield
+// AMD_3_STAGES: tt.store
+// AMD_3_STAGES: tt.store
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -1711,7 +1707,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
 // CHECK: scf.for
 tt.func @peeled_prologue_statically_dead(
-                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                   %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
   %lb = arith.constant 0 : i32
   %ub = arith.constant 2 : i32

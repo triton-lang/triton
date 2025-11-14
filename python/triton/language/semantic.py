@@ -1256,9 +1256,13 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
-            val = self.broadcast_impl_shape(val, ptr.type.get_block_shapes())
-            if mask is not None:
-                mask = self.broadcast_impl_shape(mask, ptr.type.get_block_shapes())
+            ptr_shape = ptr.shape
+            if mask is None:
+                ptr, val = self.broadcast_tensors(ptr, val)
+            else:
+                ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
+            if ptr_shape != ptr.shape:
+                raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
 
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
@@ -1467,6 +1471,10 @@ class TritonSemantic(Generic[TensorTy]):
         input_precision = input_precision.upper()
         if input_precision == "TF32X3":
             input_precision = "TF32x3"
+        if input_precision == "BF16X3":
+            input_precision = "BF16x3"
+        if input_precision == "BF16X6":
+            input_precision = "BF16x6"
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
@@ -1586,6 +1594,20 @@ class TritonSemantic(Generic[TensorTy]):
             assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
             return self.bitcast(val, triton_ty)
 
+    def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale):
+        if lhs_scale is not None:
+            scale_factor = 16 if lhs_scale.dtype.is_fp8e4nv() else 32
+            lhs_scale_shape = lhs_scale.type.shape
+            assert lhs_scale_shape == [
+                M, K // scale_factor
+            ], f"lhs_scale must be a tensor of shape [{M}, {K // scale_factor}]. Got {lhs_scale_shape}"
+        if rhs_scale is not None:
+            scale_factor = 16 if rhs_scale.dtype.is_fp8e4nv() else 32
+            rhs_scale_shape = rhs_scale.type.shape
+            assert rhs_scale_shape == [
+                N, K // scale_factor
+            ], f"rhs_scale must be a tensor of shape [{N}, {K // scale_factor}]. Got {rhs_scale_shape}"
+
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
@@ -1617,8 +1639,11 @@ class TritonSemantic(Generic[TensorTy]):
         assert PACKED_B_DIM == PACKED_A_DIM, f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
         #assert K * PACKED_B >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
         B = lhs.type.shape[0] if lhs_rank == 3 else None
+        K = K_LHS
         if not lhs_k_pack:
             M = M * PACKED_A
+        else:
+            K = K * PACKED_A
         if not rhs_k_pack:
             N = N * PACKED_B
         ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
@@ -1630,6 +1655,8 @@ class TritonSemantic(Generic[TensorTy]):
             assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
         lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
+        self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
+                                 None if rhs_scale_is_none else rhs_scale)
         return self.tensor(
             self.builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                            rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
@@ -1739,7 +1766,7 @@ class TritonSemantic(Generic[TensorTy]):
         head, *tail = inputs
         for i in range(len(tail)):
             head, tail[i] = self.broadcast_impl_value(head, tail[i])
-        for i in range(len(tail)):
+        for i in range(len(tail) - 1):
             head, tail[i] = self.broadcast_impl_value(head, tail[i])
         return (head, *tail)
 

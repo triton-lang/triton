@@ -30,14 +30,14 @@ jobs:
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2
       - name: Detect if build deps (e.g. LLVM hash) changed
         id: detect-change
         if: github.event_name == 'push'
-        uses: tj-actions/changed-files@v46
+        uses: tj-actions/changed-files@v47
         with:
           files: |
             cmake/*.txt

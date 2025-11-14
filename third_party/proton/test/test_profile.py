@@ -15,14 +15,7 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_hip
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -43,11 +36,16 @@ def test_torch(context, tmp_path: pathlib.Path):
         assert len(data[0]["children"]) == 1
         # bfs search until find the "elementwise_kernel" and then check its children
         queue = [data[0]]
+        import re
         while len(queue) > 0:
             parent_frame = queue.pop(0)
             for child in parent_frame["children"]:
                 if "elementwise_kernel" in child["frame"]["name"]:
                     assert len(child["children"]) == 0
+                    # check the regex of the parent name matches
+                    # file_name:line_number@function_name
+                    regex = r".+:\d+@.+"
+                    assert re.match(regex, parent_frame["frame"]["name"])
                     return
                 queue.append(child)
 
@@ -77,6 +75,7 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(is_hip(), reason="Currently broken after updating to ROCm 7")
 def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -101,8 +100,9 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # no kernels
     g = torch.cuda.CUDAGraph()
     with torch.cuda.graph(g):
-        for _ in range(10):
-            fn()
+        for i in range(10):
+            with proton.scope(f"iter_{i}"):
+                fn()
 
     proton.enter_scope("test")
     g.replay()
@@ -126,9 +126,15 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # {torch.ones, add, foo}
     if is_hip():
         assert len(test_frame["children"]) >= 2
+        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
-        assert len(test_frame["children"]) >= 3
-    assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+        # cuda backend supports "<captured_at>" annotation
+        child = test_frame["children"][0]
+        assert child["frame"]["name"] == "<captured_at>"
+        # 0...9 iterations
+        assert len(child["children"]) == 10
+        # check one of the iterations
+        assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):

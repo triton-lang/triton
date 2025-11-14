@@ -2,7 +2,7 @@ from contextlib import nullcontext
 import pytest
 import torch
 import triton
-from triton.tools.ragged_tma import create_ragged_descriptor, load_ragged, store_ragged
+from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
@@ -23,7 +23,7 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
         _ = TensorDescriptor.from_tensor(x, [BLOCK_M])
 
 
-@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True)])
+@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True), (0, 32, False)])
 @pytest.mark.parametrize("N, BLOCK_N, expect_error_n", [(128, 32, False), (128, 30, True), (127, 32, False)])
 def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, expect_error_m):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
@@ -39,10 +39,14 @@ def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, exp
 
     shape_error = expect_error_n or expect_error_m
     error_alignment = (N % 16) != 0
-    expect_error = shape_error or error_alignment
+    zero_shape_error = M <= 0 or N <= 0
+    expect_error = shape_error or error_alignment or zero_shape_error
 
     exc_type = ValueError if shape_error else AssertionError
     match = "Shape element . must be a power of 2" if shape_error else "strides must be 16-byte aligned"
+    if zero_shape_error and not shape_error and not error_alignment:
+        match = "shape must be positive"
+        exc_type = AssertionError
     ctx = pytest.raises(exc_type, match=match) if expect_error else nullcontext()
     with ctx:
         _ = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_N])
@@ -53,6 +57,13 @@ def example_load_store_kernel(X, Y, x_off, y_off, x_size, y_size):
 
     data = load_ragged(X, x_off, x_size, [0, 0])
     store_ragged(Y, y_off, y_size, [0, 0], data)
+
+
+@triton.jit
+def example_load_atomic_add_kernel(X, Y, x_off, y_off, x_size, y_size):
+
+    data = load_ragged(X, x_off, x_size, [0, 0])
+    atomic_add_ragged(Y, y_off, y_size, [0, 0], data)
 
 
 @pytest.mark.parametrize("dtype", [
@@ -66,13 +77,16 @@ def test_ragged_tma(dtype):
         pytest.skip("Test requires Hopper or Blackwell target.")
         return
 
+    test_atomic_add = dtype in ["bfloat16", "float16", "float32", "int32"]
     dtype = getattr(torch, dtype)
 
-    src = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
+    src1 = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
+    src2 = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
     ref = torch.randn((1024, 80), dtype=torch.float32, device="cuda").to(dtype)
     dst = ref.clone()
 
-    X = create_ragged_descriptor(src, [32, 128])
+    X1 = create_ragged_descriptor(src1, [32, 128])
+    X2 = create_ragged_descriptor(src2, [32, 128])
     Y = create_ragged_descriptor(dst, [32, 128])
 
     x_off = 42
@@ -80,14 +94,17 @@ def test_ragged_tma(dtype):
     x_size = 17
     y_size = 24
 
-    example_load_store_kernel[(1, )](X, Y, x_off, y_off, x_size, y_size)
+    example_load_store_kernel[(1, )](X1, Y, x_off, y_off, x_size, y_size)
+    if test_atomic_add:
+        example_load_atomic_add_kernel[(1, )](X2, Y, x_off, y_off, x_size, y_size)
 
     # the initial and final segments are unchanged:
     res0 = torch.equal(dst[:y_off], ref[:y_off])
     res1 = torch.equal(dst[y_off + y_size:], ref[y_off + y_size:])
 
     # this segment will be copied verbatim from src:
-    res2 = torch.equal(dst[y_off:y_off + x_size], src[x_off:x_off + x_size])
+    ref_tensor = src1 + src2 if test_atomic_add else src1
+    res2 = torch.equal(dst[y_off:y_off + x_size], ref_tensor[x_off:x_off + x_size])
 
     # this segment will have read OOB zeroes and written them here:
     res3 = torch.all(dst[y_off + x_size:y_off + y_size] == 0.0).item()

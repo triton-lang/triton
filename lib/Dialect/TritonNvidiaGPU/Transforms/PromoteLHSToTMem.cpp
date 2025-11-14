@@ -19,18 +19,11 @@ namespace nvidia_gpu {
 
 namespace {
 template <class MMAOpTy>
-Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, RankedTensorType srcType) {
+Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, gpu::MemDescType lhsTMEMType,
+                           ttg::CTALayoutAttr ctaLayout) {
   int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
-  auto accTmemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
-      tcGen5MMAOp.getD().getType().getEncoding());
-  auto lhs = tcGen5MMAOp.getA();
-  auto lhsShape = lhs.getType().getShape();
-  // M has to follow the MMA size, as it is related to the message we are using.
-  // N has to follow the number of columns in the LHS.
-  int M = accTmemEncoding.getBlockM();
-  int N = lhsShape[1];
-  Attribute resLayout = getTmemCompatibleLayout(M, N, srcType, numWarps);
-  return resLayout;
+  return nvidia_gpu::getDefaultLayoutForTmemLdSt(lhsTMEMType, numWarps,
+                                                 ctaLayout);
 }
 
 template <class MMAOpTy> class LHSToTMem : public OpRewritePattern<MMAOpTy> {
@@ -66,7 +59,8 @@ public:
     const unsigned colStride = 1;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        colStride, CTASplitNum[0], CTASplitNum[1]);
+        colStride, CTASplitNum[0], CTASplitNum[1],
+        accTMemEncoding.getTwoCTAs());
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(
@@ -79,7 +73,8 @@ public:
     if (!layoutTmemCompatible) {
       if (!comesFromLoadOrBlockArg(src) ||
           triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
-        newLayout = getLHSTMemLayout(tcGen5MMAOp, srcType);
+        newLayout = getLHSTMemLayout(tcGen5MMAOp, lhsMemDescType,
+                                     ttg::getCTALayout(srcType.getEncoding()));
       } else {
         return failure();
       }
@@ -88,9 +83,9 @@ public:
     if (newLayout != srcLayout) {
       auto ty = cast<RankedTensorType>(src.getType());
       auto newTy = ty.cloneWithEncoding(newLayout);
-      src = rewriter.create<ttg::ConvertLayoutOp>(loc, newTy, src);
+      src = ttg::ConvertLayoutOp::create(rewriter, loc, newTy, src);
     }
-    Value tMemAlloc = rewriter.create<TMEMAllocOp>(loc, lhsMemDescType, src);
+    Value tMemAlloc = TMEMAllocOp::create(rewriter, loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
     return success();
   }

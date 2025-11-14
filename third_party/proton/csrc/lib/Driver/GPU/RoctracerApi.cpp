@@ -5,16 +5,6 @@ namespace proton {
 
 namespace roctracer {
 
-struct ExternLibRoctracer : public ExternLibBase {
-  using RetType = roctracer_status_t;
-  static constexpr const char *name = "libroctracer64.so";
-  static constexpr const char *defaultDir = "";
-  static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
-  static void *lib;
-};
-
-void *ExternLibRoctracer::lib = nullptr;
-
 DEFINE_DISPATCH(ExternLibRoctracer, setProperties, roctracer_set_properties,
                 roctracer_domain_t, void *)
 

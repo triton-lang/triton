@@ -1,6 +1,7 @@
 #include "cuda.h"
 #include <dlfcn.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -202,13 +203,11 @@ defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
-  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
-      maxActiveClusters = -1;
+  int clusterDim = -1, maxActiveClusters = -1;
   int shared = 0;
   CUfunction func;
 
-  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
-                        &clusterDimY, &clusterDimZ)) {
+  if (!PyArg_ParseTuple(args, "Kii", &func, &shared, &clusterDim)) {
     return NULL;
   }
 
@@ -221,13 +220,13 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-  launchAttr[0].value.clusterDim.x = clusterDimX;
-  launchAttr[0].value.clusterDim.y = clusterDimY;
-  launchAttr[0].value.clusterDim.z = clusterDimZ;
+  launchAttr[0].value.clusterDim.x = clusterDim;
+  launchAttr[0].value.clusterDim.y = 1;
+  launchAttr[0].value.clusterDim.z = 1;
   CUlaunchConfig config;
-  config.gridDimX = clusterDimX;
-  config.gridDimY = maxActiveBlocks * clusterDimY;
-  config.gridDimZ = clusterDimZ;
+  config.gridDimX = clusterDim * maxActiveBlocks;
+  config.gridDimY = 1;
+  config.gridDimZ = 1;
   config.blockDimX = 128;
   config.blockDimY = 1;
   config.blockDimZ = 1;
@@ -420,10 +419,53 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
-  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
+  CUresult res = cuTensorMapEncodeTiled(
       &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,
       stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
-      swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B, fill));
+      swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B, fill);
+  if (res != CUDA_SUCCESS) {
+    const char *str;
+    cuGetErrorString(res, &str);
+    char err[4096] = {0};
+    size_t off = 0;
+    off += snprintf(
+        err + off, sizeof(err) - off,
+        "Triton Error [CUDA]: Failed to create tensor map descriptor: %s\n",
+        str ? str : "Unknown error");
+    off += snprintf(err + off, sizeof(err) - off,
+                    "elemType=%d rank=%d global_address=0x%llx elemSize=%d "
+                    "swizzle=%d padding=%d\n",
+                    elemType, rank, (unsigned long long)global_address,
+                    elemSize, swizzle, padding);
+    off += snprintf(err + off, sizeof(err) - off, "shape=[");
+    for (int i = 0; i < rank; ++i) {
+      off +=
+          snprintf(err + off, sizeof(err) - off, "%llu%s",
+                   (unsigned long long)shapeInt[i], (i + 1 < rank) ? ", " : "");
+    }
+    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    off += snprintf(err + off, sizeof(err) - off, "strides=[");
+    for (int i = 0; i < rank; ++i) {
+      off += snprintf(err + off, sizeof(err) - off, "%llu%s",
+                      (unsigned long long)stridesLL[i],
+                      (i + 1 < rank) ? ", " : "");
+    }
+    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    off += snprintf(err + off, sizeof(err) - off, "blockSize=[");
+    for (int i = 0; i < rank; ++i) {
+      off += snprintf(err + off, sizeof(err) - off, "%u%s",
+                      (unsigned)blockSizeInt[i], (i + 1 < rank) ? ", " : "");
+    }
+    off += snprintf(err + off, sizeof(err) - off, "] elementStrides=[");
+    for (int i = 0; i < rank; ++i) {
+      off += snprintf(err + off, sizeof(err) - off, "%u%s",
+                      (unsigned)elementStrides[i], (i + 1 < rank) ? ", " : "");
+    }
+    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    PyErr_SetString(PyExc_RuntimeError, err);
+
+    goto cleanup;
+  }
 
   return (PyObject *)desc;
 

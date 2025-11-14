@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=CHECK --check-prefix=BASE
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization -tritongpu-pipeline -tritongpu-optimize-partition-warps | FileCheck %s --check-prefix=OPT
 
 #indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -29,13 +30,15 @@ tt.func @matmul_change_desc_in_prologue(
   // BASE-NOT: tt.make_tensor_descriptor
   // PIPELINE-NOT: ttng.tensormap_create
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(1)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(1)
   // BASE-NOT: tt.make_tensor_descriptor
   // PIPELINE-NOT: ttng.tensormap_create
   // PIPELINE-COUNT-1: tc_gen5_mma
   // PIPELINE-NOT: tc_gen5_mma
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(2)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(2)
   // BASE-COUNT-2: tt.make_tensor_descriptor
   // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
   // PIPELINE-COUNT-2: ttng.tensormap_create
@@ -88,9 +91,11 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(1)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(1)
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(2)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(2)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
   // CHECK-NOT: partition2
@@ -117,7 +122,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // CHECK-LABEL: @matmul_tma_and_regular_load
 tt.func @matmul_tma_and_regular_load(
   %a_desc: !tt.tensordesc<tensor<1x64xf16, #shared>>,
-  %b_ptr_init: tensor<64x128x!tt.ptr<f16>, #b_layout> {tt.divisibility = 16 : i32, tt.contiguity = 64 : i32}
+  %b_ptr_init: tensor<64x128x!tt.ptr<f16>, #b_layout> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 64]> : tensor<2xi32>}
 ) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -128,11 +133,13 @@ tt.func @matmul_tma_and_regular_load(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(4)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(4)
   // PIPELINE-COUNT-3: async_copy_global_to_local
   // PIPELINE-NOT: async_copy_global_to_local
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(4)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(4)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
   // CHECK-NOT: partition2
@@ -142,7 +149,7 @@ tt.func @matmul_tma_and_regular_load(
 
     %a = tt.descriptor_gather %a_desc[%indices, %off_k] : (!tt.tensordesc<tensor<1x64xf16, #shared>>, tensor<128xi32, #indices_layout>, i32) -> tensor<128x64xf16, #oper_layout>
 
-    %b_ptrs = tt.addptr %b_ptr, %offs_n {tt.divisibility = dense<16> : tensor<64x128xi32>, tt.contiguity = dense<64> : tensor<64x128xi32>, tt.constancy = dense<1> : tensor<64x128xi32>} : tensor<64x128x!tt.ptr<f16>, #b_layout>, tensor<64x128xi32, #b_layout>
+    %b_ptrs = tt.addptr %b_ptr, %offs_n {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 64]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>} : tensor<64x128x!tt.ptr<f16>, #b_layout>, tensor<64x128xi32, #b_layout>
     %b = tt.load %b_ptrs : tensor<64x128x!tt.ptr<f16>, #b_layout>
 
     %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
@@ -194,6 +201,8 @@ tt.func public @attention_forward(
   %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
   // CHECK-LABEL: ttg.warp_specialize
+  // CHECK-LABEL: default
+  // CHECK: ttng.fence_async_shared
   // PIPELINE: partition0
   // PIPELINE-COUNT-4: ttng.tc_gen5_mma
   // PIPELINE-NOT: ttng.tc_gen5_mma
@@ -248,9 +257,9 @@ tt.func public @attention_forward(
 
     %P = arith.truncf %softmax : tensor<256x64xf32, #blocked> to tensor<256x64xf16, #blocked>
 
-    %P_tmem = ttng.tmem_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem, #ttng.tensor_memory>
+    %P_smem = ttg.local_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #shared, #smem>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc_corrected : (tensor<256x64xf32, #blocked>) -> (!ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %63, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %PV_mma_tok = ttng.tc_gen5_mma %P_smem, %63, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %O, %O_tok = ttng.tmem_load %acc_tmem[%PV_mma_tok] : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 
     scf.yield %next_l_i, %O, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>

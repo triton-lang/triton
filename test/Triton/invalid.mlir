@@ -171,7 +171,7 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
     // expected-error @+1 {{op result encoding must be specified}}
@@ -541,6 +541,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+module {
+  tt.func @dot_scaled_invalid_dims(
+    %a: tensor<128x128xf8E4M3FN>,
+    %b: tensor<128x128xf8E4M3FN>,
+    %a_scale: tensor<128x128xi8>,
+    %b_scale: tensor<128x4xi8>) -> tensor<128x128xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    // expected-error @below {{scales K dimension must match the operand K divided by the scale factor}}
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = true} : tensor<128x128xf8E4M3FN>, tensor<128x128xi8>  * tensor<128x128xf8E4M3FN>, tensor<128x4xi8>-> tensor<128x128xf32>
+    tt.return %result : tensor<128x128xf32>
+  }
+}
+
+// -----
+
 tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
   // expected-error @below {{source tensor must have exactly one element}}
   %0 = tt.unsplat %arg0 : tensor<128xf32>
@@ -612,4 +627,21 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)
   tt.return
+}
+
+// -----
+
+// Test that DotOp with f32 inputs but without TF32 precision is rejected for MMAv2
+// MMAv2 requires TF32 input precision for f32 operands
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  tt.func @dot_f32_without_tf32_mma_v2(%a: tensor<16x16xf32, #dot_operand_a>, %b: tensor<16x16xf32, #dot_operand_b>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    // expected-error @below {{unsupported MMA version}}
+    %result = tt.dot %a, %b, %cst, inputPrecision = ieee : tensor<16x16xf32, #dot_operand_a> * tensor<16x16xf32, #dot_operand_b> -> tensor<16x16xf32, #mma>
+    tt.return
+  }
 }

@@ -2,11 +2,26 @@ import torch
 import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
-from triton_kernels.tensor import Tensor, Bitmatrix
+from triton_kernels.tensor import SparseMatrix, Tensor
+from triton_kernels.tensor import Bitmatrix, BIT
 from typing import Optional, Union
+from triton_kernels.distributed import symm_mem_pool
+import torch.distributed as dist
 
 
-def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
+def make_empty(offset, shape, dtype, device, all_gather):
+    if all_gather:
+        rank_id = dist.get_rank()
+        ret_bufs = symm_mem_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
+        ret = ret_bufs[rank_id]
+        offset = symm_mem_pool.align_up(offset + ret.numel() * ret.element_size(),
+                                        symm_mem_pool.regions["topk"].alignment)
+        return ret_bufs, ret, offset
+    ret = torch.empty(shape, dtype=dtype, device=device)
+    return (ret, ), ret, 0
+
+
+def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False):
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
@@ -14,43 +29,41 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
-    BLOCK_S = 128
+    use_provided_indx = y_indx is not None
     assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
-    assert return_bitmatrix
     n_rows, n_cols = x.shape
     n_rows_max, _ = x.shape_max
     dev = x.device
+    n_rows_out_max = n_rows_max * dist.get_world_size() if all_gather else n_rows_max
     # scratchpad tensors
     # NOTE: these are not returned
-    y_vals = torch.empty((n_rows_max, k), dtype=x.dtype, device=dev)
-    if y_indx is not None:
-        use_provided_indx = True
+    y_vals_bufs, y_vals, offset = make_empty(0, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
+    if y_indx is None:
+        y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
     else:
-        y_indx = torch.empty((n_rows_max, k), dtype=torch.int16, device=dev)
-        use_provided_indx = False
+        y_indx_bufs = (y_indx, )
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
-    bitmatrix = torch.empty((n_cols_words, cdiv(n_rows_max, 32) * 32), dtype=torch.uint32, device=dev)
-    bitmatrix = torch.transpose(bitmatrix, 0, 1)[:n_rows_max]
-    s_blocks = cdiv(n_cols, BLOCK_S)
-    s_cols = s_blocks * BLOCK_S
-    scratchpad = torch.empty((s_cols, ), dtype=torch.int32, device=dev)
-    pids = max(cdiv(n_rows_max, BLOCK_M), s_blocks)
+    bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
+                                                        torch.uint32, dev, all_gather=all_gather)
+    bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
+    pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
         x, x.stride(0),  # inputs
-        y_vals, y_indx, y_vals.stride(0), use_provided_indx,  # output [topk]
-        bitmatrix, bitmatrix.stride(0), bitmatrix.stride(1),  # output [bitmatrix]
+        y_vals_bufs, y_indx_bufs, y_vals.stride(0), use_provided_indx,  # output [topk]
+        bitmatrix_bufs, bitmatrix_data.stride(0), bitmatrix_data.stride(1),  # output [bitmatrix]
         n_rows, n_cols,  # shapes
-        scratchpad, BLOCK_S, s_blocks,  # thing to memset to zero
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
+        dist.get_rank() * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
-    bitmatrix_shape = [n_rows, n_cols_words * 32]
-    bitmatrix_shape_max = [n_rows_max, None]
-    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
+    if all_gather:
+        symm_mem_pool.hdl.barrier(channel=0)
+    bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
+    bitmatrix_shape_max = [n_rows_out_max, None]
+    bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
 
 
@@ -69,8 +82,8 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
+    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather)
         ctx.save_for_backward(x, y_indx)
         ctx.apply_softmax = apply_softmax
         ctx.k = k
@@ -81,7 +94,7 @@ class TopK(torch.autograd.Function):
     def backward(ctx, dy_vals, _0, _1):
         x, y_indx = ctx.saved_tensors
         dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows, ctx.apply_softmax)
-        return dx, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None
 
 
 def topk(
@@ -89,9 +102,9 @@ def topk(
     k: int,
     apply_softmax: bool = True,
     dim: int = 1,
-    return_bitmatrix: bool = True,
     y_indx: Optional[torch.Tensor] = None,
     n_rows: Optional[int] = None,
+    all_gather: bool = False,
 ):
     """
     Computes the top-k values and indices along a specified dimension of a tensor.
@@ -107,9 +120,6 @@ def topk(
         Whether to apply softmax to the input tensor before computing top-k.
     dim : int, default 1
         Dimension along which to compute top-k.
-    return_bitmatrix : bool, default True
-        A bitmatrix of shape (n_tokens, cdiv(n_expts, 32)).
-        Each bit on [t, b] indicates whether the b-th expert was selected for the t-th token.
     y_indx : torch.Tensor, optional
         Pre-allocated tensor for storing indices of top-k elements with shape (n_tokens, k).
         If provided, we skip the computation of top-k indices and use this tensor instead.
@@ -118,7 +128,50 @@ def topk(
 
     Returns
     -------
-    (expt_scal, expt_indx, bitmatrix) : Tuple[torch.Tensor, torch.Tensor, Bitmatrix]
+    SparseMatrix: sparse matrix equal to `x` with non-selected entries set to 0
     """
-    ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
-    return ret
+    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather)
+    return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
+
+
+def topk_torch(
+    x,
+    k,
+    apply_softmax: bool = True,
+    dim: int = 1,
+    y_indx: Optional[torch.Tensor] = None,
+    n_rows: Optional[int] = None,
+) -> SparseMatrix:
+    if n_rows is None:
+        n_rows = x.shape[0]
+    has_user_provided_indx = y_indx is not None
+    cdiv = lambda a, b: (a + b - 1) // b
+    device = x.device
+    assert dim == 1
+    assert not isinstance(x, Tensor)
+    if not has_user_provided_indx:
+        y_indx = torch.argsort(-x, dim=1, stable=True)[:, :k]
+    y_indx = y_indx.long()
+    y_vals = torch.take_along_dim(x[:n_rows, :], y_indx[:n_rows, :], dim=1)
+    y_vals = torch.cat([y_vals, x[n_rows:, :k]], dim=0)
+    y_indx = y_indx.int()
+    # compute bitmatrix
+    _, n_cols = x.shape
+    bitmatrix_data = torch.zeros((cdiv(n_cols, 32), cdiv(x.shape[0], 32) * 32), dtype=torch.int32, device=device)
+    bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:x.shape[0]]
+    # fill bitmatrix
+    if apply_softmax:
+        y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
+    if not has_user_provided_indx:
+        y_indx, sort_indices = torch.sort(y_indx, dim=1)
+        y_vals = torch.gather(y_vals, 1, sort_indices)
+    y_indx[n_rows:, :] = -1
+    rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
+    cols = y_indx.reshape(-1)  # 64-bit safe for div/mod
+    word_idx = torch.div(cols, 32, rounding_mode='floor')
+    bit_idx = cols % 32
+    masks = torch.ones_like(bit_idx) << bit_idx
+    bitmatrix_data.index_put_((rows, word_idx), masks, accumulate=True)
+    bitmatrix_data = bitmatrix_data.view(torch.uint32)
+    bitmatrix = Bitmatrix(bitmatrix_data, shape=x.shape, dtype=BIT)
+    return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)

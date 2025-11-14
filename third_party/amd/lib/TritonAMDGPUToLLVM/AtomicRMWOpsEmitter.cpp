@@ -16,8 +16,8 @@ Value generateI32DppMove(RewriterBase &rewriter, Value val, int dppCtrl,
   auto loc = val.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value old = b.i32_val(0);
-  auto dppMovOp = rewriter.create<ROCDL::DPPUpdateOp>(
-      loc, i32_ty, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
+  auto dppMovOp = ROCDL::DPPUpdateOp::create(
+      rewriter, loc, i32_ty, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
   return dppMovOp.getResult();
 }
 
@@ -184,23 +184,23 @@ Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
     rmwMask = b.icmp_ult(laneID, numActiveLanes);
   }
 
-  rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
-                                  undefVal);
+  LLVM::CondBrOp::create(rewriter, loc, rmwMask, atomicBlock, endBlock,
+                         undefVal);
 
   rewriter.setInsertionPointToEnd(atomicBlock);
-  Value atom = enableIntraWaveReduce
-                   ? atomicIntraWaveReduce(rewriter, rmwPtr, valElem, binOp,
-                                           memOrder, scopeStr.c_str())
-                   : rewriter
-                         .create<LLVM::AtomicRMWOp>(loc, binOp, rmwPtr, valElem,
-                                                    memOrder, scopeStr.c_str())
-                         .getResult();
+  Value atom =
+      enableIntraWaveReduce
+          ? atomicIntraWaveReduce(rewriter, rmwPtr, valElem, binOp, memOrder,
+                                  scopeStr.c_str())
+          : LLVM::AtomicRMWOp::create(rewriter, loc, binOp, rmwPtr, valElem,
+                                      memOrder, scopeStr.c_str())
+                .getResult();
 
   if (sharedMemBase.has_value()) {
     Value atomPtr = *sharedMemBase;
     b.store(atom, atomPtr);
   }
-  rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+  LLVM::BrOp::create(rewriter, loc, atom, endBlock);
   rewriter.setInsertionPointToStart(endBlock);
 
   return endBlock->getArgument(0);
@@ -269,8 +269,8 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   endBlock->addArgument({packF16Ty}, {loc});
 
   rewriter.setInsertionPointToEnd(curBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
-                                  undefVal);
+  LLVM::CondBrOp::create(rewriter, loc, rmwMask, atomicBlock, endBlock,
+                         undefVal);
 
   rewriter.setInsertionPointToEnd(atomicBlock);
 
@@ -282,30 +282,30 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   rewriter.setInsertionPointToEnd(atomicBlock);
 
   // If `checkPairs` was set to `false`, `packedBlock` must be removed by DCE
-  rewriter.create<LLVM::CondBrOp>(loc, enablePackedOpt, packedBlock,
-                                  regularBlock);
+  LLVM::CondBrOp::create(rewriter, loc, enablePackedOpt, packedBlock,
+                         regularBlock);
 
   // Fill out the regular block, where we issue two atomic ops.
   rewriter.setInsertionPointToEnd(regularBlock);
   Value pairedOperand0 = b.extract_element(valueElemTy, operand, b.i32_val(0));
   Value pairedOperand1 = b.extract_element(valueElemTy, operand, b.i32_val(1));
-  Value atomNonVec0 = rewriter.create<LLVM::AtomicRMWOp>(
-      loc, binOp, rmwPtr, pairedOperand0, memOrder, scopeStr.c_str());
-  Value atomNonVec1 = rewriter.create<LLVM::AtomicRMWOp>(
-      loc, binOp, rightNeighbourPtr, pairedOperand1, memOrder,
-      scopeStr.c_str());
+  Value atomNonVec0 = LLVM::AtomicRMWOp::create(
+      rewriter, loc, binOp, rmwPtr, pairedOperand0, memOrder, scopeStr.c_str());
+  Value atomNonVec1 =
+      LLVM::AtomicRMWOp::create(rewriter, loc, binOp, rightNeighbourPtr,
+                                pairedOperand1, memOrder, scopeStr.c_str());
   Value packedRes = b.undef(packF16Ty);
   packedRes = b.insert_element(packF16Ty, packedRes, atomNonVec0, b.i32_val(0));
   packedRes = b.insert_element(packF16Ty, packedRes, atomNonVec1, b.i32_val(1));
-  rewriter.create<LLVM::BrOp>(loc, packedRes, endBlock);
+  LLVM::BrOp::create(rewriter, loc, packedRes, endBlock);
 
   // Start to fill out the packed block.
   rewriter.setInsertionPointToEnd(packedBlock);
 
-  Value atom = rewriter.create<LLVM::AtomicRMWOp>(loc, binOp, rmwPtr, operand,
-                                                  memOrder, scopeStr.c_str());
+  Value atom = LLVM::AtomicRMWOp::create(rewriter, loc, binOp, rmwPtr, operand,
+                                         memOrder, scopeStr.c_str());
 
-  rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+  LLVM::BrOp::create(rewriter, loc, atom, endBlock);
 
   rewriter.setInsertionPointToStart(endBlock);
   Value atomRes = endBlock->getArgument(0);
@@ -374,8 +374,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   // TODO: Calculate actual number of difference addresses in a wave.
   Value optAtomic = b.icmp_ult(numNeighbours, b.i32_val(32));
 
-  rewriter.create<LLVM::CondBrOp>(loc, optAtomic, initLoop, atomicBlock,
-                                  ValueRange({rmwPtr, operand}));
+  LLVM::CondBrOp::create(rewriter, loc, optAtomic, initLoop, atomicBlock,
+                         ValueRange({rmwPtr, operand}));
   rewriter.setInsertionPointToEnd(initLoop);
 
   auto *afterLoopBlock = initLoop->splitBlock(rewriter.getInsertionPoint());
@@ -388,7 +388,7 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   loopBody->addArgument(i32_ty, loc);
 
   rewriter.setInsertionPointToEnd(initLoop);
-  rewriter.create<LLVM::BrOp>(loc, b.i32_val(0), loopBody);
+  LLVM::BrOp::create(rewriter, loc, b.i32_val(0), loopBody);
 
   // Greed search of same addr within wavefront. Also collect auxiliary
   // information about relative position:
@@ -418,9 +418,9 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);
   idx = b.add(idx, start);
-  rewriter.create<LLVM::CondBrOp>(loc, done, afterLoopBlock,
-                                  ValueRange({idx, cnt, leader}), loopBody,
-                                  ValueRange({base}));
+  LLVM::CondBrOp::create(rewriter, loc, done, afterLoopBlock,
+                         ValueRange({idx, cnt, leader}), loopBody,
+                         ValueRange({base}));
 
   rewriter.setInsertionPointToEnd(afterLoopBlock);
 
@@ -451,8 +451,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value reductionCond = b.icmp_ne(
       targetInfo.ballot(rewriter, loc, i64_ty, b.icmp_ne(cntRes, b.i32_val(1))),
       b.i64_val(0));
-  rewriter.create<LLVM::CondBrOp>(loc, reductionCond, partialReductionBlock,
-                                  afterRedBlock, operand);
+  LLVM::CondBrOp::create(rewriter, loc, reductionCond, partialReductionBlock,
+                         afterRedBlock, operand);
   rewriter.setInsertionPointToEnd(partialReductionBlock);
 
   auto performOp = [&](Value res, Value v) -> Value {
@@ -487,7 +487,7 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
     acc = b.select(b.icmp_ult(b.i32_val(i), cntRes), performOp(acc, tmp), acc);
   }
 
-  rewriter.create<LLVM::BrOp>(loc, acc, afterRedBlock);
+  LLVM::BrOp::create(rewriter, loc, acc, afterRedBlock);
   rewriter.setInsertionPointToEnd(afterRedBlock);
 
   auto *endBlock = afterRedBlock->splitBlock(rewriter.getInsertionPoint());
@@ -495,17 +495,17 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   rewriter.setInsertionPointToEnd(afterRedBlock);
   Value leaderCond = leaderRes;
   Value defaultRes = b.undef(operandElemType);
-  rewriter.create<LLVM::CondBrOp>(
-      loc, leaderCond, atomicBlock,
-      ValueRange({rmwPtr, afterRedBlock->getArgument(0)}), endBlock,
-      ValueRange({defaultRes}));
+  LLVM::CondBrOp::create(rewriter, loc, leaderCond, atomicBlock,
+                         ValueRange({rmwPtr, afterRedBlock->getArgument(0)}),
+                         endBlock, ValueRange({defaultRes}));
   rewriter.setInsertionPointToEnd(atomicBlock);
   // Utilize global atomic only by leader threads
   Value addr = atomicBlock->getArgument(0);
   Value atomAddr = b.inttoptr(origPtrType, addr);
-  Value atom = rewriter.create<LLVM::AtomicRMWOp>(
-      loc, opKind, atomAddr, atomicBlock->getArgument(1), memOrdering, scope);
-  rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+  Value atom = LLVM::AtomicRMWOp::create(rewriter, loc, opKind, atomAddr,
+                                         atomicBlock->getArgument(1),
+                                         memOrdering, scope);
+  LLVM::BrOp::create(rewriter, loc, atom, endBlock);
   rewriter.setInsertionPointToStart(endBlock);
 
   return endBlock->getArgument(0);

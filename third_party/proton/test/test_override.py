@@ -2,16 +2,11 @@ import os
 import subprocess
 import pathlib
 import json
+import pytest
 
-import triton
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not supported")
 
 
 def test_override(tmp_path: pathlib.Path):
@@ -68,12 +63,12 @@ def test_override(tmp_path: pathlib.Path):
                 #insert after the line
                 line = line + '    proton.record start "load_ops" loc(#loc)\n'
                 line = line + '    proton.record start "load_x" loc(#loc)\n'
-            elif ("tt.load" in line and isFirstLoad) or ("amdgpu.buffer_load" in line and isFirstLoad):
+            elif ("tt.load" in line and isFirstLoad) or ("amdg.buffer_load" in line and isFirstLoad):
                 #insert after the line
                 line = line + '    proton.record end "load_x" loc(#loc)\n'
                 line = line + '    proton.record start "load_y" loc(#loc)\n'
                 isFirstLoad = False
-            elif ("tt.load" in line and not isFirstLoad) or ("amdgpu.buffer_load" in line and not isFirstLoad):
+            elif ("tt.load" in line and not isFirstLoad) or ("amdg.buffer_load" in line and not isFirstLoad):
                 #insert after the line
                 line = line + '    proton.record end "load_y" loc(#loc)\n'
                 line = line + '    proton.record end "load_ops" loc(#loc)\n'

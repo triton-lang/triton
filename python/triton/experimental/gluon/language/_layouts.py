@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
@@ -9,6 +9,9 @@ def _realize_cta_layout(layout, rank):
     ctas_per_cga = layout.ctas_per_cga or [1] * rank
     cta_split_num = layout.cta_split_num or [1] * rank
     cta_order = layout.cta_order or list(reversed(range(rank)))
+    # Canonicalize CTA order to [n,n-1,...,0] if CTAsPerCGA is [1...1]. This matches logic in C++.
+    if all(num_cta == 1 for num_cta in ctas_per_cga):
+        cta_order = list(range(rank - 1, -1, -1))
     object.__setattr__(layout, "ctas_per_cga", ctas_per_cga)
     object.__setattr__(layout, "cta_split_num", cta_split_num)
     object.__setattr__(layout, "cta_order", cta_order)
@@ -23,6 +26,10 @@ class DistributedLayout:
     def type(self):
         return constexpr_type(self)
 
+    @property
+    def rank(self):
+        return len(self.cta_order)
+
 
 @dataclass(frozen=True)
 class AutoLayout(DistributedLayout):
@@ -32,6 +39,24 @@ class AutoLayout(DistributedLayout):
 
     def mangle(self):
         return "AL"
+
+    @property
+    def rank(self):
+        raise ValueError("AutoLayout has no rank")
+
+
+@dataclass(frozen=True)
+class CoalescedLayout(DistributedLayout):
+
+    def _to_ir(self, builder):
+        return builder.get_coalesced_layout()
+
+    def mangle(self):
+        return "CL"
+
+    @property
+    def rank(self):
+        raise ValueError("CoalescedLayout has no rank")
 
 
 @dataclass(frozen=True)
@@ -141,6 +166,10 @@ class SliceLayout(DistributedLayout):
     def __hash__(self):
         return hash((self.dim, self.parent))
 
+    @property
+    def rank(self):
+        return self.parent.rank - 1
+
 
 @dataclass(frozen=True)
 class DistributedLinearLayout(DistributedLayout):
@@ -195,6 +224,10 @@ class DistributedLinearLayout(DistributedLayout):
             tuple(self.shape),
         ))
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
 
 @dataclass(frozen=True)
 class DotOperandLayout(DistributedLayout):
@@ -223,6 +256,10 @@ class DotOperandLayout(DistributedLayout):
 
     def __hash__(self):
         return hash((self.operand_index, self.parent, self.k_width))
+
+    @property
+    def rank(self):
+        return self.parent.rank
 
 
 @dataclass(frozen=True, eq=True)
@@ -288,8 +325,7 @@ def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
         assert len(cta_split_num) == len(shape)
-        for dim in range(len(shape_per_cta)):
-            shape_per_cta[dim] /= cta_split_num[dim]
+        shape_per_cta = [shape_per_cta[dim] // cta_split_num[dim] for dim in range(len(shape_per_cta))]
     return shape_per_cta
 
 
@@ -592,18 +628,17 @@ class SharedLinearLayout(SharedLayout):
     """Represents a shared memory layout defined via an explicit LinearLayout."""
 
     offset_bases: List[List[int]]
-    block_bases: List[List[int]]
-    shape: List[int]
+    block_bases: List[List[int]] = field(default_factory=list)
     alignment: int = 16
 
     def __post_init__(self):
         super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
         super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
-        super().__setattr__("shape", _unwrap_shape(self.shape))
         super().__setattr__("alignment", _unwrap_if_constexpr(self.alignment))
 
-        rank = len(self.shape)
-        assert rank > 0, "SharedLinearLayout shape must not be empty"
+        assert len(self.offset_bases) != 0, "SharedLinearLayout offset_bases must not be empty"
+        rank = len(self.offset_bases[0])
+        assert rank > 0, "SharedLinearLayout offset_bases must not be empty"
         for basis in self.offset_bases:
             assert len(basis) == rank
         for basis in self.block_bases:
@@ -612,16 +647,15 @@ class SharedLinearLayout(SharedLayout):
             "SharedLinearLayout alignment must be a positive power of two"
 
     def _to_ir(self, builder):
-        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.shape, self.alignment)
+        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.alignment)
 
     def mangle(self) -> str:
-        return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.shape}_{self.alignment}_SharedLinear"
+        return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
 
     def __hash__(self):
         return hash((
             tuple(map(tuple, self.offset_bases)),
             tuple(map(tuple, self.block_bases)),
-            tuple(self.shape),
             self.alignment,
         ))
 

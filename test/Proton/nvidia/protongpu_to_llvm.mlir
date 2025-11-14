@@ -135,28 +135,76 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
-  // CHECK-LABEL: convert_smem_finalize
-  // CHECK-DAG: nvvm.read.ptx.sreg.smid
-  // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
+  // CHECK-LABEL: convert_smem_initialize
+  // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb2
   // CHECK-DAG: ^bb1:
+
   // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
-  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK-DAG: %[[PREAMBLE_OFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: %[[PREAMBLE_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PREAMBLE_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
+  // CHECK-DAG: llvm.store %[[PREAMBLE]], %[[PREAMBLE_PTR]] : i32, !llvm.ptr<1>
+
   // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.br ^bb2
-  // CHECK-DAG: ^bb2(%[[I:.*]]: i32):
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(510 : i32) : i32
-  // CHECK-DAG: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
-  // CHECK-DAG: %[[I_NEW:.*]] = llvm.add %[[I]], %[[STEP]] : i32
-  // CHECK-DAG: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]] : i32), ^bb3
-  // CHECK-DAG: ^bb3:
-  // CHECK-DAG: llvm.return
+  // CHECK-DAG: %[[PID_OFFSET:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[PID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %[[PID]], %[[PID_PTR]] : i32, !llvm.ptr<1>
+
+  // CHECK-DAG: %[[SMID:.*]] = nvvm.read.ptx.sreg.smid
+  // CHECK-DAG: %[[SMID_OFFSET:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %[[SMID]], %[[SMID_PTR]] : i32, !llvm.ptr<1>
+
+  // CHECK-DAG: %[[INIT_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-DAG: %[[INIT_TIME_OFFSET:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: %[[INIT_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[INIT_TIME_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %[[INIT_TIME]], %[[INIT_TIME_PTR]] : i64, !llvm.ptr<1>
+
+  // CHECK: ^bb2:
+  // CHECK: llvm.return
+  llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    proton_gpu.initialize %0 : !tt.ptr<i32>
+    llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_smem_finalize
+  // CHECK: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
+  // CHECK: llvm.store
+  // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb2
+  // CHECK: ^bb1: // pred: ^bb0
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
+  // CHECK: llvm.br ^bb2
+  // CHECK: ^bb2: // 2 preds: ^bb0, ^bb1
+  // CHECK: llvm.cond_br %{{.*}}, ^bb3, ^bb4
+  // CHECK: ^bb3: // pred: ^bb2
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK: llvm.br ^bb4
+  // CHECK: ^bb4: // 2 preds: ^bb2, ^bb3
+  // CHECK: llvm.cond_br %{{.*}}, ^[[LOOP_HEAD:bb[0-9]+]](%{{.*}} : i32), ^[[EXIT:bb[0-9]+]]
+  // CHECK: ^[[LOOP_HEAD]](%{{.*}}: i32):
+  // CHECK: llvm.cond_br %{{.*}}, ^[[LOOP_BODY:bb[0-9]+]](%{{.*}} : i32), ^[[EXIT]]
+  // CHECK: ^[[LOOP_BODY]](%{{.*}}: i32):
+  // CHECK: llvm.getelementptr
+  // CHECK: llvm.store
+  // CHECK: llvm.store
+  // CHECK: ^[[EXIT]]:
+  // CHECK: llvm.cond_br %{{.*}}, ^[[POST:bb[0-9]+]], ^[[RET:bb[0-9]+]]
+  // CHECK: ^[[POST]]:
+  // CHECK: %{{.*}} = llvm.mlir.constant(8 : i32) : i32
+  // CHECK: %[[POST_FINAL_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%{{.*}}{{\]}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
+  // CHECK: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK: llvm.store %[[POST_FINAL_TIME]], %[[POST_FINAL_TIME_PTR]] : i64, !llvm.ptr<1>
+  // CHECK: llvm.br ^[[RET]]
+  // CHECK: ^[[RET]]:
+  // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
