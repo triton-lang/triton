@@ -52,7 +52,7 @@ from triton import knobs
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 @triton.jit
-def kernel1(BLOCK_SIZE: tl.constexpr):
+def kernel(BLOCK_SIZE: tl.constexpr):
     return
 
 if __name__ == '__main__':
@@ -63,7 +63,7 @@ if __name__ == '__main__':
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
 
-    h = kernel1[grid](BLOCK_SIZE=1024)
+    h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
 
@@ -73,7 +73,7 @@ python test.py
 ```
 ``` MLIR
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel1() attributes {noinline = false} {
+  tt.func public @kernel() attributes {noinline = false} {
     tt.return loc(#loc1)
   } loc(#loc)
 } loc(#loc)
@@ -90,7 +90,7 @@ TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestL
 
 ``` MLIR
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel1() attributes {noinline = false} {
+  tt.func public @kernel() attributes {noinline = false} {
     tt.return loc(#loc1)
   } loc(#loc)
 } loc(#loc)
@@ -143,11 +143,9 @@ if __name__ == '__main__':
     h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 
-    # Unset the hook and clear the kernel cache to go back to the
-    # standard pipeline
-    kernel.device_caches.clear()
+    # Unset the hook to go back to the standard pipeline
     knobs.runtime.add_stages_inspection_hook = None
-    h = kernel2[grid](BLOCK_SIZE=1024)
+    h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
 
@@ -184,7 +182,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #loc1 = loc("/home/triton/test.py":14:4)
 ```
 
-The hook, as it's defined will insert the pass at the vert end of the make_ttir pipeline.
+The hook, as it's defined will insert the pass at the end of the make_ttir pipeline.
 This functionality can be toggled on and off by just commenting out this line in kernel code:
 knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
 without needing any core compiler changes or rebuilding Triton.
