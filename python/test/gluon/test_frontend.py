@@ -3001,6 +3001,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+def test_amd_warp_pipeline(target):
+
+    @gluon.jit
+    def kernel():
+        c0: ttgl.constexpr = 0
+        one: ttgl.constexpr = 1
+
+        # Simple loop with an explicit split point
+        for i in range(c0, 10, one):
+            with ttgl.amd.warp_pipeline_stage("stage0"):
+                x = i + one
+            with ttgl.amd.warp_pipeline_stage("stage1"):
+                y = x * one
+                x = y + one
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=target)
+    print(module)
+    assert str(module).count("triton.warp_pipeline.border") == 2
+
+
 @gluon.jit
 def print_num_warps():
     num_warps: ttgl.constexpr = ttgl.num_warps()
