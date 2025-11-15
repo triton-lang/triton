@@ -60,6 +60,7 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
 
 
 def test_jit(tmp_path):
+
     @triton.jit
     def foo(x, size: tl.constexpr, y):
         offs = tl.arange(0, size)
@@ -69,12 +70,12 @@ def test_jit(tmp_path):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_instrumentation.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    foo[(1,)](x, 1, y, num_warps=4)
+    foo[(1, )](x, 1, y, num_warps=4)
     device = triton.runtime.driver.active.get_current_device()
     assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
     proton.finalize()
-    foo[(1,)](x, 1, y, num_warps=4)
-    assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"
+    foo[(1, )](x, 1, y, num_warps=4)
+    assert (len(foo.device_caches[device][0]) == 2), "Instrumented and uninstrumented kernels both should be cached"
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
@@ -136,18 +137,16 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
         assert int.from_bytes(preamble.numpy().tobytes(), "little") == 0xDEADBEEF
         header_size = 40
         metadata_size = header_size + pgm.metadata.num_warps * 4
-        start_tag = host_buffer[metadata_size : metadata_size + 4]
-        start_clock = host_buffer[metadata_size + 4 : metadata_size + 8]
-        end_tag = host_buffer[metadata_size + 8 : metadata_size + 12]
-        end_clock = host_buffer[metadata_size + 12 : metadata_size + 16]
+        start_tag = host_buffer[metadata_size:metadata_size + 4]
+        start_clock = host_buffer[metadata_size + 4:metadata_size + 8]
+        end_tag = host_buffer[metadata_size + 8:metadata_size + 12]
+        end_clock = host_buffer[metadata_size + 12:metadata_size + 16]
         assert int.from_bytes(start_tag.numpy().tobytes(), "little") & 0xFFFFF800 == 0
-        assert int.from_bytes(end_tag.numpy().tobytes(), "little") & 0xFFFFF800 == 0x80000000
+        assert (int.from_bytes(end_tag.numpy().tobytes(), "little") & 0xFFFFF800 == 0x80000000)
         start_clock_val = int.from_bytes(start_tag.numpy().tobytes(), "little") & 0x7FF << 32 | int.from_bytes(
-            start_clock.numpy().tobytes(), "little"
-        )
+            start_clock.numpy().tobytes(), "little")
         end_clock_val = int.from_bytes(end_tag.numpy().tobytes(), "little") & 0x7FF << 32 | int.from_bytes(
-            end_clock.numpy().tobytes(), "little"
-        )
+            end_clock.numpy().tobytes(), "little")
         assert end_clock_val > start_clock_val
 
     # instrumentation context has finalized, now validate assembly
@@ -246,14 +245,14 @@ def test_select_ids(tmp_path: pathlib.Path):
         uid_num_offset = 36
         uid_vec_offset = 40
         uid_num = int.from_bytes(
-            proton.hooks.InstrumentationHook.host_buffer[uid_num_offset : uid_num_offset + 4].numpy().tobytes(),
+            proton.hooks.InstrumentationHook.host_buffer[uid_num_offset:uid_num_offset + 4].numpy().tobytes(),
             "little",
         )
         assert uid_num == len(select_ids)
         for i in range(uid_num):
             offset = uid_vec_offset + i * 4
             warp_id = int.from_bytes(
-                proton.hooks.InstrumentationHook.host_buffer[offset : offset + 4].numpy().tobytes(),
+                proton.hooks.InstrumentationHook.host_buffer[offset:offset + 4].numpy().tobytes(),
                 "little",
             )
             warp_indices.append(warp_id)
@@ -262,6 +261,7 @@ def test_select_ids(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
+
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         BLOCK_SIZE = args["BLOCK_SIZE"]
         return {"name": f"add_{BLOCK_SIZE}"}
@@ -305,12 +305,10 @@ def test_tree(tmp_path: pathlib.Path, hook):
         kernel_frame = data[0]["children"][0]["children"][0]
         load_ops = kernel_frame["children"][0]
         assert "load_ops" in load_ops["frame"]["name"]
-        assert (
-            "load_x" in load_ops["children"][0]["frame"]["name"] or "load_x" in load_ops["children"][1]["frame"]["name"]
-        )
-        assert (
-            "load_y" in load_ops["children"][0]["frame"]["name"] or "load_y" in load_ops["children"][1]["frame"]["name"]
-        )
+        assert ("load_x" in load_ops["children"][0]["frame"]["name"]
+                or "load_x" in load_ops["children"][1]["frame"]["name"])
+        assert ("load_y" in load_ops["children"][0]["frame"]["name"]
+                or "load_y" in load_ops["children"][1]["frame"]["name"])
         assert load_ops["children"][0]["metrics"]["cycles"] > 0
         assert load_ops["children"][0]["metrics"]["normalized_cycles"] > 0
         assert load_ops["children"][1]["metrics"]["cycles"] > 0
@@ -318,6 +316,7 @@ def test_tree(tmp_path: pathlib.Path, hook):
 
 
 def test_trace(tmp_path: pathlib.Path):
+
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -382,6 +381,7 @@ def test_trace(tmp_path: pathlib.Path):
 
 
 def test_multi_session(tmp_path: pathlib.Path):
+
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -442,6 +442,7 @@ def test_multi_session(tmp_path: pathlib.Path):
 
 
 def test_autotune(tmp_path: pathlib.Path):
+
     def metadata_fn(
         grid: tuple,
         metadata: NamedTuple,
@@ -504,20 +505,15 @@ def test_warp_spec(tmp_path: pathlib.Path):
         pytest.skip("target backend does not support warp specialization and TMA")
 
     @triton.jit
-    def matmul_kernel_tma(
-        a_desc,
-        b_desc,
-        c_desc,  #
-        M,
-        N,
-        K,  #
-        BLOCK_SIZE_M: tl.constexpr,  #
-        BLOCK_SIZE_N: tl.constexpr,  #
-        BLOCK_SIZE_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr,  #
-        FP8_OUTPUT: tl.constexpr,  #
-        WARP_SPECIALIZE: tl.constexpr,  #
-    ):
+    def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
+                          M, N, K,  #
+                          BLOCK_SIZE_M: tl.constexpr,  #
+                          BLOCK_SIZE_N: tl.constexpr,  #
+                          BLOCK_SIZE_K: tl.constexpr,  #
+                          GROUP_SIZE_M: tl.constexpr,  #
+                          FP8_OUTPUT: tl.constexpr,  #
+                          WARP_SPECIALIZE: tl.constexpr,  #
+                          ):
         dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -568,7 +564,7 @@ def test_warp_spec(tmp_path: pathlib.Path):
         def grid(META):
             BLOCK_M = 128
             BLOCK_N = 256
-            return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),)
+            return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
             a_desc,
@@ -631,11 +627,11 @@ def test_timeline(tmp_path: pathlib.Path):
         pl.exit_scope("entire")
 
     with proton.scope("init"):
-        x = torch.ones((1024,), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
-        foo[(1,)](x, y, x.size()[0], num_warps=4)
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
 
     proton.finalize()
 
@@ -683,7 +679,7 @@ def test_globaltime(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     BLOCK_SIZE = 1024
-    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE), )
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
     proton.finalize()
 
@@ -723,25 +719,20 @@ def test_overhead(tmp_path: pathlib.Path):
 
     def bench():
         with proton.scope("single"):
-            kernel[(1024,)](x, y, BLOCK_SIZE, False)
+            kernel[(1024, )](x, y, BLOCK_SIZE, False)
         with proton.scope("loop"):
-            kernel[(1024,)](x, y, BLOCK_SIZE, True)
+            kernel[(1024, )](x, y, BLOCK_SIZE, True)
 
     # warmup
     bench()
 
-    proton.start(
-        str(temp_file_time.with_suffix("")),
-    )
+    proton.start(str(temp_file_time.with_suffix("")), )
 
     with proton.scope("session0"):
         bench()
 
-    proton.start(
-        str(temp_file_cycles.with_suffix("")),
-        backend="instrumentation",
-        mode=proton.mode.Default(metric_type="cycle", buffer_size=4096),
-    )
+    proton.start(str(temp_file_cycles.with_suffix("")), backend="instrumentation",
+                 mode=proton.mode.Default(metric_type="cycle", buffer_size=4096))
 
     with proton.scope("session1"):
         bench()
@@ -771,6 +762,7 @@ def test_overhead(tmp_path: pathlib.Path):
 
 @pytest.mark.skipif(is_hip(), reason="not implemented yet")
 def test_gmem_buffer(tmp_path: pathlib.Path):
+
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -834,6 +826,7 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
 
 
 def test_threaded_kernel_call(tmp_path: pathlib.Path):
+
     import threading
 
     @triton.jit
