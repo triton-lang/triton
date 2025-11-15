@@ -517,6 +517,11 @@ class amd_knobs(base_knobs):
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
+    # Path to dump MIR files for debugging/analysis
+    dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
+    # Path to externally-provided MIR files to use instead of generated ones
+    swap_mir: env_opt_str = env_opt_str("TRITON_SWAP_MIR")
+
 
 class proton_knobs(base_knobs):
     disable: env_bool = env_bool("TRITON_PROTON_DISABLE", False)
