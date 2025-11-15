@@ -3,6 +3,9 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MIRParser/MIRParser.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -26,11 +29,22 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
+#include <cstdio>
 #include <memory>
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+/*
+#ifdef _WIN32
+#include <io.h>
+#define dup _dup
+#define dup2 _dup2
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+*/
 
 namespace py = pybind11;
 
@@ -67,13 +81,116 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject) {
+std::string
+translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
+                     const std::string &proc, const std::string &features,
+                     const std::vector<std::string> &flags,
+                     bool enable_fp_fusion, const std::string &dumpFileId) {
   using namespace mlir;
+
+  // Check if we should dump MIR
+  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
+  bool dumpMir = !dumpMirBase.empty();
+  if (!dumpMir) {
+    return "";
+  }
+
+  // options
+  auto options = llvm::cl::getRegisteredOptions();
+  for (std::string flag : flags) {
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
+  }
+  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  if (!disableLLVMOpt) {
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
+  }
+
+  // Save and set stop-before if needed (for MIR output or custom stop point)
+  std::string originalStopBefore;
+  auto stopBeforeOpt = options.find("stop-before");
+  if (stopBeforeOpt != options.end()) {
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+    originalStopBefore = optPtr->getValue();
+    optPtr->setValue("machine-scheduler");
+  }
+
+  // inline everything
+  for (llvm::Function &f : module.functions())
+    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+  // verify and store llvm
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createAlwaysInlinerLegacyPass());
+  pm.add(llvm::createVerifierPass());
+
+  pm.run(module);
+
+  // create machine
+  module.setTargetTriple(Triple(triple));
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  // set data layout
+  module.setDataLayout(machine->createDataLayout());
+
+  // emit machine code
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    llvm::legacy::PassManager pass;
+    // emit
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::AssemblyFile);
+    pass.run(module);
+  }
+
+  if (stopBeforeOpt != options.end()) {
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+    optPtr->setValue(originalStopBefore);
+  }
+
+  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream outFile(dumpFilename, EC, llvm::sys::fs::OF_None);
+    if (EC) {
+      llvm::errs() << "Error opening file " << dumpFilename << ": "
+                   << EC.message() << "\n";
+    } else {
+      outFile << result;
+      outFile << "---";
+      outFile << "\n========== SCHEDULING DAG ==========\n";
+    }
+  }
+
+  return result;
+}
+
+std::string translateLLVMIRToASM(
+    llvm::Module &module, const std::string &triple, const std::string &proc,
+    const std::string &features, const std::vector<std::string> &flags,
+    bool enable_fp_fusion, bool isObject, const std::string &dumpFileId) {
+  using namespace mlir;
+
+  // Check if we should dump DAG
+  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
+  bool dumpMir = !dumpMirBase.empty();
+
   // options
   auto options = llvm::cl::getRegisteredOptions();
   for (std::string flag : flags) {
@@ -130,13 +247,37 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     llvm::dbgs() << reportStream.str();
     timePassesStr.clear();
   }
-  // module->print(llvm::outs(), nullptr);
+
+  std::string dumpFilename;
+  int saved_stderr_fd = -1;
+  if (dumpMir) {
+    dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
+
+    // Enable misched-print-dags for DAG
+    auto mischedPrintOpt = options.find("misched-print-dags");
+    if (mischedPrintOpt != options.end()) {
+      auto *optPtr =
+          static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      optPtr->setValue(true);
+    }
+
+    // Save original stderr file descriptor
+    saved_stderr_fd = dup(fileno(stderr));
+
+    // Redirect stderr to append to dump file
+    FILE *redirected = freopen(dumpFilename.c_str(), "a", stderr);
+    if (!redirected) {
+      llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename
+                   << "\n";
+    }
+  }
 
   // create machine
   module.setTargetTriple(Triple(triple));
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   // set data layout
   module.setDataLayout(machine->createDataLayout());
+
   // emit machine code
   std::string result;
   {
@@ -151,10 +292,37 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);
-      llvm::dbgs() << reportStream.str();
-      timePassesStr.clear();
+      if (!dumpMir) {
+        llvm::dbgs() << reportStream.str();
+        timePassesStr.clear();
+      }
     }
   }
+
+  // Restore stderr and reset options if we were dumping
+  if (dumpMir) {
+    // Restore stderr
+    fflush(stderr);
+    if (saved_stderr_fd != -1) {
+      dup2(saved_stderr_fd, fileno(stderr));
+      close(saved_stderr_fd);
+      clearerr(stderr);
+    }
+
+    llvm::dbgs() << reportStream.str();
+    timePassesStr.clear();
+
+    // Reset misched-print-dags
+    auto mischedPrintOpt = options.find("misched-print-dags");
+    if (mischedPrintOpt != options.end()) {
+      auto *optPtr =
+          static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      optPtr->setValue(false);
+    }
+
+    llvm::errs() << "MIR and DAG dumped to: " << dumpFilename << "\n";
+  }
+
   return result;
 }
 
@@ -425,7 +593,8 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject) -> py::object {
+         bool enable_fp_fusion, bool isObject,
+         std::string dumpFileId) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -443,12 +612,40 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject);
+                                     enable_fp_fusion, isObject, dumpFileId);
         }
         if (isObject)
           return py::bytes(obj);
         else
           return py::str(obj);
+      },
+      ret::take_ownership);
+
+  m.def(
+      "translate_to_mir",
+      [](std::string llvmIR, std::string triple, std::string proc,
+         std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion, std::string dumpFileId) -> py::object {
+        std::string obj;
+        {
+          // when allow_threads goes out of scope, gil will be released
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
+                                     enable_fp_fusion, dumpFileId);
+        }
+        return py::str(obj);
       },
       ret::take_ownership);
 
