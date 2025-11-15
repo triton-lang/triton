@@ -160,3 +160,71 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %6 : tensor<128x16xf32, #mma>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [8, 1], instrShape = [16, 16, 16], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @chained_dots_with_load_bias_in_between
+
+  // Similar to the previous test but load bias tensor bewteen 2 dots
+
+  // Load and add bias between dots
+  // dot1 -> load -> addf -> dot2
+  // We expect the unstreamable load to be kept after pipelining
+
+  // CHECK: scf.for
+  // CHECK: tt.dot
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: ttg.async_copy_global_to_local
+  // CHECK: tt.dot
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
+  // CHECK: tt.load
+  // CHECK: ttg.async_copy_global_to_local
+  // CHECK: scf.yield
+  tt.func @chained_dots_with_load_bias_in_between(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg5: i32) -> tensor<256x64xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #mma>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x64x!tt.ptr<f16>, #blocked>
+    %3 = tt.broadcast %1 : tensor<64x1xi32, #blocked> -> tensor<64x64xi32, #blocked>
+    %4 = tt.addptr %2, %3 : tensor<64x64x!tt.ptr<f16>, #blocked>, tensor<64x64xi32, #blocked>
+    %6 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked2>
+    %7 = tt.load %6 : tensor<256x64x!tt.ptr<f16>, #blocked2>
+    %8 = ttg.convert_layout %7 : tensor<256x64xf16, #blocked2> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+    %9 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+    %10 = tt.splat %arg4 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked3>
+    %11 = scf.for %arg6 = %c0_i32 to %arg5 step %c1_i32 iter_args(%arg7 = %cst_0) -> (tensor<256x64xf32, #mma>)  : i32 {
+      %12 = arith.muli %arg6, %c64_i32 : i32
+      %13 = tt.load %4 : tensor<64x64x!tt.ptr<f16>, #blocked>
+      %14 = ttg.convert_layout %13 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %15 = tt.dot %8, %14, %cst : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x64xf32, #mma>
+      %16 = tt.splat %12 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+      %17 = arith.addi %16, %9 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+      %18 = tt.expand_dims %17 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<1x64xi32, #blocked3>
+      %19 = tt.broadcast %18 : tensor<1x64xi32, #blocked3> -> tensor<256x64xi32, #blocked3>
+      %bias_ptr = tt.addptr %10, %19 : tensor<256x64x!tt.ptr<f16>, #blocked3>, tensor<256x64xi32, #blocked3>
+      %bias = tt.load %bias_ptr : tensor<256x64x!tt.ptr<f16>, #blocked3>
+      %bias_mma = ttg.convert_layout %bias : tensor<256x64xf16, #blocked3> -> tensor<256x64xf16, #mma>
+      %bias_f32 = arith.extf %bias_mma : tensor<256x64xf16, #mma> to tensor<256x64xf32, #mma>
+      %dot_bias = arith.addf %15, %bias_f32 : tensor<256x64xf32, #mma>
+      %25 = tt.load %4 : tensor<64x64x!tt.ptr<f16>, #blocked>
+      %26 = arith.truncf %dot_bias : tensor<256x64xf32, #mma> to tensor<256x64xf16, #mma>
+      %27 = ttg.convert_layout %26 : tensor<256x64xf16, #mma> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %28 = ttg.convert_layout %25 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %29 = tt.dot %27, %28, %arg7 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x64xf32, #mma>
+      scf.yield %29 : tensor<256x64xf32, #mma>
+    }
+    tt.return %11 : tensor<256x64xf32, #mma>
+  }
+}
