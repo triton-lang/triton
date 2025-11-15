@@ -23,7 +23,6 @@ class NullAllocator:
 
 _NULL_ALLOCATOR = NullAllocator()
 
-
 _allocator: ContextVar[Allocator] = ContextVar("_allocator", default=_NULL_ALLOCATOR)
 
 
