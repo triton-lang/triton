@@ -354,11 +354,15 @@ std::string translateMIRToASM(const std::string &mirPath,
 
   auto options = llvm::cl::getRegisteredOptions();
 
-  auto startAfterOpt = options.find("start-after");
-  std::string originalStartAfter;
-  if (startAfterOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-    originalStartAfter = optPtr->getValue();
+  // We need to start before machine-scheduler and disable it instead of simply
+  // start after it because machine-scheduler is used as anchor point to insert
+  // some passes. Starting after machine-scheduler would also not insert these passes
+  // to the pipeline.
+  auto startBeforeOpt = options.find("start-before");
+  std::string originalStartBefore;
+  if (startBeforeOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
+    originalStartBefore = optPtr->getValue();
     optPtr->setValue("machine-scheduler");
   }
 
@@ -367,6 +371,14 @@ std::string translateMIRToASM(const std::string &mirPath,
 //if (debugPassOpt != options.end()) {
 //  debugPassOpt->second->addOccurrence(1, "debug-pass", "Structure");
 //}
+
+  auto enableMISchedOpt = options.find("enable-misched");
+  bool originalEnableMisched;
+  if (enableMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
+    originalEnableMisched = optPtr->getValue();
+    enableMISchedOpt->second->addOccurrence(1, "enable-misched", "false");
+  }
 
   auto enablePostMISchedOpt = options.find("enable-post-misched");
   bool originalEnablePostMisched;
@@ -444,9 +456,14 @@ std::string translateMIRToASM(const std::string &mirPath,
   }
 
   // Restore options
-  if (startAfterOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-    optPtr->setValue(originalStartAfter);
+  if (startBeforeOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
+    optPtr->setValue(originalStartBefore);
+  }
+
+  if (enableMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
+    optPtr->setValue(originalEnableMisched);
   }
 
   if (enablePostMISchedOpt != options.end()) {
