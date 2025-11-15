@@ -1,3 +1,4 @@
+import expecttest
 import importlib.util
 import itertools
 import os
@@ -785,3 +786,42 @@ def test_async_compile(device, fresh_triton_cache):
         assert a[0, 0] == 1
         kernel[(1, )](a, 2)
         assert a[0, 0] == 2
+
+
+def test_higher_order_kernel(device, fresh_triton_cache, capsys):
+
+    @triton.jit
+    def fn_a():
+        tl.static_print("Compiling with fn_a")
+        return 0
+
+    @triton.jit
+    def kernel(out_ptr, FUNC: tl.constexpr) -> None:
+        val = FUNC()
+        tl.store(out_ptr, val)
+
+    output = torch.empty((), device=device, dtype=torch.int32)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 0
+
+    # Test we can update src in-place
+    orig_src = fn_a.src
+    new_src = orig_src.replace("with fn_a", "with fn_a after modification")
+    new_src = new_src.replace("0", "1")
+    fn_a._unsafe_update_src(new_src)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 1
+
+    # Test that the on disc cache works
+    kernel.device_caches.clear()
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 1
+
+    fn_a._unsafe_update_src(orig_src)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 0
+
+    expecttest.assert_expected_inline(capsys.readouterr().out, """\
+Compiling with fn_a
+Compiling with fn_a after modification
+""")

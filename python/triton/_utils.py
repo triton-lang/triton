@@ -128,3 +128,7 @@ for k, v in type_canonicalisation_dict.items():
 
 def get_primitive_bitwidth(dtype: str) -> int:
     return BITWIDTH_DICT[dtype]
+
+
+def is_namedtuple(val):
+    return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
