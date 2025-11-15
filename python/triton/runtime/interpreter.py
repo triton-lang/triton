@@ -828,6 +828,9 @@ class InterpreterBuilder:
             raise TypeError(f"unsupported type {type}")
 
 
+_MISSING = object()
+
+
 class _LangPatchScope:
     """Tracks patched attributes so they can be restored."""
 
@@ -835,14 +838,17 @@ class _LangPatchScope:
         self._changes: list[tuple[object, str, object]] = []
 
     def set_attr(self, obj: object, name: str, value: object) -> None:
-        original = getattr(obj, name, None)
+        original = getattr(obj, name, _MISSING)
         self._changes.append((obj, name, original))
         setattr(obj, name, value)
 
     def restore(self) -> None:
         while self._changes:
             obj, name, original = self._changes.pop()
-            setattr(obj, name, original)
+            if original is _MISSING:
+                delattr(obj, name)
+            else:
+                setattr(obj, name, original)
 
 
 def _patch_attr(obj, name, member, builder, scope: _LangPatchScope):
