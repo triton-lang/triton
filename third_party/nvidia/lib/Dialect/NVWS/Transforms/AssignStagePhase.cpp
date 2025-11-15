@@ -263,11 +263,23 @@ template <class T> struct AssignStagePhase {
     auto ifOpOutputsIds = getPartitionOutputs(ifOp);
     ifOp.erase();
 
-    for (auto arg : {thenIndex.stage, thenIndex.phase}) {
-      auto argIds = getPartitionIds(arg.getDefiningOp());
-      ifOpIds.insert(argIds.begin(), argIds.end());
-      ifOpOutputsIds.push_back(argIds);
+    SetVector<int> stageIds;
+    // at least one of the then/else block must have producing op
+    for (auto arg : {thenIndex.stage, elseIndex.stage}) {
+      if (auto defOp = arg.getDefiningOp()) {
+        auto argIds = getPartitionIds(defOp);
+        stageIds.insert(argIds.begin(), argIds.end());
+      }
     }
+    SetVector<int> phaseIds;
+    for (auto arg : {thenIndex.phase, elseIndex.phase}) {
+      if (auto defOp = arg.getDefiningOp()) {
+        auto argIds = getPartitionIds(defOp);
+        phaseIds.insert(argIds.begin(), argIds.end());
+      }
+    }
+    ifOpOutputsIds.push_back(stageIds);
+    ifOpOutputsIds.push_back(phaseIds);
     setPartition(newIfOp, ifOpIds);
     setPartitionOutputs(newIfOp, ifOpOutputsIds);
 
@@ -285,13 +297,17 @@ template <class T> struct AssignStagePhase {
         std::optional<SetVector<int>> partitionIds;
         if (hasPartition(&op))
           partitionIds = getPartitionIds(&op);
+        auto wsTag = getWarpSpecializeTag(&op);
         auto stageCluster = getStageCluster(&op);
 
         auto createInto = [&](auto opTy, auto... args) {
           using ty = decltype(opTy);
-          return triton::gpu::createInto<ty>(
+          auto op = triton::gpu::createInto<ty>(
               builder, builder.getLoc(), partitionIds, stageCluster,
               std::forward<decltype(args)>(args)...);
+          if (wsTag)
+            setWarpSpecializeTag(op, *wsTag);
+          return op;
         };
 
         auto nextStage = createInto(arith::AddIOp{}, index.stage,
@@ -508,8 +524,20 @@ LogicalResult assignStagePhase(triton::FuncOp funcOp) {
             !result.use_empty()) {
           auto arg = forOp.getBody()->getTerminator()->getOperand(
               result.getResultNumber());
-          updateOutputWithDefaultPartition(forOp, result.getResultNumber());
-          visitBackwardSlice(forOp, arg, callback, visited);
+          // Check if any users of this scalar result lack ttg.partition, or if
+          // it is used in another warp-specialized loop. If so, the scalar is
+          // consumed by the root partition outside the warp-specialized loop,
+          // requiring us to assign the default partition to all operations that
+          // compute this result.
+          bool assignDefaultPartition =
+              llvm::any_of(result.getUsers(), [&](Operation *user) {
+                return !hasPartition(user) ||
+                       (isa<scf::ForOp>(user) && hasWarpSpecializeTag(user));
+              });
+          if (assignDefaultPartition) {
+            updateOutputWithDefaultPartition(forOp, result.getResultNumber());
+            visitBackwardSlice(forOp, arg, callback, visited);
+          }
         }
       }
     }

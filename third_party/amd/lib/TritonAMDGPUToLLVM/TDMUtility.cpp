@@ -125,7 +125,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        SmallVector<int64_t> blockShape, int numWarps,
                        unsigned padInterval, unsigned padAmount,
                        SmallVector<Value> &group0, SmallVector<Value> &group1,
-                       SmallVector<Value> offset, Value dstPtr, Value pred) {
+                       SmallVector<Value> offset, Value dstPtr, Value pred,
+                       Value barrierPtr) {
   assert(offset.size() == 2 && "NYI: TDM > 2D cases.");
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -184,6 +185,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
       b.or_(group0[3], b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
 
   // group1 changed fields:
+  // [18]: atomic_barrier_enable (optional)
+  // [47:32]: atomic_barrier_address[18:3] (optional)
   // [79:48]:   tensor shape dim inner
   // [111:80]:  tensor shape dim outer
   group1[1] = b.shl(tensorShape[1], b.i32_val(16));
@@ -191,6 +194,15 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   group1[2] = b.or_(group1[2], b.shl(tensorShape[0], b.i32_val(16)));
   group1[3] = b.and_(group1[3], b.i32_val(0xFFFF << 16));
   group1[3] = b.or_(group1[3], b.lshr(tensorShape[0], b.i32_val(16)));
+  if (barrierPtr) {
+    group1[0] = b.or_(group1[0], b.shl(b.i32_val(1), b.i32_val(18)));
+    group1[1] = b.or_(
+        group1[1], b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
+                          b.i32_val(0x00FFFF)));
+  } else {
+    // Disable atomic_barrier_enable in case it was set before
+    group1[0] = b.and_(group1[0], b.i32_val(0xFFFBFFFF));
+  }
 }
 
 } // namespace mlir::LLVM::AMD

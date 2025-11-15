@@ -1124,10 +1124,20 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
+    Value barrierPtr = nullptr;
+    if (op.getBarrier()) {
+      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+          loc, adaptor.getBarrier(),
+          typeConverter->convertType(
+              op.getBarrier().getType().getElementType()),
+          rewriter);
+      barrierPtr = smemObj.getBase();
+    }
+
     LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
                                  blockShape, numWarps, padInterval, padAmount,
                                  group0Vec, group1Vec, offset, dstPtr,
-                                 op.getPred());
+                                 op.getPred(), barrierPtr);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1179,7 +1189,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
                                  blockShape, numWarps, /*padInterval=*/0,
                                  /*padAmount=*/0, group0Vec, group1Vec, offset,
-                                 dstPtr, b.true_val());
+                                 dstPtr, b.true_val(), nullptr);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1842,8 +1852,9 @@ struct AtomicRMWOpConversion
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     auto tid = getThreadId(rewriter, loc);
 
+    bool needLdsStaging = !tensorTy && !opResult.use_empty();
     std::optional<Value> atomicSharedMemBase =
-        op->hasAttr("allocation.offset")
+        op->hasAttr("allocation.offset") && needLdsStaging
             ? std::optional<Value>(getSharedMemoryBase(
                   loc, rewriter, targetInfo, op.getOperation()))
             : std::nullopt;
@@ -2014,6 +2025,28 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
+struct AsyncCopyMbarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncCopyMbarrierArriveOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncCopyMbarrierArriveOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(),
+        typeConverter->convertType(op.getBarrier().getType().getElementType()),
+        rewriter);
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.ds.atomic.async.barrier.arrive.b64",
+        void_ty(getContext()), smemObj.getBase());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2033,5 +2066,6 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD

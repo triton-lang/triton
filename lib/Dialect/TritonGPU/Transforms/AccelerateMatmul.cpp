@@ -566,7 +566,7 @@ public:
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
         context, instrShape[0], instrShape[1], colStride, CTASplitNum[0],
-        CTASplitNum[1]);
+        CTASplitNum[1], useTwoCTAs);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     MemDescType accMemDescType =
@@ -719,31 +719,6 @@ public:
                                          mmaResult.newRetType, rewriter);
     Value newB = convertDotOperandForMMA(b, 1, minBitwidth,
                                          mmaResult.newRetType, rewriter);
-
-    // Compute tiles per warp for each operand
-    auto computeTilePerWarp = [&](Value operand, int operandIdx) -> unsigned {
-      auto operandTy = cast<RankedTensorType>(operand.getType());
-      auto dotEncoding = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-          operandTy.getEncoding());
-      if (!dotEncoding)
-        return 1;
-
-      const int bitWidth = operandTy.getElementType().getIntOrFloatBitWidth();
-      const int kWidth = dotEncoding.getKWidth();
-      auto rep = mmaResult.mmaEnc.getRepForOperand(
-          triton::gpu::getShapePerCTA(operandTy), bitWidth, kWidth,
-          dotEncoding.getOpIdx());
-
-      // repA = [repM, repK], repB = [repK, repN]
-      // For operand A (idx 0): return rep[1] (repK)
-      // For operand B (idx 1): return rep[2] (repN)
-      if (operandIdx == 0) {
-        return rep.size() >= 2 ? rep[1] : 1;
-      } else {
-        return rep.size() >= 3 ? rep[2] : 1;
-      }
-    };
-
     const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
@@ -808,8 +783,6 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = a.getType();
-    auto oldBType = b.getType();
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;
@@ -847,7 +820,7 @@ public:
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, m, n, colStride, CTASplitNum[0], CTASplitNum[1]);
+        context, m, n, colStride, CTASplitNum[0], CTASplitNum[1], false);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     MemDescType accMemDescType =
