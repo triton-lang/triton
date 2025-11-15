@@ -452,13 +452,8 @@ class HIPBackend(BaseBackend):
         features = '-real-true16' if 'gfx11' in options.arch else ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
-        mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion, dump_file_id)
-      # if not mir:
-      #     amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-      #                                    False)
-      # else:
-      #     amdgcn = llvm.translate_mir_to_asm(mir, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-      #                                    False)
+        _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                  dump_file_id)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False, dump_file_id)
         if knobs.amd.dump_amdgcn:
