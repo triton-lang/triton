@@ -72,9 +72,9 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
     return torch.vstack(out)
 
 
-def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weight_dtype,
+def init_compute_data(m, n, k, n_slices, mode, act_dtype, weight_dtype,
                       has_y_gammas, device="cuda",
-                      inner_expt_opt=None, padding_block_k=None):
+                      inner_expt_opt=None):
     torch.manual_seed(0)
     assert mode in {'batched', "plain", 'ragged'}
     shape_a = (n_slices, m, k) if mode == 'batched' else (m, k)
@@ -83,16 +83,6 @@ def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weigh
     b = alloc_rand(batch_size + (k, n), device=device, dtype=weight_dtype)
     bias = alloc_rand(batch_size + (n, ), device=device, dtype=torch.float32)
     gammas = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32) if has_y_gammas else None
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
-        b = b.transpose(-1, -2).contiguous().transpose(-1, -2)
-
-    if inner_expt_opt is not None:
-        bias = None
-        if "pad_x" in inner_expt_opt:
-            a = pad_rows_to_multiples(a.T, ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0).T.contiguous()
-        if "pad_w" in inner_expt_opt:
-            b = pad_rows_to_multiples(b, ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0)
-
     return a, b, bias, gammas
 
 
@@ -100,28 +90,38 @@ def init_compute_data(m, n, k, ragged_metadata, n_slices, mode, act_dtype, weigh
 # numerics stuff
 # ---------------
 
+def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
+    dtype_str = dtype_str.strip("mx")
+    return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
 
-def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode, n_slices=1, expt_is_inner=False, device="cuda"):
+class DType:
+
+    def __init__(self, dtype_str):
+        self.has_global_scale = dtype_str.startswith("float8")
+        self.has_mx_scale = dtype_str.startswith("mx")
+        self.torch_dtype = dtype_str_to_torch(dtype_str)
+
+
+def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_slices=1, expt_is_inner=False, device="cuda"):
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not weight_mxfp
     # flexpoint
-    make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_slices // 2) +
-                                                  ([val0]
-                                                   if n_slices % 2 else []), dtype=torch.float32, device=device)
-    make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
-    make = lambda val0, val1, is_tensor: make_tensor(val0, val1) if is_tensor else make_scalar(val0)
-
-    in_flex_data = lambda scale, use_flex: InFlexData(dtype=out_dtype, scale=make_scalar(scale)
-                                                      ) if use_flex else InFlexData()
+    make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_slices // 2) + ([val0] if n_slices % 2 else []), #
+                                                  dtype=torch.float32, device=device)
+    make_scalar_scale = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
+    make_tensor_scale = lambda val0, val1, is_tensor: make_tensor(val0, val1) if is_tensor else make_scalar_scale(val0)
     flex_ctx = FlexCtx(
-        lhs_data=in_flex_data(1.25, act_use_flexpoint),
+        lhs_data= InFlexData(
+            dtype=out_dtype,
+            scale=make_scalar_scale(1.25)
+        ) if act_use_flexpoint else InFlexData(),
         rhs_data=InFlexData(
             dtype=weight_dtype,
-            scale=make(1.50, 1.25, not expt_is_inner),
+            scale=make_tensor_scale(1.50, 1.25, not expt_is_inner),
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make_scalar(4.00),
-            actual_scale=make_scalar(0),
+            expected_scale=make_scalar_scale(4.00),
+            actual_scale=make_scalar_scale(0),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )
@@ -151,9 +151,6 @@ def apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_config):
     )
 
 
-def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
-    dtype_str = dtype_str.strip("mx")
-    return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
 
 
 # Scope to ensure that the opt_flags_constraints are reset after the test
@@ -402,12 +399,21 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   mode, n_slices, expt_is_inner, device=device)
+                                   n_slices, expt_is_inner, device=device)
 
-    # ragged metadata
-    gather_indx = torch.randint(0, max(m, 1), (m, ), device=device, dtype=torch.int32) if do_gather else None
-    scatter_indx = torch.randperm(m, device=device, dtype=torch.int32) if do_scatter else None
-    x_ragged_metadata = init_ragged_metadata(n_slices, m if not expt_is_inner else k, device) if mode == "ragged" else None
+    gather_indx = None if not do_gather else torch.randint(0, max(m, 1), (m, ), device=device, dtype=torch.int32)
+    scatter_indx = None if not do_scatter else torch.randperm(m, device=device, dtype=torch.int32)
+    x_ragged_metadata = None if mode != "ragged" else init_ragged_metadata(n_slices, m if not expt_is_inner else k, device)
+    w_ragged_metadata = None if not expt_is_inner else replace(x_ragged_metadata)
+
+
+    x_tri, w_tri, bias_tri, gammas_tri = init_compute_data(m, n, k, n_slices,
+                                                           mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
+                                                           torch.bfloat16 if weight_mxfp else weight_dtype,
+                                                           has_y_gammas, device=device,
+                                                           inner_expt_opt=inner_expt_opt)
+    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+        w_tri = w_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
 
     # ..
     padding_block_k = 32
@@ -419,22 +425,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         elif not is_persistent:
             padding_block_k = 64
 
-
-    x_tri, w_tri, bias_tri, gammas_tri = init_compute_data(m, n, k, x_ragged_metadata, n_slices,
-                                                           mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
-                                                           torch.bfloat16 if weight_mxfp else weight_dtype,
-                                                           has_y_gammas, device=device,
-                                                           inner_expt_opt=inner_expt_opt, padding_block_k=padding_block_k)
-
-    w_ragged_metadata = None
-    if expt_is_inner:
-        w_ragged_metadata = replace(x_ragged_metadata)
-        if "pad_w" in inner_expt_opt:
-            w_ragged_metadata.slice_offs = w_ragged_metadata.block_offs(padding_block_k) * padding_block_k
-            w_ragged_metadata.slice_sizes_divisibility = padding_block_k
+    if inner_expt_opt is not None:
+        bias_tri = None
         if "pad_x" in inner_expt_opt:
+            x_tri = pad_rows_to_multiples(x_tri.T, x_ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0).T.contiguous()
             x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             x_ragged_metadata.slice_sizes_divisibility = padding_block_k
+        if "pad_w" in inner_expt_opt:
+            w_tri = pad_rows_to_multiples(w_tri, w_ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0)
+            w_ragged_metadata.slice_offs = w_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+            w_ragged_metadata.slice_sizes_divisibility = padding_block_k
 
 
     x_ref, w_ref, bias_ref, gammas_ref = apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_opt)
