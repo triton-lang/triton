@@ -68,6 +68,19 @@ public:
   }
 };
 
+bool membarFilter(Operation *beforeOp, Operation *afterOp) {
+  if (isa<triton::nvidia_gpu::WarpGroupDotOp, triton::gpu::LocalStoreOp>(
+          beforeOp)) {
+    if (auto mbarArriveOp =
+            dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(afterOp)) {
+      auto numWarps = triton::gpu::lookupNumWarps(afterOp);
+      auto numArrive = mbarArriveOp.getCount();
+      return numArrive >= numWarps;
+    }
+  }
+  return false;
+}
+
 struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
@@ -86,7 +99,7 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
-    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation, membarFilter);
     membarPass.run();
 
     mlir::LowerToLLVMOptions option(context);

@@ -19,6 +19,7 @@ struct BlockInfo {
 
   IntervalMapT syncReadIntervals;
   IntervalMapT syncWriteIntervals;
+  IntervalMapT syncAtomicIntervals;
 
   BlockInfo() = default;
 
@@ -30,6 +31,9 @@ struct BlockInfo {
     for (auto &interval : other.syncWriteIntervals)
       syncWriteIntervals[interval.first].insert(interval.second.begin(),
                                                 interval.second.end());
+    for (auto &interval : other.syncAtomicIntervals)
+      syncAtomicIntervals[interval.first].insert(interval.second.begin(),
+                                                 interval.second.end());
     return *this;
   }
 
@@ -39,39 +43,67 @@ struct BlockInfo {
     err << "  Read Intervals:\n";
     for (auto &[interval, ops] : syncReadIntervals) {
       err << "    [" << interval.start() << ", " << interval.end() << "] ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
+      for (auto &op : ops) {
+        op->dump();
+        err << "\n";
+      }
       err << "\n";
     }
     err << "  Write Intervals:\n";
     for (auto &[interval, ops] : syncWriteIntervals) {
       err << "    [" << interval.start() << ", " << interval.end() << "] ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
+      for (auto &op : ops) {
+        op->dump();
+        err << "\n";
+      }
+      err << "\n";
+    }
+    err << "  Atomic Intervals:\n";
+    for (auto &[interval, ops] : syncAtomicIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops) {
+        op->dump();
+        err << "\n";
+      }
       err << "\n";
     }
   }
 
   /// Returns true if intervals in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
-    return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals,
-                                 filter) ||
-           /*WAR*/
-           isIntersected(syncReadIntervals, other.syncWriteIntervals, filter) ||
-           /*WAW*/
-           isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
+  bool isIntersected(const BlockInfo &afterInfo, MembarFilterFn filter) const {
+    // * Atomic, Write, Read
+    // Atomic F, T, T
+    // Write  T, T, T
+    // Rread  T, T, F
+    const auto &a0 = syncAtomicIntervals;
+    const auto &r0 = syncReadIntervals;
+    const auto &w0 = syncWriteIntervals;
+
+    // Note `*this`comes before `afterInfo`.
+    const auto &a1 = afterInfo.syncAtomicIntervals;
+    const auto &r1 = afterInfo.syncReadIntervals;
+    const auto &w1 = afterInfo.syncWriteIntervals;
+
+    auto intersects = [&](const IntervalMapT &s0, const auto &...ss) {
+      return (... || isIntersected(s0, ss, filter));
+    };
+
+    return intersects(a0, w1, r1) || intersects(w0, a1, w1, r1) ||
+           intersects(r0, a1, w1);
   }
 
   /// Clears the intervals because a barrier is inserted.
   void sync() {
     syncReadIntervals.clear();
     syncWriteIntervals.clear();
+    syncAtomicIntervals.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadIntervals == other.syncReadIntervals &&
-           syncWriteIntervals == other.syncWriteIntervals;
+           syncWriteIntervals == other.syncWriteIntervals &&
+           syncAtomicIntervals == other.syncAtomicIntervals;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }

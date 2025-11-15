@@ -47,12 +47,6 @@ include "TritonAMDGPUOpInterfaces.td"
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
 
-//
-// Interfaces
-//
-def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
-
 //===----------------------------------------------------------------------===//
 // ExtractSliceOp
 //===----------------------------------------------------------------------===//
