@@ -12,6 +12,7 @@
 #include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -44,6 +45,8 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace test {
@@ -135,6 +138,21 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
+
+  // Plugin passes
+  if (std::string filename =
+          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      !filename.empty()) {
+
+    TritonPlugin TP(filename);
+    std::vector<const char *> passNames;
+    if (auto result = TP.getPassHandles(passNames); !result)
+      llvm::report_fatal_error(result.takeError());
+
+    for (const char *passName : passNames)
+      if (auto result = TP.registerPass(passName); !result)
+        llvm::report_fatal_error(result.takeError());
+  }
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
