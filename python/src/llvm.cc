@@ -35,6 +35,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+/*
 #ifdef _WIN32
 #include <io.h>
 #define dup _dup
@@ -43,6 +44,7 @@
 #else
 #include <unistd.h>
 #endif
+*/
 
 namespace py = pybind11;
 
@@ -79,13 +81,11 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-std::string translateLLVMIRToMIR(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion,
-                                 const std::string &dumpFileId) {
+std::string
+translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
+                     const std::string &proc, const std::string &features,
+                     const std::vector<std::string> &flags,
+                     bool enable_fp_fusion, const std::string &dumpFileId) {
   using namespace mlir;
 
   // Check if we should dump MIR
@@ -153,13 +153,14 @@ std::string translateLLVMIRToMIR(llvm::Module &module,
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
     // emit
-    machine->addPassesToEmitFile(pass, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
-
   }
 
   if (stopBeforeOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
     optPtr->setValue(originalStopBefore);
   }
 
@@ -168,7 +169,8 @@ std::string translateLLVMIRToMIR(llvm::Module &module,
     std::error_code EC;
     llvm::raw_fd_ostream outFile(dumpFilename, EC, llvm::sys::fs::OF_None);
     if (EC) {
-      llvm::errs() << "Error opening file " << dumpFilename << ": " << EC.message() << "\n";
+      llvm::errs() << "Error opening file " << dumpFilename << ": "
+                   << EC.message() << "\n";
     } else {
       outFile << result;
       outFile << "---";
@@ -179,16 +181,13 @@ std::string translateLLVMIRToMIR(llvm::Module &module,
   return result;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject,
-                                 const std::string &dumpFileId) {
+std::string translateLLVMIRToASM(
+    llvm::Module &module, const std::string &triple, const std::string &proc,
+    const std::string &features, const std::vector<std::string> &flags,
+    bool enable_fp_fusion, bool isObject, const std::string &dumpFileId) {
   using namespace mlir;
 
-  // Check if we should dump MIR
+  // Check if we should dump DAG
   std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
   bool dumpMir = !dumpMirBase.empty();
 
@@ -249,7 +248,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     timePassesStr.clear();
   }
 
-  // TRITON_DUMP_MIR: Enable MIR and DAG dumping
   std::string dumpFilename;
   int saved_stderr_fd = -1;
   if (dumpMir) {
@@ -258,7 +256,8 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     // Enable misched-print-dags for DAG
     auto mischedPrintOpt = options.find("misched-print-dags");
     if (mischedPrintOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      auto *optPtr =
+          static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
       optPtr->setValue(true);
     }
 
@@ -266,9 +265,10 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     saved_stderr_fd = dup(fileno(stderr));
 
     // Redirect stderr to append to dump file
-    FILE* redirected = freopen(dumpFilename.c_str(), "a", stderr);
+    FILE *redirected = freopen(dumpFilename.c_str(), "a", stderr);
     if (!redirected) {
-      llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename << "\n";
+      llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename
+                   << "\n";
     }
   }
 
@@ -315,178 +315,13 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     // Reset misched-print-dags
     auto mischedPrintOpt = options.find("misched-print-dags");
     if (mischedPrintOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      auto *optPtr =
+          static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
       optPtr->setValue(false);
     }
 
     llvm::errs() << "MIR and DAG dumped to: " << dumpFilename << "\n";
   }
-
-  return result;
-}
-
-
-// New function: Resume compilation from MIR
-std::string translateMIRToASM(const std::string &mirText,
-                              const std::string &triple,
-                              const std::string &proc,
-                              const std::string &features,
-                              const std::vector<std::string> &flags,
-                              bool enable_fp_fusion,
-                              bool isObject) {
-  using namespace mlir;
-
-  std::string llcCmd = "/home/sontuavu/llvm-project/build/bin/llc";
-  llcCmd += " -mtriple=" + triple;
-  llcCmd += " -mcpu=" + proc;
-  if (!features.empty()) {
-    llcCmd += " -mattr=" + features;
-  }
-  llcCmd += " -start-before=machine-block-freq";
-  llcCmd += " vector_add_post_sched.mir";
-  llcCmd += " -o /dev/null";
-  llcCmd += " 2> tmp";
-  
-  int ret = system(llcCmd.c_str());
-  if (ret != 0) {
-    llvm::errs() << "Warning: llc command failed for DAG generation\n";
-  }
-
-    auto options = llvm::cl::getRegisteredOptions();
-
-    auto startBeforeOpt = options.find("start-after");
-    if (startBeforeOpt != options.end()) {
-      startBeforeOpt->second->addOccurrence(1, "start-after", "machine-scheduler");
-      llvm::errs() << "start-before option set successfully\n";
-    } else {
-      llvm::errs() << "WARNING: start-before option not found!\n";
-    }
-
-  // Enable pass debugging
-  auto debugPassOpt = options.find("debug-pass");
-  if (debugPassOpt != options.end()) {
-    debugPassOpt->second->addOccurrence(1, "debug-pass", "Structure");
-  }
-
-  // Apply other flags
-  for (const std::string &flag : flags) {
-    auto it = options.find(flag);
-    if (it != options.end()) {
-      it->second->addOccurrence(1, flag, "true");
-    }
-  }
-
-
-  // Parse MIR into LLVM Module
-  llvm::LLVMContext context;
-  llvm::SMDiagnostic error;
-
-  // Create a MemoryBuffer from MIR text
-  std::unique_ptr<llvm::MemoryBuffer> buffer =
-      llvm::MemoryBuffer::getMemBuffer(mirText);
-
-  std::unique_ptr<llvm::MIRParser> mirParser =
-      llvm::createMIRParser(std::move(buffer), context);
-
-  if (!mirParser) {
-    llvm::report_fatal_error("failed to create MIR parser");
-  }
-
-  std::unique_ptr<llvm::Module> module = mirParser->parseIRModule();
-  if (!module) {
-    llvm::report_fatal_error("failed to parse MIR IR module");
-  }
-
-  // Apply flags
-//auto options = llvm::cl::getRegisteredOptions();
-//for (const std::string &flag : flags) {
-//  auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-//  assert(shortPtr);
-//  shortPtr->setValue(true);
-//}
-
-//// Set start-after to resume after the point where we stopped
-//std::string originalStartAfter;
-//auto startAfterOpt = options.find("start-before");
-//if (startAfterOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-//  originalStartAfter = optPtr->getValue();
-//  // Start after the pass we stopped before (machine-scheduler)
-//  // Actually, when loading MIR, we want to run from the beginning of
-//  // the machine pass pipeline, so we might not need start-after
-//  optPtr->setValue("machine-scheduler");
-//}
-
-//auto enableMachineSchedOpt = options.find("enable-misched");
-//if (enableMachineSchedOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMachineSchedOpt->second);
-//  optPtr->setValue(false);
-//}
-
-  // Setup target machine
-  module->setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(module.get(), proc, enable_fp_fusion, features);
-  module->setDataLayout(machine->createDataLayout());
-
-  // Create MachineModuleInfoWrapperPass FIRST
-  llvm::MachineModuleInfoWrapperPass *MMIWP =
-      new llvm::MachineModuleInfoWrapperPass(machine.get());
-
-  // Create PassManager and add MMIWP
-  llvm::legacy::PassManager pass;
-  pass.add(MMIWP);
-
-  // Now create MachineModuleInfo and parse machine functions
-  llvm::MachineModuleInfo MMI(machine.get());
-  if (mirParser->parseMachineFunctions(*module, MMI)) {
-    llvm::report_fatal_error("Failed to parse machine functions from MIR");
-  }
-
-  // Verify machine functions
-  llvm::errs() << "Verifying machine functions...\n";
-  for (auto &F : *module) {
-    if (auto *MF = MMIWP->getMMI().getMachineFunction(F)) {
-        auto &MRI = MF->getRegInfo();
-        // Freeze reserved registers
-        if (!MRI.reservedRegsFrozen()) {
-          MRI.freezeReservedRegs();
-        }
-      llvm::errs() << "  Function: " << F.getName() << "\n";
-      llvm::errs() << "    Num basic blocks: " << MF->size() << "\n";
-
-      // Check if basic blocks are valid
-      for (auto &MBB : *MF) {
-        llvm::errs() << "    BB: " << MBB.getNumber() << " has " << MBB.size() << " instructions\n";
-      }
-
-      // Try to verify
-      if (!MF->verify(nullptr, nullptr, nullptr, /*AbortOnError=*/false)) {
-        llvm::errs() << "    WARNING: MachineFunction verification FAILED!\n";
-      } else {
-        llvm::errs() << "    MachineFunction verification passed\n";
-      }
-    }
-  }
-
-  // Emit code from MIR
-  std::string result;
-  {
-    llvm::raw_string_ostream stream(result);
-    llvm::buffer_ostream pstream(stream);
-
-    auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
-                             : llvm::CodeGenFileType::AssemblyFile;
-
-    // This will run the remaining machine passes and emit assembly/object
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
-    pass.run(*module);
-  }
-
-  // Restore start-after
-//if (startAfterOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-//  optPtr->setValue(originalStartAfter);
-//}
 
   return result;
 }
@@ -758,7 +593,8 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject, std::string dumpFileId) -> py::object {
+         bool enable_fp_fusion, bool isObject,
+         std::string dumpFileId) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -812,24 +648,6 @@ void init_triton_llvm(py::module &&m) {
         return py::str(obj);
       },
       ret::take_ownership);
-
-  m.def(
-    "translate_mir_to_asm",
-    [](std::string mirText, std::string triple, std::string proc,
-       std::string features, std::vector<std::string> flags,
-       bool enable_fp_fusion, bool isObject) -> py::object {
-      std::string result;
-      {
-        py::gil_scoped_release allow_threads;
-        result = translateMIRToASM(mirText, triple, proc, features, flags,
-                                   enable_fp_fusion, isObject);
-      }
-      if (isObject)
-        return py::bytes(result);
-      else
-        return py::str(result);
-    },
-    ret::take_ownership);
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;
