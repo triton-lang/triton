@@ -2267,73 +2267,6 @@ struct SqrtOpConversion
 private:
   bool ftz;
 };
-
-struct PreciseSqrtOpConversion
-    : ElementwiseOpConversionBase<triton::PreciseSqrtOp,
-                                  PreciseSqrtOpConversion> {
-  explicit PreciseSqrtOpConversion(LLVMTypeConverter &typeConverter,
-                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                   bool ftz, PatternBenefit benefit)
-      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
-        ftz(ftz) {}
-
-  SmallVector<Value> createDestOps(triton::PreciseSqrtOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    // If the op is neither FP32 nor denorm flushing(ftz), it's directly lowered
-    // to LLVM::SqrtOp.
-    if (elemTy.getIntOrFloatBitWidth() != 32 || !ftz) {
-      return {LLVM::SqrtOp::create(rewriter, loc, elemTy, operands[0],
-                                   adaptor.getAttributes().getValue())};
-    }
-
-    // On the AMDGPU backend, instructions legalized from LLVM::SqrtOp are
-    // designed to always preserve denorms, according to
-    // https://github.com/llvm/llvm-project/blob/3d6b2d49/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
-    //
-    // For f32 inputs with ftz enabled, we need to manually lower the op to
-    // bypass the scaling-up-and-down process while keeping other parts
-    // unchanged. To ensure IEEE-compliant results, we approximate `sqrt(x)`
-    // using `x * rsq(x)` and apply extra refinement iterations to correct the
-    // result.
-    StringRef funcName = "llvm.amdgcn.rsq.f32";
-
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-
-    Value sqrtR =
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
-
-    Value sqrtX = operands[0][0];
-    Value sqrtS = b.fmul(f32_ty, sqrtX, sqrtR);
-
-    // Refine the approximation with Newton iteration
-    Value sqrtH = b.fmul(f32_ty, sqrtR, b.f32_val(0.5f));
-    Value sqrtE = b.fma(b.neg(f32_ty, sqrtH), sqrtS, b.f32_val(0.5f));
-    sqrtH = b.fma(sqrtH, sqrtE, sqrtH);
-    sqrtS = b.fma(sqrtS, sqrtE, sqrtS);
-    Value sqrtD = b.fma(b.neg(f32_ty, sqrtS), sqrtS, sqrtX);
-    sqrtS = b.fma(sqrtD, sqrtH, sqrtS);
-
-    // Handle +0/-0/+inf
-    // These flags come from
-    // https://github.com/llvm/llvm-project/blob/217e0f39/llvm/include/llvm/ADT/FloatingPointMode.h#L239-L265.
-    const unsigned fcPosInf = 0x0200;
-    const unsigned fcNegZero = 0x0020;
-    const unsigned fcPosZero = 0x0040;
-    const unsigned fcZero = fcNegZero | fcPosZero;
-
-    Value isZeroOrPosInf =
-        LLVM::IsFPClass::create(rewriter, loc, i1_ty, sqrtX, fcPosInf | fcZero);
-    return {b.select(isZeroOrPosInf, sqrtX, sqrtS)};
-  }
-
-private:
-  bool ftz;
-};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2382,6 +2315,8 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -2409,8 +2344,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
-  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
-                                        benefit);
   triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();
