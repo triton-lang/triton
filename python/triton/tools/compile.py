@@ -163,11 +163,10 @@ def compile_kernel(args: CompileArgs):
     # dump C stub code
     suffix = ''
     for i, ty in enumerate(signature.values()):
-        suffix += str(i)
         if hints.get((i, ), None) == 1:
-            suffix += 'c'
+            suffix += f'{i}c'
         if hints.get((i, ), None) == 16:
-            suffix += 'd'
+            suffix += f'{i}d'
     func_name = '_'.join([out_name, sig_hash, suffix])
     asm = ccinfo.asm[backend.binary_ext]  # store binary data once
 
