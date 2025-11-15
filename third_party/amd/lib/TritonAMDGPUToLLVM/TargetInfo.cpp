@@ -167,24 +167,26 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 
+// TODO: to refactor these shuffle methods from amd utitlity.cpp into
+// targetinfo.
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                             int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              Value i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
@@ -665,6 +667,46 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())
     AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
+}
+
+std::pair<Value, Value> TargetInfo::getLaneAndWarpId(RewriterBase &rewriter,
+                                                     Location loc) const {
+  auto isaFamily = getISAFamily();
+  Value laneId, warpId;
+  if (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily) {
+    // On GFX9, there is no dedicated hardware instruction to read `wave_id`.
+    // The value is instead computed from `workitem.id.x`. Per the GFX9 ABI,
+    // `workitem.id.x` is initialized in a vector register, and vector
+    // instructions are generated for IR operations that depend on `wave_id`.
+    //
+    // A `v_readfirstlane` instruction is inserted at the end of these vector
+    // sequences to transfer the value from a vector register to a scalar
+    // register, initializing `$m0`.
+
+    // When this sequence occurs inside a loop, the MachineLICM pass does not
+    // hoist it because `v_readfirstlane` is convergent. Since both
+    // `workitem.id.x` and `wave_id` are constant at runtime, their
+    // computation can be safely hoisted to the function entry block.
+
+    auto insertPt = rewriter.saveInsertionPoint();
+    Operation *parentOp = insertPt.getBlock()->getParentOp();
+    while (!isa<LLVM::LLVMFuncOp>(parentOp)) {
+      parentOp = parentOp->getParentOp();
+    }
+
+    auto funcOp = cast<LLVM::LLVMFuncOp>(parentOp);
+    rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+
+    std::tie(laneId, warpId) = TargetInfoBase::getLaneAndWarpId(rewriter, loc);
+    auto call = ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, warpId);
+    warpId = call.getRes();
+
+    rewriter.restoreInsertionPoint(insertPt);
+  } else {
+    std::tie(laneId, warpId) = TargetInfoBase::getLaneAndWarpId(rewriter, loc);
+  }
+
+  return {laneId, warpId};
 }
 
 } // namespace mlir::triton::AMD

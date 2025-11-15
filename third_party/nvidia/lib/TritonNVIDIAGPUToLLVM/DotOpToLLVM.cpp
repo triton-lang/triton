@@ -90,14 +90,21 @@ struct WarpGroupDotOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using ConvertOpToLLVMPattern<
       triton::nvidia_gpu::WarpGroupDotOp>::ConvertOpToLLVMPattern;
+  WarpGroupDotOpConversion(LLVMTypeConverter &typeConverter,
+                           const NVIDIA::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                        getThreadId(rewriter, loc));
+                        targetInfo.getThreadId(rewriter, loc));
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct WarpGroupDotWaitOpConversion
@@ -159,10 +166,11 @@ struct WarpGroupDotWaitOpConversion
 } // namespace
 
 void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int computeCapability, PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, int computeCapability,
+    PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
-  patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
+  patterns.add<WarpGroupDotOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
   patterns.add<ScaledDotOpConversion>(typeConverter, computeCapability,
                                       benefit);

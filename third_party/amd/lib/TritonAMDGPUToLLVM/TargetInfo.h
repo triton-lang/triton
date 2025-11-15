@@ -105,6 +105,9 @@ public:
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
 
+  std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
+                                           Location loc) const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,

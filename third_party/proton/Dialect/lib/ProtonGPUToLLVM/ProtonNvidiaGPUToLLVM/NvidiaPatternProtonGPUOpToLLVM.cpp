@@ -40,8 +40,8 @@ struct CircularStoreOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
+    auto dataPack = lowerCircularStoreOpHelper(op, adaptor.getSegment(),
+                                               rewriter, targetInfo);
 
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {

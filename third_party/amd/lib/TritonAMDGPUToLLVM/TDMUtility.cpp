@@ -126,7 +126,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        unsigned padInterval, unsigned padAmount,
                        SmallVector<Value> &group0, SmallVector<Value> &group1,
                        SmallVector<Value> offset, Value dstPtr, Value pred,
-                       Value barrierPtr) {
+                       const TargetInfo &targetInfo, Value barrierPtr) {
   assert(offset.size() == 2 && "NYI: TDM > 2D cases.");
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -137,7 +137,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto [srcPtr, tensorShape, tensorStride] =
       decodeTDMDescriptor(rewriter, loc, group0, group1);
 
-  auto warpId = getLaneAndWarpId(rewriter, loc).second;
+  auto warpId = targetInfo.getLaneAndWarpId(rewriter, loc).second;
   auto warps = getWarpDistribution(blockShape, numWarps);
 
   // Shift global pointer by offset

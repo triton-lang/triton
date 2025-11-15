@@ -2,6 +2,7 @@
 #define PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
 
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "llvm/ADT/SmallVector.h"
@@ -34,6 +35,10 @@ public:
   virtual int getIndexPtrAddrSpace() const = 0;
 
   virtual ~TargetInfoBase() = default;
+
+  virtual Value getThreadId(RewriterBase &rewriter, Location loc) const {
+    return helper.getThreadId(rewriter, loc);
+  }
 
 protected:
   const mlir::triton::TargetInfoBase &helper;

@@ -13,6 +13,14 @@ def ConvertNVGPUToLLVM : Pass<"convert-nv-gpu-to-llvm", "mlir::ModuleOp"> {
                              "mlir::LLVM::LLVMDialect",
                              "mlir::NVVM::NVVMDialect",
                              "mlir::triton::nvgpu::NVGPUDialect"];
+    let options = [
+        Option<"computeCapability", "compute-capability",
+               "int32_t", /*default*/"80",
+               "device compute capability">,
+        Option<"ptxVersion", "ptx-version",
+               "int32_t", /*default*/"80",
+               "PTX version">,
+    ];
 }
 
 #endif // NVGPU_CONVERSION_PASSES

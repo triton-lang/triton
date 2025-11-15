@@ -13,6 +13,7 @@ namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
+using mlir::triton::AMD::TargetInfo;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
 namespace {
@@ -25,11 +26,12 @@ enum class ShflKind : uint32_t {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
-                               ISAFamily isaFamily, Value val, Value i,
-                               int strideInt, ShflKind mode, Value clamp) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
+                               Value i, int strideInt, ShflKind mode,
+                               Value clamp, const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned bits = val.getType().getIntOrFloatBitWidth();
+  auto isaFamily = targetInfo.getISAFamily();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
   // 32bit/dwords so we need promote to 32 here.
@@ -40,8 +42,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     if (bits < 32)
       val = b.sext(i32_ty, val);
 
-    val = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt, mode,
-                            clamp);
+    val = shuffleCommonImpl(loc, rewriter, val, i, strideInt, mode, clamp,
+                            targetInfo);
 
     if (bits < 32)
       val = b.trunc(int_ty(bits), val);
@@ -55,10 +57,10 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     Value vec = b.bitcast(val, vecTy);
     Value val0 = b.extract_element(f32_ty, vec, b.i32_val(0));
     Value val1 = b.extract_element(f32_ty, vec, b.i32_val(1));
-    val0 = shuffleCommonImpl(loc, rewriter, isaFamily, val0, i, strideInt, mode,
-                             clamp);
-    val1 = shuffleCommonImpl(loc, rewriter, isaFamily, val1, i, strideInt, mode,
-                             clamp);
+    val0 = shuffleCommonImpl(loc, rewriter, val0, i, strideInt, mode, clamp,
+                             targetInfo);
+    val1 = shuffleCommonImpl(loc, rewriter, val1, i, strideInt, mode, clamp,
+                             targetInfo);
     vec = b.undef(vecTy);
     vec = b.insert_element(vecTy, vec, val0, b.i32_val(0));
     vec = b.insert_element(vecTy, vec, val1, b.i32_val(1));
@@ -66,7 +68,7 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   }
 
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId = getThreadId(rewriter, loc);
+  Value threadId = targetInfo.getThreadId(rewriter, loc);
 
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = b.i32_val(iWarpSize);
@@ -193,46 +195,46 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   return Value();
 }
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter,
-                           ISAFamily isaFamily, Value val, Value i,
-                           int strideInt, ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, int strideInt, ShflKind mode, Value clamp,
+                           const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // To shuffle pointers, convert them to i64.
   Type valTy = val.getType();
   if (isa<LLVM::LLVMPointerType>(valTy))
     val = b.ptrtoint(i64_ty, val);
-  Value result = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt,
-                                   mode, clamp);
+  Value result = shuffleCommonImpl(loc, rewriter, val, i, strideInt, mode,
+                                   clamp, targetInfo);
   if (isa<LLVM::LLVMPointerType>(valTy))
     result = b.inttoptr(valTy, result);
   return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 ISAFamily isaFamily) {
+                 const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, isaFamily, val, b.i32_val(i), i,
-                       ShflKind::bfly, b.i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), i, ShflKind::bfly,
+                       b.i32_val(0x1f), targetInfo);
 }
 
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                ISAFamily isaFamily) {
+                const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, isaFamily, val, b.i32_val(i), i,
-                       ShflKind::up, b.i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), i, ShflKind::up,
+                       b.i32_val(0x0), targetInfo);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 ISAFamily isaFamily) {
+                 const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleIdx(loc, rewriter, val, b.i32_val(i), isaFamily);
+  return shuffleIdx(loc, rewriter, val, b.i32_val(i), targetInfo);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 ISAFamily isaFamily) {
+                 const TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, isaFamily, val, i, 0, ShflKind::idx,
-                       b.i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, b.i32_val(0x1f),
+                       targetInfo);
 }
 
 Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,

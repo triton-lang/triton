@@ -8,9 +8,31 @@ enum class ProgramIDDim : uint32_t;
 
 class TargetInfoBase {
 public:
-  virtual bool supportMaximumMinimum() const = 0;
+  // -----------------------------------------------------------------------
+  // Hardware Indices
+  // -----------------------------------------------------------------------
+
+  // If an operation is contained within a warp specialize region, this returns
+  // the thread ID offset of that warpgroup.
+  virtual std::optional<int> getWarpGroupStartThreadId(Block *block) const;
+
+  // Returns CTA level thread ID.
+  virtual Value getThreadId(RewriterBase &rewriter, Location loc) const;
+
+  // Get the lane ID, which is index of the thread within its warp.
+  Value getLaneId(RewriterBase &rewriter, Location loc) const;
+
+  // Get the lane ID and warp ID
+  virtual std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
+                                                   Location loc) const;
 
   virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
+
+  // -----------------------------------------------------------------------
+  // End of Hardware Indices
+  // -----------------------------------------------------------------------
+
+  virtual bool supportMaximumMinimum() const = 0;
 
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;

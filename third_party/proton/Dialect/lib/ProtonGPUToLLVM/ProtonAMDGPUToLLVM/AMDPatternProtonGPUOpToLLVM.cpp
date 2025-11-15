@@ -29,8 +29,8 @@ struct CircularStoreOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
+    auto dataPack = lowerCircularStoreOpHelper(op, adaptor.getSegment(),
+                                               rewriter, targetInfo);
 
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {

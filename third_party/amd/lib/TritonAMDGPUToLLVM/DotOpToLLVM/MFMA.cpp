@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -34,6 +35,7 @@ namespace {
 
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using ::mlir::LLVM::AMD::shuffleXor;
+using ::mlir::triton::AMD::TargetInfo;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::LinearEncodingAttr;
@@ -64,6 +66,7 @@ struct DotOpMFMAConversionHelper {
 
   ConversionPatternRewriter &rewriter;
   const LLVMTypeConverter *typeConverter;
+  const TargetInfo &targetInfo;
   Location loc;
   MLIRContext *ctx{};
 
@@ -72,9 +75,10 @@ struct DotOpMFMAConversionHelper {
   explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                      ConversionPatternRewriter &rewriter,
                                      const LLVMTypeConverter *typeConverter,
-                                     Location loc)
+                                     const TargetInfo &targetInfo, Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
+        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc),
+        ctx(mfmaLayout.getContext()) {}
 
   Value generateMFMAOp(StringRef intrinsicName, Value valA, Value valB,
                        Value valC, int cbsz = 0, int abid = 0,
@@ -103,7 +107,7 @@ struct DotOpMFMAConversionHelper {
   }
 
   Value processSubBlocks(int numSubBlocks, Value acc, bool reduceSubBlocks,
-                         bool zeroSubBlocks) const {
+                         bool zeroSubBlocks, Value laneId) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     assert((numSubBlocks & (numSubBlocks - 1)) == 0 &&
            "numSubBlocks in not pow 2!");
@@ -111,7 +115,6 @@ struct DotOpMFMAConversionHelper {
       return acc;
     constexpr int warpSize = 64;
     int subBlockSize = warpSize / numSubBlocks;
-    Value laneId = getLaneId(rewriter, loc);
     auto vecTy = dyn_cast<VectorType>(acc.getType());
     auto elemType = vecTy.getElementType();
     assert(elemType.getIntOrFloatBitWidth() == 32);
@@ -124,7 +127,7 @@ struct DotOpMFMAConversionHelper {
       while (subBlockSize < warpSize) {
         for (int i = 0; i < numScalars; ++i) {
           Value other_acc =
-              shuffleXor(loc, rewriter, accScalar[i], subBlockSize);
+              shuffleXor(loc, rewriter, accScalar[i], subBlockSize, targetInfo);
           if (elemType.isInteger(32))
             accScalar[i] = b.add(accScalar[i], other_acc);
           else
@@ -158,8 +161,8 @@ struct DotOpMFMAConversionHelper {
   /// @param numSubBlocks
   /// @param acc
   /// @return
-  Value reduceSubBlocks(int numSubBlocks, Value acc) const {
-    return processSubBlocks(numSubBlocks, acc, true, false);
+  Value reduceSubBlocks(int numSubBlocks, Value acc, Value laneId) const {
+    return processSubBlocks(numSubBlocks, acc, true, false, laneId);
   }
 
   /// @brief Zeroes out redundant values in all sub-blocks except first one
@@ -171,8 +174,8 @@ struct DotOpMFMAConversionHelper {
   /// @param numSubBlocks
   /// @param acc
   /// @return
-  Value zeroAuxiliarBlocks(int numSubBlocks, Value acc) const {
-    return processSubBlocks(numSubBlocks, acc, false, true);
+  Value zeroAuxiliarBlocks(int numSubBlocks, Value acc, Value laneId) const {
+    return processSubBlocks(numSubBlocks, acc, false, true, laneId);
   }
 
   /// Dot operand layout minimal tile is kDimInstrSize elements across
@@ -522,8 +525,9 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
   ScaledDotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                   ConversionPatternRewriter &rewriter,
                                   const LLVMTypeConverter *typeConverter,
-                                  Location loc)
-      : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter, loc) {}
+                                  const TargetInfo &targetInfo, Location loc)
+      : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter,
+                                  targetInfo, loc) {}
 
   Value generateScaledMFMAOp(StringRef intrinsicName, Value valA, Value valB,
                              Value valC, Type elemTypeA, Type elemTypeB) const {
@@ -728,6 +732,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     } else
       innerKBound = numVecInKBase;
 
+    auto laneId = targetInfo.getLaneId(rewriter, loc);
     for (outerK = 0; outerK < outerKBound; outerK++) {
       for (int b = 0; b < numRepB; ++b) {
         for (int m = 0; m < numRepM; ++m) {
@@ -746,7 +751,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                      m * numRepN * elemsPerVec + n * elemsPerVec + v],
                   tb.i32_val(v));
             }
-            acc = zeroAuxiliarBlocks(subBlocks, acc);
+            acc = zeroAuxiliarBlocks(subBlocks, acc, laneId);
             for (innerK = 0; innerK < innerKBound; innerK++) {
               int k = is2Step ? outerK : innerK;
               if (existBothScales) {
@@ -790,7 +795,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
               if (!firstMfma)
                 firstMfma = acc;
             }
-            acc = reduceSubBlocks(subBlocks, acc);
+            acc = reduceSubBlocks(subBlocks, acc, laneId);
             adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
                                   kDimInstrSize, kDimOperandSize, elemsPerVec);
           }
@@ -821,7 +826,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter,
+                          const TargetInfo &targetInfo) {
   auto rankedTType = [](Value tensor) {
     return cast<RankedTensorType>(tensor.getType());
   };
@@ -843,7 +849,8 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
+  DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter,
+                                   targetInfo, loc);
 
   return helper.convertDot(op, adaptor);
 }
@@ -851,7 +858,8 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 LogicalResult convertScaledMFMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter) {
+                                ConversionPatternRewriter &rewriter,
+                                const TargetInfo &targetInfo) {
   assert(isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
          isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both lhs and rhs should be in DotOperand layout.");
@@ -899,7 +907,7 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
   ScaledDotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter,
-                                         loc);
+                                         targetInfo, loc);
 
   return helper.convertScaledDot(op, adaptor);
 }

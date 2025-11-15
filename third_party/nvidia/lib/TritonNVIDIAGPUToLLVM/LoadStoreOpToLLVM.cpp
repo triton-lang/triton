@@ -63,7 +63,7 @@ Value emitRedundantThreadPredicate(
   auto kBlock = str_attr("block");
 
   Value zero = b.i32_val(0);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
   Value blockId = freeVarMasks.lookup(kBlock) == 0
                       ? zero
                       : targetInfo.getClusterCTAId(rewriter, loc);
@@ -1244,7 +1244,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         {str_attr("offset")});
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
         [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
@@ -1302,7 +1302,12 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncTMACopyGlobalToLocalOpConversion(
+      LLVMTypeConverter &converter, const NVIDIA::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+            converter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,
@@ -1327,7 +1332,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), llvmElemTy, rewriter);
     Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, dstTy);
     auto voidTy = void_ty(op->getContext());
-    auto id = getThreadId(rewriter, loc);
+    auto id = targetInfo.getThreadId(rewriter, loc);
 
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
@@ -1407,6 +1412,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 LogicalResult convertTMAStoreLikeOp(Operation *op,
@@ -1414,7 +1421,8 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
                                     ConversionPatternRewriter &rewriter,
                                     Value tmaPtr, ttg::MemDescType srcTy,
                                     Value src, ValueRange coords,
-                                    const std::string &tmaInst) {
+                                    const std::string &tmaInst,
+                                    const NVIDIA::TargetInfo &targetInfo) {
   auto loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
@@ -1422,7 +1430,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
       LLVM::getSharedMemoryObjectFromStruct(loc, src, llvmElemTy, rewriter);
   Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, srcTy);
   auto voidTy = void_ty(op->getContext());
-  auto id = getThreadId(rewriter, loc);
+  auto id = targetInfo.getThreadId(rewriter, loc);
   // Select just one thread for the TMA copy. This also helps the compiler to
   // figure out that the op is uniform.
   Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
@@ -1490,7 +1498,12 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 struct AsyncTMACopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncTMACopyLocalToGlobalOpConversion(
+      LLVMTypeConverter &converter, const NVIDIA::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
+            converter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
@@ -1509,13 +1522,21 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     tmaInst << "}], [$" << (operandIdx++) << "];";
     return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
                                  op.getSrc().getType(), adaptor.getSrc(),
-                                 adaptor.getCoord(), tmaInst.str());
+                                 adaptor.getCoord(), tmaInst.str(), targetInfo);
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct AsyncTMAReduceOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAReduceOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncTMAReduceOpConversion(LLVMTypeConverter &converter,
+                             const NVIDIA::TargetInfo &targetInfo,
+                             ModuleAxisInfoAnalysis &axisAnalysisPass,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAReduceOp>(converter,
+                                                                     benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAReduceOp op, OpAdaptor adaptor,
@@ -1534,8 +1555,10 @@ struct AsyncTMAReduceOpConversion
     tmaInst << "}], [$" << (operandIdx++) << "];";
     return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
                                  op.getSrc().getType(), adaptor.getSrc(),
-                                 adaptor.getCoord(), tmaInst.str());
+                                 adaptor.getCoord(), tmaInst.str(), targetInfo);
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
@@ -1866,16 +1889,15 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     int computeCapability, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
-               AtomicRMWOpConversion>(typeConverter, targetInfo,
-                                      axisInfoAnalysis, benefit);
+  patterns
+      .add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
+           AtomicRMWOpConversion, AsyncTMACopyGlobalToLocalOpConversion,
+           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAReduceOpConversion>(
+          typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion,
-               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
-               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
-      typeConverter, benefit);
+  patterns.add<AsyncTMAGatherOpConversion, AsyncTMAScatterOpConversion,
+               TMAStoreWaitOpConversion>(typeConverter, benefit);
 }

@@ -54,7 +54,11 @@ struct FenceAsyncSharedOpConversion
 
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  InitBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                          PatternBenefit benefit,
+                          NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InitBarrierOp op, OpAdaptor adaptor,
@@ -66,7 +70,7 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
+    auto id = targetInfo.getThreadId(rewriter, loc);
     auto pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
@@ -80,11 +84,17 @@ struct InitBarrierOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct InvalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InvalBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  InvalBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit,
+                           NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InvalBarrierOp op, OpAdaptor adaptor,
@@ -96,7 +106,7 @@ struct InvalBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
+    auto id = targetInfo.getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
@@ -109,11 +119,17 @@ struct InvalBarrierOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct BarrierExpectConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierExpectOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  BarrierExpectConversion(LLVMTypeConverter &typeConverter,
+                          PatternBenefit benefit,
+                          NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::BarrierExpectOp op, OpAdaptor adaptor,
@@ -125,7 +141,7 @@ struct BarrierExpectConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
+    auto id = targetInfo.getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     pred = b.and_(pred, adaptor.getPred());
     ::mlir::triton::PTXBuilder ptxBuilder;
@@ -141,6 +157,8 @@ struct BarrierExpectConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct WaitBarrierOpConversion
@@ -228,7 +246,11 @@ struct WaitBarrierOpConversion
 
 struct ArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  ArriveBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
@@ -242,7 +264,7 @@ struct ArriveBarrierOpConversion
     ptxAsm << ";";
 
     TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value id = getThreadId(rewriter, op.getLoc());
+    Value id = targetInfo.getThreadId(rewriter, op.getLoc());
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
@@ -260,6 +282,8 @@ struct ArriveBarrierOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 } // namespace
 
@@ -267,9 +291,7 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
-  patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
-                                                                  benefit);
-  patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion,
+               WaitBarrierOpConversion, ArriveBarrierOpConversion,
+               BarrierExpectConversion>(typeConverter, benefit, targetInfo);
 }

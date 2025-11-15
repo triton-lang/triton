@@ -107,7 +107,7 @@ struct InitializeOpConversion
     //  | (2 words)                     |
     //  +-------------------------------+ 10
 
-    Value threadId = getThreadId(rewriter, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
 
     Block *prevBlock = op->getBlock();
@@ -623,7 +623,7 @@ struct InitCtxOpConversion
 
     // InitCtxOp can only be called in the master warps, so using `getThreadId`
     // is fine.
-    Value threadId = getThreadId(rewriter, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 

@@ -223,7 +223,7 @@ private:
         zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
     auto i8AddrLayout = i8Tile * addrLayout;
 
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
     auto regBase =
         applyLinearLayout(
             loc, rewriter, i8AddrLayout,
@@ -372,7 +372,7 @@ private:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     mlir::Type retTy = dstTy;
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
     auto calcPaddedOffset = [&](Value smemOffset) {
