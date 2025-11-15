@@ -828,22 +828,39 @@ class InterpreterBuilder:
             raise TypeError(f"unsupported type {type}")
 
 
-def _patch_attr(obj, name, member, builder):
+class _LangPatchScope:
+    """Tracks patched attributes so they can be restored."""
+
+    def __init__(self) -> None:
+        self._changes: list[tuple[object, str, object]] = []
+
+    def set_attr(self, obj: object, name: str, value: object) -> None:
+        original = getattr(obj, name, None)
+        self._changes.append((obj, name, original))
+        setattr(obj, name, value)
+
+    def restore(self) -> None:
+        while self._changes:
+            obj, name, original = self._changes.pop()
+            setattr(obj, name, original)
+
+
+def _patch_attr(obj, name, member, builder, scope: _LangPatchScope):
     semantic = TritonSemantic(builder)
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
                                                                 {k: v
                                                                  for k, v in kwargs.items()
                                                                  if k != "_semantic"}, _semantic=semantic))
-    setattr(obj, name, new_member)
+    scope.set_attr(obj, name, new_member)
 
 
-def _patch_builtin(pkg, builder):
+def _patch_builtin(pkg, builder, scope: _LangPatchScope):
     for name, member in inspect.getmembers(pkg):
         if tl.core.is_builtin(member):
-            _patch_attr(pkg, name, member, builder)
+            _patch_attr(pkg, name, member, builder, scope)
 
 
-def _patch_lang_tensor(tensor):
+def _patch_lang_tensor(tensor, scope: _LangPatchScope):
 
     def _get_bool(self):
         data = self.handle.data
@@ -859,11 +876,11 @@ def _patch_lang_tensor(tensor):
         res_ty = tl.core.block_type(self.dtype, block_shape)
         return tl.core.tensor(handle, res_ty)
 
-    tensor.__index__ = lambda self: int(self.handle.data)
-    tensor.__bool__ = lambda self: _get_bool(self)
-    tensor.__repr__ = lambda self: repr(self.handle.data)
-    tensor.__str__ = lambda self: str(self.handle.data)
-    tensor.T = property(_get_transpose)
+    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data))
+    scope.set_attr(tensor, "__bool__", lambda self: _get_bool(self))
+    scope.set_attr(tensor, "__repr__", lambda self: repr(self.handle.data))
+    scope.set_attr(tensor, "__str__", lambda self: str(self.handle.data))
+    scope.set_attr(tensor, "T", property(_get_transpose))
 
 
 class ReduceScanOpInterface:
@@ -1058,7 +1075,7 @@ class ScanOps(ReduceScanOpInterface):
         return ret
 
 
-def _patch_reduce_scan():
+def _patch_reduce_scan(scope: _LangPatchScope):
     # Because interpreter doesn't support region_builder_fn, we cannot patch the builder
     # to use the new reduce and scan functions.
     # Instead, we need to patch reduce and reduce functions in tl and tl.core
@@ -1068,13 +1085,13 @@ def _patch_reduce_scan():
     def _new_scan(input, axis, combine_fn, reverse=False, **kwargs):
         return ScanOps(axis, combine_fn, reverse).apply(input)
 
-    tl.reduce = _new_reduce
-    tl.associative_scan = _new_scan
-    tl.core.reduce = _new_reduce
-    tl.core.associative_scan = _new_scan
+    scope.set_attr(tl, "reduce", _new_reduce)
+    scope.set_attr(tl, "associative_scan", _new_scan)
+    scope.set_attr(tl.core, "reduce", _new_reduce)
+    scope.set_attr(tl.core, "associative_scan", _new_scan)
 
 
-def _patch_lang_core(lang):
+def _patch_lang_core(lang, scope: _LangPatchScope):
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -1140,29 +1157,31 @@ def _patch_lang_core(lang):
         input.handle.set_attr(name, values)
         return input
 
-    lang.range = _new_range
-    lang.static_range = _new_range
-    lang.static_assert = _new_static_assert
-    lang.static_print = print
-    lang.dtype.to_ir = _new_to_ir
-    lang.multiple_of = partial(_set_attr, name="tt.divisibility")
-    lang.max_contiguous = partial(_set_attr, name="tt.contiguity")
-    lang.max_constancy = partial(_set_attr, name="tt.constancy")
+    scope.set_attr(lang, "range", _new_range)
+    scope.set_attr(lang, "static_range", _new_range)
+    scope.set_attr(lang, "static_assert", _new_static_assert)
+    scope.set_attr(lang, "static_print", print)
+    scope.set_attr(lang.dtype, "to_ir", _new_to_ir)
+    scope.set_attr(lang, "multiple_of", partial(_set_attr, name="tt.divisibility"))
+    scope.set_attr(lang, "max_contiguous", partial(_set_attr, name="tt.contiguity"))
+    scope.set_attr(lang, "max_constancy", partial(_set_attr, name="tt.constancy"))
 
-    _patch_reduce_scan()
+    _patch_reduce_scan(scope)
 
 
 def _patch_lang(fn):
+    scope = _LangPatchScope()
     langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
     assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
     for lang in langs:
-        _patch_builtin(lang, interpreter_builder)
-        _patch_builtin(lang.tensor, interpreter_builder)
+        _patch_builtin(lang, interpreter_builder, scope)
+        _patch_builtin(lang.tensor, interpreter_builder, scope)
         if lang == tl:
-            _patch_builtin(lang.math, interpreter_builder)
-        _patch_lang_tensor(lang.tensor)
-        _patch_lang_core(lang)
-    _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder)
+            _patch_builtin(lang.math, interpreter_builder, scope)
+        _patch_lang_tensor(lang.tensor, scope)
+        _patch_lang_core(lang, scope)
+    _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)
+    return scope
 
 
 def _tuple_create(arg, contents):
@@ -1312,26 +1331,29 @@ class GridExecutor:
         for hook in self.pre_run_hooks:
             hook(*args_hst, **kwargs_hst)
         # remaps core language functions to interpreted ones
-        _patch_lang(self.fn)
-        # we need to copy arguments to the host for the interpreter
-        # implicitly convert tensor arguments to their base pointers
-        args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
-        args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
-        # iterate through grid
-        grid = self.grid(args) if callable(self.grid) else self.grid
-        assert len(grid) <= 3, "grid must have at most 3 dimensions"
-        grid = grid + (1, ) * (3 - len(grid))
-        interpreter_builder.set_grid_dim(*grid)
+        patch_scope = _patch_lang(self.fn)
         try:
-            for x in range(grid[0]):
-                for y in range(grid[1]):
-                    for z in range(grid[2]):
-                        interpreter_builder.set_grid_idx(x, y, z)
-                        self.fn(**args)
-        except Exception as e:
-            if triton.knobs.compilation.front_end_debugging:
-                raise
-            raise InterpreterError(repr(e)) from e
+            # we need to copy arguments to the host for the interpreter
+            # implicitly convert tensor arguments to their base pointers
+            args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
+            args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
+            # iterate through grid
+            grid = self.grid(args) if callable(self.grid) else self.grid
+            assert len(grid) <= 3, "grid must have at most 3 dimensions"
+            grid = grid + (1, ) * (3 - len(grid))
+            interpreter_builder.set_grid_dim(*grid)
+            try:
+                for x in range(grid[0]):
+                    for y in range(grid[1]):
+                        for z in range(grid[2]):
+                            interpreter_builder.set_grid_idx(x, y, z)
+                            self.fn(**args)
+            except Exception as e:
+                if triton.knobs.compilation.front_end_debugging:
+                    raise
+                raise InterpreterError(repr(e)) from e
+        finally:
+            patch_scope.restore()
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
