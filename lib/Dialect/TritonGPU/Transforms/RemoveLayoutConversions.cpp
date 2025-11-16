@@ -141,16 +141,15 @@ public:
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp);
 
-  LogicalResult
-  getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
-                          SetVector<Value> &slice,
-                          DenseMap<Value, Attribute> &layout,
-                          std::function<bool(Operation *)> stopPropagation);
+  LogicalResult getConvertBackwardSlice(
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+      DenseMap<Value, Attribute> &layout,
+      std::function<TraversalAction(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
       DenseMap<Value, Attribute> &layout,
-      std::function<bool(Operation *)> stopPropagation = nullptr);
+      std::function<TraversalAction(Operation *)> stopPropagation = nullptr);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -968,7 +967,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation) {
+    std::function<TraversalAction(Operation *)> stopPropagation) {
   // Allow re-using existing conversions for a value. Check dominance of any
   // reusable materializations against the root value. This is sufficient
   // because the conversions are processed in post-order.
@@ -1003,7 +1002,7 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation) {
+    std::function<TraversalAction(Operation *)> stopPropagation) {
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1099,6 +1098,17 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
     dtypeBitWidth = minBitWidth;
   }
   return (elementCount * dtypeBitWidth) >> 3;
+}
+
+static auto
+abortOnForOpOrStopOn(llvm::function_ref<bool(Operation *)> shouldStop = {}) {
+  return [shouldStop](Operation *op) {
+    if (isa<scf::ForOp>(op))
+      return TraversalAction::AbortWithError;
+    if (shouldStop && shouldStop(op))
+      return TraversalAction::Stop;
+    return TraversalAction::Continue;
+  };
 }
 
 void LayoutRematerialization::backwardRematerialization(
@@ -1234,6 +1244,25 @@ void LayoutRematerialization::backwardRematerialization(
     }
   }
 
+  // Heuristic: rematerialize through forOps for pointer types with 0 remat
+  // cost. This aims to rematerialize cvt layouts for pipelined loads in the
+  // epilogue to avoid redundant computations inside the loop.
+  bool sliceContainsForOp = llvm::any_of(slice, [](Value v) {
+    return llvm::isa_and_nonnull<scf::ForOp>(v.getDefiningOp());
+  });
+  if (sliceContainsForOp) {
+    if (!isa<PointerType>(targetType.getElementType())) {
+      LDBG("  skipped rematerialization of non pointer type becuase the slice "
+           "contains a forOp");
+      return;
+    }
+    if (rematerialisationCost > 0) {
+      LDBG("  skipped rematerialization through a forOp because of non zero "
+           "rematerialisation cost");
+      return;
+    }
+  }
+
   LLVM_DEBUG({
     DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
     DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
@@ -1325,7 +1354,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   DenseMap<Value, Attribute> layout;
   // Set-up the conversion "cache"
   LogicalResult result = getConvertBackwardSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
+      abortOnForOpOrStopOn(stop));
   if (result.failed())
     return;
 
@@ -1404,7 +1434,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
-      isExtOrBroadcastOp);
+      abortOnForOpOrStopOn(isExtOrBroadcastOp));
   if (result.failed())
     return;
 
@@ -1421,8 +1451,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
+      LogicalResult result =
+          getRematerializableSlice(op->getOpOperand(0), srcEncoding, tempSlice,
+                                   tempLayout, abortOnForOpOrStopOn());
 
       // If a value is already assigned to a _different_ layout,
       // we cannot propagate past this op (as it would conflict with
@@ -1487,7 +1518,7 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
   if (failed(getRematerializableSlice(convertOp.getSrcMutable(),
                                       convertOp.getType().getEncoding(), slice,
-                                      layout, isIfOp)))
+                                      layout, abortOnForOpOrStopOn(isIfOp))))
     return;
 
   // These are the conditional edges above which conversions should be hoisted.
@@ -1522,10 +1553,12 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     SetVector<Value> thenSlice, elseSlice;
     DenseMap<Value, Attribute> thenLayout, elseLayout;
 
-    LogicalResult thenResult = getRematerializableSlice(
-        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
-    LogicalResult elseResult = getRematerializableSlice(
-        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
+    LogicalResult thenResult =
+        getRematerializableSlice(thenRes, rootLayout, thenSlice, thenLayout,
+                                 abortOnForOpOrStopOn(isIfOp));
+    LogicalResult elseResult =
+        getRematerializableSlice(elseRes, rootLayout, elseSlice, elseLayout,
+                                 abortOnForOpOrStopOn(isIfOp));
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
