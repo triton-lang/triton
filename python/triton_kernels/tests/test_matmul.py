@@ -37,6 +37,7 @@ def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
 def make_slice_sizes(n_slices, total_size, device="cuda"):
+    torch.manual_seed(0)
     dtype = torch.int32
     if total_size < 0:
         raise ValueError("total_size must be non-negative")
@@ -176,9 +177,6 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
         })
     return constraints
 
-def init_ragged_metadata(n_slices, slice_dim, device):
-    slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
-    return make_ragged_tensor_metadata(slice_sizes, slice_dim)
 
 def convert_to_mxfp(x, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajor):
     mx_axis = x.ndim - 2
@@ -491,13 +489,15 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
 
     gather_indx = None if not do_gather else torch.randint(0, max(m, 1), (m, ), device=device, dtype=torch.int32)
     scatter_indx = None if not do_scatter else torch.randperm(m, device=device, dtype=torch.int32)
-    a_ragged_metadata = None if mode != "ragged" else init_ragged_metadata(n_slices, m if not expt_is_inner else k, device)
-    b_ragged_metadata = None if not expt_is_inner else replace(a_ragged_metadata)
 
+
+    slice_dim = m if not expt_is_inner else k
+    slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
 
 
     batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
 
+    a_ragged_metadata = None if mode != "ragged" else make_ragged_tensor_metadata(slice_sizes, slice_dim)
     a_shape = (n_slices, m, k) if mode == 'batched' else (m, k)
     a_tri = alloc_rand(a_shape, device=device, dtype=torch.bfloat16 if act_mxfp8 else act_dtype)
     if inner_expt_opt is not None and "pad_a" in inner_expt_opt:
@@ -511,6 +511,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         precision_opt.a_mx_scale = a_mx_scales_tri
 
 
+    b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, slice_dim)
     b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
     if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
         b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
