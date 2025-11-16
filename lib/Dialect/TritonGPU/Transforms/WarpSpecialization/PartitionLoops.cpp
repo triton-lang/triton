@@ -448,7 +448,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   for (auto [b, region, partition] : llvm::zip(
            builders, wgOp.getPartitionRegions(), partitions.getPartitions())) {
-    if (!llvm::is_contained(*getPartitionIds(loop), b.partitionId)) {
+    if (!llvm::is_contained(getPartitionIds(loop), b.partitionId)) {
       nvws::WarpGroupYieldOp::create(b, wgOp.getLoc(), SmallVector<Value>{});
       continue;
     }
