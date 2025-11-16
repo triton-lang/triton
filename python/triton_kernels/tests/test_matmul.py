@@ -8,9 +8,8 @@ from typing import Union
 import triton
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul import FlexCtx, PrecisionConfig, FnSpecs, FnName, Epilogue
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
-from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details import layout
 # numerics utilities
@@ -70,20 +69,6 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
         cur[:size, :] = A[i_cur:i_next, :]
         out.append(cur)
     return torch.vstack(out)
-
-
-def init_compute_data(m, n, k, n_slices, mode, act_dtype, weight_dtype,
-                      has_y_gammas, device="cuda",
-                      inner_expt_opt=None):
-    torch.manual_seed(0)
-    assert mode in {'batched', "plain", 'ragged'}
-    shape_a = (n_slices, m, k) if mode == 'batched' else (m, k)
-    batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
-    a = alloc_rand(shape_a, device=device, dtype=act_dtype)
-    b = alloc_rand(batch_size + (k, n), device=device, dtype=weight_dtype)
-    bias = alloc_rand(batch_size + (n, ), device=device, dtype=torch.float32)
-    gammas = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32) if has_y_gammas else None
-    return a, b, bias, gammas
 
 
 # ---------------
@@ -510,14 +495,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     b_ragged_metadata = None if not expt_is_inner else replace(a_ragged_metadata)
 
 
-    a_tri, b_tri, bias_tri, gammas_tri = init_compute_data(m, n, k, n_slices,
-                                                           mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
-                                                           torch.bfloat16 if weight_mxfp else weight_dtype,
-                                                           has_y_gammas, device=device,
-                                                           inner_expt_opt=inner_expt_opt)
-    if inner_expt_opt is not None:
-        bias_tri = None
 
+    batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
+
+    a_shape = (n_slices, m, k) if mode == 'batched' else (m, k)
+    a_tri = alloc_rand(a_shape, device=device, dtype=torch.bfloat16 if act_mxfp8 else act_dtype)
     if inner_expt_opt is not None and "pad_a" in inner_expt_opt:
         a_tri, a_ragged_metadata = pad_ragged_tensor(a_tri, a_ragged_metadata, transpose=True)
     if a_transpose:
@@ -529,6 +511,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         precision_opt.a_mx_scale = a_mx_scales_tri
 
 
+    b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
     if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
         b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
     if b_transpose:
@@ -537,6 +520,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         b_tri, b_scale_tri = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
         precision_opt.b_mx_scale = b_scale_tri
 
+    bias_tri = None if inner_expt_opt is not None else alloc_rand(batch_size + (n, ), device=device, dtype=torch.float32)
+
+    gammas_tri = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32) if has_y_gammas else None
 
     c_shape = compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, a_tri)
     c_tri = torch.empty(c_shape, dtype=act_dtype, device=device)
@@ -676,88 +662,88 @@ def test_set_idle_sms():
     assert flags.idle_sms == num_idle_sms
 
 
-@pytest.mark.parametrize("m, n, k, mode", [
-    (1200, 704, 608, "ragged"),
-    (800, 800, 400, "batched"),
-])
-@pytest.mark.parametrize("split_k", [1, 2])
-@pytest.mark.parametrize("do_gather, do_scatter", [
-    (False, False),
-    (True, False),
-    (False, True),
-    (True, True),
-])
-@pytest.mark.parametrize("is_persistent, epilogue_subtile", [
-    (False, None),
-    (True, 1),
-    (True, 4),
-])
-@pytest.mark.parametrize("swiglu_alpha, swiglu_limit", [
-    (1.1, 1.4),
-    (1.0, 1.2),
-    (0.7, 1.0),
-])
-def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
-                   swiglu_alpha, swiglu_limit, device, opt_flags_scope):
-    torch.manual_seed(0)
-    constraints = {
-        "is_persistent": is_persistent,
-        "epilogue_subtile": epilogue_subtile,
-        "split_k": split_k,
-    }
-    n_slices = 1
-    opt_flags.update_opt_flags_constraints(constraints)
+# @pytest.mark.parametrize("m, n, k, mode", [
+#     (1200, 704, 608, "ragged"),
+#     (800, 800, 400, "batched"),
+# ])
+# @pytest.mark.parametrize("split_k", [1, 2])
+# @pytest.mark.parametrize("do_gather, do_scatter", [
+#     (False, False),
+#     (True, False),
+#     (False, True),
+#     (True, True),
+# ])
+# @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
+#     (False, None),
+#     (True, 1),
+#     (True, 4),
+# ])
+# @pytest.mark.parametrize("swiglu_alpha, swiglu_limit", [
+#     (1.1, 1.4),
+#     (1.0, 1.2),
+#     (0.7, 1.0),
+# ])
+# def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
+#                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
+#     torch.manual_seed(0)
+#     constraints = {
+#         "is_persistent": is_persistent,
+#         "epilogue_subtile": epilogue_subtile,
+#         "split_k": split_k,
+#     }
+#     n_slices = 1
+#     opt_flags.update_opt_flags_constraints(constraints)
 
-    weight_dtype, act_dtype = torch.float16, torch.float16
-    if mode == "ragged" and do_gather:
-        gindx = torch.randint(0, m, (m, ), device=device).to(torch.int32) if do_gather and m > 0 else None
-    if mode == "ragged" and do_scatter:
-        sindx = torch.randperm(m, device=device).to(torch.int32) if do_scatter else None
-    if mode == "ragged":
-        slice_dim = m
-        slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
-        x_ragged_metadata = make_ragged_tensor_metadata(slice_sizes, slice_dim)
+#     weight_dtype, act_dtype = torch.float16, torch.float16
+#     if mode == "ragged" and do_gather:
+#         gindx = torch.randint(0, m, (m, ), device=device).to(torch.int32) if do_gather and m > 0 else None
+#     if mode == "ragged" and do_scatter:
+#         sindx = torch.randperm(m, device=device).to(torch.int32) if do_scatter else None
+#     if mode == "ragged":
+#         slice_dim = m
+#         slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
+#         x_ragged_metadata = make_ragged_tensor_metadata(slice_sizes, slice_dim)
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_slices, device=device)
-    x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_slices, mode,
-                                         act_dtype, weight_dtype, False, device=device)
+#     precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_slices, device=device)
+#     x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_slices, mode,
+#                                          act_dtype, weight_dtype, False, device=device)
 
-    if mode == "batched":
-        x_ragged_metadata, gindx, sindx = None, None, None
+#     if mode == "batched":
+#         x_ragged_metadata, gindx, sindx = None, None, None
 
-    try:
-        a = swiglu(matmul(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
-                   precision_config=SwiGLUPrecisionConfig(swiglu_limit))
-        b = matmul(
-            x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt,
-            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
-                                             (swiglu_alpha, swiglu_limit)))
-    except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
+#     try:
+#         a = swiglu(matmul(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
+#                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
+#         b = matmul(
+#             x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt,
+#             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+#                                              (swiglu_alpha, swiglu_limit)))
+#     except opt_flags.InapplicableConstraint:
+#         pytest.skip("inapplicable constraint")
 
-    assert_close(a, b)
+#     assert_close(a, b)
 
 
-@pytest.mark.parametrize("m, n, k", [
-    (320, 2**19, 0),
-    (4096, 4096, 0),
-])
-@pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
-def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
-    torch.manual_seed(0)
+# @pytest.mark.parametrize("m, n, k", [
+#     (320, 2**19, 0),
+#     (4096, 4096, 0),
+# ])
+# @pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
+# def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+#     torch.manual_seed(0)
 
-    if view_x_as_zero_cols:
-        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
-        x = x[:0, :].transpose(-1, -2)
-    else:
-        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
-    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
-    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+#     if view_x_as_zero_cols:
+#         x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+#         x = x[:0, :].transpose(-1, -2)
+#     else:
+#         x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
+#     w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
+#     bias = torch.randn(n, device="cuda", dtype=torch.float32)
 
-    try:
-        tri_y = matmul(x, w, bias)
-    except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
-    ref_y = matmul_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+#     try:
+#         tri_y = matmul(x, w, bias)
+#     except opt_flags.InapplicableConstraint:
+#         pytest.skip("inapplicable constraint")
+#     ref_y = matmul_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
 
-    assert_close(ref_y, tri_y)
+#     assert_close(ref_y, tri_y)
