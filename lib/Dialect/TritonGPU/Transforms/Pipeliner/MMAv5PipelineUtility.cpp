@@ -220,9 +220,19 @@ static bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
     return true;
   }
   auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  Value accUseFlagInit;
   while (auto blockArg = dyn_cast<BlockArgument>(accUseFlag)) {
     accUseFlag = yieldOp.getOperand(blockArg.getArgNumber() - 1);
+    accUseFlagInit = forOp.getInitArgs()[blockArg.getArgNumber() - 1];
   }
+
+  if (accUseFlagInit && matchPattern(accUseFlagInit, m_Zero()) &&
+      matchPattern(accUseFlag, m_One())) {
+    // A simple case for nested loops - the use flag is initialized to false
+    // and uncondionally set to true in later iterations
+    return true;
+  }
+
   // If the accUseFlag is overwritten in the loop, we treat it as a 'false'
   // with condition being ~accUseFlag.
   return accUseFlag.getDefiningOp() &&
