@@ -180,6 +180,97 @@ def init_ragged_metadata(n_slices, slice_dim, device):
     slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
     return make_ragged_tensor_metadata(slice_sizes, slice_dim)
 
+def convert_to_mxfp(x_tri, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajor):
+    mx_axis = x_tri.ndim - 2
+    # compute layouts
+    x_layout, x_layout_opts = layout.StridedLayout, dict()
+    x_scale_layout, x_scale_layout_opts = layout.StridedLayout, dict()
+    if hbm_swizzling and is_mxfp4:
+        x_layout, x_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mx_axis)
+        x_scale_layout, x_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
+            mx_axis=mx_axis, num_warps=8)
+    # downcast to mxfp
+    if is_colmajor:
+        # create storage
+        x_tri, x_scale_tri = downcast_to_mxfp(x_tri, x_dtype, axis=mx_axis)
+        x_tri_dtype = FP4 if is_mxfp4 else x_dtype
+        x_ref = upcast_from_mxfp(x_tri, x_scale_tri, torch.bfloat16, axis=mx_axis)
+        # create tensor object
+        x_tri = convert_layout(wrap_torch_tensor(x_tri, x_tri_dtype), x_layout, **x_layout_opts)
+        x_scale_tri = convert_layout(wrap_torch_tensor(x_scale_tri), x_scale_layout, **x_scale_layout_opts)
+    else:
+        if torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
+        if block_m == 16:
+            pytest.skip("PassManager::run failed from Triton compiler")
+        # TODO: swizzling for rowmajor
+
+        # A typical use case is we already quantized col-major weight,
+        # and we want matmul with its transposed row-major weight w/o
+        # requantization.
+
+        # put abs_max of each 32x32 block to diagonal so scales of transposed agree
+        x_ndim = x_tri.ndim
+        if x_ndim == 2:
+            x_tri = x_tri.unsqueeze(0)
+        BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
+        for e, i, j in itertools.product(range(x_tri.shape[0]), range(0, x_tri.shape[1], BLOCK_SIZE), range(0, x_tri.shape[2], BLOCK_SIZE)):
+            i_end = min(i+BLOCK_SIZE, x_tri.shape[1])
+            j_end = min(j+BLOCK_SIZE, x_tri.shape[2])
+            block = x_tri[e, i:i_end, j:j_end]
+            m_abs = block.abs().max()
+            i_len = i_end - i
+            j_len = j_end - j
+            min_len = min(i_len, j_len)
+            signs = torch.randint(0, 2, (max(i_len, j_len),), device=x_tri.device) * 2 - 1
+            block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
+            if j_len > i_len:
+                block[i_len - 1, i_len:] = signs[min_len:] * m_abs
+            elif i_len > j_len:
+                block[j_len:, j_len - 1] = signs[min_len:] * m_abs
+        if x_ndim == 2:
+            x_tri = x_tri.squeeze(0)
+
+        # matmul with rowmajor weight expects scale is separately
+        # constructed (not much additional memory needed).
+        _, x_scale_tri = downcast_to_mxfp(x_tri, x_dtype, axis=mx_axis)
+        # reuse quantized value from colmajor
+        wT_tri, wT_scale_tri = downcast_to_mxfp(x_tri.mT.contiguous(), x_dtype, axis=mx_axis)
+        x_ref = upcast_from_mxfp(wT_tri, wT_scale_tri, torch.bfloat16, axis=mx_axis).mT.contiguous()
+        x_tri_dtype = FP4 if is_mxfp4 else x_dtype
+        x_tri = wrap_torch_tensor(wT_tri.data.mT, x_tri_dtype)
+
+    return x_tri, x_scale_tri, x_ref
+
+def compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, x_tri):
+    if mode == "batched":
+        return (x_tri.shape[0], x_tri.shape[-2], n)
+    elif scatter_indx is not None:
+        return (scatter_indx.shape[0], n)
+    elif expt_is_inner:
+        return (n_slices, m, n)
+    n_rows = x_tri.shape[-2] if gather_indx is None else gather_indx.shape[0]
+    return (n_rows, n)
+
+def pad_ragged_tensor(x, x_ragged_metadata, transpose, hbm_swizzling, is_persistent):
+    divisbility = 32
+    if hbm_swizzling:
+        if torch.cuda.get_device_capability()[0] >= 10:
+            # Blackwell scale swizzling constraint
+            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
+            divisbility = 128
+        elif not is_persistent:
+            divisbility = 64
+
+    if transpose:
+        y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=divisbility, pad_value=0).T.contiguous()
+    else:
+        y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=divisbility, pad_value=0).contiguous()
+    y_ragged_metadata = replace(x_ragged_metadata,
+                                slice_offs=x_ragged_metadata.block_offs(divisbility) * divisbility,
+                                slice_sizes_divisibility=divisbility)
+    return y, y_ragged_metadata
+
 # ---------------
 # unit tests
 # ---------------
@@ -197,9 +288,9 @@ class Case:
     split_k: int = 1
     hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
-    x_transpose: bool = False
-    w_transpose: bool = False
-    y_transpose: bool = False
+    a_transpose: bool = False
+    b_transpose: bool = False
+    c_transpose: bool = False
     colmajor_mxfp_weight: bool = True
 
     def __post_init__(self):
@@ -276,14 +367,14 @@ def _build_test_op_cases():
     # transposes / permutes
     test_cases.extend([
         Case(320, 400, 400, "batched", "float16", "float16",
-                x_transpose=x_tr, w_transpose=w_tr, y_transpose=y_tr)
-        for x_tr, w_tr, y_tr in itertools.product((False, True), repeat=3)
+                a_transpose=a_tr, b_transpose=b_tr, c_transpose=c_tr)
+        for a_tr, b_tr, c_tr in itertools.product((False, True), repeat=3)
     ])
     test_cases.extend([
         Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
-                x_transpose=False, w_transpose=True, y_transpose=False),
+                a_transpose=False, b_transpose=True, c_transpose=False),
         Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
-                x_transpose=True, w_transpose=True, y_transpose=True),
+                a_transpose=True, b_transpose=True, c_transpose=True),
     ])
     return test_cases
 
@@ -300,14 +391,14 @@ def _build_test_op_cases():
     (True, False, None),
     (False, True, None),
     (True, True, None),
-    (False, False, "pad_w"),
-    (False, False, "pad_x"),
+    (False, False, "pad_b"),
+    (False, False, "pad_a"),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
-            x_transpose, w_transpose, y_transpose,
+            a_transpose, b_transpose, c_transpose,
             device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
@@ -315,7 +406,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
     try:
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
-                 x_transpose, w_transpose, y_transpose,
+                 a_transpose, b_transpose, c_transpose,
                  device, opt_flags_scope)
     except pytest.skip.Exception as e:
         skip_message = str(e)
@@ -325,7 +416,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
 
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
-            x_transpose, w_transpose, y_transpose,
+            a_transpose, b_transpose, c_transpose,
             device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
@@ -373,11 +464,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     if expt_is_inner:
         if mode != "ragged":
             pytest.skip("inner_expt_opt only meaningful with ragged")
-        if "mx" in act_dtype_str and inner_expt_opt != "pad_x":
-            pytest.skip("inner_expt_opt and act mx only supported with pad_x")
+        if "mx" in act_dtype_str and inner_expt_opt != "pad_a":
+            pytest.skip("inner_expt_opt and act mx only supported with pad_a")
         if "mx" in weight_dtype_str:
-            if inner_expt_opt != "pad_w":
-                pytest.skip("inner_expt_opt and weight mx only supported with pad_w")
+            if inner_expt_opt != "pad_b":
+                pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
             if is_persistent and not hbm_swizzling:
                 pytest.skip("FIXME: Fatal Python error: Aborted")
             if is_hip():
@@ -385,6 +476,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                     pytest.skip("FIXME: failed to translate module to LLVM IR")
                 if hbm_swizzling:
                     pytest.skip("NYI: nner_expt_opt and HBM swizzling")
+    # TODO: should construct the test case differently rather than overriding here
+    if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
+        b_transpose = True
 
     torch.manual_seed(0)
     # set opt flags constraints
@@ -395,6 +489,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     weight_mxfp4 = weight_mxfp and "float4" in weight_dtype_str
     act_mxfp8 = act_dtype_str.startswith("mx")
     act_is_float8 = act_dtype_str.startswith("float8")
+    a_mxfp8 = act_mxfp8
+    c_mxfp8 = act_mxfp8
+    b_mxfp = weight_mxfp
 
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
@@ -403,174 +500,67 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
 
     gather_indx = None if not do_gather else torch.randint(0, max(m, 1), (m, ), device=device, dtype=torch.int32)
     scatter_indx = None if not do_scatter else torch.randperm(m, device=device, dtype=torch.int32)
-    x_ragged_metadata = None if mode != "ragged" else init_ragged_metadata(n_slices, m if not expt_is_inner else k, device)
-    w_ragged_metadata = None if not expt_is_inner else replace(x_ragged_metadata)
+    a_ragged_metadata = None if mode != "ragged" else init_ragged_metadata(n_slices, m if not expt_is_inner else k, device)
+    b_ragged_metadata = None if not expt_is_inner else replace(a_ragged_metadata)
 
 
-    x_tri, w_tri, bias_tri, gammas_tri = init_compute_data(m, n, k, n_slices,
+    a_tri, b_tri, bias_tri, gammas_tri = init_compute_data(m, n, k, n_slices,
                                                            mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                            torch.bfloat16 if weight_mxfp else weight_dtype,
                                                            has_y_gammas, device=device,
                                                            inner_expt_opt=inner_expt_opt)
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
-        w_tri = w_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
-
-    # ..
-    padding_block_k = 32
-    if hbm_swizzling:
-        if torch.cuda.get_device_capability()[0] >= 10:
-            # Blackwell scale swizzling constraint
-            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
-            padding_block_k = 128
-        elif not is_persistent:
-            padding_block_k = 64
-
     if inner_expt_opt is not None:
         bias_tri = None
-        if "pad_x" in inner_expt_opt:
-            x_tri = pad_rows_to_multiples(x_tri.T, x_ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0).T.contiguous()
-            x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
-            x_ragged_metadata.slice_sizes_divisibility = padding_block_k
-        if "pad_w" in inner_expt_opt:
-            w_tri = pad_rows_to_multiples(w_tri, w_ragged_metadata.slice_offs, multiple=padding_block_k, pad_value=0)
-            w_ragged_metadata.slice_offs = w_ragged_metadata.block_offs(padding_block_k) * padding_block_k
-            w_ragged_metadata.slice_sizes_divisibility = padding_block_k
+    if inner_expt_opt is not None and "pad_a" in inner_expt_opt:
+        a_tri, a_ragged_metadata = pad_ragged_tensor(a_tri, a_ragged_metadata, True, hbm_swizzling, is_persistent)
+    if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
+        b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, False, hbm_swizzling, is_persistent)
 
 
-    x_ref, w_ref, bias_ref, gammas_ref = apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_opt)
+    a_ref, b_ref, bias_ref, gammas_ref = apply_precision(a_tri, b_tri, bias_tri, gammas_tri, precision_opt)
 
-    if x_transpose:
-        x_tri = x_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
-    if w_transpose:
-        w_tri = w_tri.transpose(-1, -2).contiguous().transpose(-1, -2)
-    if y_transpose:
-        if mode == "batched":
-            yT_shape = (n_slices, n, x_tri.shape[-2])
-        elif scatter_indx is not None:
-            yT_shape = (n, scatter_indx.shape[0])
-        elif expt_is_inner:
-            yT_shape = (n_slices, n, m)
-        else:
-            n_rows = x_tri.shape[-2] if gather_indx is None else gather_indx.shape[0]
-            yT_shape = (n, n_rows)
-        y_tri_in = torch.empty(yT_shape, dtype=act_dtype, device=device).transpose(-1, -2)
-    else:
-        y_tri_in = None
+    if a_transpose:
+        a_tri = a_tri.mT.contiguous().mT
+    if b_transpose:
+        b_tri = b_tri.mT.contiguous().mT
+
+    c_shape = compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, a_tri)
+    c_tri = torch.empty(c_shape, dtype=act_dtype, device=device)
+    if c_transpose:
+        c_tri = c_tri.mT.contiguous().mT
 
 
-    if weight_mxfp:
-        mx_axis = w_tri.ndim - 2
-        # compute layouts
-        w_layout, w_layout_opts = layout.StridedLayout, dict()
-        w_scale_layout, w_scale_layout_opts = layout.StridedLayout, dict()
-        if hbm_swizzling and weight_mxfp4:
-            w_layout, w_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mx_axis)
-            w_scale_layout, w_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-                mx_axis=mx_axis, num_warps=8)
-        # downcast to mxfp
-        w_tri_orig = w_tri
-        if colmajor_mxfp_weight:
-            w_tri, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
-            w_ref = upcast_from_mxfp(w_tri, w_scale_tri, torch.bfloat16, axis=mx_axis)
-            w_tri_dtype = FP4 if weight_mxfp4 else weight_dtype
-            w_tri = wrap_torch_tensor(w_tri, w_tri_dtype)
-            w_scale_tri = wrap_torch_tensor(w_scale_tri)
-            # convert layouts
-            w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
-            w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
-        else:
-            if torch.cuda.get_device_capability()[0] < 10:
-                pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
-            if block_m == 16:
-                pytest.skip("PassManager::run failed from Triton compiler")
-            # TODO: swizzling for rowmajor
+    if b_mxfp:
+        b_tri, b_scale_tri, b_ref = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
+        precision_opt.b_mx_scale = b_scale_tri
 
-            # A typical use case is we already quantized col-major weight,
-            # and we want matmul with its transposed row-major weight w/o
-            # requantization.
+    if a_mxfp8:
+        a_tri, a_mx_scales_tri = downcast_to_mxfp(a_tri, act_dtype, axis=-1)
+        a_ref = upcast_from_mxfp(a_tri, a_mx_scales_tri, torch.bfloat16, axis=-1)
+        precision_opt.a_mx_scale = a_mx_scales_tri
 
-            # put abs_max of each 32x32 block to diagonal so scales of transposed agree
-            w_ndim = w_tri.ndim
-            if w_ndim == 2:
-                w_tri = w_tri.unsqueeze(0)
-            BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
-            for e, i, j in itertools.product(range(w_tri.shape[0]), range(0, w_tri.shape[1], BLOCK_SIZE), range(0, w_tri.shape[2], BLOCK_SIZE)):
-                i_end = min(i+BLOCK_SIZE, w_tri.shape[1])
-                j_end = min(j+BLOCK_SIZE, w_tri.shape[2])
-                block = w_tri[e, i:i_end, j:j_end]
-                m_abs = block.abs().max()
-                i_len = i_end - i
-                j_len = j_end - j
-                min_len = min(i_len, j_len)
-                signs = torch.randint(0, 2, (max(i_len, j_len),), device=w_tri.device) * 2 - 1
-                block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
-                if j_len > i_len:
-                    block[i_len - 1, i_len:] = signs[min_len:] * m_abs
-                elif i_len > j_len:
-                    block[j_len:, j_len - 1] = signs[min_len:] * m_abs
-            if w_ndim == 2:
-                w_tri = w_tri.squeeze(0)
-
-            # matmul with rowmajor weight expects scale is separately
-            # constructed (not much additional memory needed).
-            _, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
-            # reuse quantized value from colmajor
-            w_tri_rowmajor, w_scale_tri_rowmajor = downcast_to_mxfp(w_tri.mT.contiguous(), weight_dtype, axis=mx_axis)
-            w_ref = upcast_from_mxfp(w_tri_rowmajor, w_scale_tri_rowmajor, torch.bfloat16, axis=mx_axis).mT.contiguous()
-            w_tri = w_tri_rowmajor.data.mT
-
-            def _pad_and_block(x: torch.Tensor) -> torch.Tensor:
-                x = torch.nn.functional.pad(x, (0, x.shape[-1] % BLOCK_SIZE), mode="replicate")
-                return x.view(*x.shape[:-1], x.shape[-1] // BLOCK_SIZE, BLOCK_SIZE)
-
-            # check if generated scale is transpose-invariant as intended construction
-            # [cdiv(K, 32), N] -> dedup to [cdiv(K, 32), cdiv(N, 32)]
-            w_scale_tri_blocked = _pad_and_block(w_scale_tri)
-            w_scale_tri_sampled = w_scale_tri_blocked[..., 0:1]
-            # [cdiv(N, 32), K] -> dedup to [cdiv(N, 32), cdiv(K, 32)#]
-            w_scale_tri_rowmajor_blocked = _pad_and_block(w_scale_tri_rowmajor)
-            w_scale_tri_rowmajor_sampled = w_scale_tri_rowmajor_blocked[..., 0:1]
-            assert torch.equal(w_scale_tri_sampled.expand_as(w_scale_tri_blocked), w_scale_tri_blocked)
-            assert torch.equal(w_scale_tri_rowmajor_sampled.expand_as(w_scale_tri_rowmajor_blocked), w_scale_tri_rowmajor_blocked)
-            assert torch.equal(w_scale_tri_sampled.squeeze(-1), w_scale_tri_rowmajor_sampled.squeeze(-1).mT)
-
-        precision_opt.weight_scale = w_scale_tri
     epilogue = None
-    if act_mxfp8:
-        x_tri, x_mx_scales_tri = downcast_to_mxfp(x_tri, act_dtype, axis=-1)
-        x_ref = upcast_from_mxfp(x_tri, x_mx_scales_tri, torch.bfloat16, axis=-1)
-        is_input_batched = x_tri.ndim == 3
-        y_shape = x_tri.shape if is_input_batched else (1,) + x_tri.shape
-        n_rows = y_shape[1] if gather_indx is None or mode == "batched" else gather_indx.shape[0]
-        y_shape = (y_shape[0], n_rows, w_tri_orig.shape[-1])
-        if scatter_indx is None or mode == "batched":
-            if not is_input_batched:
-                y_shape = (y_shape[1], y_shape[2])
-        else:
-            y_shape = (n_rows, y_shape[-1])
-        y_scale_shape = y_shape[:-1] + (triton.cdiv(y_shape[-1], MXFP_BLOCK_SIZE),)
-        y_scale = torch.empty(y_scale_shape, dtype=torch.uint8, device=x_tri.device)
-        precision_opt = replace(precision_opt, act_scale=x_mx_scales_tri, out_scale=y_scale)
+    if c_mxfp8:
+        c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
+        c_scale = torch.empty(c_scale_shape, dtype=torch.uint8, device=a_tri.device)
+        precision_opt.c_mx_scale = c_scale
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
-    else:
-        y_scale = None
 
     if mode == "batched":
-        x_ragged_metadata, gather_indx, scatter_indx = None, None, None
-    flex = precision_opt.flex_ctx
+        a_ragged_metadata, gather_indx, scatter_indx = None, None, None
 
     # triton
     try:
-        tri_y = matmul(x_tri, w_tri, bias_tri,
-                           x_ragged_metadata, w_ragged_metadata,
+        tri_y = matmul(a_tri, b_tri, bias_tri,
+                           a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas_ref, epilogue=epilogue, c=y_tri_in)
+                           gammas=gammas_ref, epilogue=epilogue, c=c_tri)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
-    ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
-                             a_ragged_metadata=x_ragged_metadata,
-                             b_ragged_metadata=w_ragged_metadata,
+    ref_y = matmul_torch(a_ref, b_ref, bias_ref,  #
+                             a_ragged_metadata=a_ragged_metadata,
+                             b_ragged_metadata=b_ragged_metadata,
                              gather_indx=gather_indx,
                              scatter_indx=scatter_indx,
                              gammas=gammas_ref)
@@ -585,12 +575,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
             return val / scal[:, None, None]
 
     # check that y_tri_in was used if provided
-    if y_tri_in is not None:
-        assert tri_y.data_ptr() == y_tri_in.data_ptr()
-        assert tri_y.shape == y_tri_in.shape
-        assert tri_y.stride() == y_tri_in.stride()
+    if c_tri is not None:
+        assert tri_y.data_ptr() == c_tri.data_ptr()
+        assert tri_y.shape == c_tri.shape
+        assert tri_y.stride() == c_tri.stride()
     if act_mxfp8:
-        tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
+        tri_y = upcast_from_mxfp(tri_y, precision_opt.c_mx_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
         ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, act_dtype, axis=-1)
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
@@ -604,6 +594,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     else:
         maxtol = None
         rmstol = None
+
+    flex = precision_opt.flex_ctx
     assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y, maxtol=maxtol, rmstol=rmstol)
 
     if act_is_float8:
@@ -632,7 +624,7 @@ def test_small_batch_matmul(m, n, k):
         t = alloc_rand(shape, "cuda", dtype)
         return t.transpose(1, 2) if trans else t
 
-    for x_transpose, w_transpose, bias, dtype in itertools.product(
+    for a_transpose, b_transpose, bias, dtype in itertools.product(
         (False, True),
         (False, True),
         (False, True),
@@ -641,12 +633,12 @@ def test_small_batch_matmul(m, n, k):
         if (
             torch.cuda.get_device_capability()[0] < 10
             and dtype is torch.float8_e5m2
-            and (not w_transpose)
+            and (not b_transpose)
         ):
             continue  # Not supported
 
-        x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
-        w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
+        x = _make_tensor((BATCH_SIZE, m, k), dtype, a_transpose)
+        w = _make_tensor((BATCH_SIZE, k, n), dtype, b_transpose)
         bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
         tri_y = matmul(x, w, bias)
 

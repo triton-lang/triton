@@ -92,9 +92,9 @@ class PrecisionConfig:
     acc_scale: int = 1.0
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: callable = None
-    act_scale: Tensor | None = None
-    weight_scale: Tensor| None = None
-    out_scale: Tensor | None = None
+    a_mx_scale: Tensor | None = None
+    b_mx_scale: Tensor| None = None
+    c_mx_scale: Tensor | None = None
     out_dtype: torch.dtype = None
     enforce_bitwise_invariance: bool = False
 
@@ -102,7 +102,7 @@ class PrecisionConfig:
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
-        return precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+        return precision_config.b_mx_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
 
     return False
 
@@ -139,9 +139,9 @@ def init_allocation(x, w, precision_config, fused_activation,
     if opt_flags.split_k > 1:
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
-    if "matmul" in scratchpad and precision_config.out_scale is not None:
+    if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
-        scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N_scratch, MXFP_BLOCK_SIZE)), torch.uint8)
+        scratchpad["mx_c_mx_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N_scratch, MXFP_BLOCK_SIZE)), torch.uint8)
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
@@ -239,7 +239,7 @@ def matmul(a, b, bias,
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack scales
-    b_scale = precision_config.weight_scale
+    b_scale = precision_config.b_mx_scale
     b_has_mx = b_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(b.dtype) == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
@@ -254,7 +254,7 @@ def matmul(a, b, bias,
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
         b_scale.dtype = torch.uint8
-    a_scale = precision_config.act_scale
+    a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
     if a_scale is not None and not isinstance(a_scale, Tensor):
@@ -363,11 +363,11 @@ def matmul(a, b, bias,
     out_matmul = memory["scratchpad"].get("matmul", memory["output"])
     out_matmul_flex = OutFlexData() if out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
     # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
-    out_matmul_scale = precision_config.out_scale
+    out_matmul_scale = precision_config.c_mx_scale
     if out_matmul_scale is not None:
         out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
-        if has_scratchpad and "mx_out_scale" in memory["scratchpad"]:
-            out_matmul_scale = memory["scratchpad"]["mx_out_scale"]
+        if has_scratchpad and "mx_c_mx_scale" in memory["scratchpad"]:
+            out_matmul_scale = memory["scratchpad"]["mx_c_mx_scale"]
     out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
     # matrix multiplication
     flex = precision_config.flex_ctx
@@ -518,7 +518,7 @@ def matmul(a, b, bias,
             c_dtype = memory["output"].dtype,
             c_flex = precision_config.flex_ctx.out_data,
             c_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
-            c_has_mx = precision_config.out_scale is not None,
+            c_has_mx = precision_config.c_mx_scale is not None,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
@@ -534,7 +534,7 @@ def matmul(a, b, bias,
     if not (is_input_batched or b_ragged_metadata is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
-        precision_config.out_scale = out_final_mx_scale
+        precision_config.c_mx_scale = out_final_mx_scale
     return out_final
 
 # -----------------------------------------------------------------------------
