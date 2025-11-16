@@ -2,10 +2,11 @@
 Block Scaled Matrix Multiplication
 ==================================
 This tutorial demonstrates a Triton implementation of block scaled matrix multiplication
-which is generic over FP4 and FP8 formats. The formats supported in the tutorial are the OCP microscaling
-formats, including mxfp4 and mxfp8, as well as NVIDIA's nvfp4 format. These matrix multiplications
-are accelerated by fifth generation tensor core instructions on CUDA devices with compute capability 10.
-
+which is generic over FP4 and FP8 formats on NVIDIA and AMD GPUs.
+The tutorial supports OCP microscaling formats such as mxfp4 and mxfp8, and NVIDIA's nvfp4
+(on NVIDIA GPUs) and mxfp4 (on AMD GPUs). These matrix multiplications are hardware-accelerated
+using fifth-generation Tensor Cores on NVIDIA GPUs with compute capability 10, and by the CDNA4
+matrix cores on AMD GPUs.
 Users can run the tutorial with each of the supported formats by passing the `--format`
 argument and can benchmark the performance of each by specifying matrix dimensions
 and iteration steps.
@@ -25,6 +26,7 @@ Future updates to this tutorial which support mixed precision block scaled matmu
 # %%
 # Background
 # ----------
+# Scale preshuffling on NVIDIA GPUs
 #
 # CUDA devices that support PTX 8.7 and later can utlize block scaled matrix multiply
 # instructions. In order for low latency access to these scale factors in the fast
@@ -67,29 +69,33 @@ Future updates to this tutorial which support mixed precision block scaled matmu
 
 # Scale preshuffling on AMD GPUs
 #
-# Scales are stored as 8-bit tensors, where each element scales 32 values from the A or B operand tensors.
-# Since MFMA instructions are wave-level instructions, that means that each thread provides a fixed set of operand values to MFMA instructions.
+# Similar to NVIDIA GPUs, on AMD GPUs with CDNA4 architecture, scaled MFMA instructions natively
+# support scaled matrix multiplication. Since it only supports OCP microscaling formats each
+# scale is an 8-bit value that scales 32 elements from A or B operand tensors.
+# Scales are stored as 8-bit tensors. Since MFMA instructions are warp-level instructions, that
+# means that each thread provides a fixed set of operand values to MFMA instructions.
 #
 # For example, in an MFMA instruction with shape 16x16x128:
 # - 4 threads contribute elements along the K dimension.
 # - 16 threads contribute elements along the M or N dimension.
 #
-# From the perspective of the scales tensor, even if the K dimension is stored contiguously in LDS,
-# each thread sees its elements along K dim as strided due to interleaving with other threads.
-# This striding limits the ability to load scale values using vectorized memory access.
+# From the perspective of the scales tensor, even if the K dimension is stored contiguously in
+# shared memory, each thread sees its elements along K dim as strided due to interleaving with
+# other threads. This striding limits the ability to load scale values using vectorized memory
+# access.
 #
 # Our goal is to reorganize the scale tensor so that:
 # 1. Each thread stores the 4 scale values it needs for 4 MFMA ops in contiguous memory.
-# 2. Continuous threads access contiguous memory locations improving global memory coalescing when bypassing LDS,
-#    which is especially beneficial for "skinny" matmuls.
+# 2. Continuous threads access contiguous memory locations improving global memory coalescing when
+# bypassing LDS, which is especially beneficial for "skinny" matmuls.
 #
 # We consider two MFMA cases: one with non-K dimension 16, and one with 32.
 # In both, the minimum tile size for preshuffling is 32x32x256.
 # For example, for a 32x256 operand tile, the corresponding scale tensor has shape 32x8,
 # where each scale covers 32 elements along the K dimension.
 #
-# Each thread holds one scale per MFMA operation. We pack the 4 scale values (for 4 different MFMA ops)
-# next to each other in memory.
+# Each thread holds one scale per MFMA operation. We pack the 4 scale values
+# (for 4 different MFMA ops) next to each other in memory.
 #
 # Case 1: mfma_scaled_16x16x128
 #
@@ -119,11 +125,15 @@ import triton.language as tl
 import triton.profiler as proton
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton._internal_testing import is_hip_cdna4
 
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_hip_cdna4():
+    target = triton.runtime.driver.active.get_current_target()
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
 def supports_block_scaling():
@@ -388,12 +398,12 @@ def show_profile(profile_name):
 
 
 @triton.jit
-def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_scales_ptr, M, N, K, stride_am,
-                                                    stride_ak, stride_bk, stride_bn, stride_ck, stride_cm, stride_cn,
-                                                    stride_asm, stride_ask, stride_bsn, stride_bsk,
-                                                    # Meta-parameters
-                                                    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                                                    mfma_nonkdim: tl.constexpr, preshuffle: tl.constexpr):
+def block_scaled_matmul_kernel_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_scales_ptr, M, N, K, stride_am, stride_ak,
+                                     stride_bk, stride_bn, stride_ck, stride_cm, stride_cn, stride_asm, stride_ask,
+                                     stride_bsn, stride_bsk,
+                                     # Meta-parameters
+                                     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+                                     mfma_nonkdim: tl.constexpr):
     """Kernel for computing the matmul C = A x B.
     A and B inputs are in the microscale fp4 (mxfp4) format.
     A_scales and B_scales are in e8m0 format.
@@ -408,12 +418,6 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
 
     # We assume 32 elements along K share the same scale.
     SCALE_GROUP_SIZE: tl.constexpr = 32
-
-    if preshuffle:
-        NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
-    else:
-        NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 1
-
     num_k_iter = tl.cdiv(K, BLOCK_K // 2)
     # Create pointers for first block of A and B input matrices
     # The BLOCK sizes are of the elements and in fp4 we pack 2 per uint8 container.
@@ -425,41 +429,31 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
     b_ptrs = b_ptr + (offs_k_split[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     # Create pointers for the first block of A and B scales
-    offs_asn = (pid_n *
-                (BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE) + tl.arange(0, (BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE))) % N
-    offs_ks = tl.arange(0, BLOCK_K // SCALE_GROUP_SIZE * NON_K_PRESHUFFLE_BLOCK_SIZE)
+    offs_asn = (pid_n * (BLOCK_N // 32) + tl.arange(0, (BLOCK_N // 32))) % N
+    offs_ks = tl.arange(0, BLOCK_K // SCALE_GROUP_SIZE * 32)
 
     # B scales are N x K even though B operand is K x N.
     b_scale_ptrs = (b_scales_ptr + offs_asn[:, None] * stride_bsn + offs_ks[None, :] * stride_bsk)
-    offs_asm = (pid_m *
-                (BLOCK_M // NON_K_PRESHUFFLE_BLOCK_SIZE) + tl.arange(0, (BLOCK_M // NON_K_PRESHUFFLE_BLOCK_SIZE))) % M
+    offs_asm = (pid_m * (BLOCK_M // 32) + tl.arange(0, (BLOCK_M // 32))) % M
     a_scale_ptrs = (a_scales_ptr + offs_asm[:, None] * stride_asm + offs_ks[None, :] * stride_ask)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
     for k in range(0, num_k_iter):
-        if preshuffle:
-            # Here we "undo" the shuffle done in global memory (shuffle_scales_cdna4 function).
-            if mfma_nonkdim == 32:
-                a_scales = tl.load(a_scale_ptrs).reshape(BLOCK_M // NON_K_PRESHUFFLE_BLOCK_SIZE,
-                                                         BLOCK_K // SCALE_GROUP_SIZE // 8, 2, 32, 4,
-                                                         1).permute(0, 3, 1, 4, 2,
-                                                                    5).reshape(BLOCK_M, BLOCK_K // SCALE_GROUP_SIZE)
-                b_scales = tl.load(b_scale_ptrs).reshape(BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE,
-                                                         BLOCK_K // SCALE_GROUP_SIZE // 8, 2, 32, 4,
-                                                         1).permute(0, 3, 1, 4, 2,
-                                                                    5).reshape(BLOCK_N, BLOCK_K // SCALE_GROUP_SIZE)
-            elif mfma_nonkdim == 16:
-                a_scales = tl.load(a_scale_ptrs).reshape(BLOCK_M // NON_K_PRESHUFFLE_BLOCK_SIZE,
-                                                         BLOCK_K // SCALE_GROUP_SIZE // 8, 4, 16, 2, 2,
-                                                         1).permute(0, 5, 3, 1, 4, 2,
-                                                                    6).reshape(BLOCK_M, BLOCK_K // SCALE_GROUP_SIZE)
-                b_scales = tl.load(b_scale_ptrs).reshape(BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE,
-                                                         BLOCK_K // SCALE_GROUP_SIZE // 8, 4, 16, 2, 2,
-                                                         1).permute(0, 5, 3, 1, 4, 2,
-                                                                    6).reshape(BLOCK_N, BLOCK_K // SCALE_GROUP_SIZE)
-        else:
-            a_scales = tl.load(a_scale_ptrs)
-            b_scales = tl.load(b_scale_ptrs)
+        # Here we "undo" the shuffle done in global memory (shuffle_scales_cdna4 function).
+        if mfma_nonkdim == 32:
+            a_scales = tl.load(a_scale_ptrs).reshape(BLOCK_M // 32, BLOCK_K // SCALE_GROUP_SIZE // 8, 2, 32, 4,
+                                                     1).permute(0, 3, 1, 4, 2,
+                                                                5).reshape(BLOCK_M, BLOCK_K // SCALE_GROUP_SIZE)
+            b_scales = tl.load(b_scale_ptrs).reshape(BLOCK_N // 32, BLOCK_K // SCALE_GROUP_SIZE // 8, 2, 32, 4,
+                                                     1).permute(0, 3, 1, 4, 2,
+                                                                5).reshape(BLOCK_N, BLOCK_K // SCALE_GROUP_SIZE)
+        elif mfma_nonkdim == 16:
+            a_scales = tl.load(a_scale_ptrs).reshape(BLOCK_M // 32, BLOCK_K // SCALE_GROUP_SIZE // 8, 4, 16, 2, 2,
+                                                     1).permute(0, 5, 3, 1, 4, 2,
+                                                                6).reshape(BLOCK_M, BLOCK_K // SCALE_GROUP_SIZE)
+            b_scales = tl.load(b_scale_ptrs).reshape(BLOCK_N // 32, BLOCK_K // SCALE_GROUP_SIZE // 8, 4, 16, 2, 2,
+                                                     1).permute(0, 5, 3, 1, 4, 2,
+                                                                6).reshape(BLOCK_N, BLOCK_K // SCALE_GROUP_SIZE)
 
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs, cache_modifier=None)
@@ -469,12 +463,9 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
         # Advance the ptrs to the next K block.
         a_ptrs += (BLOCK_K // 2) * stride_ak
         b_ptrs += (BLOCK_K // 2) * stride_bk
-        if preshuffle:
-            a_scale_ptrs += BLOCK_K * stride_ask
-            b_scale_ptrs += BLOCK_K * stride_bsk
-        else:
-            a_scale_ptrs += (BLOCK_K // SCALE_GROUP_SIZE) * stride_ask
-            b_scale_ptrs += (BLOCK_K // SCALE_GROUP_SIZE) * stride_bsk
+
+        a_scale_ptrs += BLOCK_K * stride_ask
+        b_scale_ptrs += BLOCK_K * stride_bsk
 
     c = accumulator.to(c_ptr.type.element_ty)
 
@@ -487,10 +478,7 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
     tl.store(c_ptrs, c, mask=c_mask, cache_modifier=".wt")
 
 
-def shuffle_scales_cdna4(scales: torch.Tensor, mfma_nonkdim: int, preshuffle: bool):
-    if not preshuffle:
-        return scales
-
+def shuffle_scales_cdna4(scales: torch.Tensor, mfma_nonkdim: int):
     scales_shuffled = scales.clone()
     sm, sn = scales_shuffled.shape
 
@@ -505,7 +493,7 @@ def shuffle_scales_cdna4(scales: torch.Tensor, mfma_nonkdim: int, preshuffle: bo
     return scales_shuffled
 
 
-def generate_gemm_afp4wfp4_inputs(M, N, K):
+def initialize_block_scaled_amd(M, N, K, mfma_nonkdim):
 
     BLOCK_M = 128
     BLOCK_N = 128
@@ -516,22 +504,20 @@ def generate_gemm_afp4wfp4_inputs(M, N, K):
         "BLOCK_K": BLOCK_K,
         "num_stages": 2,
         "num_warps": 8,
-        "mfma_nonkdim": 16,
-        "preshuffle": True,
+        "mfma_nonkdim": mfma_nonkdim,
     }
 
     torch.manual_seed(5)
-    SCALE_GROUP_SIZE = 32
 
     x = MXFP4Tensor(size=(M, K), device="cuda").random()
     w = MXFP4Tensor(size=(N, K), device="cuda").random()
 
-    x_scales = torch.randint(124, 128, (K // SCALE_GROUP_SIZE, M), dtype=torch.uint8, device="cuda")
-    w_scales = torch.randint(124, 128, (K // SCALE_GROUP_SIZE, N), dtype=torch.uint8, device="cuda")
+    x_scales = torch.randint(124, 128, (K // 32, M), dtype=torch.uint8, device="cuda")
+    w_scales = torch.randint(124, 128, (K // 32, N), dtype=torch.uint8, device="cuda")
     x_scales = x_scales.T
     w_scales = w_scales.T
-    x_scales_shuffled = shuffle_scales_cdna4(x_scales, configs["mfma_nonkdim"], configs["preshuffle"])
-    w_scales_shuffled = shuffle_scales_cdna4(w_scales, configs["mfma_nonkdim"], configs["preshuffle"])
+    x_scales_shuffled = shuffle_scales_cdna4(x_scales, configs["mfma_nonkdim"])
+    w_scales_shuffled = shuffle_scales_cdna4(w_scales, configs["mfma_nonkdim"])
 
     return (
         x,
@@ -544,7 +530,7 @@ def generate_gemm_afp4wfp4_inputs(M, N, K):
     )
 
 
-def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4"):
+def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4", mfma_nonkdim=16):
 
     def e8m0_to_f32(x):
         x_f32 = 2**((x - 127).to(torch.float32))
@@ -553,20 +539,20 @@ def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4"):
 
     def run_torch(x, w, x_scales, w_scales, dtype):
         # First convert the x and w inputs to f32.
-        SCALE_GROUP_SIZE = 32
         x_f32 = x.to(torch.float32)
         w_f32 = w.to(torch.float32)
         # Next convert the e8m0 scales to f32.
-        x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
+        x_scales = x_scales.repeat_interleave(32, dim=1).to(torch.float32)
         x_scales_f32 = e8m0_to_f32(x_scales)
         x_f32 = x_f32 * x_scales_f32
-        w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
+        w_scales = w_scales.repeat_interleave(32, dim=1).to(torch.float32)
         w_scales_f32 = e8m0_to_f32(w_scales)
         w_f32 = w_f32 * w_scales_f32
         return torch.mm(x_f32, w_f32.T).to(dtype)
 
-    x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = generate_gemm_afp4wfp4_inputs(
-        M, N, K)
+    x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = \
+    initialize_block_scaled_amd(M, N, K, mfma_nonkdim)
+
     x = x_mxfp4.to_packed_tensor(dim=1)
     w = w_mxfp4.to_packed_tensor(dim=1)
 
@@ -576,7 +562,7 @@ def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4"):
 
     torch_out = run_torch(x_mxfp4, w_mxfp4, x_scales, w_scales, torch.float32)
     torch.testing.assert_close(torch_out, triton_out)
-    print(f"✅ (pass {block_scale_type})")
+    print(f"✅ (pass {block_scale_type}, mfma_nonk_dim {mfma_nonkdim})")
 
 
 def block_scaled_matmul_amd(x, w, x_scales_triton, w_scales_triton, configs):
@@ -596,27 +582,26 @@ def block_scaled_matmul_amd(x, w, x_scales_triton, w_scales_triton, configs):
     triton_out = torch.empty((M, N), device="cuda")
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4[grid](x, w, triton_out, x_scales_triton, w_scales_triton, M, N, K,
-                                                          x.stride(0), x.stride(1), w.stride(0), w.stride(1), 0,
-                                                          triton_out.stride(0), triton_out.stride(1),
-                                                          x_scales_triton.stride(0), x_scales_triton.stride(1),
-                                                          w_scales_triton.stride(0), w_scales_triton.stride(1), BLOCK_M,
-                                                          BLOCK_N, configs["BLOCK_K"], configs["mfma_nonkdim"],
-                                                          configs["preshuffle"], num_warps=configs["num_warps"],
-                                                          num_stages=configs["num_stages"], **kernel_kwargs)
+    block_scaled_matmul_kernel_cdna4[grid](x, w, triton_out, x_scales_triton, w_scales_triton, M, N, K, x.stride(0),
+                                           x.stride(1), w.stride(0), w.stride(1), 0, triton_out.stride(0),
+                                           triton_out.stride(1), x_scales_triton.stride(0), x_scales_triton.stride(1),
+                                           w_scales_triton.stride(0), w_scales_triton.stride(1), BLOCK_M, BLOCK_N,
+                                           configs["BLOCK_K"], configs["mfma_nonkdim"], num_warps=configs["num_warps"],
+                                           num_stages=configs["num_stages"], **kernel_kwargs)
     triton_out = triton_out.to(torch.float32)
 
     return triton_out
 
 
-def bench_block_scaled_amd(K, block_scale_type="mxfp4", reps=10):
+def bench_block_scaled_amd(K, block_scale_type="mxfp4", reps=10, mfma_nonkdim=16):
     assert K % 128 == 0
     M = 8192
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
-    x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = generate_gemm_afp4wfp4_inputs(
-        M, N, K)
+    x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = \
+    initialize_block_scaled_amd(M, N, K, mfma_nonkdim)
+
     x = x_mxfp4.to_packed_tensor(dim=1)
     w = w_mxfp4.to_packed_tensor(dim=1)
 
@@ -647,9 +632,10 @@ if __name__ == "__main__":
 
         if is_cuda():
             validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
-        else:
-            assert (is_hip_cdna4())
-            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format)
+        elif is_hip_cdna4():
+            assert args.format == "mxfp4", "AMD tutorial only supports mxpf4 format currently"
+            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=16)
+            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=32)
 
         if args.bench:
             proton.start("block_scaled_matmul", hook="triton")
@@ -657,8 +643,8 @@ if __name__ == "__main__":
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 if is_cuda():
                     bench_block_scaled(K, reps=10000, block_scale_type=args.format)
-                else:
-                    assert (is_hip_cdna4())
-                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format)
+                elif is_hip_cdna4():
+                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=16)
+                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=32)
             proton.finalize()
             show_profile("block_scaled_matmul")
