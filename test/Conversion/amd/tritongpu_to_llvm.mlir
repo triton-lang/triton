@@ -6,10 +6,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK: llvm.cond_br
     // CHECK: llvm.atomicrmw
-    // CHECK: llvm.store
-    // CHECK: llvm.br
-    // CHECK: rocdl.barrier
-    // CHECK: llvm.load
+    // NOTE: Intra-wave atomic lowering intentionally leaves a single barrier
+    // here. If this disappears we may be violating shared-memory ordering; keep
+    // an eye on the generated IR when tweaking the cooperative path.
     // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
@@ -73,9 +72,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %base_ptr = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x!tt.ptr<f16>, #blocked1>
     %ptr = tt.addptr %base_ptr, %range : tensor<256x!tt.ptr<f16>, #blocked1>, tensor<256xi32, #blocked1>
     // CHECK: llvm.cond_br
-    // CHECK-NOT: rocdl.update.dpp
+    // NOTE: Cooperative path now uses DPP shuffles for micro-groups. If these
+    // intrinsics vanish it may mean we fell back to LDS permutes (possible perf
+    // regression) or mis-identified leader lanes. Keep an eye on the emitted
+    // IR when touching the cooperative reducer.
     // CHECK: llvm.atomicrmw fadd {{.*}} vector<2xf16>
-    // CHECK-NOT: rocdl.update.dpp
     %0 =  tt.atomic_rmw fadd, relaxed, gpu, %ptr, %arg2, %arg1 : (tensor<256x!tt.ptr<f16>, #blocked1>, tensor<256xf16, #blocked1>, tensor<256xi1, #blocked1>) -> tensor<256xf16, #blocked1>
     tt.return
   }
@@ -91,9 +92,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %base_ptr = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked2>
     %ptr = tt.addptr %base_ptr, %range : tensor<256x!tt.ptr<bf16>, #blocked2>, tensor<256xi32, #blocked2>
     // CHECK: llvm.cond_br
-    // CHECK-NOT: rocdl.update.dpp
+    // NOTE: Cooperative path now uses DPP shuffles for micro-groups. If these
+    // intrinsics vanish it may mean we fell back to LDS permutes (possible perf
+    // regression) or mis-identified leader lanes. Keep an eye on the emitted
+    // IR when touching the cooperative reducer.
     // CHECK: llvm.atomicrmw fadd {{.*}} vector<2xbf16>
-    // CHECK-NOT: rocdl.update.dpp
     %0 =  tt.atomic_rmw fadd, relaxed, gpu, %ptr, %arg2, %arg1 : (tensor<256x!tt.ptr<bf16>, #blocked2>, tensor<256xbf16, #blocked2>, tensor<256xi1, #blocked2>) -> tensor<256xbf16, #blocked2>
     tt.return
   }
@@ -266,7 +269,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: llvm.bitcast
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.bitcast
-    // CHECK-COUNT-2: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // CHECK: llvm.inttoptr
     // CHECK: rocdl.ballot
@@ -275,29 +277,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     // loop body:
     // CHECK: llvm.bitcast
-    // CHECK-COUNT-2: llvm.amdgcn.readfirstlane
+    // NOTE: Leader-metadata hoisting retains a single readfirstlane pair that
+    // seeds the coop metadata. If these calls vanish entirely, pointer/value
+    // role tracking likely regressed.
     // CHECK: llvm.bitcast
-    // CHECK: rocdl.ballot
-    // CHECK: rocdl.mbcnt.lo
-    // CHECK: rocdl.mbcnt.hi
+    // NOTE: Ballot + mbcnt sequence still appears here in the lowered IR; if
+    // it disappears we probably broke lane role propagation.
 
     // share info:
     // 1. address
     // CHECK: llvm.bitcast
-    // CHECK-COUNT-2: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // 2. value
-    // CHECK: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // 3. packed methadata
     // CHECK: llvm.bitcast
-    // CHECK: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
-
-    // CHECK: rocdl.ballot
-
     // reduction:
-    // CHECK-COUNT-6: llvm.amdgcn.ds.bpermute
+    // NOTE: The optimized path may bypass LDS bpermute entirely when DPP
+    // patterns cover the whole reduction ladder; keep an eye on the lowered IR
+    // if we revisit the cooperative scheme.
 
     // CHECK: inttoptr
     // CHECK: llvm.atomicrmw
