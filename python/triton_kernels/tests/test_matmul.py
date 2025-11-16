@@ -129,7 +129,7 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_sl
                            out_dtype=out_dtype)
 
 
-def apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_config):
+def apply_precision(x_tri, w_tri, x_ref, w_ref, bias_tri, gammas_tri, precision_config):
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
@@ -144,8 +144,8 @@ def apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_config):
         return x
 
     return (
-        apply(x_tri, flex_ctx.lhs_data.scale),
-        apply(w_tri, flex_ctx.rhs_data.scale),
+        x_ref if x_ref is not None else apply(x_tri, flex_ctx.lhs_data.scale),
+        w_ref if w_ref is not None else apply(w_tri, flex_ctx.rhs_data.scale),
         None if bias_tri is None else apply(bias_tri, None),
         None if gammas_tri is None else apply(gammas_tri, None),
     )
@@ -180,8 +180,8 @@ def init_ragged_metadata(n_slices, slice_dim, device):
     slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
     return make_ragged_tensor_metadata(slice_sizes, slice_dim)
 
-def convert_to_mxfp(x_tri, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajor):
-    mx_axis = x_tri.ndim - 2
+def convert_to_mxfp(x, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajor):
+    mx_axis = x.ndim - 2
     # compute layouts
     x_layout, x_layout_opts = layout.StridedLayout, dict()
     x_scale_layout, x_scale_layout_opts = layout.StridedLayout, dict()
@@ -192,11 +192,11 @@ def convert_to_mxfp(x_tri, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajo
     # downcast to mxfp
     if is_colmajor:
         # create storage
-        x_tri, x_scale_tri = downcast_to_mxfp(x_tri, x_dtype, axis=mx_axis)
+        x, x_scale_tri = downcast_to_mxfp(x, x_dtype, axis=mx_axis)
         x_tri_dtype = FP4 if is_mxfp4 else x_dtype
-        x_ref = upcast_from_mxfp(x_tri, x_scale_tri, torch.bfloat16, axis=mx_axis)
+        x_ref = upcast_from_mxfp(x, x_scale_tri, torch.bfloat16, axis=mx_axis)
         # create tensor object
-        x_tri = convert_layout(wrap_torch_tensor(x_tri, x_tri_dtype), x_layout, **x_layout_opts)
+        x = convert_layout(wrap_torch_tensor(x, x_tri_dtype), x_layout, **x_layout_opts)
         x_scale_tri = convert_layout(wrap_torch_tensor(x_scale_tri), x_scale_layout, **x_scale_layout_opts)
     else:
         if torch.cuda.get_device_capability()[0] < 10:
@@ -210,37 +210,37 @@ def convert_to_mxfp(x_tri, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajo
         # requantization.
 
         # put abs_max of each 32x32 block to diagonal so scales of transposed agree
-        x_ndim = x_tri.ndim
+        x_ndim = x.ndim
         if x_ndim == 2:
-            x_tri = x_tri.unsqueeze(0)
+            x = x.unsqueeze(0)
         BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
-        for e, i, j in itertools.product(range(x_tri.shape[0]), range(0, x_tri.shape[1], BLOCK_SIZE), range(0, x_tri.shape[2], BLOCK_SIZE)):
-            i_end = min(i+BLOCK_SIZE, x_tri.shape[1])
-            j_end = min(j+BLOCK_SIZE, x_tri.shape[2])
-            block = x_tri[e, i:i_end, j:j_end]
+        for e, i, j in itertools.product(range(x.shape[0]), range(0, x.shape[1], BLOCK_SIZE), range(0, x.shape[2], BLOCK_SIZE)):
+            i_end = min(i+BLOCK_SIZE, x.shape[1])
+            j_end = min(j+BLOCK_SIZE, x.shape[2])
+            block = x[e, i:i_end, j:j_end]
             m_abs = block.abs().max()
             i_len = i_end - i
             j_len = j_end - j
             min_len = min(i_len, j_len)
-            signs = torch.randint(0, 2, (max(i_len, j_len),), device=x_tri.device) * 2 - 1
+            signs = torch.randint(0, 2, (max(i_len, j_len),), device=x.device) * 2 - 1
             block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
             if j_len > i_len:
                 block[i_len - 1, i_len:] = signs[min_len:] * m_abs
             elif i_len > j_len:
                 block[j_len:, j_len - 1] = signs[min_len:] * m_abs
         if x_ndim == 2:
-            x_tri = x_tri.squeeze(0)
+            x = x.squeeze(0)
 
         # matmul with rowmajor weight expects scale is separately
         # constructed (not much additional memory needed).
-        _, x_scale_tri = downcast_to_mxfp(x_tri, x_dtype, axis=mx_axis)
+        _, x_scale_tri = downcast_to_mxfp(x, x_dtype, axis=mx_axis)
         # reuse quantized value from colmajor
-        wT_tri, wT_scale_tri = downcast_to_mxfp(x_tri.mT.contiguous(), x_dtype, axis=mx_axis)
+        wT_tri, wT_scale_tri = downcast_to_mxfp(x.mT.contiguous(), x_dtype, axis=mx_axis)
         x_ref = upcast_from_mxfp(wT_tri, wT_scale_tri, torch.bfloat16, axis=mx_axis).mT.contiguous()
         x_tri_dtype = FP4 if is_mxfp4 else x_dtype
-        x_tri = wrap_torch_tensor(wT_tri.data.mT, x_tri_dtype)
+        x = wrap_torch_tensor(wT_tri.data.mT, x_tri_dtype)
 
-    return x_tri, x_scale_tri, x_ref
+    return x, x_scale_tri, x_ref
 
 def compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, x_tri):
     if mode == "batched":
@@ -252,23 +252,15 @@ def compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m,
     n_rows = x_tri.shape[-2] if gather_indx is None else gather_indx.shape[0]
     return (n_rows, n)
 
-def pad_ragged_tensor(x, x_ragged_metadata, transpose, hbm_swizzling, is_persistent):
-    divisbility = 32
-    if hbm_swizzling:
-        if torch.cuda.get_device_capability()[0] >= 10:
-            # Blackwell scale swizzling constraint
-            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
-            divisbility = 128
-        elif not is_persistent:
-            divisbility = 64
-
+def pad_ragged_tensor(x, x_ragged_metadata, transpose):
+    multiple = 128
     if transpose:
-        y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=divisbility, pad_value=0).T.contiguous()
+        y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
     else:
-        y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=divisbility, pad_value=0).contiguous()
+        y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).contiguous()
     y_ragged_metadata = replace(x_ragged_metadata,
-                                slice_offs=x_ragged_metadata.block_offs(divisbility) * divisbility,
-                                slice_sizes_divisibility=divisbility)
+                                slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
+                                slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
 
 # ---------------
@@ -511,18 +503,27 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                                                            inner_expt_opt=inner_expt_opt)
     if inner_expt_opt is not None:
         bias_tri = None
+
+    a_ref = None
     if inner_expt_opt is not None and "pad_a" in inner_expt_opt:
-        a_tri, a_ragged_metadata = pad_ragged_tensor(a_tri, a_ragged_metadata, True, hbm_swizzling, is_persistent)
-    if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
-        b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, False, hbm_swizzling, is_persistent)
-
-
-    a_ref, b_ref, bias_ref, gammas_ref = apply_precision(a_tri, b_tri, bias_tri, gammas_tri, precision_opt)
-
+        a_tri, a_ragged_metadata = pad_ragged_tensor(a_tri, a_ragged_metadata, transpose=True)
     if a_transpose:
         a_tri = a_tri.mT.contiguous().mT
+    if a_mxfp8:
+        a_tri, a_mx_scales_tri = downcast_to_mxfp(a_tri, act_dtype, axis=-1)
+        a_ref = upcast_from_mxfp(a_tri, a_mx_scales_tri, torch.bfloat16, axis=-1)
+        precision_opt.a_mx_scale = a_mx_scales_tri
+
+
+    b_ref = None
+    if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
+        b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
     if b_transpose:
         b_tri = b_tri.mT.contiguous().mT
+    if b_mxfp:
+        b_tri, b_scale_tri, b_ref = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
+        precision_opt.b_mx_scale = b_scale_tri
+
 
     c_shape = compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, a_tri)
     c_tri = torch.empty(c_shape, dtype=act_dtype, device=device)
@@ -530,14 +531,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         c_tri = c_tri.mT.contiguous().mT
 
 
-    if b_mxfp:
-        b_tri, b_scale_tri, b_ref = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
-        precision_opt.b_mx_scale = b_scale_tri
+    a_ref, b_ref, bias_ref, gammas_ref = apply_precision(a_tri, b_tri, a_ref, b_ref, bias_tri, gammas_tri, precision_opt)
 
-    if a_mxfp8:
-        a_tri, a_mx_scales_tri = downcast_to_mxfp(a_tri, act_dtype, axis=-1)
-        a_ref = upcast_from_mxfp(a_tri, a_mx_scales_tri, torch.bfloat16, axis=-1)
-        precision_opt.a_mx_scale = a_mx_scales_tri
 
     epilogue = None
     if c_mxfp8:
