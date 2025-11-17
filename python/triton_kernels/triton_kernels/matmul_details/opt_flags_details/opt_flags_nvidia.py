@@ -49,6 +49,42 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     return block_k
 
 
+def compute_block_k_tma(
+    m: int,
+    constraints: dict,
+    enforce_bitwise_invariance: bool,
+    tokens_per_expt: int,
+    routing_data,
+    lhs_dtype,
+    rhs_dtype,
+    precision_config,
+):
+    if constraints.get("block_m", None):
+        block_m = constraints["block_m"]
+    elif enforce_bitwise_invariance:
+        block_m = 128
+    else:
+        if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
+            # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
+            if (
+                lhs_dtype == torch.bfloat16
+                and rhs_dtype == FP4
+                and tokens_per_expt >= 16
+                and torch.cuda.get_device_capability()[0] >= 10
+            ):
+                block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
+            else:
+                block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+        else:
+            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+    block_m_tma = block_m
+    has_mx_act_scale = precision_config is not None and precision_config.act_scale is not None
+    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    if has_native_mxfp and has_mx_act_scale:
+        block_m_tma = min(block_m, 128)
+    return block_m, block_m_tma
+
+
 def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     device_props = torch.cuda.get_device_properties(0)
     n_sms = device_props.multi_processor_count

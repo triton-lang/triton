@@ -326,4 +326,10 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
                 mx_axis=mxfp_dim, num_warps=8)
             scales = convert_layout(scales, scale_layout, **scale_layout_opts)
+        if dtype.is_mxfloat8 and hbm_swizzling:
+            # # convert buffer to swizzled hbm layout
+            # buffer_layout, buffer_layout_opts = layout.make_default_matmul_mxfp8_w_layout(mx_axis=mxfp_dim)
+            # buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
+            # convert scales to swizzled hbm layout
+            scales = convert_layout(scales, layout.make_default_matmul_mxfp8_act_scale_layout(), **{})
     return buffer, scales, ragged_metadata

@@ -199,20 +199,7 @@ def make_default_opt_flags_nvidia(
     group_m = 8
     xcd_swizzle = 1
     # block_m
-    if constraints.get("block_m", None):
-        block_m = constraints["block_m"]
-    elif enforce_bitwise_invariance:
-        block_m = 128
-    else:
-        if slice_size <= 64 and routing_data is not None and routing_data.slice_sizes is not None:
-            # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and slice_size >= 16 and torch.cuda.get_device_capability()[0] >= 10:
-                block_m = max(16, min(triton.next_power_of_2(8 * slice_size), 128))
-            else:
-                block_m = max(16, min(triton.next_power_of_2(2 * slice_size), 64))
-        else:
-            block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
-    # block n
+    block_m, block_m_tma = opt_flags_nvidia.compute_block_m(m, constraints, enforce_bitwise_invariance, slice_size, routing_data, lhs_dtype, rhs_dtype, precision_config)
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
     # is_persistent
@@ -233,6 +220,7 @@ def make_default_opt_flags_nvidia(
         if m * n * k < 131072:
             is_persistent = False
     block_n = block_n_tma if is_persistent else block_n
+    block_m = block_m_tma if is_persistent else block_m
     # block k
     block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16:
