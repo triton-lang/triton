@@ -362,8 +362,8 @@ class CodeGenerator(ast.NodeVisitor):
     }
     builtin_namespace.update((
         ('print', language.core.device_print),
-        ('min', language.minimum),
-        ('max', language.maximum),
+        ('min', language.core.builtin_min),
+        ('max', language.core.builtin_max),
     ))
 
     def _unsupported(self, node, message):
