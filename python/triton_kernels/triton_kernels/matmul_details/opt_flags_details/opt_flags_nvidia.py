@@ -1,3 +1,4 @@
+from sys import maxsize
 import torch
 import triton
 from triton_kernels import target_info
@@ -49,7 +50,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     return block_k
 
 
-def compute_block_k_tma(
+def compute_block_m(
     m: int,
     constraints: dict,
     enforce_bitwise_invariance: bool,
@@ -77,12 +78,7 @@ def compute_block_k_tma(
                 block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
         else:
             block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
-    block_m_tma = block_m
-    has_mx_act_scale = precision_config is not None and precision_config.act_scale is not None
-    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and has_mx_act_scale:
-        block_m_tma = min(block_m, 128)
-    return block_m, block_m_tma
+    return block_m
 
 
 def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:

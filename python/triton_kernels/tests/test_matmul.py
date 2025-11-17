@@ -185,7 +185,7 @@ def _build_test_op_cases():
         for case in _build_test_op_cases()
     ],
 )
-@pytest.mark.parametrize("block_m", [64, 128])
+@pytest.mark.parametrize("block_m", [16, 128])
 @pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
     (False, False, None),
     (True, False, None),

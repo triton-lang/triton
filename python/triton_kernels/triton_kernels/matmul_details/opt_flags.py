@@ -220,7 +220,6 @@ def make_default_opt_flags_nvidia(
         if m * n * k < 131072:
             is_persistent = False
     block_n = block_n_tma if is_persistent else block_n
-    block_m = block_m_tma if is_persistent else block_m
     # block k
     block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16:
