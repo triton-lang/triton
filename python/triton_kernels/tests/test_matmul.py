@@ -517,20 +517,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     )
     precision_opt.b_mx_scale = b_scale_tri
 
-
-    # ragged_dim = m if not expt_is_inner else k
-    # slice_sizes = make_slice_sizes(n_slices, ragged_dim, device=device)
-    # batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
-    # b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, ragged_dim)
-    # b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
-    # if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
-    #     b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
-    # if b_transpose:
-    #     b_tri = b_tri.mT.contiguous().mT
-    # if b_mxfp:
-    #     b_tri, b_scale_tri = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
-    #     precision_opt.b_mx_scale = b_scale_tri
-
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias_tri     = None if not do_bias    else torch.randn(b_tri.shape[:-2] + b_tri.shape[-1:], dtype=torch.float32, device=device)
