@@ -954,3 +954,102 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   tt.return
 }
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @subslice_aliasing
+tt.func public @subslice_aliasing(%data: tensor<128x128xf16>) {
+    // CHECK: ttg.local_alloc
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view0 = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view1 = ttg.memdesc_subslice %alloc[0, 64] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view2 = ttg.memdesc_subslice %alloc[64, 0] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view3 = ttg.memdesc_subslice %alloc[64, 64] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data, %alloc : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // RAW between 128x128 store and %data0 local_load, both access part of %view0
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_load
+    %data0 = ttg.local_load %view0 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data0 load and the store, both access %view0
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data0, %view0 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data1 = ttg.local_load %view1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data1 load and the store, both access %view1
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data1, %view1 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data2 = ttg.local_load %view2 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data2 load and the store, both access %view2
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data2, %view2 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data3 = ttg.local_load %view3 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data3 load and the store, both access %view3
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data3, %view3 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // RAW between %view3 store and %all_res load, both access part of %view3
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_load
+    %all_res = ttg.local_load %alloc : !ttg.memdesc<128x128xf16, #shared, #smem, mutable, 128x128> -> tensor<128x128xf16>
+    // CHECK-NEXT: return
+    tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// %c_dyn (view2) is dynamic offset so its uses will alias with all other index
+// CHECK-LABEL: @memindex_aliasing
+tt.func public @memindex_aliasing(%data: tensor<64x64xf16>, %c_dyn : i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c3 = arith.constant 3 : i32
+    // CHECK: ttg.local_alloc
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.memdesc_index
+    %view0 = ttg.memdesc_index %alloc[%c0] : !ttg.memdesc<4x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.memdesc_index
+    %view1 = ttg.memdesc_index %alloc[%c1] : !ttg.memdesc<4x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.memdesc_index
+    %view2 = ttg.memdesc_index %alloc[%c_dyn] : !ttg.memdesc<4x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data, %view0 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data, %view1 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data, %view2 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_load
+    %data0 = ttg.local_load %view0 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data0, %view0 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.local_load
+    %data1 = ttg.local_load %view1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data1, %view1 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_load
+    %data2 = ttg.local_load %view2 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16>
+    // CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data2, %view2 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: return
+    tt.return
+}
