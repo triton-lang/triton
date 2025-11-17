@@ -294,7 +294,7 @@ def TTNG_AsyncCLCTryCancelOp : TTNG_Op<"async_clc_try_cancel", []> {
   let assemblyFormat = "$mbarAlloc`,` $clcResAlloc attr-dict `:` type(operands)";
 }
 
-def TTNG_AsyncCLCQueryCancelOp : TTNG_Op<"async_clc_query_cancel", []> {
+def TTNG_CLCQueryCancelOp : TTNG_Op<"clc_query_cancel", []> {
   let summary = "Extract CTA ID from CLC response";
 
   let description = [{
