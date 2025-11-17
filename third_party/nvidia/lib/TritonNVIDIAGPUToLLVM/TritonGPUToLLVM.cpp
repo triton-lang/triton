@@ -172,6 +172,9 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::populateInstrumentationToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
 
+    mlir::triton::populateWarpIdOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
+
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

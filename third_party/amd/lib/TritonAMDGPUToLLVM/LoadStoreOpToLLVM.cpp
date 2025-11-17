@@ -546,12 +546,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       }
 
       auto funcOp = cast<LLVM::LLVMFuncOp>(parentOp);
-      rewriter.setInsertionPointToStart(&funcOp.getBody().front());
 
+      rewriter.setInsertionPointToStart(&funcOp.getBody().front());
       std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
-      auto call = LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, "llvm.amdgcn.readfirstlane", {i32_ty}, {warpId});
-      warpId = call.getResult(0);
       rewriter.restoreInsertionPoint(insertPt);
     } else {
       std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);

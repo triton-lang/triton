@@ -357,13 +357,12 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
   Value laneId;
-  Value warpId;
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
     laneId = tid;
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = b.udiv(tid, warpSizeVal);
   }
 
   return {laneId, warpId};
@@ -1552,6 +1551,53 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   Value resultStruct =
       packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
   rewriter.replaceOp(op, {resultStruct});
+}
+
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
+                               Value i, NVVM::ShflKind mode, Value clamp) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+
+  if (bits == 64) {
+    Type vecTy = vec_ty(f32_ty, 2);
+    Value vec = b.bitcast(val, vecTy);
+    Value val0 = b.extract_element(f32_ty, vec, b.i32_val(0));
+    Value val1 = b.extract_element(f32_ty, vec, b.i32_val(1));
+    val0 = shuffleCommonImpl(loc, rewriter, val0, i, mode, clamp);
+    val1 = shuffleCommonImpl(loc, rewriter, val1, i, mode, clamp);
+    vec = b.undef(vecTy);
+    vec = b.insert_element(vecTy, vec, val0, b.i32_val(0));
+    vec = b.insert_element(vecTy, vec, val1, b.i32_val(1));
+    return b.bitcast(vec, val.getType());
+  }
+  Type type = val.getType();
+  if (type != i32_ty) {
+    val = b.bitcast(val, int_ty(bits));
+    if (bits < 32)
+      val = b.zext(i32_ty, val);
+  }
+  Value mask = b.i32_val(0xFFFFFFFF);
+  Value result = NVVM::ShflOp::create(rewriter, loc, i32_ty, mask, val, i,
+                                      clamp, mode, UnitAttr());
+  if (type != i32_ty) {
+    if (bits < 32)
+      result = b.trunc(int_ty(bits), result);
+    result = b.bitcast(result, type);
+  }
+  return result;
+}
+
+Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val, Value i,
+                    NVVM::ShflKind mode, Value clamp) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // To shuffle pointers, convert them to i64.
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = b.ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, val, i, mode, clamp);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = b.inttoptr(valTy, result);
+  return result;
 }
 
 } // namespace mlir

@@ -92,6 +92,11 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
 
+void populateWarpIdOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   const TargetInfoBase &targetInfo,
+                                   PatternBenefit benefit);
+
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      const TargetInfoBase &targetInfo,

@@ -232,6 +232,7 @@ struct ConvertTritonAMDGPUToLLVM
                                                      targetInfo, commonBenefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, commonBenefit);
+
     AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
@@ -245,6 +246,9 @@ struct ConvertTritonAMDGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+
+    mlir::triton::AMD::populateWarpIdOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
         mlir::amdgpu::Chipset::parse(this->arch);

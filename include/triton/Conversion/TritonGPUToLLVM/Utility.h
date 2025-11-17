@@ -3,6 +3,7 @@
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -628,6 +629,10 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  Value threadPred,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter);
+
+Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val, Value i,
+                    NVVM::ShflKind mode, Value clamp);
+
 } // namespace mlir
 
 #endif

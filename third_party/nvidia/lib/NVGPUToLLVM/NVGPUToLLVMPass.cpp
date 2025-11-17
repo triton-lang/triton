@@ -7,8 +7,10 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+
 #include "llvm/Support/ErrorHandling.h"
 
 namespace ttn = mlir::triton::nvgpu;
@@ -195,11 +197,11 @@ private:
   Constraints inputConstraints;
 };
 
-class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
+class WarpIdOpPattern : public OpRewritePattern<mlir::triton::gpu::WarpIdOp> {
 public:
-  using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
+  using OpRewritePattern<mlir::triton::gpu::WarpIdOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttn::WarpIdOp op,
+  LogicalResult matchAndRewrite(mlir::triton::gpu::WarpIdOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);

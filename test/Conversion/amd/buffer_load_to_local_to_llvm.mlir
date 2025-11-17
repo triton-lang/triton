@@ -342,14 +342,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COMMON-NEXT: %1 = llvm.mlir.constant(63 : i32) : i32
     // COMMON-NEXT: %2 = llvm.and %0, %1 : i32
     // COMMON-NEXT: %3 = llvm.mlir.constant(64 : i32) : i32
-    // COMMON-NEXT: %4 = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: %5 = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%4) : (i32) -> i32
-    // COMMON-NEXT: %6 = rocdl.workitem.id.x : i32
-    // COMMON-NEXT: %7 = llvm.mlir.constant(63 : i32) : i32
-    // COMMON-NEXT: %8 = llvm.and %6, %7 : i32
-    // COMMON-NEXT: %9 = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %4 = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %5 = rocdl.workitem.id.x : i32
+    // COMMON-NEXT: %6 = llvm.mlir.constant(63 : i32) : i32
+    // COMMON-NEXT: %7 = llvm.and %5, %6 : i32
+    // COMMON-NEXT: %8 = llvm.udiv %7, %4 : i32
+    // COMMON-NEXT: %9 = rocdl.readfirstlane %8 : i32
     // COMMON-NEXT: %10 = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: %11 = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%10) : (i32) -> i32
+    // COMMON-NEXT: %11 = rocdl.workitem.id.x : i32
+    // COMMON-NEXT: %12 = llvm.mlir.constant(63 : i32) : i32
+    // COMMON-NEXT: %13 = llvm.and %11, %12 : i32
+    // COMMON-NEXT: %14 = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %15 = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %16 = rocdl.workitem.id.x : i32
+    // COMMON-NEXT: %17 = llvm.mlir.constant(63 : i32) : i32
+    // COMMON-NEXT: %18 = llvm.and %16, %17 : i32
+    // COMMON-NEXT: %19 = llvm.udiv %18, %15 : i32
+    // COMMON-NEXT: %20 = rocdl.readfirstlane %19 : i32
 
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %1 = amdg.buffer_load_to_local %arg0[%0] into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
