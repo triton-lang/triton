@@ -1,7 +1,7 @@
 import json
 import pathlib
 
-from typing import NamedTuple
+from typing import NamedTuple, Tuple
 
 import pytest
 import torch
@@ -11,8 +11,15 @@ import triton.language as tl
 import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
+from triton._internal_testing import (
+    is_cuda,
+    is_hip,
+    is_hip_cdna2,
+    is_hip_cdna4,
+    supports_tma,
+    supports_ws,
+)
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, is_hip_cdna4, supports_tma, supports_ws, is_cuda
 
 pl.enable_semantic("triton")
 
@@ -173,9 +180,83 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
         clock_loc = suffix.split(",")[0].split()[0]
         break
     assert clock_loc is not None
-    loc_line = next((line for line in llir_lines if clock_loc in line and "DILocation" in line), None)
+    loc_line = next(
+        (line for line in llir_lines if clock_loc in line and "DILocation" in line),
+        None,
+    )
     assert loc_line is not None
     assert "line: " in loc_line and "line: 0" not in loc_line
+
+
+def test_select_ids(tmp_path: pathlib.Path):
+    from contextlib import contextmanager
+
+    select_ids = [0, 2]
+    mode = proton.mode.Default(
+        sampling_strategy="selective",
+        sampling_options=",".join(str(i) for i in select_ids),
+        granularity="warp",
+    )
+
+    @contextmanager
+    def instrumentation(file_path):
+        proton.hooks.InstrumentationHook.enable_host_buffer = True
+        proton.start(
+            str(file_path.with_suffix("")),
+            backend="instrumentation",
+            mode=mode,
+        )
+        try:
+            yield
+        finally:
+            proton.hooks.InstrumentationHook.enable_host_buffer = False
+            proton.finalize()
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        with pl.scope("load_ops"):
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_select_ids.hatchet"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+
+    warp_indices = []
+
+    with instrumentation(temp_file):
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=4)
+        uid_num_offset = 36
+        uid_vec_offset = 40
+        uid_num = int.from_bytes(
+            proton.hooks.InstrumentationHook.host_buffer[uid_num_offset:uid_num_offset + 4].numpy().tobytes(),
+            "little",
+        )
+        assert uid_num == len(select_ids)
+        for i in range(uid_num):
+            offset = uid_vec_offset + i * 4
+            warp_id = int.from_bytes(
+                proton.hooks.InstrumentationHook.host_buffer[offset:offset + 4].numpy().tobytes(),
+                "little",
+            )
+            warp_indices.append(warp_id)
+        assert sorted(warp_indices) == select_ids
 
 
 @pytest.mark.parametrize("hook", ["triton", None])
@@ -336,6 +417,11 @@ def test_multi_session(tmp_path: pathlib.Path):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
+    temp_file_restart = tmp_path / "test_tree_restart.hatchet"
+    session_id0 = proton.start(str(temp_file_restart.with_suffix("")), backend="instrumentation")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
     with open(temp_file_inst, "rb") as f:
         data = json.load(f)
         kernel_frame = data[0]["children"][0]
@@ -347,6 +433,12 @@ def test_multi_session(tmp_path: pathlib.Path):
         kernel_frame = data[0]["children"][0]
         assert "add_kernel" == kernel_frame["frame"]["name"]
         assert "time (ns)" in kernel_frame["metrics"]
+
+    with open(temp_file_restart, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]
+        assert "add_kernel" == kernel_frame["frame"]["name"]
+        assert "cycles" in kernel_frame["children"][0]["metrics"]
 
 
 def test_autotune(tmp_path: pathlib.Path):
@@ -602,3 +694,192 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert s > 1
         ts_diff = target[s - 1]["ts"] - target[0]["ts"]
         assert ts_diff >= target[0]["dur"]
+
+
+@pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
+def test_overhead(tmp_path: pathlib.Path):
+    temp_file_cycles = tmp_path / "test_overhead.hatchet"
+    temp_file_time = tmp_path / "test_overhead_time.hatchet"
+
+    @triton.jit()
+    def kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, LOOP: tl.constexpr):
+        pl.enter_scope("kernel")
+        for _ in range(16):
+            if LOOP:
+                pl.enter_scope("loop")
+            x = tl.load(x_ptr + tl.arange(0, BLOCK_SIZE))
+            tl.store(y_ptr + tl.arange(0, BLOCK_SIZE), x + 1)
+            if LOOP:
+                pl.exit_scope("loop")
+        pl.exit_scope("kernel")
+
+    BLOCK_SIZE = 256
+    x = torch.zeros(BLOCK_SIZE, device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+
+    def bench():
+        with proton.scope("single"):
+            kernel[(1024, )](x, y, BLOCK_SIZE, False)
+        with proton.scope("loop"):
+            kernel[(1024, )](x, y, BLOCK_SIZE, True)
+
+    # warmup
+    bench()
+
+    proton.start(str(temp_file_time.with_suffix("")), )
+
+    with proton.scope("session0"):
+        bench()
+
+    proton.start(str(temp_file_cycles.with_suffix("")), backend="instrumentation",
+                 mode=proton.mode.Default(metric_type="cycle", buffer_size=4096))
+
+    with proton.scope("session1"):
+        bench()
+    proton.finalize()
+
+    with temp_file_time.open("rb") as f:
+        data = json.load(f)
+    root = data[0]
+
+    def session_kernel_time(session_name: str) -> Tuple[int, int]:
+        session_node = next(child for child in root["children"] if child["frame"]["name"] == session_name)
+        single_node = next(child for child in session_node["children"] if child["frame"]["name"] == "single")
+        loop_node = next(child for child in session_node["children"] if child["frame"]["name"] == "loop")
+        kernel_node = single_node["children"][0]
+        single_time = kernel_node["metrics"]["time (ns)"]
+        kernel_node = loop_node["children"][0]
+        loop_time = kernel_node["metrics"]["time (ns)"]
+        return single_time, loop_time
+
+    session0_single_time, session0_loop_time = session_kernel_time("session0")
+    session1_single_time, session1_loop_time = session_kernel_time("session1")
+    single_threshold = 1.2 if is_cuda() else 1.5
+    loop_threshold = 2.0 if is_cuda() else 3.0
+    assert session1_single_time / session0_single_time < single_threshold, "Simple kernel overhead too high"
+    assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
+
+
+@pytest.mark.skipif(is_hip(), reason="not implemented yet")
+def test_gmem_buffer(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 512
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_gmem_buffer.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(buffer_type="global")
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+        mode=mode,
+    )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Assert we have exactly 4 events (2 warps × 2 scopes)
+        assert len(events) == 4
+
+        # Assert all events have the expected common fields
+        for event in events:
+            assert "ts" in event
+            assert "dur" in event
+            assert event["dur"] > 0
+
+        # Assert we have 2 kernel events and 2 load_ops events
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        load_ops_events = [e for e in events if e["name"] == "load_ops"]
+        assert len(kernel_events) == 2
+        assert len(load_ops_events) == 2
+
+        # Assert we have events from both warps
+        warp0_events = [e for e in events if "warp 0" in e["tid"]]
+        warp1_events = [e for e in events if "warp 1" in e["tid"]]
+        assert len(warp0_events) == 2
+        assert len(warp1_events) == 2
+
+
+def test_threaded_kernel_call(tmp_path: pathlib.Path):
+
+    import threading
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+
+    temp_file = tmp_path / "test_threaded.chrome_trace"
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+    )
+
+    exception_holder = []
+
+    def run_kernel():
+        try:
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        except Exception as e:
+            exception_holder.append(e)
+
+    thread = threading.Thread(target=run_kernel)
+    thread.start()
+    thread.join()
+
+    proton.finalize()
+
+    assert len(exception_holder) == 0, f"Kernel raised exception: {exception_holder[0] if exception_holder else None}"
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) > 0
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        assert len(kernel_events) > 0

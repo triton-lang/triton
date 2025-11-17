@@ -13,7 +13,7 @@ from triton.backends.driver import GPUDriver
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
-libraries = ['cuda']
+libraries = ['libcuda.so.1']
 PyCUtensorMap = None
 
 

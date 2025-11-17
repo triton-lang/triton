@@ -2096,6 +2096,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_k_pack: bool, optional
     """
     out_dtype = _unwrap_if_constexpr(out_dtype)
+    acc = _unwrap_if_constexpr(acc)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2799,6 +2800,8 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
 
@@ -3430,3 +3433,42 @@ def binary_op_type_legalization(lhs, rhs, semantic):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+_NOTHING = object()
+
+
+def is_negative_zero(x):
+    return x == 0.0 and math.copysign(1.0, x) < 0
+
+
+@builtin
+def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.max(_unwrap_if_constexpr(args)))
+
+    warn("builtin max on tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    return maximum(*args, propagate_nan=propagate_nan, _semantic=_semantic)
+
+
+@builtin
+def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.min(_unwrap_if_constexpr(args)))
+
+    warn("builtin min on tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    return minimum(*args, propagate_nan=propagate_nan, _semantic=_semantic)

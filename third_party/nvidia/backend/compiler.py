@@ -322,6 +322,7 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         passes.gluon.add_inliner(pm)
+        passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.gluon.add_canonicalizer(pm)
@@ -348,6 +349,7 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
+        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
         if knobs.compilation.instrumentation_mode == "consan":
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)

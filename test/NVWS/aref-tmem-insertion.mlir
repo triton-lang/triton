@@ -10,7 +10,7 @@
 #shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
 #shared3 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>
 #shared4 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
-#shared5 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true, CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [2, 1, 0]}>
+#shared5 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true, rank = 3}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
@@ -150,7 +150,9 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       %10 = ttng.tmem_store %cst, %result[%9], %true {ttg.partition = array<i32: 1>} : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       scf.yield %10 : !ttg.async.token
     } {tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 5 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs= [array<i32: 1>]}
-    // CHECK: nvws.aref.put.exit [[AREF]], [[TOK2]] [#nvws.async_op<none>] :
+    // CHECK: nvws.aref.put.exit [[AREF]], [[TOK2]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 5 : i32}
+    // CHECK-NEXT: [[BUF:%.*]], [[TOK:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 5 : i32}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF]], [[TOK]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 5 : i32}
     tt.return
   }
 
@@ -247,14 +249,14 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %result, %token = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %0 = ttng.tmem_store %cst, %result[%token], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %1:2 = scf.for %arg2 = %c0_i32 to %c32_i32 step %c1_i32 iter_args(%arg3 = %true, %arg4 = %0) -> (i1, !ttg.async.token)  : i32 {
-      %2:3 = "get_offsets"(%arg2) : (i32) -> (i32, i32, i32)
+      %2:3 = "get_offsets"(%arg2) {ttg.partition = array<i32: 2>} : (i32) -> (i32, i32, i32)
       %3 = tt.descriptor_load %arg0[%2#0, %2#2] {ttg.partition = array<i32: 2>} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
       %4 = tt.descriptor_load %arg1[%2#1, %2#2] {ttg.partition = array<i32: 2>} : !tt.tensordesc<tensor<64x128xf16, #shared>> -> tensor<64x128xf16, #blocked1>
       %5 = ttg.local_alloc %3 {ttg.partition = array<i32: 2>} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
       %6 = ttg.local_alloc %4 {ttg.partition = array<i32: 2>} : (tensor<64x128xf16, #blocked1>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
       %7 = ttng.tc_gen5_mma %5, %6, %result[%arg4], %arg3, %true {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %8 = arith.cmpi eq, %arg2, %c0_i32 : i32
-      %9 = arith.cmpi ne, %arg2, %c0_i32 : i32
+      %8 = arith.cmpi eq, %arg2, %c0_i32 {ttg.partition = array<i32: 0, 1>}: i32
+      %9 = arith.cmpi ne, %arg2, %c0_i32 {ttg.partition = array<i32: 1>} : i32
       %10 = scf.if %8 -> (!ttg.async.token) {
         "some_op"() {ttg.partition = array<i32: 0>} : () -> ()
         %result_0, %token_1 = ttng.tmem_load %result[%7] {ttg.partition = array<i32: 0>} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
@@ -264,7 +266,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
         scf.yield %7 : !ttg.async.token
       } {ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 1>]}
       scf.yield %9, %10 : i1, !ttg.async.token
-    } {tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 8 : i32}
+    } {ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>, array<i32: 1>], tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 8 : i32}
     tt.return
   }
 
@@ -320,9 +322,14 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       %9 = ttng.tc_gen5_mma_scaled %6, %8, %result_1[%arg7], %result, %result_2, %true, %true lhs = e4m3 rhs = e4m3 {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf8E4M3FN, #shared2, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #shared4, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>
       scf.yield {ttg.partition = array<i32: 0, 1, 2>} %9 : !ttg.async.token
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 9 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>]}
+    %val, %tok = ttng.tmem_load %result_1[%1] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    "use"(%val) : (tensor<128x128xf32, #blocked>) -> ()
     // CHECK: nvws.aref.put.exit [[AREF]], [[TOK1]] [#nvws.async_op<tc5mma>]
     // CHECK-NEXT: aref.get.enter
+    // CHECK-NEXT: aref.buffer
+    // CHECK-NEXT: tmem_load
     // CHECK-NEXT: aref.get.exit
+    // CHECK-NEXT: use
     tt.return
   }
 
@@ -502,7 +509,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       scf.yield %token_4 : !ttg.async.token
       // CHECK-NEXT: }
     } {tt.num_stages = 3 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 16 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>]}
-    // CHECK-NEXT: put.exit [[AREF]], [[TOK1]] [#nvws.async_op<none>] :
+    // CHECK-NEXT: put.exit [[AREF]], [[TOK1]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 16 : i32}
     // CHECK-NEXT: {{.*}}, [[TOK:%.*]] = nvws.aref.get.enter [[AREF]] :
     // CHECK-NEXT: aref.buffer [[AREF]], [[TOK]] :
     // CHECK-NEXT: tmem_load
@@ -717,16 +724,67 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       scf.yield %15, %6, %token_7, %23 : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token
       // CHECK-NEXT: } {
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>, array<i32: 1>, array<i32: 3>]}
-    // CHECK: aref.put.exit [[AREF_O]], [[RET]]#3 [#nvws.async_op<tc5mma>] :
-    // CHECK-NEXT: aref.put.exit [[AREF_S]], [[RET]]#2 [#nvws.async_op<none>] :
-    // CHECK-NEXT: aref.get.enter [[AREF_S]] :
-    // CHECK-NEXT: aref.get.exit [[AREF_S]], {{.*}} [{{.*}}] :
+    // CHECK: aref.put.exit [[AREF_O]], [[RET]]#3 [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 3>, ttg.warp_specialize.tag = 0 : i32}
+    // CHECK-NEXT: aref.put.exit [[AREF_S]], [[RET]]#2 [#nvws.async_op<none>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 0 : i32}
+    // CHECK-NEXT: aref.get.enter [[AREF_S]] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 0 : i32}
+    // CHECK-NEXT: aref.get.exit [[AREF_S]], {{.*}} [{{.*}}] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 0 : i32}
     // CHECK-NEXT: aref.get.enter [[AREF_O]] :
     // CHECK-NEXT: aref.buffer [[AREF_O]], {{.*}} :
     // CHECK-NEXT: tmem_load
     // CHECK-NEXT: aref.get.exit [[AREF_O]], {{.*}} [{{.*}}] :
     %result_4, %token_5 = ttng.tmem_load %result_2[%1#3] : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
     "use"(%1#0, %result_4, %1#1) : (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> ()
+    tt.return
+  }
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @hoisted_alloc
+  tt.func @hoisted_alloc(%lb: i32, %ub: i32, %step: i32, %ptr0: !tt.ptr<i32>) {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: tmem_alloc
+    // CHECK-NEXT: aref.create
+    // CHECK-NEXT: put.enter
+    // CHECK-NEXT: aref.buffer
+    // CHECK-NEXT: tmem_store
+    %res, %tok = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    // CHECK: scf.for
+    %tok0 = scf.for %iv0 = %lb to %ub step %step iter_args(%tok1 = %tok) -> (!ttg.async.token) : i32 {
+      %ptrub = tt.addptr %ptr0, %iv0 {ttg.partition = array<i32: 1, 2>} : !tt.ptr<i32>, i32
+      %ub1 = tt.load %ptrub {ttg.partition = array<i32: 1, 2>} : !tt.ptr<i32>
+      %lb1 = "lb1"(%iv0) {ttg.partition = array<i32: 1, 2>} : (i32) -> i32
+      %step1 = "step1"(%iv0) {ttg.partition = array<i32: 1, 2>} : (i32) -> i32
+    // CHECK: scf.for
+      %tok4 = scf.for %iv = %lb1 to %ub1 step %step1 iter_args(%tok2 = %tok1) -> (!ttg.async.token)  : i32 {
+        %sA = "load1"(%iv) {ttg.partition = array<i32: 1>} : (i32) -> !ttg.memdesc<128x64xf32, #shared, #smem>
+        %sB = "load2"(%iv) {ttg.partition = array<i32: 1>} : (i32) -> !ttg.memdesc<64x128xf32, #shared, #smem>
+        %tok3 = ttng.tc_gen5_mma %sA, %sB, %res[%tok2], %true, %true {ttg.partition = array<i32: 2>} : !ttg.memdesc<128x64xf32, #shared, #smem>, !ttg.memdesc<64x128xf32, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+        // CHECK: scf.yield
+        scf.yield {ttg.partition = array<i32: 1, 2>} %tok3 : !ttg.async.token
+      } {ttg.partition = array<i32: 1, 2>, ttg.partition.outputs = [array<i32: 2>]}
+      // CHECK: put.exit
+      // CHECK-NEXT: get.enter
+      // CHECK-NEXT: aref.buffer
+      // CHECK-NEXT: tmem_load
+      // CHECK-NEXT: get.exit
+      // CHECK-NEXT: use
+      %val, %tok5 = ttng.tmem_load %res[%tok4] {ttg.partition = array<i32: 0>} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      "use"(%val) {ttg.partition = array<i32: 0>} : (tensor<128x128xf32, #blocked>) -> ()
+      // CHECK: scf.yield
+      scf.yield {ttg.partition = array<i32: 0, 1, 2>} %tok5 : !ttg.async.token
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 2>], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: put.exit
+    // CHECK-NEXT: get.enter
+    // CHECK-NEXT: get.exit
     tt.return
   }
 }

@@ -118,6 +118,8 @@ void init_gluon_passes(py::module &&m) {
                      gluon::createGluonResolveAutoEncodingsPass);
   ADD_PASS_WRAPPER_0("add_canonicalizer", gluon::createGluonCanonicalize);
   ADD_PASS_WRAPPER_0("add_inliner", gluon::createGluonInline);
+  ADD_PASS_WRAPPER_0("add_infer_coalesced_encodings",
+                     gluon::createGluonInferCoalescedEncodingsPass);
 }
 
 void init_triton_passes(py::module &&m) {

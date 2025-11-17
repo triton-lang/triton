@@ -1,8 +1,11 @@
+from dataclasses import dataclass
 import torch
 from .base import Layout
 
 
+@dataclass
 class BlackwellMXValueLayout(Layout):
+    shape: list[int]
     name: str = "BLACKWELL_VALUE"
 
     def __init__(self, shape) -> None:

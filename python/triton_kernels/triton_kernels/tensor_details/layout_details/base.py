@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 
+@dataclass
 class Layout(ABC):
-
-    def __init__(self, shape) -> None:
-        self.initial_shape = shape
+    initial_shape: list[int]
 
     @abstractmethod
     def swizzle_data(self, data):

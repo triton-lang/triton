@@ -214,7 +214,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   std::optional<TMemLdStEncodingInfo> msgInfo;
   for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
                     TMemAccessAtom::I16x64b, TMemAccessAtom::I16x128b}) {
-    auto tile = getTileLayout(ctx, atom, unpacked);
+    auto tile = getTileLayout(ctx, atom, unpacked, /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -227,7 +227,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked);
+    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked,
+                              /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
