@@ -260,6 +260,32 @@ def pad_ragged_tensor(x, x_ragged_metadata, transpose):
                                 slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
 
+def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose, squeeze_batch_dim):
+    # allocate buffer
+    buffer_shape = ((n_slices,) if ragged_dim is None else tuple()) + shape
+    buffer_dtype = torch.bfloat16 if "mx" in dtype else dtype_str_to_torch(dtype.strip("mx"))
+    buffer = alloc_rand(buffer_shape, device=device, dtype=buffer_dtype)
+    if squeeze_batch_dim:
+        buffer = buffer.squeeze(0)
+    # handle raggedness
+    ragged_metadata = None
+    if ragged_dim is not None:
+        slice_sizes = make_slice_sizes(n_slices, shape[ragged_dim], device=device)
+        ragged_metadata = make_ragged_tensor_metadata(slice_sizes, shape[ragged_dim])
+    if ragged_padding:
+        buffer, ragged_metadata = pad_ragged_tensor(buffer, ragged_metadata, ragged_dim==1)
+    # handle transpose
+    if transpose:
+        buffer = buffer.mT.contiguous().mT
+    # handle mxfp
+    scales = None
+    if mxfp_dim is not None:
+        buffer, scales = downcast_to_mxfp(buffer, dtype_str_to_torch(dtype.strip("mx")), axis=mxfp_dim)
+        scales = wrap_torch_tensor(scales)
+        buffer = wrap_torch_tensor(buffer)
+    return buffer, scales, ragged_metadata
+
+
 # ---------------
 # unit tests
 # ---------------
@@ -491,27 +517,26 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     scatter_indx = None if not do_scatter else torch.randperm(m, device=device, dtype=torch.int32)
 
 
-    slice_dim = m if not expt_is_inner else k
-    slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
+    ragged_dim = m if not expt_is_inner else k
+    slice_sizes = make_slice_sizes(n_slices, ragged_dim, device=device)
+
+    a_tri, a_scales, a_ragged_metadata = make_random_tensor(
+        shape=(m, k),
+        n_slices = n_slices,
+        ragged_dim = None if mode != "ragged" else 1 if expt_is_inner else 0,
+        device = device,
+        dtype = act_dtype_str,
+        mxfp_dim = -1 if a_mxfp8 else None,
+        transpose = a_transpose,
+        ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
+        squeeze_batch_dim = mode == "plain",
+    )
+    precision_opt.a_mx_scale = a_scales
 
 
     batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
 
-    a_ragged_metadata = None if mode != "ragged" else make_ragged_tensor_metadata(slice_sizes, slice_dim)
-    a_shape = (n_slices, m, k) if mode == 'batched' else (m, k)
-    a_tri = alloc_rand(a_shape, device=device, dtype=torch.bfloat16 if act_mxfp8 else act_dtype)
-    if inner_expt_opt is not None and "pad_a" in inner_expt_opt:
-        a_tri, a_ragged_metadata = pad_ragged_tensor(a_tri, a_ragged_metadata, transpose=True)
-    if a_transpose:
-        a_tri = a_tri.mT.contiguous().mT
-    if a_mxfp8:
-        a_tri, a_mx_scales_tri = downcast_to_mxfp(a_tri, act_dtype, axis=-1)
-        a_tri = wrap_torch_tensor(a_tri)
-        a_mx_scales_tri = wrap_torch_tensor(a_mx_scales_tri)
-        precision_opt.a_mx_scale = a_mx_scales_tri
-
-
-    b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, slice_dim)
+    b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, ragged_dim)
     b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
     if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
         b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
