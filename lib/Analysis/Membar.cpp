@@ -52,6 +52,13 @@ IntervalVector generateIntervalsForType(triton::gpu::MemDescType srcTy,
 
   auto strides = computeStrides(srcTy);
 
+  // TODO: We could detect when multiple trailing dimensions are contiguous in
+  // memory (stride[i] == product of dims after it) and create larger intervals
+  // that include all those dimensions.
+  // For example, shape [4, 8, 16, 32] with strides [4096, 512, 32, 1] could
+  // generate 32 intervals of size 16*32=512 instead of 256 intervals of
+  // size 32. This would improve performance during interval overlap.
+
   // Generate intervals by converting interval indices to memory offsets.
   // Each intervalIdx is mapped into multi-dimensional coordinates, then
   // converted to a linear memory offset using the tensor's strides.
@@ -138,9 +145,9 @@ IntervalVector applyViewOperations(int64_t baseElementOffset,
       return applyViewOperations(baseElementOffset + elementOffset, leafTy,
                                  remainingOps);
     } else {
-      // This can be made smarter in the future by looking at loop iterations
-      // and if we alternate index then we can reduce the analysis to just
-      // one of the slices
+      // TODO: This can be made smarter in the future by looking at loop
+      // iterations and if we alternate index then we can reduce the analysis
+      // to just one of the slices
       IntervalVector intervals;
       int64_t dim0Size = srcTy.getDimSize(0);
       // Dynamic index: recursively handle all possible values of dim0
@@ -178,6 +185,13 @@ IntervalVector getFineGrainedIntervals(Interval<size_t> baseInterval,
       // Start of the chain of ops (local_alloc/function parameter/...)
       break;
     }
+  }
+
+  // If there are no view operations then we are accessing the full allocation.
+  // Return the entire base interval instead of a lot of small intervals that
+  // will cover the full base interval.
+  if (viewOps.empty()) {
+    return {baseInterval};
   }
 
   auto ty = cast<triton::gpu::MemDescType>(value.getType());
@@ -500,6 +514,7 @@ void MembarAnalysisImpl<PrintIntervals>::update(
     op->print(llvm::errs());
     llvm::errs() << "\n";
     curBlockInfo.dump();
+    llvm::errs() << "---\n";
   }
 
   // Update the region info, even if barrier is inserted, we have to maintain
