@@ -24,7 +24,9 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
 
   LogicalResult inferAutoEncoding(Attribute operandEncoding,
                                   Attribute &resultEncoding) const {
-    assert(isa<gluon::AutoEncodingAttr>(operandEncoding));
+    if (!isa<gluon::AutoEncodingAttr, gluon::CoalescedEncodingAttr>(
+            operandEncoding))
+      return failure();
     resultEncoding = operandEncoding;
     return success();
   }

@@ -299,12 +299,16 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-kind-shapes
   if (t.isF32()) {
     return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
   }
-  if (t.isF16() || t.isBF16()) {
+  if (t.isF16()) {
     return {
         {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  if (t.isBF16()) {
+    return {{MMADTypeKind::f16, {Float32Type::get(ctx)}}};
   }
   // TODO: float6 and explicit float4 types are not supported yet.
   // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
@@ -329,10 +333,11 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
            << strMMADTypeKind(akind->first) << " but RHS kind is "
            << strMMADTypeKind(bkind->first);
   }
-  if (!llvm::is_contained(akind->second, d)) {
+  if (!llvm::is_contained(akind->second, d) ||
+      !llvm::is_contained(bkind->second, d)) {
     InFlightDiagnostic diag =
-        op->emitOpError("unsupported accumulator dtype for operand kind ")
-        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << d
+        op->emitOpError("unsupported accumulator dtype for operand types ")
+        << a << " and " << b << ", accumulator dtype is " << d
         << " but must be one of [";
     llvm::interleaveComma(akind->second, diag, [&](Type t) { diag << t; });
     diag << "]";

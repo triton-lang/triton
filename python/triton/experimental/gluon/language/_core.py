@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -112,9 +112,11 @@ atomic_or = builtin(tl_core.atomic_or)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
+cast = builtin(tl_core.cast)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
+gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
 load = builtin(tl_core.load)
@@ -148,7 +150,7 @@ class distributed_type(block_type):
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
         assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
-        if not isinstance(layout, AutoLayout):
+        if not isinstance(layout, (AutoLayout, CoalescedLayout)):
             assert len(
                 shape
             ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
@@ -441,25 +443,6 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
-def gather(src, index, axis, _semantic=None):
-    """
-    Gather values from a tensor along a specified axis using an index tensor.
-
-    Args:
-        src (tensor): The source tensor to gather values from.
-        index (tensor): The index tensor specifying which values to gather.
-        axis (int): The axis along which to gather values.
-
-    Returns:
-        tensor: The gathered tensor.
-    """
-    src = _unwrap_if_constexpr(src)
-    index = _unwrap_if_constexpr(index)
-    axis = _unwrap_if_constexpr(axis)
-    return _semantic.gather(src, index, axis)
-
-
-@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
@@ -494,6 +477,16 @@ def set_auto_layout(value, layout, _semantic=None):
     """
     layout = _unwrap_if_constexpr(layout)
     return _semantic.set_auto_layout(value, layout)
+
+
+@builtin
+def fp4_to_fp(src, elem_type, axis, _semantic=None):
+    """
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    return _semantic.fp4_to_fp(src, elem_type, axis)
 
 
 @builtin
