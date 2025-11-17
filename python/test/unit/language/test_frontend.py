@@ -656,12 +656,12 @@ def test_constexpr_max_error():
 
 @filecheck_test
 @triton.jit
-def test_for_loop_iv_modification(n):
-    # CHECK: scf.for %{{I:.*}} = %c0_i32 to %{{.*}} step %c1_i32
-    for i in range(n):
+def test_for_loop_iv_modification():
+    # CHECK: scf.for %[[I:.*]] = {{.*}} to {{.*}} step {{.*}} : i32 {
+    for i in range(4):
         # CHECK: anchor{{.*}}%[[I]]
         anchor(i)
-        # CHECK: %{{I2:.*} = arith.addi %[[I]], %c1_i32 : i32
+        # CHECK: %[[I2:.*]] = arith.addi %[[I]], %{{.*}} : i32
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
