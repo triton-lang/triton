@@ -6,7 +6,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/Support/Debug.h"
 #include <deque>
 
 namespace mlir {
@@ -197,16 +196,22 @@ IntervalVector getFineGrainedIntervals(Interval<size_t> baseInterval,
 
 } // namespace
 
-void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::run(
+    FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
-      dyn_cast<FunctionOpInterface>(allocation->getOperation());
+      dyn_cast<FunctionOpInterface>(this->allocation->getOperation());
+  if constexpr (PrintIntervals) {
+    llvm::errs() << "Function: " << funcOp.getName() << "\n";
+  }
   OpBuilder builder(funcOp.getContext());
   resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
-void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::resolve(
+    FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
   // Initialize the blockList. Operations are organized into "virtual blocks",
   // which represent segments of straight-line code analyzed by each iteration
   // of the dataflow analysis. Virtual blocks abstract over both control flow
@@ -292,7 +297,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   });
 }
 
-void MembarOrFenceAnalysis::visitTerminator(
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::visitTerminator(
     Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
@@ -345,14 +351,17 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarAnalysisImpl<PrintIntervals>::insertBarrier(Operation *op,
+                                                       OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
   auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
 }
 
-void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            FuncBlockInfoMapT *funcBlockInfoMap,
-                            OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarAnalysisImpl<PrintIntervals>::update(
+    Operation *op, BlockInfo *blockInfo, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
   if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -386,9 +395,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
+          for (auto bufferId : this->allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              auto baseInterval = allocation->getAllocatedInterval(bufferId);
+              auto baseInterval =
+                  this->allocation->getAllocatedInterval(bufferId);
               IntervalVector intervals;
 
               // Check that all operations on a buffer use the same layout.
@@ -396,46 +406,35 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // whole buffer.
               auto valTy = cast<triton::gpu::MemDescType>(value.getType());
               auto currentLayout = valTy.getEncoding();
-              auto previousLayout = blockInfo->bufferLayouts.find(bufferId);
-              bool layoutChanged =
-                  (previousLayout != blockInfo->bufferLayouts.end() &&
-                   previousLayout->second != currentLayout);
-              // Track layout for this operation - will be propagated via join()
-              // If we've already seen this buffer in this operation, encodings
-              // must match
+              // Track the layout for this operation. If we've already seen
+              // this buffer in this operation, encodings must match
               auto [it, inserted] =
                   curBlockInfo.bufferLayouts.emplace(bufferId, currentLayout);
               assert(inserted ||
                      it->second == currentLayout &&
                          "Same buffer used with multiple layouts in same op");
+              auto previousLayout = blockInfo->bufferLayouts.find(bufferId);
+              bool layoutChanged =
+                  (previousLayout != blockInfo->bufferLayouts.end() &&
+                   previousLayout->second != currentLayout);
+
               if (layoutChanged) {
-                // Layout changed - use full buffer to force barrier
+                // Layout changed, use the full interval as we tracking ranges
+                // across layouts is complex and not commonly needed
                 intervals.push_back(baseInterval);
               } else {
-                // Get precise intervals touched by this value
+                // Get fine grained intervals for the operation
                 intervals = getFineGrainedIntervals(baseInterval, value);
               }
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
-                llvm::dbgs() << "Value (write effect): " << value << "\n";
-                llvm::dbgs() << "Op (write effect): ";
-                op->print(llvm::dbgs());
-                llvm::dbgs() << "\n";
                 // Insert operation for each interval touched
                 for (auto interval : intervals) {
-                  llvm::dbgs() << "  Write interval: [" << interval.start()
-                               << ", " << interval.end() << ")\n";
                   curBlockInfo.syncWriteIntervals[interval].insert(op);
                 }
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                llvm::dbgs() << "Value (read effect): " << value << "\n";
-                llvm::dbgs() << "Op (read effect): ";
-                op->print(llvm::dbgs());
-                llvm::dbgs() << "\n";
                 // Insert operation for each interval touched
                 for (auto interval : intervals) {
-                  llvm::dbgs() << "  Read interval: [" << interval.start()
-                               << ", " << interval.end() << ")\n";
                   curBlockInfo.syncReadIntervals[interval].insert(op);
                 }
               }
@@ -451,7 +450,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
       curBlockInfo.syncReadIntervals[allIntervals].insert(op);
     }
-    scratchBufferId = allocation->getBufferId(op);
+    scratchBufferId = this->allocation->getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
@@ -478,9 +477,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = this->allocation->getAllocatedInterval(scratchBufferId);
     curBlockInfo.syncWriteIntervals[interval].insert(op);
-    auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
+    auto insertCTABarrier =
+        blockInfo->isIntersected(curBlockInfo, this->filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
@@ -490,13 +490,27 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
     curBlockInfo.syncReadIntervals[interval].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
+  } else if (blockInfo->isIntersected(curBlockInfo, this->filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
   }
+  if constexpr (PrintIntervals) {
+    llvm::errs() << "Op: ";
+    op->print(llvm::errs());
+    llvm::errs() << "\n";
+    curBlockInfo.dump();
+  }
+
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers and layout information.
   blockInfo->join(curBlockInfo);
 }
+
+// Explicit template instantiations
+template class MembarOrFenceAnalysisImpl<>;
+template class MembarOrFenceAnalysisImpl<true>;
+template class MembarAnalysisImpl<>;
+template class MembarAnalysisImpl<true>;
+
 } // namespace mlir

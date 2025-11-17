@@ -75,6 +75,8 @@ bool filterFn(Operation *op, Operation *other) {
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
+  using FuncBlockInfoMapT = MembarOrFenceAnalysis::FuncBlockInfoMapT;
+
   ProxyFenceAnalysis() = default;
   explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
@@ -120,7 +122,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
+          for (auto bufferId : this->allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               // TODO: handle proxy read cases. Those are currently handled in
               // FenceInsertionPass where it can generate better placement for
@@ -128,19 +130,19 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
                   proxyBlockInfo
-                      .syncWriteIntervals[allocation->getAllocatedInterval(
-                          bufferId)]
+                      .syncWriteIntervals[this->allocation
+                                              ->getAllocatedInterval(bufferId)]
                       .insert(op);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
                 curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
+                    .syncWriteIntervals[this->allocation->getAllocatedInterval(
                         bufferId)]
                     .insert(op);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
                 curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
+                    .syncReadIntervals[this->allocation->getAllocatedInterval(
                         bufferId)]
                     .insert(op);
               }
@@ -149,18 +151,18 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    scratchBufferId = allocation->getBufferId(op);
+    scratchBufferId = this->allocation->getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
   // starting from a shared memory write, followed by a series of shared memory
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = this->allocation->getAllocatedInterval(scratchBufferId);
     curBlockInfo.syncReadIntervals[interval].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
-    if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
+    if (proxyBlockInfo.isIntersected(*blockInfo, this->filter)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
       blockInfo->sync();
