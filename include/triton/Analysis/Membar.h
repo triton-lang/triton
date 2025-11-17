@@ -103,7 +103,7 @@ private:
 //===----------------------------------------------------------------------===//
 
 // Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis {
+template <bool PrintIntervals = false> class MembarOrFenceAnalysisImpl {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
 
 public:
@@ -121,11 +121,12 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
+  MembarOrFenceAnalysisImpl() = default;
+  explicit MembarOrFenceAnalysisImpl(Allocation *allocation,
+                                     MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
 
-  virtual ~MembarOrFenceAnalysis() = default;
+  virtual ~MembarOrFenceAnalysisImpl() = default;
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
@@ -162,13 +163,20 @@ protected:
   MembarFilterFn filter = nullptr;
 };
 
-class MembarAnalysis : public MembarOrFenceAnalysis {
-public:
-  MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+// Type alias for backward compatibility
+using MembarOrFenceAnalysis = MembarOrFenceAnalysisImpl<>;
 
-  ~MembarAnalysis() override = default;
+template <bool PrintIntervals = false>
+class MembarAnalysisImpl : public MembarOrFenceAnalysisImpl<PrintIntervals> {
+public:
+  using FuncBlockInfoMapT =
+      typename MembarOrFenceAnalysisImpl<PrintIntervals>::FuncBlockInfoMapT;
+
+  MembarAnalysisImpl() = default;
+  explicit MembarAnalysisImpl(Allocation *allocation, MembarFilterFn filter)
+      : MembarOrFenceAnalysisImpl<PrintIntervals>(allocation, filter) {}
+
+  ~MembarAnalysisImpl() override = default;
 
 private:
   /// Updates the BlockInfo operation based on the operation.
@@ -178,6 +186,8 @@ private:
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
+
+using MembarAnalysis = MembarAnalysisImpl<>;
 
 /// Postorder traversal on the callgraph to insert membar instructions
 /// of each function.
@@ -212,7 +222,10 @@ private:
   MembarFilterFn filter;
 };
 
-typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;
+// Type aliases for common instantiations
+using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
+using ModuleMembarAnalysisPrint =
+    ModuleMembarOrFenceAnalysis<MembarAnalysisImpl<true>>;
 
 } // namespace mlir
 
