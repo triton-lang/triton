@@ -303,7 +303,10 @@ SmallVector<Attribute> getConsumerAsyncOpKinds(ArrayRef<Operation *> consumers,
                                                MLIRContext *ctx) {
   SetVector<AsyncOp> kindSet;
   for (auto consumer : consumers) {
-    if (isa<scf::ForOp>(consumer)) {
+    if (isa<scf::ForOp>(consumer) && consumers.size() > 1) {
+      // In this case, a getExit is placed after the consumer loop. The
+      // corresponding async kind attributes should be determined from other
+      // consumer ops in the loop.
       continue;
     }
     if (isa<WarpGroupDotOp>(consumer)) {
