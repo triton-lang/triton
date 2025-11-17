@@ -18,7 +18,7 @@ long as the plugin is linked into the libtriton.so and the Triton include passes
 ## Example 1: Developing a custom pass and running triton-opt to inspect the modified IR
 ``` bash
 export LLVM_BUILD_SHARED_LIBS=1;  make dev-install-llvm
-TRITON_PASS_PLUGIN_PATH=libTritonPluginsTestLib.so triton-opt -tritongpu-plugin test/Plugins/test-plugin.mlir
+TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so triton-opt -tritongpu-plugin test/Plugins/test-plugin.mlir
 ```
 ``` MLIR
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
@@ -67,7 +67,7 @@ if __name__ == '__main__':
     print(h.asm["ttgir"])
 ```
 
-Running as is will produce the expected output of print the TTGIR of the kernel:
+Running as is will produce the expected output of printing the TTGIR of the kernel:
 ``` bash
 python test.py
 ```
@@ -81,11 +81,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #loc1 = loc("/home/triton/test.py":14:4)
 ```
 
-Running with same code but loading the plugin library also produces the same results since, while the plugin pass has been loaded and registered with the
-pass manager is not inserted into the compiler pass pipeline:
+Running same code but loading the plugin library also produces the same results since, while the plugin pass has been loaded and registered with the
+pass manager it is not inserted into the compiler pass pipeline:
 
 ``` bash
-TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.python
+TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
 ```
 
 ``` MLIR
@@ -153,7 +153,7 @@ if __name__ == '__main__':
 TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
 ```
 
-Shows the pass ran and modified the kernel name but only after the hook is set. Any kernels before the hook are left unchanged.
+Shows the pass ran and modified the kernel name but only after the hook is set. Any kernels before the hook or after the hook is unset are left unchanged.
 
 ``` MLIR
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
@@ -181,8 +181,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #loc1 = loc("/home/triton/test.py":14:4)
 ```
 
-The hook, as it's defined will insert the pass at the end of the make_ttir pipeline.
-This functionality can be toggled on and off by just commenting out this line in kernel code:
+The hook, as defined, in the example will insert the pass at the end of the make_ttir pipeline but it's placement in the Triton pipeline is abritary.
+This functionality can be toggled on and off by just commenting out this line in kernel code (or setting to None):
 knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
 without needing any core compiler changes or rebuilding Triton.
 
@@ -190,8 +190,8 @@ without needing any core compiler changes or rebuilding Triton.
 
 Here we now run two kernels one with the full standard Triton pipeline and one with fully customized pipeline entirely from within
 kernel code with modifying any core Triton compiler code or recompiling. We run the kernel with a hook to output the standard pipeline, modify
-the compiler.py file to insert our out of tree pass before add_loop_unroll pass (although their is not restriction of where it can be inserted),
-then run the second kernel with a different pipeline. This modification can, as before, be see in the kernel function name modification by the
+the compiler.py file to insert our out of tree pass before add_loop_unroll pass (although there is no restriction of where it can be inserted),
+then run the second kernel with a different pipeline. This modification can, as before, be seen in the kernel function name modification by the
 inserted pass.
 
 ``` python
