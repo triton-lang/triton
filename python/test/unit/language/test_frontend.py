@@ -652,3 +652,16 @@ def test_constexpr_max_error():
 
     with pytest.raises(CompilationError):
         run_parser(max_kernel, args=(1.0, -0.0))
+
+
+@filecheck_test
+@triton.jit
+def test_for_loop_iv_modification(n):
+    # CHECK: scf.for %{{I:.*}} = %c0_i32 to %{{.*}} step %c1_i32
+    for i in range(n):
+        # CHECK: anchor{{.*}}%[[I]]
+        anchor(i)
+        # CHECK: %{{I2:.*} = arith.addi %[[I]], %c1_i32 : i32
+        i += 1
+        # CHECK: anchor{{.*}}%[[I2]]
+        anchor(i)
