@@ -25,12 +25,37 @@ from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdn
 # ---------------
 
 
+def normalize_blocks(x, BLOCK_SIZE = None):
+    if BLOCK_SIZE is None:
+        BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
+    x_ndim = x.ndim
+    if x_ndim == 2:
+        x = x.unsqueeze(0)
+    for e, i, j in itertools.product(range(x.shape[0]), range(0, x.shape[1], BLOCK_SIZE), range(0, x.shape[2], BLOCK_SIZE)):
+        i_end = min(i+BLOCK_SIZE, x.shape[1])
+        j_end = min(j+BLOCK_SIZE, x.shape[2])
+        block = x[e, i:i_end, j:j_end]
+        m_abs = block.abs().max()
+        i_len = i_end - i
+        j_len = j_end - j
+        min_len = min(i_len, j_len)
+        signs = torch.randint(0, 2, (max(i_len, j_len),), device=x.device) * 2 - 1
+        block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
+        if j_len > i_len:
+            block[i_len - 1, i_len:] = signs[min_len:] * m_abs
+        elif i_len > j_len:
+            block[j_len:, j_len - 1] = signs[min_len:] * m_abs
+    if x_ndim == 2:
+        x = x.squeeze(0)
+    return x
+
 def alloc_rand(shape, device, dtype, requires_grad=False):
     if dtype.itemsize == 1:
         tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)
-
-    return torch.randn(shape, device=device, dtype=dtype, requires_grad=requires_grad)
+    ret = torch.randn(shape, device=device, dtype=dtype, requires_grad=requires_grad)
+    ret = normalize_blocks(ret)
+    return ret
 
 
 def alloc_rand_like(x):
@@ -178,77 +203,6 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
     return constraints
 
 
-def convert_to_mxfp(x, x_dtype, block_m, hbm_swizzling, is_mxfp4, is_colmajor):
-    mx_axis = x.ndim - 2
-    # compute layouts
-    x_layout, x_layout_opts = layout.StridedLayout, dict()
-    x_scale_layout, x_scale_layout_opts = layout.StridedLayout, dict()
-    if hbm_swizzling and is_mxfp4:
-        x_layout, x_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mx_axis)
-        x_scale_layout, x_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=mx_axis, num_warps=8)
-    # downcast to mxfp
-    if is_colmajor:
-        # create storage
-        x, x_scales = downcast_to_mxfp(x, x_dtype, axis=mx_axis)
-        x_tri_dtype = FP4 if is_mxfp4 else x_dtype
-        # create tensor object
-        x = convert_layout(wrap_torch_tensor(x, x_tri_dtype), x_layout, **x_layout_opts)
-        x_scales = convert_layout(wrap_torch_tensor(x_scales), x_scale_layout, **x_scale_layout_opts)
-    else:
-        if torch.cuda.get_device_capability()[0] < 10:
-            pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
-        if block_m == 16:
-            pytest.skip("PassManager::run failed from Triton compiler")
-        # TODO: swizzling for rowmajor
-
-        # A typical use case is we already quantized col-major weight,
-        # and we want matmul with its transposed row-major weight w/o
-        # requantization.
-
-        # put abs_max of each 32x32 block to diagonal so scales of transposed agree
-        x_ndim = x.ndim
-        if x_ndim == 2:
-            x = x.unsqueeze(0)
-        BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
-        for e, i, j in itertools.product(range(x.shape[0]), range(0, x.shape[1], BLOCK_SIZE), range(0, x.shape[2], BLOCK_SIZE)):
-            i_end = min(i+BLOCK_SIZE, x.shape[1])
-            j_end = min(j+BLOCK_SIZE, x.shape[2])
-            block = x[e, i:i_end, j:j_end]
-            m_abs = block.abs().max()
-            i_len = i_end - i
-            j_len = j_end - j
-            min_len = min(i_len, j_len)
-            signs = torch.randint(0, 2, (max(i_len, j_len),), device=x.device) * 2 - 1
-            block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
-            if j_len > i_len:
-                block[i_len - 1, i_len:] = signs[min_len:] * m_abs
-            elif i_len > j_len:
-                block[j_len:, j_len - 1] = signs[min_len:] * m_abs
-        if x_ndim == 2:
-            x = x.squeeze(0)
-
-        # matmul with rowmajor weight expects scale is separately
-        # constructed (not much additional memory needed).
-        _, x_scales = downcast_to_mxfp(x, x_dtype, axis=mx_axis)
-        # reuse quantized value from colmajor
-        wT_tri, _ = downcast_to_mxfp(x.mT.contiguous(), x_dtype, axis=mx_axis)
-        x_tri_dtype = FP4 if is_mxfp4 else x_dtype
-        x = wrap_torch_tensor(wT_tri.data.mT, x_tri_dtype)
-        x_scales = wrap_torch_tensor(x_scales)
-
-    return x, x_scales
-
-def compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, x_tri):
-    if mode == "batched":
-        return (x_tri.shape[0], x_tri.shape[-2], n)
-    elif scatter_indx is not None:
-        return (scatter_indx.shape[0], n)
-    elif expt_is_inner:
-        return (n_slices, m, n)
-    n_rows = x_tri.shape[-2] if gather_indx is None else gather_indx.shape[0]
-    return (n_rows, n)
-
 def pad_ragged_tensor(x, x_ragged_metadata, transpose):
     multiple = 128
     if transpose:
@@ -260,7 +214,7 @@ def pad_ragged_tensor(x, x_ragged_metadata, transpose):
                                 slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
 
-def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose, squeeze_batch_dim):
+def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose, squeeze_batch_dim, hbm_swizzling=False, is_mx_rowmajor=False):
     # allocate buffer
     buffer_shape = ((n_slices,) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if "mx" in dtype else dtype_str_to_torch(dtype.strip("mx"))
@@ -280,9 +234,22 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     # handle mxfp
     scales = None
     if mxfp_dim is not None:
-        buffer, scales = downcast_to_mxfp(buffer, dtype_str_to_torch(dtype.strip("mx")), axis=mxfp_dim)
+        assert dtype.startswith("mx")
+        buffer_dtype = dtype_str_to_torch(dtype.strip("mx"))
+        if is_mx_rowmajor:
+            scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)[1]
+            buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
+        else:
+            buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
+        buffer = wrap_torch_tensor(buffer, FP4 if "mxfloat4" in dtype else buffer_dtype)
         scales = wrap_torch_tensor(scales)
-        buffer = wrap_torch_tensor(buffer)
+        if "mxfloat4" in dtype and hbm_swizzling and not is_mx_rowmajor:
+            # convert buffer to swizzled hbm layout
+            buffer_layout, buffer_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mxfp_dim)
+            buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
+            # convert scales to swizzled hbm layout
+            scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=mxfp_dim, num_warps=8)
+            scales = convert_layout(scales, scale_layout, **scale_layout_opts)
     return buffer, scales, ragged_metadata
 
 
@@ -409,9 +376,9 @@ def _build_test_op_cases():
     (False, False, "pad_b"),
     (False, False, "pad_a"),
 ])
-@pytest.mark.parametrize("has_y_gammas", [False, True])
+@pytest.mark.parametrize("do_gamma", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
-def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
+def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             device, opt_flags_scope):
@@ -419,7 +386,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
     try:
-        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
+        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
                  device, opt_flags_scope)
@@ -429,7 +396,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
     if skip_message is not None:
         pytest.skip(skip_message)
 
-def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
+def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             device, opt_flags_scope):
@@ -491,6 +458,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                     pytest.skip("FIXME: failed to translate module to LLVM IR")
                 if hbm_swizzling:
                     pytest.skip("NYI: nner_expt_opt and HBM swizzling")
+    if not colmajor_mxfp_weight:
+        if torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
+        if block_m == 16:
+            pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
     if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
         b_transpose = True
@@ -507,18 +479,15 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     a_mxfp8 = act_mxfp8
     c_mxfp8 = act_mxfp8
     b_mxfp = weight_mxfp
+    do_bias = inner_expt_opt is None
+    do_gather = do_gather and mode != "batched"
+    do_scatter = do_scatter and mode != "batched"
 
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
                                    n_slices, expt_is_inner, device=device)
 
-    gather_indx = None if not do_gather else torch.randint(0, max(m, 1), (m, ), device=device, dtype=torch.int32)
-    scatter_indx = None if not do_scatter else torch.randperm(m, device=device, dtype=torch.int32)
-
-
-    ragged_dim = m if not expt_is_inner else k
-    slice_sizes = make_slice_sizes(n_slices, ragged_dim, device=device)
 
     a_tri, a_scales, a_ragged_metadata = make_random_tensor(
         shape=(m, k),
@@ -533,24 +502,43 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     )
     precision_opt.a_mx_scale = a_scales
 
+    b_tri, b_scale_tri, b_ragged_metadata = make_random_tensor(
+        shape=(k, n),
+        n_slices = n_slices,
+        ragged_dim = None if mode != "ragged" or inner_expt_opt is None else 0,
+        device = device,
+        dtype = weight_dtype_str,
+        mxfp_dim = -2 if b_mxfp else None,
+        transpose = b_transpose,
+        ragged_padding = inner_expt_opt is not None and "pad_b" in inner_expt_opt,
+        squeeze_batch_dim = mode == "plain",
+        hbm_swizzling = hbm_swizzling,
+        is_mx_rowmajor = not colmajor_mxfp_weight,
+    )
+    precision_opt.b_mx_scale = b_scale_tri
 
-    batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
 
-    b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, ragged_dim)
-    b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
-    if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
-        b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
-    if b_transpose:
-        b_tri = b_tri.mT.contiguous().mT
-    if b_mxfp:
-        b_tri, b_scale_tri = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
-        precision_opt.b_mx_scale = b_scale_tri
+    # ragged_dim = m if not expt_is_inner else k
+    # slice_sizes = make_slice_sizes(n_slices, ragged_dim, device=device)
+    # batch_size = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
+    # b_ragged_metadata = None if not expt_is_inner else make_ragged_tensor_metadata(slice_sizes, ragged_dim)
+    # b_tri = alloc_rand(batch_size + (k, n), device=device, dtype=torch.bfloat16 if weight_mxfp else weight_dtype)
+    # if inner_expt_opt is not None and "pad_b" in inner_expt_opt:
+    #     b_tri, b_ragged_metadata = pad_ragged_tensor(b_tri, b_ragged_metadata, transpose=False)
+    # if b_transpose:
+    #     b_tri = b_tri.mT.contiguous().mT
+    # if b_mxfp:
+    #     b_tri, b_scale_tri = convert_to_mxfp(b_tri, weight_dtype, block_m, hbm_swizzling, weight_mxfp4, colmajor_mxfp_weight)
+    #     precision_opt.b_mx_scale = b_scale_tri
 
-    bias_tri = None if inner_expt_opt is not None else alloc_rand(batch_size + (n, ), device=device, dtype=torch.float32)
+    gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
+    scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
+    bias_tri     = None if not do_bias    else torch.randn(b_tri.shape[:-2] + b_tri.shape[-1:], dtype=torch.float32, device=device)
+    gammas_tri   = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
 
-    gammas_tri = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32) if has_y_gammas else None
-
-    c_shape = compute_y_shape(mode, gather_indx, scatter_indx, expt_is_inner, n_slices, m, n, a_tri)
+    c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
+    c_shape += (scatter_indx.shape[0] if do_scatter else a_tri.shape[-2],) # row dim
+    c_shape += (b_tri.shape[-1],) # col dim
     c_tri = torch.empty(c_shape, dtype=act_dtype, device=device)
     if c_transpose:
         c_tri = c_tri.mT.contiguous().mT
