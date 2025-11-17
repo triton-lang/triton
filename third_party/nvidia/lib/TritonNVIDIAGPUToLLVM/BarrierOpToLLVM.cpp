@@ -337,7 +337,7 @@ struct AsyncCLCQueryCancelOpConversion
     SmallVector<PTXBuilder::Operand *, 2> operands = {
         builder.newOperand("=r", true),
         builder.newOperand(adaptor.getClcResAlloc(), "r")};
-    queryOp(operands, /*onlyAttachMLIRArgs=*/true);
+    queryOp(operands, /*onlyAttachMLIRArgs=*/false);
 
     Value ctaId = builder.launch(rewriter, op.getLoc(), i32_ty, false);
 
