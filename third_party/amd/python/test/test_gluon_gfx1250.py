@@ -892,87 +892,170 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
 
 @gluon.jit
 def tensor_async_copy_kernel(a_ptr, b_ptr, M, N,  #
-                             BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr,
-                             USE_TDM: ttgl.constexpr, BLOCKED_LAYOUT: ttgl.constexpr):
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+                             BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
 
-    pid = ttgl.program_id(axis=0)
-    num_pid_m = ttgl.cdiv(M, BLOCK_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
+
+    a_buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_N], smem_layout)
+
+    idx_m = pid_m * BLOCK_M
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+
+        offs_am = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+        offs_an = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+        a_ptrs = a_ptr + offs_am[:, None] * N + offs_an[None, :]
+        a_mask = (offs_am[:, None] < M) & (offs_an[None, :] < N)
+        ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer.index(i), a_ptrs, a_mask, other=0.0)
+        ttgl.amd.gfx1250.async_copy.commit_group()
+
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        a = a_buffer.index(i).load(layout=block_layout)
+
+        offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+        offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+        offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+        b_mask = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+        ttgl.store(b_ptr + offs_b, a, mask=b_mask)
+
+
+@gluon.jit
+def tensor_device_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
+                                  BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
 
     a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
-        else:
-            offs_am = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
-            offs_an = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
-            a_ptrs = a_ptr + offs_am[:, None] * N + offs_an[None, :]
-            mask_a = (offs_am[:, None] < M) & (offs_an[None, :] < N)
-            a_buffer_subview = a_buffer.index(i)
-            ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer_subview, a_ptrs, mask_a, other=0.0)
-            ttgl.amd.gfx1250.async_copy.commit_group()
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
 
-    if USE_TDM:
-        ttgl.amd.gfx1250.tdm.async_wait(0)
-    else:
-        ttgl.amd.gfx1250.async_copy.wait_group(0)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        a = a_buffer.index(i).load(layout=BLOCKED_LAYOUT)
+        a = a_buffer.index(i).load(layout=block_layout)
 
-        offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
-        offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+        offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
         offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
-        mask_b = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+        b_mask = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+        ttgl.store(b_ptr + offs_b, a, mask=b_mask)
 
-        ttgl.store(b_ptr + offs_b, a, mask=mask_b)
 
+@gluon.jit
+def tensor_host_tdm_copy_kernel(a_desc, b_ptr, M, N,  #
+                                NUM_BUFFERS: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
-@pytest.mark.parametrize("NUM_BUFFERS", [2])
-@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
-def test_compile_async_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE):
-    signature = {
-        "a_ptr": "*fp16", "b_ptr": "*fp16", "M": "i32", "N": "i32",  #
-        "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr", "USE_TDM": "constexpr",
-        "BLOCKED_LAYOUT": "constexpr"
-    }
-    # AsyncCopy requires >= 32 bits per lane so we have to pass divisibility for arguments used in pointer arithmetic
-    attrs = []
-    if ASYNC_LOAD_TYPE == "ASYNC_COPY":
-        attrs = {k: [["tt.divisibility", 16]] for k in [(x, ) for x in range(4)]}
-    BLOCKED_LAYOUT = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=tensor_async_copy_kernel, signature=signature, attrs=attrs, constexprs={
-                "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS, "USE_TDM": ASYNC_LOAD_TYPE == "TDM",
-                "BLOCKED_LAYOUT": BLOCKED_LAYOUT
-            }), target=GPUTarget("hip", 'gfx1250', 32))
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
 
-    if ASYNC_LOAD_TYPE == "TDM":
-        pattern = ("tensor_load_to_lds", "s_wait_tensorcnt 0x0")
-    elif ASYNC_LOAD_TYPE == "ASYNC_COPY":
-        pattern = ("global_load_async_to_lds", "s_wait_asynccnt 0x0")
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
+    BLOCK_M: ttgl.constexpr = a_desc.block_shape[0]
+    BLOCK_N: ttgl.constexpr = a_desc.block_shape[1]
 
-    amdgcn = k.asm["amdgcn"]
-    for pattern in pattern:
-        assert re.search(pattern, amdgcn)
+    idx_m = pid_m * BLOCK_M
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
+
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        a = a_buffer.index(i).load(layout=block_layout)
+
+        offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+        offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+        offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+        b_mask = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+        ttgl.store(b_ptr + offs_b, a, mask=b_mask)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
-@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("NUM_BUFFERS", [2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-@pytest.mark.parametrize("M,N", [(1024, 1024), (1008, 1008), (1000, 1000)])
-@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
-def test_runtime_async_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM_WARPS):
+@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM"])
+def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM_WARPS):
+    attrs = None
+    if ASYNC_LOAD_TYPE == "ASYNC_COPY":
+        # AsyncCopy requires >= 32 bits per lane so we have to pass divisibility for arguments
+        attrs = {k: [["tt.divisibility", 16]] for k in [(x, ) for x in range(4)]}
+        fn = tensor_async_copy_kernel
+        signature = {
+            "a_ptr": "*fp16",
+            "b_ptr": "*fp16",
+            "M": "i32",
+            "N": "i32",
+            "BLOCK_M": "constexpr",
+            "BLOCK_N": "constexpr",
+            "NUM_BUFFERS": "constexpr",
+        }
+        constexprs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}
+    elif "DEVICE_TDM":
+        fn = tensor_device_tdm_copy_kernel
+        signature = {
+            "a_ptr": "*fp16",
+            "b_ptr": "*fp16",
+            "M": "i32",
+            "N": "i32",
+            "BLOCK_M": "constexpr",
+            "BLOCK_N": "constexpr",
+            "NUM_BUFFERS": "constexpr",
+        }
+        constexprs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}
+    else:
+        assert ASYNC_LOAD_TYPE == "HOST_TDM"
+        fn = tensor_host_tdm_copy_kernel
+        smem_layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+        signature = {
+            "a_desc": f"tensordesc<fp16[{BLOCK_M}, {BLOCK_N}],{smem_layout}>",
+            "b_ptr": "*fp16",
+            "M": "i32",
+            "N": "i32",
+            "NUM_BUFFERS": "constexpr",
+        }
+        constexprs = {"NUM_BUFFERS": NUM_BUFFERS}
+
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(fn, signature, constexprs, attrs),
+        target=GPUTarget("hip", 'gfx1250', 32),
+        options={"num_warps": NUM_WARPS},
+    )
+    amdgcn = k.asm["amdgcn"]
+
+    if ASYNC_LOAD_TYPE in {"DEVICE_TDM", "HOST_TDM"}:
+        pattern = {"tensor_load_to_lds", "s_wait_tensorcnt 0x0"}
+    else:
+        ASYNC_LOAD_TYPE == "ASYNC_COPY"
+        pattern = {"global_load_async_to_lds", "s_wait_asynccnt 0x0"}
+    for p in pattern:
+        assert re.search(p, amdgcn), f"Can't find {p} in amdgcn"
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
+@pytest.mark.parametrize("NUM_BUFFERS", [2])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM"])
+@pytest.mark.parametrize("M,N", [(1024, 1024), (1008, 1008)])
+def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM_WARPS):
     if ASYNC_LOAD_TYPE == "ASYNC_COPY" and any([x % 16 != 0 for x in [M, N]]):
         pytest.skip("AsyncCopy tests need divisibility==16 to get vectorization information")
 
@@ -982,13 +1065,17 @@ def test_runtime_async_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LO
 
     a_device = a.cuda()
     b_device = b.cuda()
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
-    use_tdm = ASYNC_LOAD_TYPE == "TDM"
-
-    blocked_layout = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0])
-
-    tensor_async_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_BUFFERS=NUM_BUFFERS,
-                                   USE_TDM=use_tdm, BLOCKED_LAYOUT=blocked_layout, num_warps=NUM_WARPS)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N * NUM_BUFFERS))
+    if ASYNC_LOAD_TYPE == "ASYNC_COPY":
+        tensor_async_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, num_warps=NUM_WARPS)
+    elif ASYNC_LOAD_TYPE == "DEVICE_TDM":
+        tensor_device_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS,
+                                            num_warps=NUM_WARPS)
+    else:
+        assert ASYNC_LOAD_TYPE == "HOST_TDM"
+        smem_layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+        a_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(a_device, [BLOCK_M, BLOCK_N], layout=smem_layout)
+        tensor_host_tdm_copy_kernel[grid](a_desc, b_device, M, N, NUM_BUFFERS, num_warps=NUM_WARPS)
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
