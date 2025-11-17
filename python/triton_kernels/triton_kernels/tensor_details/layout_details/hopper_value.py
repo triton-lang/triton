@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from dataclasses import dataclass
 from .base import Layout
 from triton_kernels.target_info import cuda_capability_geq
 
@@ -82,7 +83,11 @@ def _unpack_bits(x, mx_axis: int):
 # -----------------------------------------------------------------------
 
 
+@dataclass
 class HopperMXValueLayout(Layout):
+    mx_axis: int
+    mma_version: int
+    leading_shape: list[int]
     name: str = "HOPPER_VALUE"
 
     def __init__(self, shape, mx_axis, mma_version=3):

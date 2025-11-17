@@ -65,6 +65,14 @@ class HIPOptions:
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
+    # memory-bound-attention: enables custom scheduling strategy in llvm backend,
+    #            This option targets special FA variant, which is memory bound and
+    #            has a lot of elementwise operations from fused operand dequantizations.
+    #            Note that this option is highly experimental,
+    #            and will be removed as soon as default sceduler algorithm is fixed.
+    #
+    # Option allows to set multiple variants divided by commas:
+    # schedule_hint="attention,memory-bound-attention"
     schedule_hint: str = 'none'
 
     def __post_init__(self):
@@ -110,8 +118,8 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
-        if opts.get("num_ctas", 1) > 1:
-            raise ValueError("num_ctas > 1 not supported for AMD GPUs")
+        if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
+            raise ValueError(f"num_ctas > 1 not supported on {self.target.arch}")
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':
@@ -228,7 +236,8 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         if options.schedule_hint.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
+            for hint in options.schedule_hint.split(","):
+                amd.passes.ttgpuir.insert_instruction_sched_hints(pm, hint)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if is_in_thread_transpose_enabled(options.arch):
@@ -366,6 +375,9 @@ class HIPBackend(BaseBackend):
         # The public kernel should be kernel 0.
         fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        if "memory-bound-attention" in options.schedule_hint.split(','):
+            fns[0].add_fn_attr("amdgpu-sched-strategy", "iterative-ilp")
+        fns[0].add_fn_attr("uniform-work-group-size", "true")
         # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
         # This attribute may be attached to a kernel function definition and is an optimization hint.
         # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
@@ -435,12 +447,6 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
-        # into loops to avoid register spills in the MachineSinking pass, while it
-        # can also lead to regression in some cases. But from current observation,
-        # the regression is not significant. It would be better to have some heuristics.
-        if options.schedule_hint == 'attention':
-            flags.append('sink-insts-to-avoid-spills')
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)

@@ -51,7 +51,8 @@ unsigned getElementBitWidth(RankedTensorType type);
 // along an axis with greatest continuity.
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                        triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+                        triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                        SmallVector<int64_t> &shapePerCTA);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);

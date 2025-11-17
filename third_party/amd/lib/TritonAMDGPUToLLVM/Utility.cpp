@@ -303,9 +303,94 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
-  Value blockId =
-      ::mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension(axis));
-  return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
+  assert(moduleOp);
+
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  if (numCTAs == 1) {
+    // For single CTA the block id is the program id
+    Value blockId = ::mlir::gpu::BlockIdOp::create(rewriter, loc,
+                                                   mlir::gpu::Dimension(axis));
+    return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
+  }
+  // For multiple CTAs the cluster id is the program id
+  std::array intrinsics = {"llvm.amdgcn.cluster.id.x",
+                           "llvm.amdgcn.cluster.id.y",
+                           "llvm.amdgcn.cluster.id.z"};
+  auto axisUInt = unsigned(axis);
+  assert(axisUInt < intrinsics.size());
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsics[axisUInt],
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
+}
+
+// For multicast memory operations (e.g., cluster.load.async.to.lds), we need a
+// bitmask indicating which CTAs in the CGA/cluster will access the same memory
+// addresses. This allows the hardware to efficiently broadcast data to multiple
+// CTAs. The linear layout's free variables in the block dimension tell us which
+// CTAs form a "communication group" (i.e., access the same data):
+//   - Free bit at position k: CTAs whose IDs differ only in bit k access
+//     the same data and should be in the same multicast group.
+//   - Fixed bits (non-free): Distinguish between different groups that
+//     access different data.
+// The multicast mask has bit i set if CTA i is in the same communication
+// group as the current CTA. The free bits determine a groupMask whereas the
+// non-free bits determine the group offset:
+//   ctaMask = groupMask << groupOffset
+// where:
+//   - groupMask: Covers all 2^k CTAs in the group (k = number of free bits)
+//   - groupOffset: Starting position of this group, determined by fixed bits
+// As an example suppose we have 8 CTAs and freeVarMask = 0b101 (bits 0,2 free).
+// This creates 2 groups of 4 CTAs each:
+//   - Group 0: CTAs {0,1,4,5} (fixed bits = 0b000)
+//   - Group 1: CTAs {2,3,6,7} (fixed bits = 0b010)
+// For CTA 5 (0b101): groupOffset = 0b101 & 0b010 = 0 => ctaMask = 0b00110011
+// For CTA 7 (0b111): groupOffset = 0b111 & 0b010 = 2 => ctaMask = 0b11001100
+Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
+                           const LinearLayout &regLayout) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+
+  auto kBlock = StringAttr::get(rewriter.getContext(), "block");
+  auto freeVarMask = regLayout.getFreeVariableMasks()[kBlock];
+
+  // If there are no free bits we do not share any data with other CTAs
+  if (freeVarMask == 0) {
+    return Value();
+  }
+
+  // Construct the groupMask with 1s at all positions representing CTAs in the
+  // communication group. We start with 0b1 and iterate over free bits. For
+  // every free bit at position k, we copy the current pattern 2^k positions
+  // higher.
+  // Example for freeVarMask = 0b101, x = non determined yet:
+  //   Initial:          groupMask = 0bxxxxxxx1 (positions {0})
+  //   Bit 0 (free):     groupMask = 0bxxxxxx11 (positions {0,1})
+  //   Bit 1 (non-free): groupMask = 0bxxxx0011 (positions {0,1})
+  //   Bit 2 (free):     groupMask = 0b00110011 (positions {0,1,4,5})
+  int groupMask = 1;
+  for (int log2 = 0; log2 < regLayout.getInDimSizeLog2(kBlock); log2++) {
+    if (!(freeVarMask & (1 << log2)))
+      continue;
+    groupMask = groupMask | (groupMask << (1 << log2));
+  }
+  // If all bits are set we broadcast to all CTAs so return the group mask.
+  if (freeVarMask == regLayout.getInDimSize(kBlock) - 1) {
+    return b.i32_val(groupMask);
+  }
+  // The non-free bits set in the ctaId determine the group offset. For every
+  // non-free bit set at position k, we shift the groupMask by 2^k positions.
+  // This can be conviniently computed by masking the ctaId with the inverse
+  // of the freeVarMask.
+  // Example1: freeVarMask = 0b101
+  //   ~freeVarMask  = 0b010
+  //   shiftAmount   = 0b101 & 0b010 = 0b000 (no shift needed)
+  //   blockMask     = 0b110011 << 0 = 0b00110011
+  // Example2: freeVarMask = 0b101, ctaId = 0b111 (cta 7)
+  //   ~freeVarMask  = 0b010
+  //   shiftAmount   = 0b111 & 0b010 = 0b010 (shift by 2)
+  //   blockMask     = 0b110011 << 2 = 0b11001100
+  Value shiftAmount = b.and_(groupId, b.i32_val(~freeVarMask));
+  Value ctaMask = b.shl(b.i32_val(groupMask), shiftAmount);
+  return ctaMask;
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
