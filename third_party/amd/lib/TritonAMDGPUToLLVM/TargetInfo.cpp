@@ -343,7 +343,6 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
   StringRef intrinsic = "llvm.amdgcn.permlane16.swap";
   for (auto i = 0; i < acc.size(); i++) {
     acc[i] = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
-    ;
   }
   return true;
 }
