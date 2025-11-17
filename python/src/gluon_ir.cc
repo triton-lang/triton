@@ -283,6 +283,11 @@ py::object layoutToGluon(Attribute layout) {
   throw py::value_error("Unhandled encoding encountered");
 }
 
+template <typename CondT> static void check(CondT &&cond, const char *msg) {
+  if (!std::forward<CondT>(cond))
+    throw py::value_error(msg);
+}
+
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
@@ -493,8 +498,8 @@ void init_gluon_ir(py::module &&m) {
               unsigned colStride, std::vector<unsigned> &ctaSplitNum,
               bool twoCTAs) -> Attribute {
              auto ctx = self.getContext();
-             assert(block.size() == 2);
-             assert(ctaSplitNum.size() == 2);
+             check(block.size() == 2, "expected a 2D block");
+             check(ctaSplitNum.size() == 2, "expected 2D CTA dimensions");
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
                  ctx, block[0], block[1], colStride, ctaSplitNum[0],
                  ctaSplitNum[1], twoCTAs);
@@ -503,20 +508,20 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self,
               std::vector<unsigned> &ctaSplitNum) -> Attribute {
              auto ctx = self.getContext();
-             assert(ctaSplitNum.size() == 2);
+             check(ctaSplitNum.size() == 2, "expected 2D CTA dimensions");
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
                  ctx, ctaSplitNum[0], ctaSplitNum[1]);
            })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
-             assert(ty.getEncoding());
+             check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding());
            })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
-             assert(ty.getEncoding());
+             check(ty.getEncoding(), "expected a memdesc with an encoding");
              return layoutToGluon(ty.getEncoding());
            })
       .def("get_tensor_descriptor_layout_type",
@@ -545,6 +550,17 @@ void init_gluon_ir(py::module &&m) {
                return self.create<triton::HistogramOp>(resultTy, operand,
                                                        *mask);
              }
+           })
+      .def("create_cat",
+           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
+              Type retType) -> Value {
+             return self.create<triton::CatOp>(retType, lhs, rhs);
+           })
+      .def("create_fp4_to_fp",
+           [](GluonOpBuilder &self, Value src, Type elemType,
+              int axis) -> Value {
+             return self.create<ttg::Fp4ToFpOp>(
+                 cast<TypedValue<RankedTensorType>>(src), elemType, axis);
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,

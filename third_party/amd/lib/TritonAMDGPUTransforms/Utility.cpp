@@ -172,8 +172,8 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
 
-  // NYI: requires different stride factor
-  if (std::min(shape[0], shape[1]) < 32) {
+  // NYI: requires different stride factor since we stride by 16 rows
+  if (std::min(shape[0], shape[1]) < 16) {
     return {};
   }
 
@@ -201,9 +201,9 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // Determine row(contig) size
   unsigned contigDim = isKContig ? kDim : nonKDim;
 
-  // We clamp contigSize to 512 bytes (to reduce the number of cases handled
-  // below) and simply repeat the tile to the full tensor size.
-  contigDim = std::min(512U / elemByteWidth, contigDim);
+  // Clamp contigSize to 1024 bytes to have space for at least 16 rows per sub
+  // tile (16KB) and simply repeat the tile to the full tensor size.
+  contigDim = std::min(1024 / elemByteWidth, contigDim);
 
   // We create linear bases mapping from [contigDim, nonContigDim] -> offset,
   // representing the row reordering as described above

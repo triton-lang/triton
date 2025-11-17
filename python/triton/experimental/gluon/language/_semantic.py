@@ -472,6 +472,13 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
 
+    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool, layout) -> TensorTy:
+        _check(layout is not None, lambda: "cat requires a destination layout")
+        _check(can_reorder, lambda: "current implementation of `cat` always may reorder elements")
+        _check(len(lhs.shape) == 1, lambda: "cat requires a rank-1 input")
+        ret_type = ttgl.distributed_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]], layout)
+        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle, ret_type.to_ir(self.builder)), ret_type)
+
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
         _check(isinstance(index.type, ttgl.distributed_type),
@@ -493,6 +500,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             )
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
+
+    def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
+        result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
+        shape = list(src.type.shape)
+        shape[axis] *= 2
+        return self._wrap_handle_infer_layout(result, elem_type, shape)
 
     def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
                         generator):
