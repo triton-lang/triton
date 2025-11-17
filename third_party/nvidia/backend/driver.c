@@ -30,6 +30,12 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
 }
 
 // To be used only *outside* a Py_{BEGIN,END}_ALLOW_THREADS block.
+#define CUDA_CHECK(ans)                                                        \
+  {{gpuAssert((ans), __FILE__, __LINE__);                                      \
+  }                                                                            \
+  }
+
+// To be used only *outside* a Py_{BEGIN,END}_ALLOW_THREADS block.
 #define CUDA_CHECK_AND_RETURN_NULL(ans)                                        \
   do {                                                                         \
     if (!gpuAssert((ans), __FILE__, __LINE__))                                 \
@@ -477,6 +483,543 @@ cleanup:
   return NULL;
 }
 
+static void ensureCudaContext() {
+  CUcontext pctx;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  if (!pctx) {
+    // Ensure device context.
+    CUdevice device;
+    CUDA_CHECK(cuDeviceGet(&device, 0));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
+  }
+}
+
+typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig *config,
+                                       CUfunction f, void **kernelParams,
+                                       void **extra);
+
+static cuLaunchKernelEx_t getLaunchKernelExHandle() {
+  // Open the shared library
+  void *handle = dlopen("libcuda.so.1", RTLD_LAZY);
+  if (!handle) {
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so.1");
+    return NULL;
+  }
+  // Clear any existing error
+  dlerror();
+  cuLaunchKernelEx_t cuLaunchKernelExHandle =
+      (cuLaunchKernelEx_t)dlsym(handle, "cuLaunchKernelEx");
+  // Check for errors
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "Failed to retrieve cuLaunchKernelEx from libcuda.so.1");
+    return NULL;
+  }
+  return cuLaunchKernelExHandle;
+}
+
+static void _launch(int gridX, int gridY, int gridZ, int num_warps,
+                    int num_ctas, int launch_cooperative_grid, int launch_pdl,
+                    int shared_memory, CUstream stream, CUfunction function,
+                    void **params) {
+  if (gridX * gridY * gridZ > 0) {
+    // 4 attributes that we can currently pass maximum
+    CUlaunchAttribute launchAttr[4];
+    static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+    if (cuLaunchKernelExHandle == NULL) {
+      cuLaunchKernelExHandle = getLaunchKernelExHandle();
+    }
+    CUlaunchConfig config;
+    config.gridDimX = gridX * num_ctas;
+    config.gridDimY = gridY;
+    config.gridDimZ = gridZ;
+
+    config.blockDimX = 32 * num_warps;
+    config.blockDimY = 1;
+    config.blockDimZ = 1;
+    config.sharedMemBytes = shared_memory;
+    config.hStream = stream;
+    config.attrs = launchAttr;
+    int num_attrs = 0;
+
+    if (launch_pdl != 0) {
+      CUlaunchAttribute pdlAttr = {
+          .id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION,
+          .value = 1};
+      launchAttr[num_attrs] = pdlAttr;
+      ++num_attrs;
+    }
+
+    if (launch_cooperative_grid != 0) {
+      CUlaunchAttribute coopAttr = {.id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE,
+                                    .value = 1};
+      launchAttr[num_attrs] = coopAttr;
+      ++num_attrs;
+    }
+
+    if (num_ctas != 1) {
+      CUlaunchAttribute clusterAttr = {};
+      clusterAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+      clusterAttr.value.clusterDim.x = num_ctas;
+      clusterAttr.value.clusterDim.y = 1;
+      clusterAttr.value.clusterDim.z = 1;
+      launchAttr[num_attrs] = clusterAttr;
+      ++num_attrs;
+
+      CUlaunchAttribute clusterSchedulingAttr = {};
+      clusterSchedulingAttr.id =
+          CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
+      clusterSchedulingAttr.value.clusterSchedulingPolicyPreference =
+          CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
+      launchAttr[num_attrs] = clusterSchedulingAttr;
+      ++num_attrs;
+    }
+
+    // num_ctas == 16 is non-portable. Does work for H100 and B200 tho
+    config.numAttrs = num_attrs;
+    if (num_ctas == 16) {
+      CUDA_CHECK(cuFuncSetAttribute(
+          function, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
+    }
+
+    CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+  }
+}
+
+typedef struct _DevicePtrInfo {
+  CUdeviceptr dev_ptr;
+  bool valid;
+} DevicePtrInfo;
+
+static PyObject *data_ptr_str = NULL;
+
+// Extract a CUDA device pointer from a pointer-like PyObject obj, and store
+// it to the memory location pointed by ptr.
+bool extractPointer(void *ptr, PyObject *obj) {
+  CUdeviceptr *dev_ptr = ptr;
+  if (obj == Py_None) {
+    *dev_ptr = (CUdeviceptr)0; // valid nullptr
+    return true;
+  }
+  if (PyLong_Check(obj)) {
+    *dev_ptr = PyLong_AsUnsignedLongLong(obj);
+    return true;
+  }
+  PyObject *ret = PyObject_CallMethodNoArgs(obj, data_ptr_str);
+  if (!PyLong_Check(ret)) {
+    PyErr_SetString(
+        PyExc_TypeError,
+        "Pointer argument must be either uint64 or have data_ptr method");
+    return false;
+  }
+  *dev_ptr = PyLong_AsUnsignedLongLong(ret);
+  if (*dev_ptr == 0) {
+    return true; // valid nullptr
+  }
+  CUresult status = cuPointerGetAttribute(
+      dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
+  if (status == CUDA_ERROR_INVALID_VALUE) {
+    PyErr_Format(PyExc_ValueError,
+                 "Pointer argument cannot be accessed from Triton "
+                 "(cpu tensor?)");
+    return false;
+  }
+  return true;
+}
+
+bool extractI8(void *ptr, PyObject *obj) {
+  *((int8_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI16(void *ptr, PyObject *obj) {
+  *((int16_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI32(void *ptr, PyObject *obj) {
+  *((int32_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI64(void *ptr, PyObject *obj) {
+  *((int64_t *)ptr) = PyLong_AsLongLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU8(void *ptr, PyObject *obj) {
+  *((uint8_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU16(void *ptr, PyObject *obj) {
+  *((uint16_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU32(void *ptr, PyObject *obj) {
+  *((uint32_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU64(void *ptr, PyObject *obj) {
+  *((uint64_t *)ptr) = PyLong_AsUnsignedLongLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP16(void *ptr, PyObject *obj) {
+  double temp_double = (double)PyFloat_AsDouble(obj);
+  uint16_t result;
+  // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 &&            \
+    !defined(PYPY_VERSION)
+  _PyFloat_Pack2(temp_double, (unsigned char *)&result, 1);
+#else
+  PyFloat_Pack2(temp_double, (char *)&result, 1);
+#endif
+  *((uint16_t *)ptr) = result;
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractBF16(void *ptr, PyObject *obj) {
+  double temp_double = (double)PyFloat_AsDouble(obj);
+  float f32 = (float)temp_double;
+  uint32_t u32 = *(uint32_t *)&f32;
+  *((uint16_t *)ptr) = (u32 >> 16);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP32(void *ptr, PyObject *obj) {
+  double temp_double = (double)PyFloat_AsDouble(obj);
+  float f32 = (float)temp_double;
+  *((uint32_t *)ptr) = *(uint32_t *)&f32;
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP64(void *ptr, PyObject *obj) {
+  double temp_double = (double)PyFloat_AsDouble(obj);
+  *((uint64_t *)ptr) = *(uint64_t *)&temp_double;
+  return PyErr_Occurred() == NULL;
+}
+
+// Extract a CUtensorMap descriptor from a python object, and store it to the
+// memory location pointed by ptr.
+bool extractTmaDesc(void *ptr, PyObject *obj) {
+  CUtensorMap *tensor_map = &((PyCUtensorMapObject *)obj)->tensorMap;
+  if (tensor_map == NULL) {
+    PyErr_Format(PyExc_TypeError,
+                 "object must be of type PyCUtensorMap, got %s",
+                 Py_TYPE(obj)->tp_name);
+    return false;
+  }
+  *((CUtensorMap *)ptr) = *tensor_map;
+  return true;
+}
+
+typedef bool (*ExtractorFunc)(void *ptr, PyObject *obj);
+
+#define MAX_NAMES_PER_EXTRACTOR 2
+
+typedef struct {
+  ExtractorFunc extract;
+  size_t size;
+  const char *name[MAX_NAMES_PER_EXTRACTOR];
+} Extractor;
+
+typedef enum {
+  EXTRACTOR_UNKOWN_INDEX = 0,
+  // pointers
+  EXTRACTOR_POINTER_INDEX = 1,
+  // ints
+  EXTRACTOR_INT8_INDEX = 2,
+  EXTRACTOR_INT16_INDEX = 3,
+  EXTRACTOR_INT32_INDEX = 4,
+  EXTRACTOR_INT64_INDEX = 5,
+  // uints
+  EXTRACTOR_UINT8_INDEX = 6,
+  EXTRACTOR_UINT16_INDEX = 7,
+  EXTRACTOR_UINT32_INDEX = 8,
+  EXTRACTOR_UINT64_INDEX = 9,
+  // floats
+  EXTRACTOR_FP16_INDEX = 10,
+  EXTRACTOR_BF16_INDEX = 11,
+  EXTRACTOR_FP32_INDEX = 12,
+  EXTRACTOR_FP64_INDEX = 13,
+  // custom
+  EXTRACTOR_NVTMADESC_INDEX = 14,
+  // last entry to have a count
+  EXTRACTOR_TYPE_COUNT
+} ExtractorTypeIndex;
+
+Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
+    [EXTRACTOR_UNKOWN_INDEX] =
+        (Extractor){.extract = NULL, .size = 0, .name = NULL},
+    [EXTRACTOR_POINTER_INDEX] = (Extractor){.extract = extractPointer,
+                                            .size = sizeof(CUdeviceptr),
+                                            .name = NULL},
+    [EXTRACTOR_INT8_INDEX] = (Extractor){.extract = extractI8,
+                                         .size = sizeof(int8_t),
+                                         .name = {"'i8'"}},
+    [EXTRACTOR_INT16_INDEX] = (Extractor){.extract = extractI16,
+                                          .size = sizeof(int16_t),
+                                          .name = {"'i16'"}},
+    [EXTRACTOR_INT32_INDEX] = (Extractor){.extract = extractI32,
+                                          .size = sizeof(int32_t),
+                                          .name = {"'i1'", "'i32'"}},
+    [EXTRACTOR_INT64_INDEX] = (Extractor){.extract = extractI64,
+                                          .size = sizeof(int64_t),
+                                          .name = {"'i64'"}},
+    [EXTRACTOR_UINT8_INDEX] = (Extractor){.extract = extractU8,
+                                          .size = sizeof(uint8_t),
+                                          .name = {"'u8'"}},
+    [EXTRACTOR_UINT16_INDEX] = (Extractor){.extract = extractU16,
+                                           .size = sizeof(uint16_t),
+                                           .name = {"'u16'"}},
+    [EXTRACTOR_UINT32_INDEX] = (Extractor){.extract = extractU32,
+                                           .size = sizeof(uint32_t),
+                                           .name = {"'u1'", "'u32'"}},
+    [EXTRACTOR_UINT64_INDEX] = (Extractor){.extract = extractU64,
+                                           .size = sizeof(uint64_t),
+                                           .name = {"'u64'"}},
+    [EXTRACTOR_FP16_INDEX] = (Extractor){.extract = extractFP16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"'fp16'"}},
+    [EXTRACTOR_BF16_INDEX] = (Extractor){.extract = extractBF16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"'bf16'"}},
+    [EXTRACTOR_FP32_INDEX] = (Extractor){.extract = extractFP32,
+                                         .size = sizeof(uint32_t),
+                                         .name = {"'fp32'", "'f32'"}},
+    [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
+                                         .size = sizeof(uint64_t),
+                                         .name = {"'fp64'"}},
+    [EXTRACTOR_NVTMADESC_INDEX] = (Extractor){.extract = extractTmaDesc,
+                                              .size = sizeof(CUtensorMap),
+                                              .name = {"'nvTmaDesc'"}},
+};
+
+Extractor getExtractor(PyObject *obj) {
+  uint8_t index = PyLong_AsLong(obj);
+  if (index >= EXTRACTOR_TYPE_COUNT) {
+    return extraction_map[EXTRACTOR_UNKOWN_INDEX];
+  }
+  return extraction_map[index];
+}
+
+bool isMatch(const char *type_bytes, ExtractorTypeIndex idx) {
+  Extractor extractor = extraction_map[idx];
+  for (int j = 0; j < MAX_NAMES_PER_EXTRACTOR; j++) {
+    if (extractor.name[j] != NULL &&
+        strcmp(type_bytes, extractor.name[j]) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+ExtractorTypeIndex getExtractorIndex(PyObject *type) {
+  ExtractorTypeIndex index = EXTRACTOR_UNKOWN_INDEX;
+  PyObject *type_repr = PyObject_Repr(type);
+  if (!type_repr) {
+    return index;
+  }
+  PyObject *type_str = PyUnicode_AsEncodedString(type_repr, "utf-8", "~E~");
+  if (!type_str) {
+    Py_DECREF(type_repr);
+    return index;
+  }
+  const char *type_bytes = PyBytes_AsString(type_str);
+  if (!type_bytes) {
+    goto cleanup;
+  }
+  if (strlen(type_bytes) < 2) {
+    PyErr_Format(PyExc_RuntimeError, "Unexpected data type: %R", type_repr);
+    goto cleanup;
+  }
+
+  // Examples: '*fp32', 'fp32', 'i8', etc.
+  if (type_bytes[1] == '*') {
+    index = EXTRACTOR_POINTER_INDEX;
+    goto cleanup;
+  }
+  for (ExtractorTypeIndex i = EXTRACTOR_INT8_INDEX; i < EXTRACTOR_TYPE_COUNT;
+       i++) {
+    if (isMatch(type_bytes, i)) {
+      index = i;
+      goto cleanup;
+    }
+  }
+
+  PyErr_Format(PyExc_RuntimeError, "Unknown data type: %R", type_repr);
+  goto cleanup;
+
+cleanup:
+  Py_DECREF(type_repr);
+  Py_DECREF(type_str);
+  return index;
+}
+
+static PyObject *buildSignatureMetadata(PyObject *self, PyObject *args) {
+  PyObject *signature = NULL;
+  if (!PyArg_ParseTuple(args, "O", &signature)) {
+    return NULL;
+  }
+  PyObject *fast_signature = PySequence_Fast(
+      signature, "Expected kernel_arg_types to be a sequence or iterable");
+  if (!fast_signature) {
+    return NULL;
+  }
+  Py_ssize_t signature_size = PySequence_Fast_GET_SIZE(fast_signature);
+  PyObject **signature_items = PySequence_Fast_ITEMS(fast_signature);
+
+  PyObject *signature_list = PyList_New(0);
+  if (signature_list == NULL) {
+    Py_DECREF(fast_signature);
+    return NULL;
+  }
+  for (Py_ssize_t i = 0; i < signature_size; ++i) {
+    ExtractorTypeIndex extractor_idx = getExtractorIndex(signature_items[i]);
+    if (extractor_idx == EXTRACTOR_UNKOWN_INDEX) {
+      goto cleanup;
+    }
+    PyObject *py_index = PyLong_FromLong(extractor_idx);
+    if (py_index == NULL) {
+      goto cleanup;
+    }
+    if (PyList_Append(signature_list, py_index) < 0) {
+      Py_DECREF(py_index);
+      goto cleanup;
+    }
+    Py_DECREF(py_index);
+  }
+
+  PyObject *ret_bytes = PyBytes_FromObject(signature_list);
+  Py_DECREF(signature_list);
+  return ret_bytes;
+
+cleanup:
+  Py_XDECREF(fast_signature);
+  Py_XDECREF(signature_list);
+  return NULL;
+}
+
+static PyObject *launchKernel(PyObject *self, PyObject *args) {
+  // ensure cuda context is valid before calling any CUDA APIs, e.g. before
+  // calls to cuPointerGetAttributes
+  ensureCudaContext();
+
+  // Parse the arguments.
+  int gridX, gridY, gridZ;
+  uint64_t _stream;
+  uint64_t _function;
+  int launch_cooperative_grid;
+  int launch_pdl;
+  int num_warps, num_ctas, shared_memory;
+  PyObject *launch_metadata = NULL;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
+  PyObject *signature = NULL;
+  PyObject *kernel_args = NULL;
+  if (!PyArg_ParseTuple(args, "iiiKKpp(iii)OOOOOOO", &gridX, &gridY, &gridZ,
+                        &_stream, &_function, &launch_cooperative_grid,
+                        &launch_pdl, &num_warps, &num_ctas, &shared_memory,
+                        &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &global_scratch_obj, &profile_scratch_obj, &signature,
+                        &kernel_args)) {
+    return NULL;
+  }
+
+  // launch entry hook.
+  if (launch_enter_hook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
+    if (!ret)
+      return NULL;
+    Py_DECREF(ret);
+  }
+
+  // Set up args for fast access.
+  PyObject *fast_kernel_arg_types = PySequence_Fast(
+      signature, "Expected kernel_arg_types to be a sequence or iterable");
+  if (!fast_kernel_arg_types) {
+    return NULL;
+  }
+  PyObject *fast_kernel_args = PySequence_Fast(
+      kernel_args, "Expected kernel_args to be a sequence or iterable");
+  if (!fast_kernel_args) {
+    Py_DECREF(fast_kernel_arg_types);
+    return NULL;
+  }
+  Py_ssize_t num_args = PySequence_Fast_GET_SIZE(fast_kernel_args);
+  Py_ssize_t num_types = PySequence_Fast_GET_SIZE(fast_kernel_arg_types);
+  if (num_args != num_types) {
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "Expected signature and args to be of the same length, got: %d != %d",
+        num_args, num_types);
+    goto cleanup;
+  }
+  PyObject **args_data = PySequence_Fast_ITEMS(fast_kernel_args);
+  PyObject **types_data = PySequence_Fast_ITEMS(fast_kernel_arg_types);
+
+  // Number of parameters passed to kernel. + 2 for global & profile scratch.
+  int num_params = num_args + 2;
+  void **params = (void **)alloca(num_params * sizeof(void *));
+  int params_idx = 0;
+  // This loop has to stay in the same function that owns params, since we are
+  // using alloca to allocate pointers to it on the stack of the function.
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    // Get extractor that will send back a struct with
+    // * size
+    // * function to call.
+    Extractor extractor = getExtractor(types_data[i]);
+    if (extractor.extract == NULL) {
+      goto cleanup;
+    }
+    PyObject *current_arg = args_data[i];
+    params[params_idx] = alloca(extractor.size);
+    if (!extractor.extract(params[params_idx++], current_arg)) {
+      goto cleanup;
+    }
+  }
+  params[params_idx] = alloca(sizeof(void *));
+  if (!extractPointer(params[params_idx++], global_scratch_obj)) {
+    goto cleanup;
+  }
+  params[params_idx] = alloca(sizeof(void *));
+  if (!extractPointer(params[params_idx++], profile_scratch_obj)) {
+    goto cleanup;
+  }
+
+  Py_BEGIN_ALLOW_THREADS;
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid,
+          launch_pdl, shared_memory, (CUstream)_stream, (CUfunction)_function,
+          params);
+  Py_END_ALLOW_THREADS;
+  if (PyErr_Occurred()) {
+    goto cleanup;
+  }
+
+  // launch exit hook.
+  if (launch_exit_hook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
+    if (!ret)
+      goto cleanup;
+    Py_DECREF(ret);
+  }
+  Py_DECREF(fast_kernel_arg_types);
+  Py_DECREF(fast_kernel_args);
+  Py_RETURN_NONE;
+
+cleanup:
+  Py_DECREF(fast_kernel_arg_types);
+  Py_DECREF(fast_kernel_args);
+  return NULL;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
@@ -491,6 +1034,11 @@ static PyMethodDef ModuleMethods[] = {
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
     {"fill_tma_descriptor", fillTMADescriptor, METH_VARARGS, "doc"},
+    {"build_signature_metadata", buildSignatureMetadata, METH_VARARGS,
+     "Calling it with a signature list (ex: ['*fp32', 'u8', 'nvTmaDesc']), "
+     "will return metadata to be passed into 'launchKernel' for quicker "
+     "argument parsing."},
+    {"launch", launchKernel, METH_VARARGS, "launches cuda kernel"},
 
     {NULL, NULL, 0, NULL} // sentinel
 };
@@ -507,6 +1055,10 @@ PyMODINIT_FUNC PyInit_cuda_utils(void) {
 
   PyObject *m = PyModule_Create(&ModuleDef);
   if (m == NULL) {
+    return NULL;
+  }
+  data_ptr_str = PyUnicode_InternFromString("data_ptr");
+  if (data_ptr_str == NULL) {
     return NULL;
   }
 
