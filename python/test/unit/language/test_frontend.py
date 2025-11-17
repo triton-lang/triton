@@ -609,3 +609,18 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.interpreter
+def test_constexpr_return():
+
+    @triton.jit
+    def get_constexpr_value():
+        return tl.constexpr(42)
+
+    @triton.jit
+    def test():
+        x: tl.constexpr = get_constexpr_value()
+        tl.static_assert(x == 42)
+
+    test[(1, )]()
