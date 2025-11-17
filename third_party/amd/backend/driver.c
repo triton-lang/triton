@@ -33,7 +33,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 #define TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                       \
   (((version) % 10000000) / 100000)
 #define TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
-#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (6)
 
 // #define TRITON_HIP_DRIVER_DBG_VERSION
 #ifdef TRITON_HIP_DRIVER_DBG_VERSION
