@@ -541,9 +541,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
-    if mode == "batched":
-        a_ragged_metadata, gather_indx, scatter_indx = None, None, None
-
     # triton
     try:
         tri_y = matmul(a_tri, b_tri, bias_tri,
