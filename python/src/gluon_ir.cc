@@ -844,8 +844,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result, Value barrier) {
-             Value pred = self.create<arith::ConstantIntOp>(1, 1);
+              Value result, Value pred, Value barrier) {
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
                  descPtr, indices, result, pred, barrier);
            })
