@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -209,7 +210,7 @@ maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
   if (!useBlock || !domInfo->dominates(cmpOp->getBlock(), useBlock))
     return {};
 
-  return triton::gpu::getBoundFromCmpOp(cmpOp, anchor);
+  return triton::getBoundFromCmpOp(cmpOp, anchor);
 }
 
 std::optional<ConstantIntRanges>
