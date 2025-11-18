@@ -101,13 +101,14 @@ def CTAEncodingAttr : TritonGPU_Attr<"CTAEncoding", "cta_encoding"> {
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
   let description = [{
-Describes how blocks (CTAs) in a cooperative thread array map onto logical
-tensor dimensions. It stores the `LinearLayout` from `block` to `dim0`, `dim1`...
+Describes how blocks (CTAs) in a cooperative thread array (CGA) map onto logical
+tensor dimensions. The `LinearLayout` maps from `block` into `dim0`, `dim1`...
   }];
 
   let extraClassDeclaration = [{
     static CTAEncodingAttr getDefault(MLIRContext *context, int rank);
-    // Legacy, we should kill this!
+    // Legacy, we should kill this! Note that it is not true in general that
+    // fromSplitParams(enc.getCTAsPerCGA(), enc.getCTASplitNum(), enc.getCTAOrder()) == enc!!
     static CTAEncodingAttr fromSplitParams(MLIRContext *context,
                                            ArrayRef<unsigned> CTAsPerCGA,
                                            ArrayRef<unsigned> CTASplitNum,
@@ -891,8 +892,7 @@ for
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
     // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
-    // single CTA (so CTAsPerCGA = [1,...,1], CTASplitNum = [1,...,1],
-    // CTAOrder=[n,n-1,...,0]).
+    // single CTA (i.e. the trivial map onto dim0..dimn-1)
     "CTAEncodingAttr":$CTALayout
   );
   let genVerifyDecl = 1;

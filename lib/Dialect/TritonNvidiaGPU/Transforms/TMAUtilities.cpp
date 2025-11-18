@@ -27,7 +27,6 @@ ttg::CTAEncodingAttr updateCTALayoutForShape(ttg::CTAEncodingAttr ctaLayout,
   if (ctaLayout.getRank() > rank) {
     auto ll = ctaLayout.getLinearLayout();
     // Broadcast over the first rankDiff dims
-    // Lezcano: Is this correct? It was the logic that was here anyway...
     unsigned rankDiff = ctaLayout.getRank() - rank;
     for (int i = 0; i < rankDiff; ++i) {
       ll = removeStandardDim(ll, 0);

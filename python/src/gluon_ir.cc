@@ -50,8 +50,7 @@ getCgaLayoutBases(ttg::CTAEncodingAttr layout) {
   auto block = StringAttr::get(ctx, "block");
   const auto &basesMap = layout.getLinearLayout().getBases();
   auto it = basesMap.find(block);
-  if (it == basesMap.end())
-    return result;
+  assert(it != basesMap.end());
   return it->second;
 }
 

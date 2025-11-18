@@ -142,6 +142,16 @@ class SliceLayout(DistributedLayout):
     def rank(self):
         return self.parent.rank - 1
 
+    @property
+    def cga_layout(self):
+        parent_cga_layout = self.parent.cga_layout
+        if not parent_cga_layout:
+            return []
+
+        rank = self.parent.rank
+        assert 0 <= self.dim < rank
+        return [basis[:self.dim] + basis[self.dim + 1:] for basis in parent_cga_layout]
+
 
 @dataclass(frozen=True)
 class DistributedLinearLayout(DistributedLayout):
@@ -232,6 +242,25 @@ class DotOperandLayout(DistributedLayout):
     @property
     def rank(self):
         return self.parent.rank
+
+    @property
+    def cga_layout(self):
+        parent_cga_layout = _unwrap_if_constexpr(getattr(self.parent, "cga_layout", [])) or []
+        if not parent_cga_layout:
+            return []
+
+        rank = self.parent.rank
+        assert all(len(basis) == rank for basis in parent_cga_layout)
+
+        k_dim = rank - 1 if self.operand_index == 0 else rank - 2
+        assert 0 <= k_dim < rank
+
+        derived = []
+        for basis in parent_cga_layout:
+            new_basis = list(basis)
+            new_basis[k_dim] = 0
+            derived.append(new_basis)
+        return derived
 
 
 @dataclass(frozen=True, eq=True)

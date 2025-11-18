@@ -27,7 +27,7 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTAEncodingAttr.  That type
+// Note that this is inconsistent with the type name CTAEncodingAttr. That type
 // is equivalent to our cgaLayout.
 //
 // IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
@@ -1269,11 +1269,8 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
+  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
   MLIRContext *ctx = cgaLayoutAttr.getContext();
-  if (cgaLayoutAttr.getRank() == 0 ||
-      cgaLayoutAttr.getCTAOrder().size() != rank) {
-    cgaLayoutAttr = CTAEncodingAttr::getDefault(ctx, rank);
-  }
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 

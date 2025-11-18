@@ -14,7 +14,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
@@ -377,28 +376,23 @@ verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
 LogicalResult
 CTAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         LinearLayout linearLayout) {
-  auto inDimNames = linearLayout.getInDimNames();
-  auto inBegin = inDimNames.begin();
-  auto inEnd = inDimNames.end();
-  if (std::distance(inBegin, inEnd) != 1) {
+  if (linearLayout.getNumInDims() != 1) {
     return emitError() << "CTA encoding must have exactly one input dimension "
                           "named 'block'.";
   }
-  auto ctx = (*inBegin).getContext();
-  if (*inBegin != StringAttr::get(ctx, "block")) {
+  auto dim = *linearLayout.getInDimNames().begin();
+  auto ctx = dim.getContext();
+  if (dim != StringAttr::get(ctx, "block")) {
     return emitError() << "CTA encoding must have exactly one input dimension "
                           "named 'block'.";
   }
 
-  SmallVector<StringAttr> outDimNames(linearLayout.getOutDimNames().begin(),
-                                      linearLayout.getOutDimNames().end());
-  SmallVector<StringAttr> expected =
-      standardOutDimNames(ctx, outDimNames.size());
-  if (!std::equal(outDimNames.begin(), outDimNames.end(), expected.begin(),
-                  expected.end())) {
-    return emitError()
-           << "CTA encoding output dims must be [dim0, dim1, ...], but got ["
-           << ArrayRef(outDimNames) << "].";
+  auto outDimNames = linearLayout.getOutDimNames();
+  auto expected = standardOutDimNames(ctx, linearLayout.getNumOutDims());
+  if (!llvm::equal(outDimNames, expected)) {
+    return emitError() << "CTA encoding output dims must be [dim0, dim1, ...], "
+                          "but got ["
+                       << outDimNames << "].";
   }
 
   return success();
@@ -737,11 +731,10 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
   if (layout == CTAEncodingAttr::getDefault(context, rank))
     return;
 
-  auto block = StringAttr::get(context, "block");
+  auto kBlock = StringAttr::get(context, "block");
   const auto &basesMap = layout.getLinearLayout().getBases();
-  auto it = basesMap.find(block);
-  if (it == basesMap.end())
-    return;
+  auto it = basesMap.find(kBlock);
+  assert(it != basesMap.end());
   const auto &bases = it->second;
   // This is the default layout
   assert(!bases.empty());
@@ -779,35 +772,28 @@ std::optional<CTAEncodingAttr> parseCTAAttr(AsmParser &parser, Attribute attr,
     return {};
   }
 
+  auto ctx = parser.getContext();
+  auto cgaName = StringAttr::get(ctx, "cga_layout");
   std::vector<std::vector<int32_t>> bases;
   bases.reserve(array.size());
   for (Attribute vecAttr : array) {
-    auto elems = llvm::dyn_cast<ArrayAttr>(vecAttr);
-    if (!elems) {
-      parser.emitError(parser.getNameLoc(),
-                       "each 'cga_layout' entry must be an array of integers");
+    SmallVector<unsigned> basisValues;
+    NamedAttribute basisAttr(cgaName, vecAttr);
+    if (parseIntArrayAttr(parser, basisAttr, basisValues, "cga_layout entry")
+            .failed())
       return {};
-    }
-    if (elems.size() != rank) {
+    if (basisValues.size() != rank) {
       parser.emitError(parser.getNameLoc())
           << "'cga_layout' entry length does not match rank " << rank;
       return {};
     }
     std::vector<int32_t> basis;
-    basis.reserve(elems.size());
-    for (Attribute value : elems) {
-      auto intAttr = llvm::dyn_cast<IntegerAttr>(value);
-      if (!intAttr) {
-        parser.emitError(parser.getNameLoc(),
-                         "'cga_layout' entries must contain integers");
-        return {};
-      }
-      basis.push_back(intAttr.getInt());
-    }
+    basis.reserve(basisValues.size());
+    for (unsigned value : basisValues)
+      basis.push_back(static_cast<int32_t>(value));
     bases.push_back(std::move(basis));
   }
 
-  auto ctx = parser.getContext();
   LinearLayout::BasesT namedBases;
   namedBases.insert(
       std::make_pair(StringAttr::get(ctx, "block"), std::move(bases)));
@@ -2692,8 +2678,14 @@ struct TritonGPUInferLayoutInterface
       }
       return success();
     };
-
     auto *ctx = getDialect()->getContext();
+
+    auto permuteCTALayout = [ctx](CTAEncodingAttr layout,
+                                  ArrayRef<int32_t> order) {
+      auto ll = transposeLinearLayout(layout.getLinearLayout(), order);
+      return CTAEncodingAttr::get(ctx, std::move(ll));
+    };
+
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
@@ -2701,8 +2693,7 @@ struct TritonGPUInferLayoutInterface
       if (failed(checkRank(enc.getRank())))
         return failure();
 
-      CTAEncodingAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
+      CTAEncodingAttr ctaLayout = permuteCTALayout(enc.getCTALayout(), order);
       resultEncoding = SwizzledSharedEncodingAttr::get(
           ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
           applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
@@ -2714,8 +2705,7 @@ struct TritonGPUInferLayoutInterface
         if (failed(checkRank(enc.getRank())))
           return failure();
 
-        CTAEncodingAttr ctaLayout =
-            permuteCTALayout(ctx, enc.getCTALayout(), order);
+        CTAEncodingAttr ctaLayout = permuteCTALayout(enc.getCTALayout(), order);
         resultEncoding = NVMMASharedEncodingAttr::get(
             ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
             enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
@@ -2727,8 +2717,7 @@ struct TritonGPUInferLayoutInterface
       if (failed(checkRank(enc.getRank())))
         return failure();
 
-      CTAEncodingAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
+      CTAEncodingAttr ctaLayout = permuteCTALayout(enc.getCTALayout(), order);
       resultEncoding = BlockedEncodingAttr::get(
           ctx, applyPermutation(enc.getSizePerThread(), order),
           applyPermutation(enc.getThreadsPerWarp(), order),

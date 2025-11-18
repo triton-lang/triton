@@ -726,8 +726,6 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
   auto enc = dyn_cast<LayoutEncodingTrait>(memdesc.getEncoding());
   if (!enc)
     return op->emitOpError("expected memdesc to have a shared memory encoding");
-  if (isa<NVMMASharedEncodingAttr>(enc))
-    return success();
   if (type.getRank() != enc.getRank()) {
     return op->emitOpError(regName)
            << " has rank " << type.getRank()

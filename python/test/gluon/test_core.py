@@ -74,7 +74,7 @@ def test_copy_kernel(layout, XBLOCK):
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
     layout = ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0],
-                                cga_layout=ttgl.make_cga_layout([2], [2], [0]))
+                                cga_layout=[[1]])
 
     inp = torch.randn(XBLOCK * 4 - 7, device="cuda")
     out = torch.empty_like(inp)
@@ -272,7 +272,6 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     fence_async_shared(cluster=two_ctas)
 
     if USE_TCGEN05:
-        # The layout of this mbarrier seems to be irrelevant. We might want to change the API to just accept num_ctas
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
@@ -492,6 +491,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
     mma_barrier_layout = None
     if use_tcgen05:
+        # The layout of this mbarrier seems to be irrelevant right now
+        # We might want to change the API here
         barrier_cga_layout = []
         if two_ctas:
             barrier_cga_layout.append([0])

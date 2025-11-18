@@ -64,7 +64,7 @@ Type replaceLayout(const Type &type, const Attribute &newLayout) {
 ttg::DistributedEncodingTrait
 replaceCTALayout(ttg::DistributedEncodingTrait layout,
                  llvm::ArrayRef<int64_t> shape, int numWarps,
-                 const ttg::CTAEncodingAttr &newCTALayout) {
+                 ttg::CTAEncodingAttr newCTALayout) {
   if (auto blockedLayout = mlir::dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     return ttg::BlockedEncodingAttr::get(
         layout.getContext(), shape, blockedLayout.getSizePerThread(),

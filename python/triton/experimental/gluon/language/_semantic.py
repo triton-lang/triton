@@ -43,8 +43,6 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
     if cga_layout:
         for basis in cga_layout:
             _check(len(basis) == rank, lambda: "cga_layout basis rank mismatch")
-    else:
-        cga_layout = []
 
     layout_obj = compute_tmem_reg_layout(
         element_ty,
