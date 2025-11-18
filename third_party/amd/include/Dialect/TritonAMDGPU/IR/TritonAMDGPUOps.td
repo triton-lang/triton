@@ -536,12 +536,15 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   let summary = "Masked load operation";
   let description = [{
-    Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+    Load operation with masking and multicast support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+    On architectures supporting multicast, the `multicastMask`specifies which CTAs in the cluster request the same data. This allows the hardware to efficiently broadcast the
+    data to multiple CTAs in the cluster.
   }];
   let arguments = (ins
     LLVM_AnyPointer:$ptr,
     I1:$mask,
     LLVM_Type:$falseVal,
+    Optional<I16>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
   );
@@ -549,7 +552,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   let results = (outs LLVM_Type:$result);
 
   let assemblyFormat = [{
-    $ptr `,` $mask `,` $falseVal
+    $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
     oilist(`cacheModifier` `=` $cache)
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` functional-type(operands, results)
