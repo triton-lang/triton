@@ -39,19 +39,21 @@ class BlackwellMXScaleLayout(Layout):
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
         data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
-                            self.SWIZZLE_K)
+        data = data.reshape(
+            self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K
+        )
         data = data.transpose(2, 4).contiguous()
         data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
         return data
 
     def unswizzle_data(self, data):
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
-                            self.SWIZZLE_K)
+        data = data.reshape(
+            self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32, self.SWIZZLE_K
+        )
         data = data.transpose(2, 4)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
         data = data.transpose(-1, -2)
-        return data[..., :self.K, :self.N]
+        return data[..., : self.K, : self.N]
 
     def swizzle_block_shape(self, block_shape):
         assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
@@ -64,26 +66,64 @@ class BlackwellActMXScaleLayout(Layout):
 
     def __init__(self, shape) -> None:
         super().__init__(shape)
-        assert len(shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {shape}"
-        (
-            *self.leading_shape,
-            self.M,  # sum of expert bs
-            self.K,
-        ) = shape
-        self.B = math.prod(self.leading_shape)
-        self.mode = "batched"
+        if len(shape) == 2:
+            (
+                self.M,  # sum of expert bs
+                self.K,
+            ) = shape
+            self.B = 1
+            self.mode = "ragged"
+        else:
+            assert len(shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {shape}"
+            (
+                *self.leading_shape,
+                self.M,  # sum of expert bs
+                self.K,
+            ) = shape
+            self.B = math.prod(self.leading_shape)
+            self.mode = "batched"
         self.ALIGN_K = 8
         self.ALIGN_M = 128
         self.SWIZZLE_K = 4
         self.K_pad = (self.K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
-        self.M_pad = (self.M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+
+        if self.mode == "batched":
+            self.M_pad = (self.M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+        else:
+
+            if ex_hist is None:
+                ex_hist = [self.M]
+            self.ex_hist = ex_hist
+
+            assert sum(self.ex_hist) == self.M, f"sum of ex_hist {self.ex_hist} must be equal to M {self.M}"
+
+            # pad each ex_hist to be the min multiple of ALIGN_M
+            self.ex_hist_padded = [
+                (ex_hist[i] + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M for i in range(len(ex_hist))
+            ]
+            self.M_pad = sum(self.ex_hist_padded)
 
     def swizzle_data(self, data):
-        padded_data = torch.nn.functional.pad(
-            data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
-        padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-        padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-        padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        if self.mode == "batched":
+            padded_data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
+            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        else:
+            offset = 0
+            padded_chunks = []
+            for i, m in enumerate(self.ex_hist):
+                if m != 0:
+                    chunk = data[offset : offset + m]
+                    padded_chunk = torch.nn.functional.pad(
+                        chunk, (0, self.K_pad - self.K, 0, self.ex_hist_padded[i] - m)
+                    )  # value of padding on left, right, top, bottom
+                    padded_chunks.append(padded_chunk)
+                    offset += m
+            padded_data = torch.cat(padded_chunks, dim=0)
+            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
 
         return padded_data
 
@@ -115,9 +155,11 @@ def unswizzle_mx_scale_bw(
 
 
 @triton.jit
-def unswizzle_act_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
-                              SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
-                              ):
+def unswizzle_act_mx_scale_bw(
+    x,
+    SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
+    SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
+):
     # input block shape is [1, BLOCK_M//128, BLOCK_K//32//4, 2, 256] and we want to unswizzle it to [BLOCK_M, BLOCK_K//32]
     shape_1: tl.constexpr = x.shape[1]
     shape_2: tl.constexpr = x.shape[2]

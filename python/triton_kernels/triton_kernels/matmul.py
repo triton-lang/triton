@@ -437,8 +437,6 @@ def matmul(a, b, bias,
         # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
         if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
             a_scale_has_tma = False
-        if not is_input_batched:
-            a_scale_has_tma = False
         if opt_flags.block_m < 128 or opt_flags.block_k < 128: # need to be at least 128 for TMA
             a_scale_has_tma = False
     if a_scale_has_tma:
