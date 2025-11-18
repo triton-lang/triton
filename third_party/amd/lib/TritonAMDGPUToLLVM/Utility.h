@@ -48,7 +48,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 // signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
 // avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal,
+             Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
              bool forceNoAliasAsyncLoads = false);
 
