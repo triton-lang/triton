@@ -341,7 +341,10 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset to shared memory";
     let description = [{
-      AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers. }];
+      AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers.
+      Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
+      This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
+    }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
@@ -349,7 +352,8 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       Optional<I32>:$stride,
-      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
     let results = (outs TTG_AsyncToken:$token);
 
