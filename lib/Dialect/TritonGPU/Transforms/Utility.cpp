@@ -887,9 +887,10 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
+    // Skip propagating through for op/while op results for now.
     // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
+    if (currentValue.getDefiningOp<scf::ForOp>() ||
+        currentValue.getDefiningOp<scf::WhileOp>())
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
