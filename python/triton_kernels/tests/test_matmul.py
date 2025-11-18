@@ -110,72 +110,8 @@ class DType:
     def __init__(self, dtype_str):
         self.has_global_scale = dtype_str.startswith("float8")
         self.has_mx_scale = dtype_str.startswith("mx")
-        self.torch_dtype = dtype_str_to_torch(dtype_str)
-
-
-def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_slices=1, expt_is_inner=False, device="cuda"):
-    weight_use_flexpoint = weight_dtype.itemsize == 1 and not weight_mxfp
-    # flexpoint
-    make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_slices // 2) + ([val0] if n_slices % 2 else []), #
-                                                  dtype=torch.float32, device=device)
-    make_scalar_scale = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
-    make_tensor_scale = lambda val0, val1, is_tensor: make_tensor(val0, val1) if is_tensor else make_scalar_scale(val0)
-    flex_ctx = FlexCtx(
-        lhs_data= InFlexData(
-            dtype=out_dtype,
-            scale=make_scalar_scale(1.25)
-        ) if act_use_flexpoint else InFlexData(),
-        rhs_data=InFlexData(
-            dtype=weight_dtype,
-            scale=make_tensor_scale(1.50, 1.25, not expt_is_inner),
-        ) if weight_use_flexpoint else InFlexData(),
-        out_data=OutFlexData(
-            dtype=out_dtype,
-            expected_scale=make_scalar_scale(4.00),
-            actual_scale=make_scalar_scale(0),
-            checksum_scale=None,
-        ) if act_use_flexpoint else OutFlexData(),
-    )
-    return PrecisionConfig(flex_ctx=flex_ctx, acc_scale=2.0 if act_use_flexpoint or weight_use_flexpoint else 1.0,
-                           out_dtype=out_dtype)
-
-
-def apply_precision(x_tri, w_tri, bias_tri, gammas_tri, precision_config):
-    flex_ctx = precision_config.flex_ctx
-
-    def apply(x, scale):
-        if scale is None:
-            x = x.clone()
-        elif scale.numel() == 1:
-            x = x.float() * scale
-        else:
-            assert x.ndim == 3
-            assert scale.numel() == x.shape[0]
-            x = x.float() * scale[:, None, None]
-        return x
-
-    if precision_config.a_mx_scale is not None:
-        mx_axis = -1
-        x_tri = convert_layout(x_tri, layout.StridedLayout)
-        x_tri_scale = convert_layout(precision_config.a_mx_scale, layout.StridedLayout)
-        x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
-    else:
-        x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
-
-    if precision_config.b_mx_scale is not None:
-        mx_axis = w_tri.storage.data.ndim - 2 # if isinstance(w_tri, Tensor) else w_tri.ndim - 2
-        w_tri = convert_layout(w_tri, layout.StridedLayout)
-        w_tri_scale = convert_layout(precision_config.b_mx_scale, layout.StridedLayout)
-        w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
-    else:
-        w_ref = apply(w_tri, flex_ctx.rhs_data.scale)
-
-    return (
-        x_ref, w_ref,
-        None if bias_tri is None else apply(bias_tri, None),
-        None if gammas_tri is None else apply(gammas_tri, None),
-    )
-
+        self.torch_dtype = dtype_str_to_torch(dtype_str.strip("mx"))
+        self.is_mxfloat4 = self.has_mx_scale and "float4" in dtype_str
 
 
 
@@ -217,7 +153,7 @@ def pad_ragged_tensor(x, x_ragged_metadata, transpose):
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose, squeeze_batch_dim, hbm_swizzling=False, is_mx_rowmajor=False):
     # allocate buffer
     buffer_shape = ((n_slices,) if ragged_dim is None else tuple()) + shape
-    buffer_dtype = torch.bfloat16 if "mx" in dtype else dtype_str_to_torch(dtype.strip("mx"))
+    buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
     buffer = alloc_rand(buffer_shape, device=device, dtype=buffer_dtype)
     if squeeze_batch_dim:
         buffer = buffer.squeeze(0)
@@ -234,16 +170,16 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     # handle mxfp
     scales = None
     if mxfp_dim is not None:
-        assert dtype.startswith("mx")
-        buffer_dtype = dtype_str_to_torch(dtype.strip("mx"))
+        assert dtype.has_mx_scale
+        buffer_dtype = dtype.torch_dtype
         if is_mx_rowmajor:
             scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)[1]
             buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
         else:
             buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if "mxfloat4" in dtype else buffer_dtype)
+        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else buffer_dtype)
         scales = wrap_torch_tensor(scales)
-        if "mxfloat4" in dtype and hbm_swizzling and not is_mx_rowmajor:
+        if dtype.is_mxfloat4 and hbm_swizzling and not is_mx_rowmajor:
             # convert buffer to swizzled hbm layout
             buffer_layout, buffer_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mxfp_dim)
             buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
@@ -472,89 +408,88 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     constraints = make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str)
     opt_flags.update_opt_flags_constraints(constraints)
 
-    weight_mxfp = weight_dtype_str.startswith("mx")
-    weight_mxfp4 = weight_mxfp and "float4" in weight_dtype_str
-    act_mxfp8 = act_dtype_str.startswith("mx")
-    act_is_float8 = act_dtype_str.startswith("float8")
-    a_mxfp8 = act_mxfp8
-    c_mxfp8 = act_mxfp8
-    b_mxfp = weight_mxfp
+    a_dtype = DType(act_dtype_str)
+    b_dtype = DType(weight_dtype_str)
+    c_dtype = DType(act_dtype_str)
+
+
     do_bias = inner_expt_opt is None
     do_gather = do_gather and mode != "batched"
     do_scatter = do_scatter and mode != "batched"
 
-    weight_dtype = dtype_str_to_torch(weight_dtype_str)
-    act_dtype = dtype_str_to_torch(act_dtype_str)
-    precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   n_slices, expt_is_inner, device=device)
 
 
-    a_tri, a_scales, a_ragged_metadata = make_random_tensor(
+    a, a_scales, a_ragged_metadata = make_random_tensor(
         shape=(m, k),
         n_slices = n_slices,
         ragged_dim = None if mode != "ragged" else 1 if expt_is_inner else 0,
         device = device,
-        dtype = act_dtype_str,
-        mxfp_dim = -1 if a_mxfp8 else None,
+        dtype = a_dtype,
+        mxfp_dim = -1 if a_dtype.has_mx_scale else None,
         transpose = a_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
     )
-    precision_opt.a_mx_scale = a_scales
 
-    b_tri, b_scale_tri, b_ragged_metadata = make_random_tensor(
+    b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
         n_slices = n_slices,
         ragged_dim = None if mode != "ragged" or inner_expt_opt is None else 0,
         device = device,
-        dtype = weight_dtype_str,
-        mxfp_dim = -2 if b_mxfp else None,
+        dtype = b_dtype,
+        mxfp_dim = -2 if b_dtype.has_mx_scale else None,
         transpose = b_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_b" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         hbm_swizzling = hbm_swizzling,
         is_mx_rowmajor = not colmajor_mxfp_weight,
     )
-    precision_opt.b_mx_scale = b_scale_tri
 
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
-    bias_tri     = None if not do_bias    else torch.randn(b_tri.shape[:-2] + b_tri.shape[-1:], dtype=torch.float32, device=device)
-    gammas_tri   = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
+    bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
+    gammas       = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
 
     c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
-    c_shape += (scatter_indx.shape[0] if do_scatter else a_tri.shape[-2],) # row dim
-    c_shape += (b_tri.shape[-1],) # col dim
-    c_tri = torch.empty(c_shape, dtype=act_dtype, device=device)
+    c_shape += (scatter_indx.shape[0] if do_scatter else a.shape[-2],) # row dim
+    c_shape += (b.shape[-1],) # col dim
+    c = torch.empty(c_shape, dtype=c_dtype.torch_dtype, device=device)
     if c_transpose:
-        c_tri = c_tri.mT.contiguous().mT
+        c = c.mT.contiguous().mT
 
 
-    a_ref, b_ref, bias_ref, gammas_ref = apply_precision(a_tri, b_tri, bias_tri, gammas_tri, precision_opt)
-
+    wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
+    flex_a = InFlexData(c_dtype.torch_dtype, wrap_list([1.25])) if c_dtype.has_global_scale else InFlexData()
+    flex_b = InFlexData(b_dtype.torch_dtype, wrap_list([1.25])) if b_dtype.has_global_scale else InFlexData()
+    flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([4.00]), wrap_list([0]), None) if c_dtype.has_global_scale else OutFlexData()
+    precision_opt = PrecisionConfig(
+        flex_ctx=FlexCtx(flex_a, flex_b, flex_c),
+        acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
+        out_dtype=c_dtype.torch_dtype,
+        a_mx_scale=a_scales,
+        b_mx_scale=b_scale_tri,
+    )
 
     epilogue = None
-    if c_mxfp8:
+    if c_dtype.has_mx_scale:
         c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
-        c_scale = torch.empty(c_scale_shape, dtype=torch.uint8, device=a_tri.device)
+        c_scale = torch.empty(c_scale_shape, dtype=torch.uint8, device=a.device)
         precision_opt.c_mx_scale = c_scale
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
     # triton
     try:
-        tri_y = matmul(a_tri, b_tri, bias_tri,
+        tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas_ref, epilogue=epilogue, c=c_tri)
+                           gammas=gammas, epilogue=epilogue, c=c)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
-    ref_y = matmul_torch(a_ref, b_ref, bias_ref,  #
-                             a_ragged_metadata=a_ragged_metadata,
-                             b_ragged_metadata=b_ragged_metadata,
-                             gather_indx=gather_indx,
-                             scatter_indx=scatter_indx,
-                             gammas=gammas_ref)
+    ref_y = matmul_torch(a, b, bias,  #
+                        a_ragged_metadata, b_ragged_metadata,
+                        gather_indx, scatter_indx, precision_opt,
+                        gammas=gammas)
 
     def scale(val, scal):
         if scal is None:
@@ -566,21 +501,18 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             return val / scal[:, None, None]
 
     # check that y_tri_in was used if provided
-    if c_tri is not None:
-        assert tri_y.data_ptr() == c_tri.data_ptr()
-        assert tri_y.shape == c_tri.shape
-        assert tri_y.stride() == c_tri.stride()
-    if act_mxfp8:
+    if c is not None:
+        assert tri_y.data_ptr() == c.data_ptr()
+        assert tri_y.shape == c.shape
+        assert tri_y.stride() == c.stride()
+    if c_dtype.has_mx_scale:
         tri_y = upcast_from_mxfp(tri_y, precision_opt.c_mx_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
-        ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, act_dtype, axis=-1)
+        ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, c_dtype.torch_dtype, axis=-1)
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
         rmstol = 4e-2
-    elif weight_mxfp4:
-        if act_is_float8:
-            maxtol = 8e-2
-        else:
-            maxtol = 3e-2
+    elif b_dtype.is_mxfloat4:
+        maxtol = 3e-2
         rmstol = None
     else:
         maxtol = None
@@ -589,7 +521,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     flex = precision_opt.flex_ctx
     assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y, maxtol=maxtol, rmstol=rmstol)
 
-    if act_is_float8:
+    if c_dtype.has_global_scale:
         tri_y_scale = flex.out_data.actual_scale.clone()
         ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype, tri_y_scale.numel() > 1)
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
