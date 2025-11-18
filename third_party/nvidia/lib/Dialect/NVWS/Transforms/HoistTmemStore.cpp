@@ -97,6 +97,9 @@ public:
               storeTok.replaceAllUsesWith(newAlloc.getToken());
             }
             if (hasPartition(store)) {
+              // The alloc op can have multiple partitions at this point. But
+              // aref-tmem-insert requires a single owner, which should be the
+              // partiton that tmem_store belongs to.
               setPartition(newAlloc, getPartitionIds(store));
             }
             rewriter.eraseOp(store);
@@ -129,6 +132,7 @@ getUniqueUserLoopAndMMA(ttng::TMEMAllocOp tmemAlloc) {
   return std::nullopt;
 }
 
+// Check if this alloc is used by an MMA op with useD initialized to false
 bool canRemoveTmemStore(ttng::TMEMAllocOp tmemAlloc) {
   auto opt = getUniqueUserLoopAndMMA(tmemAlloc);
   if (!opt)
@@ -343,8 +347,8 @@ public:
             SetVector<int> mmaPartition;
             mmaPartition.insert(1);
             // tmem store remaining in the outer loop must belong to the MMA
-            // partition. This is necessary for correctly double buffering this
-            // accumulator.
+            // partition. This is required by aref-tmem-insert for correctly
+            // double buffering this accumulator.
             setPartition(alloc, mmaPartition);
           }
         }
