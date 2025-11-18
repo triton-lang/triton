@@ -132,9 +132,10 @@ def NVWSInsertTmemAref: Pass<"nvws-insert-tmem-aref", "mlir::ModuleOp"> {
 }
 
 def NVWSHoistTmemStore: Pass<"nvws-hoist-tmem-store", "mlir::ModuleOp"> {
-  let summary = "";
+  let summary = "Hoist tmem store before the inner loop to the top level if possible.";
 
   let description = [{
+     TODO
   }];
 
   let dependentDialects = [
