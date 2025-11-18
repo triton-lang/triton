@@ -3452,10 +3452,18 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
         assert not any(is_negative_zero(x) for x in args)
         return constexpr(builtins.max(_unwrap_if_constexpr(args)))
 
-    warn("builtin max on tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
-    return maximum(*args, propagate_nan=propagate_nan, _semantic=_semantic)
+    else:
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    max_val = args[0]
+    for arg in args[1:]:
+        max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if max_val.type.is_block():
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+    return max_val
 
 
 @builtin
@@ -3468,7 +3476,15 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
         assert not any(is_negative_zero(x) for x in args)
         return constexpr(builtins.min(_unwrap_if_constexpr(args)))
 
-    warn("builtin min on tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
-    return minimum(*args, propagate_nan=propagate_nan, _semantic=_semantic)
+    else:
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    min_val = args[0]
+    for arg in args[1:]:
+        min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if min_val.type.is_block():
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+    return min_val
