@@ -372,7 +372,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: buffer_load_to_local_contiguity_hint
   tt.func @buffer_load_to_local_contiguity_hint(%ptr: !tt.ptr<f16>, %off: tensor<256xi32, #blocked>, %lds: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
-    // rocdl.raw.ptr.buffer
+    // Check we load 4 bytes
     // COMMON: %[[LOAD_BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
     // COMMON: rocdl.raw.ptr.buffer.load.lds %{{.*}}, %{{.*}}, %[[LOAD_BYTES]]
     %0 = amdg.buffer_load_to_local %ptr[%off] into %lds {contiguity = 2 : i32} : <f16>[tensor<256xi32, #blocked>] -> <256xf16, #shared1D, #smem, mutable>
