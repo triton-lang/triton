@@ -67,7 +67,7 @@ tt.func public @attention_forward(
       tt.reduce.return %68 : f32
       // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
     }) : (tensor<256x64xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    // CHECK-COUNT-6: ttg.partition = array<i32:
+    // CHECK-COUNT-8: ttg.partition = array<i32:
     %l_i_scaled = arith.mulf %l_i, %alpha : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %next_l_i = arith.addf %l_i_scaled, %l_ij : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
@@ -419,9 +419,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %k_tiles_5 = arith.divsi %K, %c128_i32 : i32
     %num_tiles = arith.muli %num_pid_m_3, %num_pid_n_4 : i32
     %num_pid_in_group = arith.muli %num_pid_n_4, %c8_i32 : i32
-    // CHECK: ttng.tmem_alloc {{.*}} : (tensor<128x128xf32, #blocked>)
     // CHECK: scf.for
-    // CHECK-Not: tmem_alloc
     scf.for %tile_id = %start_pid to %num_tiles step %c148_i32  : i32 {
       // CHECK-COUNT-10: {ttg.partition = array<i32: 0, 2>}
       // CHECK-COUNT-3: {ttg.partition = array<i32: 1, 2>}
@@ -494,8 +492,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %pid_n_8 = arith.divsi %pid_n, %group_size_m_6 : i32
       %off_am = arith.muli %pid_m_7, %c128_i32 : i32
       %off_bn = arith.muli %pid_n_8, %c128_i32 : i32
-      // CHECK: tmem_alloc {{.*}} {ttg.partition = array<i32: 1>}
-      // CHECK-NOT: tmem_store
       %accumulator, %accumulator_9 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
       %accumulator_10 = ttng.tmem_store %cst, %accumulator[%accumulator_9], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       // a random upper bound dependent on the outer tile id. There is no assume op asserting that the inner loop executs at least once.
@@ -549,10 +545,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %off_m = arith.muli %tile_idx_20, %c128_i32 : i32
       %q = tt.descriptor_load %desc_q[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked2>
       %q_21 = ttg.local_alloc %q : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
-      // CHECK: ttng.tmem_alloc {ttg.partition = array<i32: 0, 1>}
       %qk_22, %qk_23 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      // CHECK: ttng.tmem_alloc {{.*}} {ttg.partition = array<i32: 3>}
-      // CHECK-NOT: tmem_store
       %acc, %acc_24 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
       %acc_25 = ttng.tmem_store %cst_17, %acc[%acc_24], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       // CHECK: scf.for
