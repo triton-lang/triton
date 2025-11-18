@@ -1185,13 +1185,6 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<gpu::WarpSpecializePartitionsOp>(op)) {
-      // Initialize the arguments to gpu::WarpSpecializePartitionsOp with
-      // "unknown" state: the maximum possible divisibility, contiguity, and
-      // constancy.
-      knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
     // Other operations are conservatively initialized with the lowest possible
@@ -1331,16 +1324,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
                                         axisinfo::CallbackType callback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
-  // Walk pre-order so analysis results can be propagated into nested isolated
-  // regions.
-  WalkResult result =
-      funcOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-        if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
-            failed(solver->initializeAndRun(op)))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
-      });
-  if (result.wasInterrupted())
+  if (failed(solver->initializeAndRun(funcOp)))
     return;
 
   auto *axisInfoMap = getFuncData(funcOp);
