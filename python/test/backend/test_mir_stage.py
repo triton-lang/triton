@@ -36,6 +36,10 @@ def verify_mir_content(mir_content, kernel_name):
     assert "# succs left" in mir_content, \
         f"Scheduling DAG for {kernel_name} should contain successor info"
 
+    # Verify no sched DAG from post-RA scheduler
+    assert "renamable" not in mir_content, \
+        f"Scheduling DAG for {kernel_name} should not contain entries from post-RA scheduler"
+
 
 def test_mir_dump(tmp_path, monkeypatch):
     monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
