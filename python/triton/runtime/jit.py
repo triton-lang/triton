@@ -10,7 +10,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
@@ -354,6 +354,12 @@ def mangle_type(arg, specialize=False):
 
 class KernelInterface(Generic[T]):
     run: T
+
+    def warmup(self, *args, grid, **kwargs):
+        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+
+    def run(self, *args, grid, warmup, **kwargs):
+        raise NotImplementedError("run not implemented")
 
     def __getitem__(self, grid) -> T:
         """
@@ -762,9 +768,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
 
-    def warmup(self, *args, grid, **kwargs):
-        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
-
     def preload(self, specialization_data):
         import json
         import triton.language as tl
@@ -874,7 +877,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> KernelInterface[T]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
