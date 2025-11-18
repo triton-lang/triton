@@ -16,7 +16,7 @@ from triton_kernels.tensor_details import layout
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import assert_close, compute_actual_scale
+from triton_kernels.testing import assert_close
 # target-specific utilities
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
@@ -412,31 +412,29 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(act_dtype_str)
 
-
+    # --- create conditionals ---
     do_bias = inner_expt_opt is None
     do_gather = do_gather and mode != "batched"
     do_scatter = do_scatter and mode != "batched"
 
-
-
+    # --- create inputs ---
     a, a_scales, a_ragged_metadata = make_random_tensor(
         shape=(m, k),
         n_slices = n_slices,
-        ragged_dim = None if mode != "ragged" else 1 if expt_is_inner else 0,
-        device = device,
         dtype = a_dtype,
+        device = device,
+        ragged_dim = None if mode != "ragged" else 1 if expt_is_inner else 0,
         mxfp_dim = -1 if a_dtype.has_mx_scale else None,
         transpose = a_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
     )
-
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
         n_slices = n_slices,
-        ragged_dim = None if mode != "ragged" or inner_expt_opt is None else 0,
-        device = device,
         dtype = b_dtype,
+        device = device,
+        ragged_dim = None if mode != "ragged" or inner_expt_opt is None else 0,
         mxfp_dim = -2 if b_dtype.has_mx_scale else None,
         transpose = b_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_b" in inner_expt_opt,
@@ -444,12 +442,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         hbm_swizzling = hbm_swizzling,
         is_mx_rowmajor = not colmajor_mxfp_weight,
     )
-
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
     gammas       = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
 
+    # --- initialize output ---
     c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
     c_shape += (scatter_indx.shape[0] if do_scatter else a.shape[-2],) # row dim
     c_shape += (b.shape[-1],) # col dim
@@ -457,7 +455,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_transpose:
         c = c.mT.contiguous().mT
 
-
+    # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
     flex_a = InFlexData(c_dtype.torch_dtype, wrap_list([1.25])) if c_dtype.has_global_scale else InFlexData()
     flex_b = InFlexData(b_dtype.torch_dtype, wrap_list([1.25])) if b_dtype.has_global_scale else InFlexData()
@@ -470,6 +468,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_mx_scale=b_scale_tri,
     )
 
+    # --- create epilogue ---
     epilogue = None
     if c_dtype.has_mx_scale:
         c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
@@ -484,21 +483,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
                            gammas=gammas, epilogue=epilogue, c=c)
+        if c_dtype.has_global_scale:
+            tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     ref_y = matmul_torch(a, b, bias,  #
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
                         gammas=gammas)
-
-    def scale(val, scal):
-        if scal is None:
-            return val
-        elif scal.numel() == 1:
-            return val / scal
-        else:
-            assert val.ndim == 3
-            return val / scal[:, None, None]
+    if c_dtype.has_global_scale:
+        ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
     # check that y_tri_in was used if provided
     if c is not None:
@@ -518,12 +512,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol = None
         rmstol = None
 
-    flex = precision_opt.flex_ctx
-    assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y, maxtol=maxtol, rmstol=rmstol)
-
+    assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
-        tri_y_scale = flex.out_data.actual_scale.clone()
-        ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype, tri_y_scale.numel() > 1)
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 

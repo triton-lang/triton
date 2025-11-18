@@ -574,6 +574,26 @@ def apply_precision(x_tri, w_tri, precision_config):
     )
 
 
+def scale(val, scal):
+    if scal is None:
+        return val
+    elif scal.numel() == 1:
+        return val / scal
+    else:
+        assert val.ndim == 3
+        return val / scal[:, None, None]
+
+def compute_actual_scale(x, dtype, per_batch_scale=False):
+    from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+    max_finite = {
+        torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
+        torch.float8_e4m3fn: MAX_FINITE_FLOAT8E4NV,
+        torch.float8_e4m3fnuz: MAX_FINITE_FLOAT8E4B8,
+    }[dtype]
+    maxvals = x.abs().amax(dim=tuple(range(1, x.ndim))) if per_batch_scale else x.abs().max()
+    return maxvals / max_finite
+
+
 def matmul_torch(a, b, bias,
                  a_ragged_metadata: RaggedTensorMetadata | None = None,
                  b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -607,7 +627,10 @@ def matmul_torch(a, b, bias,
                 round_x, round_y,
             )
             out[expt] = out_expt.to(out.dtype)
-        return out
+        actual_scale = precision_config.flex_ctx.out_data.actual_scale
+        if actual_scale is not None:
+            actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
+        return scale(out, precision_config.flex_ctx.out_data.expected_scale)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -653,11 +676,15 @@ def matmul_torch(a, b, bias,
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
-        return y
-    out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
-    msk = scatter_indx != -1
-    out[scatter_indx[msk], :] = y[msk, :]
-    return out
+        out = y
+    else:
+        out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
+        msk = scatter_indx != -1
+        out[scatter_indx[msk], :] = y[msk, :]
+    actual_scale = precision_config.flex_ctx.out_data.actual_scale
+    if actual_scale is not None:
+        actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
+    return scale(out, precision_config.flex_ctx.out_data.expected_scale)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
