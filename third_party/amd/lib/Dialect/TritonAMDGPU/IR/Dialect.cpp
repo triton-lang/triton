@@ -668,6 +668,17 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getResult().getType();
 
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  constexpr int64_t maxBlockSize = 1 << 16; // 2^16 = 65536
+  for (size_t i = 0; i < blockShape.size(); ++i) {
+    if (blockShape[i] > maxBlockSize) {
+      return emitOpError("TDM block dimension ")
+             << i << " (" << blockShape[i] << ") exceeds maximum size of "
+             << maxBlockSize;
+    }
+  }
+
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
   if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
@@ -700,6 +711,17 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
 LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getSrc().getType();
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  constexpr int64_t maxBlockSize = 1 << 16; // 2^16 = 65536
+  for (size_t i = 0; i < blockShape.size(); ++i) {
+    if (blockShape[i] > maxBlockSize) {
+      return emitOpError("TDM block dimension ")
+             << i << " (" << blockShape[i] << ") exceeds maximum size of "
+             << maxBlockSize;
+    }
+  }
 
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());

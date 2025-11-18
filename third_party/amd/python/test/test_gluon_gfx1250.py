@@ -1209,6 +1209,38 @@ def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
     assert torch.equal(expect, actual)
 
 
+def test_tensor_descriptor_load_store_invalid_blocksize():
+    """Test that TDM operations fail when block size exceeds 2^16 (65536)"""
+    ndim = 2
+    INNER_BLOCK = 2**17  # 131072, exceeds 2^16 limit
+    dtype_str = 'float32'
+
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    alloc_shape = [7, INNER_BLOCK]
+    BLOCK_SHAPE = (8, INNER_BLOCK)
+
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    out = inp.new_empty(BLOCK_SHAPE)
+    inp = inp.cuda()
+    out = out.cuda()
+
+    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+
+    # Expect compilation to fail due to block size exceeding maximum
+    try:
+        tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
+                                                      out.shape, out.stride(), SHARED_LAYOUT)
+        pytest.fail(
+            f"Expected compilation to fail for block size {INNER_BLOCK} (2^17) > 65536 (2^16), but it succeeded")
+    except Exception as e:
+        error_msg = str(e)
+        assert "error encountered during parsing" in error_msg.lower(), \
+            f"Expected parsing error for block size > 65536, but got: {error_msg}"
+
+
 @gluon.jit
 def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
                   stride_cn, stride_scale, DTYPE_A: ttgl.constexpr, DTYPE_B: ttgl.constexpr,
