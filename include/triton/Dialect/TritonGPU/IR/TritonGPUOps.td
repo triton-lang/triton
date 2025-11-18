@@ -3,7 +3,7 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"

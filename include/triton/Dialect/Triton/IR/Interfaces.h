@@ -7,6 +7,7 @@
 
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
+#include "triton/Dialect/Triton/IR/TypeInterfaces.h.inc"
 
 namespace mlir::triton {
 

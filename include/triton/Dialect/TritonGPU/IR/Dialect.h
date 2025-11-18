@@ -8,6 +8,7 @@
 
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
@@ -158,7 +159,7 @@ inline SmallVector<unsigned> getOrder(MemDescType type) {
   return getOrder(cast<SharedEncodingTrait>(type.getEncoding()),
                   type.getShape());
 }
-inline SmallVector<unsigned> getOrder(TensorOrMemDesc type) {
+inline SmallVector<unsigned> getOrder(::mlir::triton::TensorOrMemDesc type) {
   if (auto memDesc = dyn_cast<MemDescType>(type)) {
     return getOrder(memDesc);
   } else {
@@ -177,7 +178,8 @@ inline SmallVector<unsigned> getOrderForMemory(RankedTensorType type) {
   return getOrderForMemory(cast<DistributedEncodingTrait>(type.getEncoding()),
                            type.getShape());
 }
-inline SmallVector<unsigned> getOrderForMemory(TensorOrMemDesc type) {
+inline SmallVector<unsigned>
+getOrderForMemory(::mlir::triton::TensorOrMemDesc type) {
   if (auto memDesc = dyn_cast<MemDescType>(type)) {
     return getOrder(memDesc);
   } else {
@@ -291,7 +293,7 @@ bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
 
-LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
+LinearLayout inferReshapeLinearLayout(::mlir::triton::TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
 // Verify the types of operations that operate on memory.

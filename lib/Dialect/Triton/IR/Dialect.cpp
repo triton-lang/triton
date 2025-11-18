@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
+#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
