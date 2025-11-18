@@ -253,7 +253,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     # ---- scratchpad -----#
     scratchpad = dict()
     N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
-    if opt_flags.split_k > 1 or scatter_indx is not None:
+    if opt_flags.split_k > 1 or (scatter_indx is not None and (not is_cuda() or routing_data.n_expts_act > 1)):
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
@@ -654,7 +654,7 @@ def matmul_ogs(x, w, bias,
         if y_mx_scale is not None:
             out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
     # TODO: change `matmul_ogs` semantics and move this to another op!
-    if scatter_indx is not None:
+    if scatter_indx is not None and (not is_cuda() or routing_data.n_expts_act > 1): # Matmul ogs kernel fuses scatter already, so only need for n_exps_act > 1.
         mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, 1)
         out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
         mask = mask.expand_as(out_matmul)
