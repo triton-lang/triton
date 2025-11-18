@@ -5752,6 +5752,26 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
 
 # -----------------------
+# test enable_reflect_ftz
+# -----------------------
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("enable_reflect_ftz", [False, True])
+def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
+
+    @triton.jit
+    def exp2(data):
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.math.exp2(tl.load(ptrs)))
+
+    data = torch.full((128, ), -127.0, device=device, dtype=torch.float32)
+    h = exp2.warmup(data, grid=(1, ), enable_reflect_ftz=enable_reflect_ftz)
+
+    found_ex2_ftz = re.search(r'ex2.approx.ftz.f32', h.asm["ptx"]) is not None
+    assert found_ex2_ftz == enable_reflect_ftz
+
+
+# -----------------------
 # test override_arch
 # -----------------------
 
