@@ -364,8 +364,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
                     externId, dataSet, record, isAPI, isGraph);
     // Track correlation ids from the same stream and erase those <
     // correlationId
-    correlation.corrIdToExternId.erase(record->correlation_id);
-    correlation.apiExternIds.erase(externId);
+    if (!correlation.corrIdToExternId.contain(record->correlation_id)) {
+      correlation.apiExternIds.erase(externId);
+    }
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
