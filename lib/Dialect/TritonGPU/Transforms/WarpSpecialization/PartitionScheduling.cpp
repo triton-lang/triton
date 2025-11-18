@@ -1129,58 +1129,59 @@ struct PartitionScheduling
 };
 } // namespace
 
-bool canProveExecuteOnce(scf::ForOp forOp) {
-  auto getBoundFromCmpOp =
-      [](arith::CmpIOp cmpOp, APInt min, APInt max, unsigned bitWidth,
-         bool anchorIsLhs) -> std::optional<ConstantIntRanges> {
-    // The following was taken from third_party/amd/lib/Analysis/
-    auto fold =
-        getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs());
-    if (auto constValue = getConstantIntValue(fold)) {
-      bool isSigned = true;
-      APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
-      switch (cmpOp.getPredicate()) {
-      case arith::CmpIPredicate::eq:
-        return mlir::ConstantIntRanges::constant(apVal);
-      case arith::CmpIPredicate::sge: {
-        // K >= apVal implies K ∈ [apVal, max]
-        if (anchorIsLhs)
-          return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-        // apVal >= K implies K ∈ [min, apVal]
-        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-      }
-      case arith::CmpIPredicate::sgt: {
-        // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
-        if (anchorIsLhs) {
-          return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
-        }
-        // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
-        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-      }
-      case arith::CmpIPredicate::sle: {
-        // K <= apVal implies K ∈ [min, apVal]
-        if (anchorIsLhs)
-          return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-        // apVal <= K implies K ∈ [apVal, max]
+std::optional<ConstantIntRanges> getBoundFromCmpOp(arith::CmpIOp cmpOp,
+                                                   Value anchor) {
+  // The following was taken from third_party/amd/lib/Analysis/
+  bool anchorIsLhs = cmpOp.getLhs() == anchor;
+  unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
+  APInt min = APInt::getSignedMinValue(bitWidth);
+  APInt max = APInt::getSignedMaxValue(bitWidth);
+
+  auto fold = getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs());
+  if (auto constValue = getConstantIntValue(fold)) {
+    bool isSigned = true;
+    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+      return mlir::ConstantIntRanges::constant(apVal);
+    case arith::CmpIPredicate::sge: {
+      // K >= apVal implies K ∈ [apVal, max]
+      if (anchorIsLhs)
         return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-      }
-      case arith::CmpIPredicate::slt: {
-        // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
-        if (anchorIsLhs)
-          return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-        // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
+      // apVal >= K implies K ∈ [min, apVal]
+      return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+    }
+    case arith::CmpIPredicate::sgt: {
+      // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
+      if (anchorIsLhs) {
         return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
       }
-      default:
-        break;
-      }
+      // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
+      return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
     }
-    return std::nullopt;
-  };
+    case arith::CmpIPredicate::sle: {
+      // K <= apVal implies K ∈ [min, apVal]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+      // apVal <= K implies K ∈ [apVal, max]
+      return mlir::ConstantIntRanges::range(apVal, max, isSigned);
+    }
+    case arith::CmpIPredicate::slt: {
+      // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
+      // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
+      return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
+    }
+    default:
+      break;
+    }
+  }
+  return std::nullopt;
+}
 
-  auto getAssumedBound =
-      [&](Value v, APInt min, APInt max,
-          unsigned bitWidth) -> std::optional<ConstantIntRanges> {
+bool canProveExecuteOnce(scf::ForOp forOp) {
+  auto getAssumedBound = [&](Value v) -> std::optional<ConstantIntRanges> {
     mlir::ForwardSliceOptions opt;
     SetVector<Operation *> slice;
     (void)getForwardSlice(v, &slice, opt);
@@ -1193,9 +1194,7 @@ bool canProveExecuteOnce(scf::ForOp forOp) {
         auto cond = assumeOp.getCond();
         if (auto cmpOp = cond.getDefiningOp<arith::CmpIOp>();
             cmpOp && (cmpOp.getLhs() == v || cmpOp.getRhs() == v)) {
-          bool anchorIsLhs = cmpOp.getLhs() == v;
-          if (auto bound =
-                  getBoundFromCmpOp(cmpOp, min, max, bitWidth, anchorIsLhs)) {
+          if (auto bound = getBoundFromCmpOp(cmpOp, v)) {
             return *bound;
           }
         }
@@ -1206,14 +1205,14 @@ bool canProveExecuteOnce(scf::ForOp forOp) {
 
   auto getConstIntBound = [&](Value v) {
     unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(v.getType());
-    APInt min = APInt::getSignedMinValue(bitWidth);
-    APInt max = APInt::getSignedMaxValue(bitWidth);
     if (auto cst = getConstantIntValue(getAsOpFoldResult(v))) {
       APInt apVal = {bitWidth, static_cast<uint64_t>(*cst), /*signed*/ true};
       return mlir::ConstantIntRanges::constant(apVal);
-    } else if (auto assumedBound = getAssumedBound(v, min, max, bitWidth)) {
+    } else if (auto assumedBound = getAssumedBound(v)) {
       return *assumedBound;
     } else {
+      APInt min = APInt::getSignedMinValue(bitWidth);
+      APInt max = APInt::getSignedMaxValue(bitWidth);
       return mlir::ConstantIntRanges::range(min, max, true);
     }
   };
