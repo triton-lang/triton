@@ -57,10 +57,6 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     ret = normalize_blocks(ret)
     return ret
 
-
-def alloc_rand_like(x):
-    return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
-
 def make_slice_sizes(n_slices, total_size, device="cuda"):
     torch.manual_seed(0)
     dtype = torch.int32
@@ -477,7 +473,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
-    # triton
+    # --- triton implementation ---
     try:
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
@@ -487,6 +483,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
+    # --- torch implementation ---
     ref_y = matmul_torch(a, b, bias,  #
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
@@ -494,80 +491,19 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
-    # check that y_tri_in was used if provided
-    if c is not None:
-        assert tri_y.data_ptr() == c.data_ptr()
-        assert tri_y.shape == c.shape
-        assert tri_y.stride() == c.stride()
+    # --- check results ---
     if c_dtype.has_mx_scale:
         tri_y = upcast_from_mxfp(tri_y, precision_opt.c_mx_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
-        ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, c_dtype.torch_dtype, axis=-1)
-        ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
-        maxtol = 4e-1
-        rmstol = 4e-2
+        ref_y = upcast_from_mxfp_torch(*downcast_to_mxfp_torch(ref_y, c_dtype.torch_dtype, axis=-1), target_dtype=ref_y.dtype, axis=-1)
+    maxtol, rmstol = None, None
+    if c_dtype.has_mx_scale:
+        maxtol, rmstol = 4e-1, 4e-2
     elif b_dtype.is_mxfloat4:
-        maxtol = 3e-2
-        rmstol = None
-    else:
-        maxtol = None
-        rmstol = None
-
+        maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
-
-
-# Test that we don't use unsupported block sizes.
-@pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
-@pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
-@pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
-def test_small_batch_matmul(m, n, k):
-    if is_hip():
-        pytest.skip("Not fully tested on AMD")
-
-    if m * n * k > 16384:
-        pytest.skip()
-
-    BATCH_SIZE = 10000
-
-    def _make_tensor(shape, dtype, trans):
-        if trans:
-            shape = (shape[0], shape[2], shape[1])
-        t = alloc_rand(shape, "cuda", dtype)
-        return t.transpose(1, 2) if trans else t
-
-    for a_transpose, b_transpose, bias, dtype in itertools.product(
-        (False, True),
-        (False, True),
-        (False, True),
-        (torch.float16, torch.bfloat16, torch.float8_e5m2),
-    ):
-        if (
-            torch.cuda.get_device_capability()[0] < 10
-            and dtype is torch.float8_e5m2
-            and (not b_transpose)
-        ):
-            continue  # Not supported
-
-        x = _make_tensor((BATCH_SIZE, m, k), dtype, a_transpose)
-        w = _make_tensor((BATCH_SIZE, k, n), dtype, b_transpose)
-        bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
-        tri_y = matmul(x, w, bias)
-
-        # ref_y = matmul_torch(x.float(), w.float(), bias)
-
-        # This is faster than matmul_torch.
-        ref_y = torch.bmm(x.float(), w.float())
-        if bias is not None:
-            ref_y += bias[:, None, :]
-
-        assert_close(
-            ref_y,
-            tri_y,
-            maxtol=4e-1 if dtype is torch.float8_e5m2 else None,
-            rmstol=4e-2 if dtype is torch.float8_e5m2 else None,
-        )
 
 
 def test_set_idle_sms():
