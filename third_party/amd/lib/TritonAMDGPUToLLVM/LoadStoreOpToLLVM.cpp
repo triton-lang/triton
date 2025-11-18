@@ -654,6 +654,17 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     if (other)
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
+    Value multicastMask;
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
+    if (numCTAs > 1) {
+      Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+      auto regLayout =
+          triton::gpu::toLinearLayout(cast<RankedTensorType>(ptr.getType()));
+      multicastMask = LLVM::AMD::emitCtaMulticastMask(rewriter, loc,
+                                                      clusterCTAId, regLayout);
+    }
+
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
@@ -682,8 +693,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
 
-      Value loadVal =
-          llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, cacheMod);
+      Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
+                             multicastMask, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -835,6 +846,9 @@ struct BufferLoadToLocalOpConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto dstEnc = dstTy.getEncoding();
 
+    // If the op has a contiguity hint use it to increase the vector size.
+    vec = std::max(vec, op.getContiguity());
+
     // For padded encodings restrict vec by the min interval
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
       vec = std::min(vec, padEnc.getMinInterval());
@@ -979,6 +993,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     SmallVector<Value> otherElems;
     if (op.getOther())
       otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
+
+    // If the op has a contiguity hint use it to increase the vector size.
+    vec = std::max(vec, op.getContiguity());
 
     // For padded encodings restrict vec by the min interval
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
