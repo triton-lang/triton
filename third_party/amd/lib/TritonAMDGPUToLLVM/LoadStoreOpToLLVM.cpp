@@ -835,6 +835,9 @@ struct BufferLoadToLocalOpConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto dstEnc = dstTy.getEncoding();
 
+    // If the op has a contiguity hint use it to increase the vector size.
+    vec = std::max(vec, op.getContiguity());
+
     // For padded encodings restrict vec by the min interval
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
       vec = std::min(vec, padEnc.getMinInterval());
@@ -979,6 +982,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     SmallVector<Value> otherElems;
     if (op.getOther())
       otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
+
+    // If the op has a contiguity hint use it to increase the vector size.
+    vec = std::max(vec, op.getContiguity());
 
     // For padded encodings restrict vec by the min interval
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
