@@ -1482,9 +1482,6 @@ class InterpretedFunction(KernelInterface[T]):
     def __name__(self):
         return self.fn.__name__
 
-    def __getitem__(self, grid):
-        return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
-
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
