@@ -307,6 +307,13 @@ bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
 
+// If the value "anchor" is compared against a statically-computed bound, return
+// inclusive lower and upper bounds lb <= anchor <= ub. Depending on the
+// compariosn operator, one of the bounds is a computed one while the other is
+// derived from the data type of anchor.
+std::optional<ConstantIntRanges> getBoundFromCmpOp(arith::CmpIOp cmpOp,
+                                                   Value anchor);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
