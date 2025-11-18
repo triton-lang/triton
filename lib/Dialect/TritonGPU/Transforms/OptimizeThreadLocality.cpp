@@ -53,7 +53,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
           blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
-          blocked.getCTAsPerCGA()[*reductionAxis] == 1)
+          blocked.getCTALayout().getCTAsPerCGA()[*reductionAxis] == 1)
         return failure();
     }
     ArrayRef<int64_t> shape = tensorType.getShape();

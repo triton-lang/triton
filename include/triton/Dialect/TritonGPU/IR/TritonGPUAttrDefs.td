@@ -1,16 +1,11 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
-include "mlir/IR/AttrTypeBase.td"
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrBase.td"
 
 //===----------------------------------------------------------------------===//
 // Traits, Interfaces and shared Parameters
 //===----------------------------------------------------------------------===//
-
-def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
-def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
 
 def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -18,28 +13,16 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
     Common trait for all TTGIR layouts.
   }];
   let methods = [
-    InterfaceMethod<"Get the shape of the CTAs per CGA.",
-                    "SmallVector<unsigned>",
-                    "getCTAsPerCGA", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTAsPerCGA());
-    }]>,
-    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getCTAOrder", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTAOrder());
-    }]>,
-    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
-                    "SmallVector<unsigned>",
-                    "getCTASplitNum", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTASplitNum());
-    }]>,
-    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank", (ins), [{}], [{
-      return $_attr.getCTAOrder().size();
+    InterfaceMethod<"Get the CTA layout backing this encoding.",
+                    "CTAEncodingAttr", "getCTALayout">,
+    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank",
+                    (ins), [{}], [{
+      return $_attr.getCTALayout().getRank();
     }]>
   ];
 }
 def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum"]>;
+  LayoutEncodingTrait, ["getCTALayout"]>;
 
 def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -55,81 +38,14 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
 def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
   SharedEncodingTrait, ["getAlignment"]>;
 
-def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
-                                            "linear layout"> {
-  let cppAccessorType = "const LinearLayout &";
-}
-
-//===----------------------------------------------------------------------===//
-// Base Attribute
-//===----------------------------------------------------------------------===//
-
-class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = []>
-  : AttrDef<TritonGPU_Dialect, name, traits> {
-
-  let description = [{
-TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
-how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
-\mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
-to the indices of the CUDA threads allowed to access some data at index $i$.
-
-For example, let us consider the layout function:
-\mathcal{L}(0, 0) = {0, 4}
-\mathcal{L}(0, 1) = {1, 5}
-\mathcal{L}(1, 0) = {2, 6}
-\mathcal{L}(1, 1) = {3, 7}
-
-Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
-- T[0,0] is owned by both cuda thread 0 and 4
-- T[0,1] is owned by both cuda thread 1 and 5
-- T[1,0] is owned by both cuda thread 2 and 6
-- T[1,1] is owned by both cuda thread 3 and 7
-
-Right now, Triton implements two main classes of layouts: shared, and distributed.
-  }];
-  let attrName = "triton.gpu." # attrMnemonic;
-
-  code extraBaseClassDeclaration = [{
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// CTA Layout
-//===----------------------------------------------------------------------===//
-
-def CTAEncodingAttr : TritonGPU_Attr<"CTAEncoding", "cta_encoding"> {
-  let parameters = (ins LinearLayoutParam:$linearLayout);
-
-  let description = [{
-Describes how blocks (CTAs) in a cooperative thread array (CGA) map onto logical
-tensor dimensions. The `LinearLayout` maps from `block` into `dim0`, `dim1`...
-  }];
-
-  let extraClassDeclaration = [{
-    static CTAEncodingAttr getDefault(MLIRContext *context, int rank);
-    // Legacy, we should kill this! Note that it is not true in general that
-    // fromSplitParams(enc.getCTAsPerCGA(), enc.getCTASplitNum(), enc.getCTAOrder()) == enc!!
-    static CTAEncodingAttr fromSplitParams(MLIRContext *context,
-                                           ArrayRef<unsigned> CTAsPerCGA,
-                                           ArrayRef<unsigned> CTASplitNum,
-                                           ArrayRef<unsigned> CTAOrder);
-
-    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
-    SmallVector<unsigned> getCTAsPerCGA() const;
-    SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getCTAOrder() const;
-  }];
-
-  let genVerifyDecl = 1;
-}
-
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
 def SwizzledSharedEncodingAttr
     : TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding",
-                     [SharedEncodingTrait, LayoutEncodingTrait]> {
+                     [SharedEncodingTrait, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "swizzled_shared";
 
   let description = [{
@@ -435,8 +351,6 @@ For identity mappings a short form based on order and shape is used to increase 
       return *llvm::min_element(getIntervals());
     }
 
-    CTAEncodingAttr getCTALayout() const;
-
     // Returns the total number of elements including padding given the input
     // tensor shape.
     int64_t getPaddedSize(ArrayRef<int64_t> shape) const;
@@ -447,7 +361,8 @@ For identity mappings a short form based on order and shape is used to increase 
 
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
-                     [SharedEncodingTrait, DeclareLayoutEncodingMethods]> {
+                     [SharedEncodingTrait, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "shared_linear";
 
   let description = [{
@@ -469,15 +384,15 @@ def SharedLinearEncodingAttr
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
     int32_t getAlignment() const { return static_cast<int32_t>(getLayoutAlignment()); }
-
-    CTAEncodingAttr getCTALayout() const;
   }];
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
-def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [DeclareSharedEncodingMethods, LayoutEncodingTrait]> {
+def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding",
+                     [DeclareSharedEncodingMethods, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "nvmma_shared";
 
   let description = [{
@@ -546,7 +461,8 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
 
 def AMDRotatingSharedEncodingAttr :
   TritonGPU_Attr<"AMDRotatingSharedEncoding", "amd_rotating_shared_encoding",
-                 [SharedEncodingTrait, LayoutEncodingTrait]> {
+                 [SharedEncodingTrait, LayoutEncodingTrait,
+                  DeclareLayoutEncodingMethods]> {
   let mnemonic = "amd_rotating_shared";
 
   let description = [{
@@ -695,7 +611,10 @@ We call each individual tile "rep".
 }
 
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits)> {
+  : TritonGPU_Attr<name, attrMnemonic,
+                   !listconcat([DistributedEncodingTrait, LayoutEncodingTrait,
+                                DeclareLayoutEncodingMethods],
+                               traits)> {
 
   let description = [{
 Distributed encodings have a layout function L that is entirely characterized
@@ -742,7 +661,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Linear Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding", [DeclareLayoutEncodingMethods]> {
+def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
   let mnemonic = "linear";
 
   let description = [{
@@ -778,7 +697,6 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> getThreadsPerWarp() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
-    CTAEncodingAttr getCTALayout() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getSizePerThread() const;
@@ -1429,7 +1347,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [DeclareLayoutEncodingMethods]> {
+def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let mnemonic = "slice";
 
   let description = [{
@@ -1469,15 +1387,13 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
-
-    CTAEncodingAttr getCTALayout() const;
   }];
 
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
 }
 
-def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding", [DeclareLayoutEncodingMethods]> {
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding"> {
   let mnemonic = "dot_op";
 
   let description = [{
@@ -1539,9 +1455,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    CTAEncodingAttr getCTALayout() const;
-   }];
+  let extraClassDeclaration = extraDistributedDeclaration;
 }
 
 def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {

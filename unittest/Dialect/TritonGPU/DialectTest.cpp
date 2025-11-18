@@ -583,14 +583,17 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // SliceEncoding is not well-defined for CGAs
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
         auto baseEncoding = cast<LayoutEncodingTrait>(distributedEncoding);
-        ASSERT_EQ(baseEncoding.getCTASplitNum(),
-                  linearEncoding.getCTASplitNum());
-        ASSERT_EQ(baseEncoding.getCTAsPerCGA(), baseEncoding.getCTAsPerCGA());
+        auto baseCTALayout = baseEncoding.getCTALayout();
+        auto linearCTALayout = linearEncoding.getCTALayout();
+        ASSERT_EQ(baseCTALayout.getCTASplitNum(),
+                  linearCTALayout.getCTASplitNum());
+        ASSERT_EQ(baseCTALayout.getCTAsPerCGA(),
+                  linearCTALayout.getCTAsPerCGA());
         // If we are not using CGAs, the order is meaningless
         auto useCGA =
-            baseEncoding.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
+            baseCTALayout.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
         if (useCGA && !is_dot_op_with_block_parent(distributedEncoding)) {
-          ASSERT_EQ(baseEncoding.getCTAOrder(), linearEncoding.getCTAOrder());
+          ASSERT_EQ(baseCTALayout.getCTAOrder(), linearCTALayout.getCTAOrder());
         }
       }
     }

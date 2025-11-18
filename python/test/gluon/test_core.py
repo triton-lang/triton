@@ -232,18 +232,25 @@ def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.cons
     if isinstance(layout_a, TensorMemoryLayout):
         return layout_a.two_ctas
 
+    # TODO Implement as a helper
     def has_cta_split(layout, cta_split_num):
-        if hasattr(layout, "cta_split_num"):
-            return layout.cta_split_num == cta_split_num
-        else:
-            # Super hacky
-            assert isinstance(layout, ttgl.SharedLinearLayout)
-            max_stride = [0, 0]
-            for b in itertools.chain(layout.offset_bases, layout.block_bases):
-                for i, bi in enumerate(b):
-                    max_stride[i] = max(max_stride[i], bi)
-            basis = [max_stride[0], 0] if cta_split_num == [2, 1] else [0, max_stride[1]]
-            return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
+        if hasattr(layout, "cga_layout") and layout.cga_layout:
+            rank = getattr(layout, "rank", len(cta_split_num))
+            derived_split = [1] * rank
+            for basis in layout.cga_layout:
+                idx = next((i for i, v in enumerate(basis) if v != 0), None)
+                if idx is not None and idx < rank:
+                    derived_split[idx] *= 2
+            return derived_split[:len(cta_split_num)] == cta_split_num
+
+        # Fallback for SharedLinearLayout
+        assert isinstance(layout, ttgl.SharedLinearLayout)
+        max_stride = [0, 0]
+        for b in itertools.chain(layout.offset_bases, layout.block_bases):
+            for i, bi in enumerate(b):
+                max_stride[i] = max(max_stride[i], bi)
+        basis = [max_stride[0], 0] if cta_split_num == [2, 1] else [0, max_stride[1]]
+        return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
 
     return has_cta_split(layout_a, [2, 1]) and has_cta_split(layout_b, [1, 2])
 
@@ -461,9 +468,12 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     gl_acc_dtype = acc_dtype_map[acc_dtype]
     out_dtype = torch.float32
     cta_order = [1, 0]
-    cga_layout_a = ttgl.make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
-    cga_layout_b = ttgl.make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
-    cga_layout_c = ttgl.make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+
+    # TODO Remove this function altogether
+    from triton._C.libtriton.gluon_ir import make_cga_layout
+    cga_layout_a = make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
+    cga_layout_b = make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
+    cga_layout_c = make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
     block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
                                         cga_layout=cga_layout_a)
     block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],

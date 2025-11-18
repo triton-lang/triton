@@ -70,7 +70,7 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("size_per_thread", _unwrap_if_constexpr(self.size_per_thread))
         super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
-        super().__setattr__("order", list(_unwrap_if_constexpr(self.order)))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
 
         rank = len(self.size_per_thread)
         object.__setattr__(self, "cga_layout", self.cga_layout)
@@ -98,7 +98,7 @@ class BlockedLayout(DistributedLayout):
         threads_per_warp = stringify(self.threads_per_warp)
         warps_per_cta = stringify(self.warps_per_cta)
         order = stringify(self.order)
-        cga_layout = stringify(["~".join(map(str, vec)) for vec in self.cga_layout] if self.cga_layout else None)
+        cga_layout = "_".join("~".join(map(str, vec)) for vec in self.cga_layout) if self.cga_layout else ""
         return f"B{size_per_thread}_{threads_per_warp}_{warps_per_cta}_{order}_{cga_layout}B"
 
     def __hash__(self):
@@ -453,7 +453,7 @@ class SwizzledSharedLayout(SharedLayout):
         super().__setattr__("vec", _unwrap_if_constexpr(self.vec))
         super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
         super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
-        super().__setattr__("order", list(_unwrap_if_constexpr(self.order)))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
 
         object.__setattr__(self, "cga_layout", self.cga_layout)
 
@@ -473,7 +473,7 @@ class SwizzledSharedLayout(SharedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        cga_layout = stringify(["~".join(map(str, vec)) for vec in self.cga_layout] if self.cga_layout else None)
+        cga_layout = "_".join("~".join(map(str, vec)) for vec in self.cga_layout) if self.cga_layout else ""
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{cga_layout}_SSS"
 
     def __hash__(self):
