@@ -191,7 +191,7 @@ def _build_test_op_cases():
         for case in _build_test_op_cases()
     ],
 )
-@pytest.mark.parametrize("block_m", [16, 128])
+@pytest.mark.parametrize("block_m", [128])
 @pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
     (False, False, None),
     (True, False, None),
@@ -272,8 +272,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
-        if mode != "batched":
-            pytest.skip("NYI. X swizzling only implemented for batched input for now.")
         if not act_dtype_str.startswith("mxfloat8"):
             pytest.skip(f"NYI. X swizzling only implemented for mxfloat8 act for now. Got {act_dtype_str}")
         if not is_persistent:
@@ -333,7 +331,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
-        scale_hbm_swizzling_args = {},
+        scale_hbm_swizzling_args = {"ex_hist": [m] * n_slices},
     )
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),

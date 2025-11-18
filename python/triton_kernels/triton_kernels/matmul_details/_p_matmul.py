@@ -188,9 +188,9 @@ def _p_matmul(
         # ------------------------------------------------------------
         # prologue
         # ------------------------------------------------------------
-        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
+        off_w_z, off_x_z, off_y_z, slice_off_m, slice_block_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
             pid_z, pid_m, pid_k,
-            XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
             WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
             RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
@@ -201,7 +201,6 @@ def _p_matmul(
             shape_m = tl.load(XSliceSizes + off_w_z)
         else:
             shape_m = M
-
         off_n = BLOCK_N * pid_n
 
         # ---- offset x ------
@@ -292,7 +291,12 @@ def _p_matmul(
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                     x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
                 else: # use TMA for x scale load - only cover batched case for now
-                    off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                    if X_TMA_MODE == "dense":
+                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                    else:
+                        # x block is offset based on start_m and off_m
+                        # need to index the right x scale block
+                        off_m_scale = slice_block_off_m + off_m // 128 # points to the block offset (each block is 128)
                     x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
             elif x_format == "fp16" or x_format == "bf16":
@@ -341,9 +345,9 @@ def _p_matmul(
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
             pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-            expt_id1, _, start_z1, start_m1, off_m1, _, _ = compute_offsets(
+            expt_id1, _, start_z1, start_m1, _, off_m1, _, _ = compute_offsets(
                 pid_z, pid_m, pid_k,
-                XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+                XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
                 WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
                 RAGGED_DIMENSION,
                 BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
