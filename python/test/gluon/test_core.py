@@ -234,14 +234,16 @@ def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.cons
 
     # TODO Implement as a helper
     def has_cta_split(layout, cta_split_num):
-        if hasattr(layout, "cga_layout") and layout.cga_layout:
-            rank = getattr(layout, "rank", len(cta_split_num))
+        if hasattr(layout, "cga_layout"):
+            if not layout.cga_layout:
+                return cta_split_num == [1, 1]
+            rank = layout.rank
             derived_split = [1] * rank
             for basis in layout.cga_layout:
                 idx = next((i for i, v in enumerate(basis) if v != 0), None)
                 if idx is not None and idx < rank:
                     derived_split[idx] *= 2
-            return derived_split[:len(cta_split_num)] == cta_split_num
+            return derived_split == cta_split_num
 
         # Fallback for SharedLinearLayout
         assert isinstance(layout, ttgl.SharedLinearLayout)
@@ -494,7 +496,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
         mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
-                                                 cga_layout=cga_layout_a)
+                                                 cga_layout=cga_layout_c)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_c)
