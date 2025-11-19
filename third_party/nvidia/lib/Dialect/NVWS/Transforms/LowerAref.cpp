@@ -95,9 +95,30 @@ void assignStageCluster(Operation *op,
   }
 }
 
+bool isTMEMAllocScale(Operation *op) {
+  if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
+    return isa<TensorMemoryScalesEncodingAttr>(
+        tmemAlloc.getType().getEncoding());
+  }
+  return false;
+}
+
 bool isOperandPipelineable(Value v, scf::ForOp forOp) {
   auto isPipelineable = [](Operation *op) {
-    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
+    if (auto index = dyn_cast<MemDescIndexOp>(op)) {
+      if (isTMEMAllocScale(index.getSrc().getDefiningOp())) {
+        auto tmemScaleAlloc = index.getSrc().getDefiningOp<TMEMAllocOp>();
+        if (tmemScaleAlloc.getType().getShape().size() != 3 ||
+            tmemScaleAlloc.getType().getShape()[0] == 1) {
+          // If scales are in TMEM at this point, it implies that tmem_copy is
+          // not applicable. For an MMA to work with tmem_store of scales, the
+          // scales need to be double buffered.
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
   };
 
   Operation *foundDef = nullptr;
@@ -110,9 +131,6 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
   auto forOp = mmaOp->getParentOfType<scf::ForOp>();
   if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
           mmaOp.getOperation())) {
-    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
-      isAsync = false;
-    }
     if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
         !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
       isAsync = false;
@@ -669,14 +687,6 @@ bool isProducerLoad(ArefCreateOp arefOp) {
         return true;
       }
     }
-  }
-  return false;
-}
-
-bool isTMEMAllocScale(Operation *op) {
-  if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
-    return isa<TensorMemoryScalesEncodingAttr>(
-        tmemAlloc.getType().getEncoding());
   }
   return false;
 }
