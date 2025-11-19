@@ -77,8 +77,16 @@ public:
 
   Type convertTensorDescType(triton::TensorDescType type) {
     auto ctx = type.getContext();
-    // 4 for group0, 8 for group1
-    auto types = SmallVector<Type>(4 + 8, IntegerType::get(ctx, 32));
+    auto blockType = type.getBlockType();
+    auto shape = blockType.getShape();
+
+    // Determine the number of dwords based on tensor dimensions
+    // 2D tensors: group0 (4) + group1 (8) = 12 dwords
+    // 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20
+    // dwords
+    int numDwords = (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
+
+    auto types = SmallVector<Type>(numDwords, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 };
