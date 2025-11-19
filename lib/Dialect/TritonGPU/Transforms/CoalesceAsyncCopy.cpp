@@ -1,5 +1,6 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -32,7 +33,11 @@ namespace gpu {
 // global data.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
   using OpRewritePattern::OpRewritePattern;
+  ClipAsyncCopySizePerThread(ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                             MLIRContext *context)
+      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
@@ -94,12 +99,18 @@ struct ClipAsyncCopySizePerThread
     if (other)
       other = convertBlockLayout(other, newBlockEnc);
 
+    unsigned contiguity = axisInfoAnalysis.getContiguity(src);
+    if (mask)
+      contiguity = std::min<unsigned>(contiguity,
+                                      axisInfoAnalysis.getMaskAlignment(mask));
+
     rewriter.modifyOpInPlace(copyOp, [&]() {
       copyOp.getSrcMutable().assign(src);
       if (mask)
         copyOp.getMaskMutable().assign(mask);
       if (other)
         copyOp.getOtherMutable().assign(other);
+      copyOp.setContiguity(contiguity);
     });
 
     return success();
@@ -112,10 +123,11 @@ struct CoalesceAsyncCopyPass
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    triton::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ClipAsyncCopySizePerThread>(context);
+    patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
