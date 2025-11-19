@@ -517,7 +517,7 @@ class _ReduceAutograd(torch.autograd.Function):
             scale_strides=ctx.scale_strides,
             dx=dx,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(
