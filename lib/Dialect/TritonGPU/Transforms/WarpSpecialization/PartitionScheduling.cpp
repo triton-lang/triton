@@ -197,6 +197,16 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
     }
   }
 
+  Partition *scaleTmemCopyPartition = nullptr;
+  auto setScaleCopyPartition = [&](Value scale) {
+    if (auto tmemAlloc = scale.getDefiningOp<ttng::TMEMAllocOp>()) {
+      if (!scaleTmemCopyPartition) {
+        scaleTmemCopyPartition = partitions.addPartition(0);
+      }
+      setPartition(tmemAlloc, scaleTmemCopyPartition);
+    }
+  };
+
   // Find MMAs to pipeline.
   SmallVector<ttng::MMAv5OpInterface> mmas;
   for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
@@ -237,6 +247,12 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
       setPartition(op, mmaPartition);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
+    }
+
+    if (auto mmaScaled =
+            dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {
+      setScaleCopyPartition(mmaScaled.getAScale());
+      setScaleCopyPartition(mmaScaled.getBScale());
     }
   }
 
