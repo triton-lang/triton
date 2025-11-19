@@ -283,6 +283,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_transpose = True
 
     torch.manual_seed(0)
+
     # set opt flags constraints
     constraints = make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str)
     opt_flags.update_opt_flags_constraints(constraints)
