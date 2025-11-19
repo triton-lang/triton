@@ -46,6 +46,11 @@ public:
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);
 
+  /// Get the contexts associated with the data.
+  std::vector<Context> getContexts() const {
+    return contextSource->getContexts();
+  }
+
 protected:
   /// The actual implementation of the dump operation.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;

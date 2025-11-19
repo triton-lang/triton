@@ -242,6 +242,7 @@ void ScopeIdAllocation::reachability() {
 void ScopeIdAllocation::dominance() {
   // Stage 3: derive scope parentage and verify dominance constraints.
   mlir::DominanceInfo domInfo(funcOp);
+  mlir::PostDominanceInfo postDomInfo(funcOp);
   llvm::DenseMap<ScopeId, Operation *> startRecordMap;
   llvm::DenseMap<ScopeId, Operation *> endRecordMap;
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
@@ -277,7 +278,7 @@ void ScopeIdAllocation::dominance() {
       auto parentScopeId = opToIdMap.lookup(parentStartOp);
       auto parentEndOp = endRecordMap.lookup(parentScopeId);
       if (domInfo.dominates(parentStartOp, startOp) &&
-          domInfo.dominates(endOp, parentEndOp)) {
+          postDomInfo.postDominates(parentEndOp, endOp)) {
         auto parentId = opToIdMap.lookup(parentStartOp);
         auto childId = opToIdMap.lookup(startOp);
         scopeParentIds.push_back({childId, parentId});

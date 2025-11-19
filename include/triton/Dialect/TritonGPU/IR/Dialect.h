@@ -63,6 +63,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
@@ -248,8 +249,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 // dimension.
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
-
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);

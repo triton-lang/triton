@@ -156,7 +156,7 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 }
 
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
-                     Value insertIdx, Value extractIdx,
+                     Value insertIdx, Value extractIdx, int contiguity,
                      CoarseSchedule &schedule) {
   OpBuilderForStage builder(loadOp.getLoc(), forOp, schedule);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
@@ -176,7 +176,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Value view = createSingleBufferView(builder, alloc, insertIdx);
   Operation *copy = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp.getIsVolatile(), contiguity);
   Operation *commit =
       ttg::AsyncCommitGroupOp::create(builder, copy->getResult(0));
 
@@ -274,6 +274,7 @@ void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
 
 struct AsyncLoad {
   int stageDiff;
+  int contiguity = 1;
   Value alloc;
   Value barrier;
   Operation *waitOp;
@@ -459,6 +460,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       }
       SharedEncodingTrait sharedEncoding;
       bool canUseAsyncCp = false;
+      int contiguity = 1;
       if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
         canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
         sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
@@ -478,6 +480,15 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
             cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
 
         canUseAsyncCp &= copyVecBytes >= 4;
+        if (canUseAsyncCp) {
+          auto loadOp = cast<tt::LoadOp>(op);
+          auto ptr = loadOp.getPtr();
+          unsigned vec = axisInfoAnalysis.getContiguity(ptr);
+          if (auto mask = loadOp.getMask())
+            vec = std::min<unsigned>(vec,
+                                     axisInfoAnalysis.getMaskAlignment(mask));
+          contiguity = vec;
+        }
       }
       if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
@@ -486,6 +497,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         }
         auto &asyncLoad = asyncLoads[&op];
         asyncLoad.stageDiff = stageDiff;
+        asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
@@ -589,7 +601,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
-                      schedule);
+                      asyncLoad.contiguity, schedule);
       hasAsyncLoads = true;
     } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,

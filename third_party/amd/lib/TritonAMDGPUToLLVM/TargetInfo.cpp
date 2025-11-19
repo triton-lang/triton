@@ -101,9 +101,13 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
-  // be zero. Whoever calling into this should make sure the whole program does
-  // not try to utilize CTA clusters.
+  if (supportsMultiCTALaunch()) {
+    // We dispatch only along x; return the workgroup id x
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                           "llvm.amdgcn.cluster.workgroup.id.x",
+                                           {rewriter.getI32Type()}, {})
+        .getResult(0);
+  }
   return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 }
 
@@ -159,7 +163,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                             rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 
@@ -650,6 +654,17 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
     break;
   }
 
+  return false;
+}
+
+bool TargetInfo::supportsMultiCTALaunch() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({32, 64, 128}, biwWidth);
+  }
   return false;
 }
 

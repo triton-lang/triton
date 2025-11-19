@@ -1404,7 +1404,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str, check_return_val",
                          [(shape, axis, num_ctas, dtype_x_str, check_return_val)
-                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
+                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64), (128, 128)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64']
@@ -5811,7 +5811,7 @@ def test_num_ctas_pre_sm90(device):
         msg = r"num_ctas > 1 requires NVIDIA SM90\+ \(Hopper\)"
     else:
         arch = "gfx942"
-        msg = r"num_ctas > 1 not supported for AMD GPUs"
+        msg = r"num_ctas > 1 not supported"
 
     with pytest.raises(ValueError, match=msg):
         _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)

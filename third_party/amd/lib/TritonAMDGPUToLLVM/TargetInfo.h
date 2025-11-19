@@ -13,6 +13,7 @@ public:
 
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 
+  StringRef getArch() const { return arch; }
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
@@ -99,6 +100,9 @@ public:
   // ttg.async_wait
   bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+
+  bool supportsMultiCTALaunch() const;
+  bool supportsClusterLoadBitWidth(int biwWidth) const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;

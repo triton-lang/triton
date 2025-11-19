@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout
+from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -65,9 +65,12 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
             layout_obj.lane_bases[-1] = [0, 0]
         elif layout_obj.reg_bases[-1] != [0, N // 2]:
             bitwidth = element_ty.primitive_bitwidth
+            num_reg = 2**len(layout_obj.reg_bases)
             _check(
-                len(layout_obj.reg_bases) * bitwidth > 32,
-                lambda: "splitn requires register bases of more than 2 32 bit registers")
+                num_reg > 32 // bitwidth, lambda: "To be able to `tmem.load` into `tl.split` you need to have more "
+                f"than {32 // bitwidth} {bitwidth}-bit registers, as you need to use "
+                "the instruction 32x32b.x1 twice. You can always load into "
+                "instr_variant=\"32x32b\" and then convert_layout to this layout otherwise.")
 
             reg_bases = layout_obj.reg_bases
             for bases_str in ("lane_bases", "warp_bases"):
@@ -140,10 +143,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(input.type, ttgl.distributed_type),
                lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         layout = input.type.layout
-        _check(isinstance(layout, (SliceLayout, AutoLayout)),
+        _check(isinstance(layout, (SliceLayout, AutoLayout, CoalescedLayout)),
                lambda: f"expected expand_dims input to have a SliceLayout, but got: {layout}")
         _check(
-            isinstance(layout, AutoLayout) or layout.dim == axis,
+            isinstance(layout, (AutoLayout, CoalescedLayout)) or layout.dim == axis,
             lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
         handle = self.builder.create_expand_dims(input.handle, axis)
@@ -490,6 +493,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             )
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
+
+    def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
+        result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
+        shape = list(src.type.shape)
+        shape[axis] *= 2
+        return self._wrap_handle_infer_layout(result, elem_type, shape)
 
     def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
                         generator):

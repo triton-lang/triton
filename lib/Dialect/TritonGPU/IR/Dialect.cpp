@@ -359,18 +359,6 @@ SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to
-  // do convert encoding that goes through shared memory anyway. So we
-  // consider it as expensive.
-  RankedTensorType tensorTy = cat.getType();
-  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
-  auto shape = tensorTy.getShape();
-  auto newTotalElemsPerThread =
-      gpu::getTotalElemsPerThread(targetEncoding, shape);
-  return newTotalElemsPerThread < totalElemsPerThread;
-}
-
 static LogicalResult
 verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
                   ArrayRef<unsigned> order) {
@@ -2082,6 +2070,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   bool transposed = false;
   bool fp4Padded = false;
   unsigned elementBitWidth;
+  unsigned layoutRank = 2;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
@@ -2111,6 +2100,9 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
               .failed())
         return {};
+    } else if (attr.getName() == "rank") {
+      if (parseUInt(parser, attr, layoutRank, "rank").failed())
+        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -2119,7 +2111,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/2);
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, layoutRank);
   if (!CTALayout.has_value())
     return {};
 
@@ -2137,8 +2129,14 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
     // Print only in this case to reduce the noise for the more common case.
     printer << ", fp4Padded = true";
   }
-  maybePrintCTALayout(getContext(), printer, getCTALayout(),
-                      /*rank=*/2);
+  unsigned rank = getCTALayout().getCTAOrder().size();
+  auto *ctx = getContext();
+  auto defaultLayout = CTALayoutAttr::getDefault(ctx, rank);
+  if (getCTALayout() == defaultLayout && rank != 2) {
+    printer << ", rank = " << rank;
+  } else {
+    maybePrintCTALayout(ctx, printer, getCTALayout(), rank);
+  }
   printer << "}>";
 }
 
@@ -3915,6 +3913,18 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
   assert(op && "cannot check threads per warp outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+int triton::gpu::lookupNumCTAs(Operation *op) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (!mod) {
+    op->emitOpError(
+        "is not contained within a module, cannot lookup number of CTAs");
+    llvm::report_fatal_error(
+        "failed to lookup the number of CTAs, the surrounding module should "
+        "contain a ModuleOp");
+  }
+  return triton::gpu::TritonGPUDialect::getNumCTAs(mod);
 }
 
 int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {

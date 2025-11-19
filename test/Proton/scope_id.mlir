@@ -152,6 +152,25 @@ module {
 // -----
 
 module {
+  tt.func @scf_loop() {
+    %c0 = arith.constant 0 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "loop"
+    scf.for %i = %c0 to %c0 step %c0 {
+      // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = 0}}
+      proton.record start "loop_body"
+      proton.record end "loop_body"
+    }
+    proton.record end "loop"
+    tt.return
+  }
+}
+
+// -----
+
+module {
   tt.func @scf_loop_if(%cond: i1) {
     %c0 = arith.constant 0 : index
     scf.for %i = %c0 to %c0 step %c0 {
@@ -203,19 +222,19 @@ module {
     ttg.warp_specialize()
     default {
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "default"
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "default"
       ttg.warp_yield
     }
     partition0() num_warps(1) {
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "partition"
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "partition"
       ttg.warp_return
     } : () -> ()
