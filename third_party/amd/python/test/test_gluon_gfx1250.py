@@ -1766,7 +1766,7 @@ def tensor_async_copy_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), bars.index(i))
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         prior_phase = ttgl.amd.gfx1250.mbarrier.arrive(bars.index(i))
@@ -1830,3 +1830,39 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_tdm_load_pred():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr):
+        shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 32], [1, 0])
+        reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+
+        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
+                                                           block_shape=(16, 32), layout=shared_layout)
+        smem = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
+        b_offs_m = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, reg_layout))
+        b_offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, reg_layout))
+        b_ptrs = b_ptr + b_offs_m[:, None] * 64 + b_offs_n[None, :]
+
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=False)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        tile1 = smem.load(reg_layout)
+        ttgl.store(b_ptrs, tile1)
+
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=True)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        tile2 = smem.load(reg_layout)
+        ttgl.store(b_ptrs + 32, tile2)
+
+    a = torch.randint(0x0, 0xFFFF, (16, 64), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    kernel[(1, )](a_device, b_device)
+
+    b = b_device.cpu()
+    assert torch.equal(a[:, 32:], b[:, 32:]) and not torch.equal(a[:, :32], b[:, :32])
