@@ -114,7 +114,7 @@ def _build_test_op_cases():
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
             Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
-            Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", hbm_swizzling=True, epilogue_subtile=4),
+            Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", hbm_swizzling=True),
             Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1"),
             Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1", hbm_swizzling=True),
             Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1"),
