@@ -452,13 +452,13 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{rank must be equal to the shape size perhaps with a pipelining dimension.}}
+// expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 4}}
 !rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>
 
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{rank must be equal to the shape size perhaps with a pipelining dimension.}}
+// expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 4}}
 !rank_too_small = !ttg.memdesc<4xf32, #shared, #ttg.shared_memory>
 
 // -----
