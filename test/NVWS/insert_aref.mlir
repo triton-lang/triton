@@ -584,6 +584,33 @@ tt.func @no_def_op(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @no_def_op_cycle
+tt.func @no_def_op_cycle(%lb: i32, %ub: i32, %step: i32) {
+  %init = arith.constant dense<0> : !ty
+  // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[A:%.*]] = {{.*}}, [[B:%.*]] = {{.*}}, [[X:%.*]] = {{.*}}, [[Y:%.*]] = {{.*}}, [[C:%.*]] = {{.*}})
+  scf.for %i = %lb to %ub step %step iter_args(%a = %init, %b = %init, %x = %init, %y = %init, %c = %init) -> (!ty, !ty, !ty, !ty, !ty) : i32 {
+    // CHECK-NEXT: nvws.aref.put.enter
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: nvws.aref.put.exit
+    // CHECK-NEXT: nvws.aref.put.enter
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: nvws.aref.put.exit
+    // CHECK-NEXT: get.enter
+    // CHECK-NEXT: local_load
+    // CHECK-NEXT: get.exit
+    // CHECK: "use_1"
+    // CHECK-NEXT: get.enter
+    // CHECK-NEXT: local_load
+    // CHECK-NEXT: get.exit
+    // CHECK: "use_2"
+    "use_1"(%x) { ttg.partition = array<i32: 1> } : (!ty) -> ()
+    "use_2"(%y) { ttg.partition = array<i32: 2> } : (!ty) -> ()
+
+    scf.yield  %c, %a, %c, %c, %b : !ty, !ty, !ty, !ty, !ty
+  } {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>, array<i32: 0>, array<i32: 0>, array<i32: 0>]}
+  tt.return
+}
+
 // CHECK-LABEL: @scalar_consumers
 tt.func @scalar_consumers(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
