@@ -262,13 +262,30 @@ def init_allocation(x, w, precision_config, fused_activation,
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
-    ret = dict()
+    output_shape, output_dtype = allocation.output
+    # TMA requires strides to be multiple of 16 bytes. Convert bytes to elements.
+    output_alignment = 16 // output_dtype.itemsize
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        # If innermost dimension is not multiple of 16 bytes,
+        # pad it to the nearest multiple of 16 bytes and take a slice.
+        padded_shape = list(output_shape)
+        padded_dim = None
+        if output_shape[-1] % output_alignment != 0:
+            padded_dim = -1
+            # Round up to the nearest multiple of output_alignment
+            padded_shape[-1] = (output_shape[-1] + (output_alignment - 1)) & -output_alignment
+
+        output = torch.empty(padded_shape, device=allocation.device, dtype=output_dtype)
+        if padded_dim is not None:
+            output = torch.narrow(output, padded_dim, 0, output_shape[padded_dim])
     else:
         if output.ndim == 2:
             output = output[None, :, :]
-        assert output.shape == allocation.output[0]
+        assert output.shape == output_shape
+        assert output.stride(-1) == 1
+        for stride in output.stride()[:-1]:
+            assert stride % output_alignment == 0, f"strides must be multiple of {output_alignment}, got {output.stride()}"
+    ret = dict()
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
         k: torch.empty(v[0], device=allocation.device, dtype=v[1])
