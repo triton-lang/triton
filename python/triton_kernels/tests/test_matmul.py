@@ -8,7 +8,7 @@ from typing import Union
 import triton
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FlexCtx, PrecisionConfig, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -17,6 +17,8 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.swiglu import swiglu, swiglu_fn
+from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 
 # ---------------
 # numerics stuff
@@ -167,11 +169,11 @@ def _build_test_op_cases():
     ])
     # swiglu
     test_cases.extend([
-        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k)
-     for shape in [odd_shape1, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, swiglu_opts=(1.1, 1.4))
+     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
     test_cases.extend([
-        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val)
+        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, swiglu_opts=(1.1, 1.4))
         for val in (1, 2, 4)
     ])
 
@@ -198,7 +200,7 @@ def _build_test_op_cases():
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            device, opt_flags_scope):
+            swiglu_opts, device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
@@ -206,7 +208,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
-                 device, opt_flags_scope)
+                 swiglu_opts, device, opt_flags_scope)
     except pytest.skip.Exception as e:
         skip_message = str(e)
 
@@ -216,7 +218,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            device, opt_flags_scope):
+            swiglu_opts, device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
@@ -226,6 +228,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if swiglu_opts is not None and do_gamma:
+            pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
@@ -328,10 +332,15 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
     gammas       = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
 
+    # --- create fused activation ---
+    fused_activation = None
+    if swiglu_opts is not None:
+        fused_activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), swiglu_opts)
+
     # --- initialize output ---
     c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
     c_shape += (scatter_indx.shape[0] if do_scatter else a.shape[-2],) # row dim
-    c_shape += (b.shape[-1],) # col dim
+    c_shape += (b.shape[-1] // (1 if fused_activation is None else fused_activation.specs.reduction_n) ,) # col dim
     c = torch.empty(c_shape, dtype=c_dtype.torch_dtype, device=device)
     if c_transpose:
         c = c.mT.contiguous().mT
@@ -358,12 +367,14 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
+
     # --- triton implementation ---
     try:
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas, epilogue=epilogue, c=c)
+                           gammas=gammas, epilogue=epilogue, c=c,
+                           fused_activation=fused_activation)
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
@@ -373,6 +384,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
                         gammas=gammas)
+    if swiglu_opts is not None:
+        ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
@@ -400,90 +413,3 @@ def test_set_idle_sms():
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
-
-
-# @pytest.mark.parametrize("m, n, k, mode", [
-#     (1200, 704, 608, "ragged"),
-#     (800, 800, 400, "batched"),
-# ])
-# @pytest.mark.parametrize("split_k", [1, 2])
-# @pytest.mark.parametrize("do_gather, do_scatter", [
-#     (False, False),
-#     (True, False),
-#     (False, True),
-#     (True, True),
-# ])
-# @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
-#     (False, None),
-#     (True, 1),
-#     (True, 4),
-# ])
-# @pytest.mark.parametrize("swiglu_alpha, swiglu_limit", [
-#     (1.1, 1.4),
-#     (1.0, 1.2),
-#     (0.7, 1.0),
-# ])
-# def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
-#                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
-#     torch.manual_seed(0)
-#     constraints = {
-#         "is_persistent": is_persistent,
-#         "epilogue_subtile": epilogue_subtile,
-#         "split_k": split_k,
-#     }
-#     n_slices = 1
-#     opt_flags.update_opt_flags_constraints(constraints)
-
-#     weight_dtype, act_dtype = torch.float16, torch.float16
-#     if mode == "ragged" and do_gather:
-#         gindx = torch.randint(0, m, (m, ), device=device).to(torch.int32) if do_gather and m > 0 else None
-#     if mode == "ragged" and do_scatter:
-#         sindx = torch.randperm(m, device=device).to(torch.int32) if do_scatter else None
-#     if mode == "ragged":
-#         slice_dim = m
-#         slice_sizes = make_slice_sizes(n_slices, slice_dim, device=device)
-#         x_ragged_metadata = make_ragged_tensor_metadata(slice_sizes, slice_dim)
-
-#     precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_slices, device=device)
-#     x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_slices, mode,
-#                                          act_dtype, weight_dtype, False, device=device)
-
-#     if mode == "batched":
-#         x_ragged_metadata, gindx, sindx = None, None, None
-
-#     try:
-#         a = swiglu(matmul(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
-#                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
-#         b = matmul(
-#             x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt,
-#             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
-#                                              (swiglu_alpha, swiglu_limit)))
-#     except opt_flags.InapplicableConstraint:
-#         pytest.skip("inapplicable constraint")
-
-#     assert_close(a, b)
-
-
-# @pytest.mark.parametrize("m, n, k", [
-#     (320, 2**19, 0),
-#     (4096, 4096, 0),
-# ])
-# @pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
-# def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
-#     torch.manual_seed(0)
-
-#     if view_x_as_zero_cols:
-#         x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
-#         x = x[:0, :].transpose(-1, -2)
-#     else:
-#         x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
-#     w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
-#     bias = torch.randn(n, device="cuda", dtype=torch.float32)
-
-#     try:
-#         tri_y = matmul(x, w, bias)
-#     except opt_flags.InapplicableConstraint:
-#         pytest.skip("inapplicable constraint")
-#     ref_y = matmul_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
-
-#     assert_close(ref_y, tri_y)
