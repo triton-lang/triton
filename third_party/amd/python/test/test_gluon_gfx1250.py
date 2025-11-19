@@ -1766,7 +1766,7 @@ def tensor_async_copy_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), bars.index(i))
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         prior_phase = ttgl.amd.gfx1250.mbarrier.arrive(bars.index(i))
