@@ -162,9 +162,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
-    if (allocShape.size() != 2) {
-      return emitError() << "Scales don't currently support multibuffering";
-    }
     auto bitwidth = elementType.getIntOrFloatBitWidth();
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";

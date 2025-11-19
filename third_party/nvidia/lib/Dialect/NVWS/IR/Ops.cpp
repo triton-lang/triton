@@ -49,14 +49,14 @@ static std::optional<Twine> verifySlice(T &origType, T &newType) {
     return "MLIR Types don't match";
   if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
           origType.getEncoding())) {
-    if (origType.getElementType() != newType.getElementType() ||
-        origType.getRank() != newType.getRank()) {
-      return "Ranks don't match for TensorMemoryScalesEncodingAttr";
-    }
-    for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
-      if (origType.getShape()[i] != newType.getShape()[i])
-        return "Dimensions don't match for TensorMemoryScalesEncodingAttr";
-    }
+    // if (origType.getElementType() != newType.getElementType() ||
+    //     origType.getRank() != newType.getRank()) {
+    //   return "Ranks don't match for TensorMemoryScalesEncodingAttr";
+    // }
+    // for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
+    //   if (origType.getShape()[i] != newType.getShape()[i])
+    //     return "Dimensions don't match for TensorMemoryScalesEncodingAttr";
+    // }
   } else {
     if (origType.getElementType() != newType.getElementType() ||
         origType.getRank() - 1 != newType.getRank()) {
