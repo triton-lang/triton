@@ -105,6 +105,8 @@ jobs:
           ccache --zero-stats
           if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
             chown -R root:root /triton-data
+            pip install --cache-dir /triton-data -r python/requirements.txt
+            pip install --cache-dir /triton-data -r python/test-requirements.txt
           fi
           make dev-install
       - name: Print ccache stats
