@@ -370,6 +370,8 @@ operation ::= `amdg.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mas
 ```
 
 AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers.
+Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
+This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
 
 Traits: `AttrSizedOperandSegments`
 
@@ -380,6 +382,7 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
@@ -808,13 +811,15 @@ _Masked load operation_
 Syntax:
 
 ```
-operation ::= `amdg.masked_load` $ptr `,` $mask `,` $falseVal
+operation ::= `amdg.masked_load` $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
               oilist(`cacheModifier` `=` $cache)
               (`forceNoAlias` $forceNoAlias^)?
               attr-dict `:` functional-type(operands, results)
 ```
 
-Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+Load operation with masking and multicast support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+On architectures supporting multicast, the `multicastMask`specifies which CTAs in the cluster request the same data. This allows the hardware to efficiently broadcast the
+data to multiple CTAs in the cluster.
 
 #### Attributes:
 
@@ -831,6 +836,7 @@ Load operation with masking support. If the mask is true, loads from the given p
 | `ptr` | LLVM pointer type |
 | `mask` | 1-bit signless integer |
 | `falseVal` | LLVM dialect-compatible type |
+| `multicastMask` | 16-bit signless integer |
 
 #### Results:
 

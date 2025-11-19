@@ -279,7 +279,10 @@
 <p>This operation copies data from global memory to local memory asynchronously.
 This is analogue to tt.load except the data are copied to local memory pointed
 to by the memory descriptor instead of a distributed tensor. The rest of the
-operands are the same as tt.load.</p>
+operands are the same as tt.load.
+Contiguity is the maximum number of elements that can be loaded in a single vector with
+the given layout and mask.
+This allows op to use async_copy_global_to_local even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="attributes">
@@ -289,6 +292,7 @@ operands are the same as tt.load.</p>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="id1">
