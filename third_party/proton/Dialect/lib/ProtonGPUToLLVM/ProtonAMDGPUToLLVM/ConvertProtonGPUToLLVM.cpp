@@ -58,7 +58,8 @@ struct ConvertProtonAMDGPUToLLVM
         typeConverter, patterns, protonTargetInfo, 1);
     mlir::triton::proton::gpu::AMD::populateProtonGPUOpAMDPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
-    mlir::triton::AMD::populateMaskedOpsToLLVMPatterns(patterns);
+    mlir::triton::AMD::populateMaskedOpsToLLVMPatterns(patterns,
+                                                       tritonTargetInfo);
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =

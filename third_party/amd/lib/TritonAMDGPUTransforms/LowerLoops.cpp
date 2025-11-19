@@ -47,7 +47,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                const tt::AMD::TargetInfo &targetInfo);
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx) {
+                                  Value extractIdx, int contiguity) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -58,7 +58,7 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp.getIsVolatile(), contiguity);
   auto commitOp =
       ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
@@ -357,7 +357,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (useAsyncCopy &&
         canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
                                   axisInfoAnalysis, targetInfo)) {
-      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
+      unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
     } else {
       loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
     }

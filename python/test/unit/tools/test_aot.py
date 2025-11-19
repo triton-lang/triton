@@ -63,6 +63,26 @@ def kernel(C, A, B, M, N, K,
   tl.store(c_ptrs, c)
 """
 
+gluon_kernel_src = """
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+
+@gluon.jit
+def kernel(
+    C, A, B, M, N, K,
+    stride_cm, stride_cn,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    BLOCK_M: gl.constexpr,
+    BLOCK_N: gl.constexpr,
+    BLOCK_K: gl.constexpr
+):
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[1], threads_per_warp=[64], warps_per_cta=[1], order=[0])
+    offs = gl.arange(0, 64, layout=layout)
+    a = gl.load(A + offs)
+    gl.store(B + offs, a)
+"""
+
 test_utils_src = """
 #include <cuda.h>
 #include <stdio.h>
@@ -470,3 +490,15 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
             amdgcn = k.asm["amdgcn"]
             assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
             assert '.wavefront_size: 64' in amdgcn
+
+
+def test_gluon_kernel():
+    if not is_hip():
+        pytest.skip("Gluon kernel is only supported on HIP")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dtype = "fp16"
+        BM, BN, BK = 16, 16, 16
+
+        kernel_path = write_triton_kernels(tmp_dir, gluon_kernel_src, kernel_utils_src)
+        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        check_hasco_binary_str(tmp_dir, dtype)
