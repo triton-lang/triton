@@ -5755,6 +5755,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 # test enable_reflect_ftz
 # -----------------------
 
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("enable_reflect_ftz", [False, True])
 def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
