@@ -250,8 +250,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
-
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
 
@@ -306,9 +304,6 @@ SetVector<int> getPartitionIds(OpOperand *use);
 bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
-
-std::optional<ConstantIntRanges> getBoundFromCmpOp(arith::CmpIOp cmpOp,
-                                                   Value anchor);
 
 } // namespace mlir::triton::gpu
 

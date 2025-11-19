@@ -616,6 +616,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared1D = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_cp_contiguity_hint
+  tt.func @async_cp_contiguity_hint(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
+    // CHECK: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    %0 = ttg.async_copy_global_to_local %v, %smem {contiguity = 4 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
+    tt.return
+  }
+}
+
+
+// -----
+
 #block0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #block1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #block2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>

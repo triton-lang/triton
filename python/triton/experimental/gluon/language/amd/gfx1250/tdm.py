@@ -98,8 +98,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
         tensor_descriptor: the created tensor descriptor object
     """
     ndim = len(shape)
-    # TODO: support 1D-5D tensor descriptors
-    assert ndim == 2, f"Expected 2 dimensions but got {ndim} dimensions"
+    assert 1 <= ndim <= 5, f"Expected 1 <= ndim <= 5 but got {ndim} dimensions"
     assert len(strides) == ndim, f"Expected {ndim} strides but got {len(strides)}"
     assert len(block_shape) == ndim, f"Expected block_shape to have {ndim} dimensions but got {len(strides)}"
     assert isinstance(base.dtype, ttgl.pointer_type), "Expected base to be a pointer"
@@ -128,19 +127,23 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+               pred: bool = True, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
+        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+    pred = _semantic.to_tensor(pred)
+    pred_handle = pred.handle
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
-    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, mbarrier_handle)
+    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
+                                                            mbarrier_handle)
 
 
 @builtin

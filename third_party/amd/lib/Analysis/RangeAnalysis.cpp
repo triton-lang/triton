@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -209,7 +210,7 @@ maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
   if (!useBlock || !domInfo->dominates(cmpOp->getBlock(), useBlock))
     return {};
 
-  return triton::gpu::getBoundFromCmpOp(cmpOp, anchor);
+  return triton::getBoundFromCmpOp(cmpOp, anchor);
 }
 
 std::optional<ConstantIntRanges>
@@ -567,7 +568,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
-                SplatOp, ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
+                SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -582,7 +583,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
                                                          joinCallback);
         })
-        .Case<JoinOp, CatOp>([&](auto joinOp) {
+        .Case<JoinOp>([&](auto joinOp) {
           return inferResultRangesBinaryOpUnionArgRanges(
               joinOp, argConstIntRanges, joinCallback);
         })

@@ -550,11 +550,6 @@ void init_gluon_ir(py::module &&m) {
                                                        *mask);
              }
            })
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
-           })
       .def("create_fp4_to_fp",
            [](GluonOpBuilder &self, Value src, Type elemType,
               int axis) -> Value {
@@ -844,8 +839,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result, Value barrier) {
-             Value pred = self.create<arith::ConstantIntOp>(1, 1);
+              Value result, Value pred, Value barrier) {
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
                  descPtr, indices, result, pred, barrier);
            })

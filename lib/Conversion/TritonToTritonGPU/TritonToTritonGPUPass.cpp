@@ -273,51 +273,6 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   }
 };
 
-struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // The cat op satisfy two conditions:
-    // 1. output.numel = lhs.numel + rhs.numel
-    // 2. output.total_elems_per_thread =
-    // next_power_of_2(lhs.total_elems_per_thread + rhs.total_elems_per_thread)
-    // For now, this behaves like generic, but this
-    // will evolve when we add support for `can_reorder=False`.
-    auto retType = cast<RankedTensorType>(
-        this->getTypeConverter()->convertType(op.getType()));
-    auto retEncoding =
-        cast<triton::gpu::BlockedEncodingAttr>(retType.getEncoding());
-    auto lhsType = adaptor.getLhs().getType();
-    auto rhsType = adaptor.getRhs().getType();
-    auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
-    auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsType);
-    auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
-    auto retShape = retType.getShape();
-    auto retOrder = retEncoding.getOrder();
-    auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
-    auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
-    // Get new retSizePerThread if ret elems per thread is not enough.
-    // We have to round it up to the next power of 2 due to triton's tensor size
-    // constraint.
-    auto newRetTotalElemsPerThread =
-        nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
-    auto newRetSizePerThread = llvm::to_vector(retEncoding.getSizePerThread());
-    newRetSizePerThread[retOrder[0]] *=
-        newRetTotalElemsPerThread / retTotalElemsPerThread;
-    triton::gpu::BlockedEncodingAttr newRetEncoding =
-        triton::gpu::BlockedEncodingAttr::get(
-            getContext(), newRetSizePerThread, retThreadsPerWarp,
-            retWarpsPerCTA, retOrder, retEncoding.getCTALayout());
-    auto newRetType = retType.cloneWithEncoding(newRetEncoding);
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
-                      op, newRetType, adaptor.getOperands()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
 struct TritonJoinOpPattern : public OpConversionPattern<triton::JoinOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -560,7 +515,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::UnsplatOp>,
       GenericOpPattern<triton::AddPtrOp>,
       TritonBroadcastPattern,
-      TritonCatPattern,
       TritonJoinOpPattern,
       TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
