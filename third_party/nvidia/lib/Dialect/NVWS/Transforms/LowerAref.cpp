@@ -263,22 +263,15 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
-    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-            memDescType.getEncoding())) {
-      // tmem scales encoding doesn't support multi-buffering, use buffer as-is
-      views.push_back(buffer);
-    } else {
-      auto shape = memDescType.getShape();
-      SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
-      auto memDescTypeNew = MemDescType::get(
-          tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
-          memDescType.getMemorySpace(), true);
-      auto singleBuffer =
-          MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
-      assignStageCluster(singleBuffer, partitionWsTagIds, stageCluster,
-                         rewriter);
-      views.push_back(singleBuffer);
-    }
+    auto shape = memDescType.getShape();
+    SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+    auto memDescTypeNew = MemDescType::get(
+        tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
+        memDescType.getMemorySpace(), true);
+    auto singleBuffer =
+        MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
+    assignStageCluster(singleBuffer, partitionWsTagIds, stageCluster, rewriter);
+    views.push_back(singleBuffer);
   }
 
   return views;

@@ -774,7 +774,9 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    tmemDags.push_back(TmemAccessDag::build(allocOp));
+    if (!isa<TensorMemoryScalesEncodingAttr>(allocOp.getType().getEncoding())) {
+      tmemDags.push_back(TmemAccessDag::build(allocOp));
+    }
   });
 
   for (auto &accessDag : tmemDags) {
