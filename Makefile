@@ -8,6 +8,7 @@ TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
+PIP_CACHE_DIR := "/triton-data/pip-cache"
 
 # Incremental builds
 
@@ -90,14 +91,14 @@ test: test-lit test-cpp test-python
 
 .PHONY: dev-install-requires
 dev-install-requires:
-	$(PYTHON) -m pip install -r python/requirements.txt
-	$(PYTHON) -m pip install -r python/test-requirements.txt
+	$(PYTHON) -m pip install --cache-dir=$(PIP_CACHE_DIR) -r python/requirements.txt
+	$(PYTHON) -m pip install --cache-dir=$(PIP_CACHE_DIR) -r python/test-requirements.txt
 
 
 .PHONY: dev-install-torch
 dev-install-torch:
 	# install torch but ensure pytorch-triton isn't installed
-	$(PYTHON) -m pip install torch
+	$(PYTHON) -m pip --cache-dir=$(PIP_CACHE_DIR) install torch
 	$(PYTHON) -m pip uninstall triton pytorch-triton -y
 
 .PHONY: dev-install-triton
