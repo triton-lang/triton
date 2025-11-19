@@ -721,7 +721,7 @@ static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
   });
 }
 
-// Print the CTA encoding as `cga_layout = [[...]]` when the layout is
+// Print the CTA encoding as `CGALayout = [[...]]` when the layout is
 // non-trivial.
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer,
@@ -737,7 +737,7 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
   // This is the default layout
   assert(!bases.empty());
 
-  printer << ", cga_layout = [";
+  printer << ", CGALayout = [";
   llvm::interleaveComma(bases, printer, [&](const std::vector<int32_t> &vec) {
     printer << "[";
     llvm::interleaveComma(vec, printer);
@@ -768,23 +768,23 @@ std::optional<CTAEncodingAttr> parseCTAAttr(AsmParser &parser, Attribute attr,
   auto array = llvm::dyn_cast<ArrayAttr>(attr);
   if (!array) {
     parser.emitError(parser.getNameLoc(),
-                     "expected array value for 'cga_layout'");
+                     "expected array value for 'CGALayout'");
     return {};
   }
 
   auto ctx = parser.getContext();
-  auto cgaName = StringAttr::get(ctx, "cga_layout");
+  auto cgaName = StringAttr::get(ctx, "CGALayout");
   std::vector<std::vector<int32_t>> bases;
   bases.reserve(array.size());
   for (Attribute vecAttr : array) {
     SmallVector<unsigned> basisValues;
     NamedAttribute basisAttr(cgaName, vecAttr);
-    if (parseIntArrayAttr(parser, basisAttr, basisValues, "cga_layout entry")
+    if (parseIntArrayAttr(parser, basisAttr, basisValues, "CGALayout entry")
             .failed())
       return {};
     if (basisValues.size() != rank) {
       parser.emitError(parser.getNameLoc())
-          << "'cga_layout' entry length does not match rank " << rank;
+          << "'CGALayout' entry length does not match rank " << rank;
       return {};
     }
     std::vector<int32_t> basis;
@@ -836,7 +836,7 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
-    } else if (attr.getName() == "cga_layout") {
+    } else if (attr.getName() == "CGALayout") {
       ctaAttr = attr.getValue();
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
@@ -1199,7 +1199,7 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
-    if (attr.getName() == "cga_layout") {
+    if (attr.getName() == "CGALayout") {
       ctaAttr = attr.getValue();
       continue;
     }
@@ -1270,7 +1270,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
     }
-    if (attr.getName() == "cga_layout") {
+    if (attr.getName() == "CGALayout") {
       ctaAttr = attr.getValue();
       continue;
     }
@@ -1386,7 +1386,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
-    if (attr.getName() == "cga_layout") {
+    if (attr.getName() == "CGALayout") {
       ctaAttr = attr.getValue();
       continue;
     }
@@ -1558,7 +1558,7 @@ Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
     } else {
-      if (attr.getName() == "cga_layout") {
+      if (attr.getName() == "CGALayout") {
         ctaAttr = attr.getValue();
       } else {
         parser.emitError(parser.getNameLoc(), "unexpected key: ")
@@ -2077,7 +2077,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "fp4Padded") {
       if (parseBool(parser, attr, fp4Padded, "fp4Padded").failed())
         return {};
-    } else if (attr.getName() == "cga_layout") {
+    } else if (attr.getName() == "CGALayout") {
       ctaAttr = attr.getValue();
     } else if (attr.getName() == "rank") {
       if (parseUInt(parser, attr, layoutRank, "rank").failed())

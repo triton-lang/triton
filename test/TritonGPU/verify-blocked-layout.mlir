@@ -4,7 +4,7 @@
     sizePerThread=[1, 1],
     threadsPerWarp=[16, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1], cga_layout = [[0, 0]]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -24,7 +24,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 2],
-    order=[0, 1], cga_layout = [[0, 0]]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -64,7 +64,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1], cga_layout = [[0, 0]]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -85,7 +85,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1], cga_layout = [[0, 0]]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
