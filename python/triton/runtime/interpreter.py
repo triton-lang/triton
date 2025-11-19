@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict, Callable
+from typing import Tuple, List, Dict, Callable, TypeVar
 
 import math
 import numpy as np
@@ -13,11 +13,14 @@ import dataclasses
 from dataclasses import dataclass
 
 from triton.language.semantic import TritonSemantic
+from triton.runtime.jit import KernelInterface
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -1324,8 +1327,6 @@ class GridExecutor:
             arg_dev.copy_(arg_hst)
 
     def __call__(self, *args_dev, **kwargs):
-        if kwargs.pop("warmup", False):
-            return
         # Removes not used reserved keywords from kwargs
         # Triton doesn't support keyword-only, variable positional or variable keyword arguments
         # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
@@ -1449,7 +1450,7 @@ class FunctionRewriter:
         return local_namespace[self.fn.__name__]
 
 
-class InterpretedFunction:
+class InterpretedFunction(KernelInterface[T]):
     # Cache all rewritten functions
     rewritten_fn: Dict[Callable, Callable] = {}
 
@@ -1459,13 +1460,14 @@ class InterpretedFunction:
         self.kwargs = kwargs
         self.pre_run_hooks = []
 
-        def run(*args, **kwargs):
-            fn = self.rewrite()
-            return GridExecutor(fn, self.arg_names, kwargs["grid"], self.pre_run_hooks)(*args, **kwargs)
-
-        self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def run(self, *args, grid, warmup, **kwargs):
+        if warmup:
+            return
+        fn = self.rewrite()
+        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)
@@ -1479,9 +1481,6 @@ class InterpretedFunction:
     @property
     def __name__(self):
         return self.fn.__name__
-
-    def __getitem__(self, grid):
-        return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call

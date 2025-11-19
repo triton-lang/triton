@@ -212,19 +212,42 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-    auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
-    auto elemType = ttng::getTMAElementType(nullptr, descTy);
-    assert(swizzle.has_value());
-    assert(elemType.has_value());
-    auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+
     py::dict metadata;
-    metadata["swizzle"] = *swizzle;
-    metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
-    metadata["elem_type"] = *elemType;
-    metadata["block_size"] =
-        std::vector<int>(blockSize.begin(), blockSize.end());
-    metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
+      auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+      auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
+      auto elemType = ttng::getTMAElementType(nullptr, descTy);
+      assert(swizzle.has_value());
+      assert(elemType.has_value());
+      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+      metadata["swizzle"] = *swizzle;
+      metadata["elem_size"] =
+          descTy.getBlockType().getElementTypeBitWidth() / 8;
+      metadata["elem_type"] = *elemType;
+      metadata["block_size"] =
+          std::vector<int>(blockSize.begin(), blockSize.end());
+      metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    } else {
+      auto blockShape = blockType.getShape();
+      metadata["block_size"] =
+          std::vector<int>(blockShape.begin(), blockShape.end());
+      metadata["elem_bits"] = blockType.getElementTypeBitWidth();
+
+      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+        py::list intervalPaddingPairs;
+        for (auto [interval, padding] : llvm::zip_equal(
+                 paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
+          py::list pair;
+          pair.append(interval);
+          pair.append(padding);
+          intervalPaddingPairs.append(pair);
+        }
+        metadata["interval_padding_pairs"] = intervalPaddingPairs;
+
+        auto blockShape = blockType.getShape();
+      }
+    }
     result.append(std::move(metadata));
   }
   return result;
@@ -1528,18 +1551,6 @@ void init_triton_ir(py::module &&m) {
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);
-           })
-      .def("create_cat",
-           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
-             auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
-             if (!(lhsType.getShape().size() == 1 &&
-                   rhsType.getShape().size() == 1))
-               throw std::invalid_argument(
-                   "shape not supported by cat. Expecting rank-1 inputs");
-             std::vector<int64_t> shape{lhsType.getShape()[0] +
-                                        rhsType.getShape()[0]};
-             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {

@@ -132,8 +132,8 @@ def compile_kernel(args: CompileArgs):
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
-    src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-
+    kernel.create_binder()
+    src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
         if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
@@ -192,6 +192,7 @@ def compile_kernel(args: CompileArgs):
         "gridY": grid[1],
         "gridZ": grid[2],
         "_placeholder": "",
+        "warp_size": target.warp_size,
     }
     output_files = []
     backend_name = target.backend
