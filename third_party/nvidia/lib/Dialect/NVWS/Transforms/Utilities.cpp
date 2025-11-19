@@ -27,10 +27,7 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
 }
 
 int getArefDepth(MemDescType bufTy) {
-  auto shape = bufTy.getShape();
-  return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding())
-             ? 1
-             : shape[0];
+  return bufTy.getShape()[0];
 }
 
 MemDescType getArefViewBufferType(MemDescType bufTy) {

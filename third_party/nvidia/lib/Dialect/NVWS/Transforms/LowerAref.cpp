@@ -689,7 +689,8 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 
     bool eligible = true;
     for (auto opnd : arefOp.getOperands()) {
-      if (!opnd.getDefiningOp() || !isTMEMAllocScale(opnd.getDefiningOp())) {
+      if (!opnd.getDefiningOp() || (isa<TMEMAllocOp>(opnd.getDefiningOp()) &&
+                                    !isTMEMAllocScale(opnd.getDefiningOp()))) {
         eligible = false;
       }
     }
