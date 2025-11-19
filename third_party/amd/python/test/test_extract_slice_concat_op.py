@@ -6,8 +6,6 @@ import triton
 
 from triton._internal_testing import is_hip
 
-num_ctas_list = [1]
-
 GPU_DIALECT = "ttg"
 
 if is_hip():
@@ -168,7 +166,7 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
         pytest.skip("concat op is AMD specific instruction.")
 
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[16, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[16, 4], warpsPerCTA=[4, 1], order=[1, 0]}}>
     #src_layout = {src_layout}
     #dst_layout = {dst_layout}
 

@@ -740,9 +740,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {1, 1}
-  CTASplitNum = {1, 1}
+  blocked = {{0, 1}}
 }>
 
 Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) as follows:
@@ -766,9 +764,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {1, 1}
-  CTASplitNum = {1, 1}
+  blocked = {{0, 1}}
 }>
 
 Example 3, A row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) and
@@ -796,9 +792,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {2, 2}
-  CTASplitNum = {2, 2}
+  blocked = {{0, 1}, {1, 0}}
 }>
 }];
 
