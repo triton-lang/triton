@@ -13,6 +13,8 @@ class HopperMXScaleLayout(Layout):
     name: str = "HOPPER_SCALE"
 
     def __init__(self, shape, mx_axis, num_warps=8) -> None:
+        if mx_axis is not None and mx_axis < 0:
+            mx_axis += len(shape)
         assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
         super().__init__(shape)
         self.mx_axis = mx_axis
@@ -70,6 +72,8 @@ def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constex
     """
     Triton inverse of swizzle_mxfp4_scale_hopper
     """
+    if mx_axis is not None and mx_axis < 0:
+        mx_axis += len(x.shape)
     tl.static_assert(len(x.shape) == 2, "NYI")
     # implementation assumes mxfp data is packed along the last dimension
     x = x.trans() if mx_axis == 0 else x
