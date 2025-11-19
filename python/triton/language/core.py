@@ -1790,7 +1790,10 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param reorder: Deprecated option. Elements are never reordered.
+    :param can_reorder: Deprecated option. Elements are never reordered.
+    :type can_reorder: bool
+    :param dim: The dimension to concatenate along.
+    :type dim: int
     """
     rank = len(input.shape)
     assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
