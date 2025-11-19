@@ -136,8 +136,7 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
 # test concat op
 # -----------------------
 
-cta_layout = [[1, 1], [1, 1], [0, 1]]
-blocked_32x32 = BlockedLayout([2, 2], [8, 8], [2, 2], [0, 1], *cta_layout)
+blocked_32x32 = BlockedLayout([2, 2], [8, 8], [2, 2], [0, 1])
 broadcasted_32x32 = LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4],
                                                                           [0, 8]], warp=[[16, 0], [0, 16]], block=[])
 
