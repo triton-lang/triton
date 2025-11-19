@@ -157,6 +157,13 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
     }
+    auto isSubview = shape.size() < allocShape.size();
+    auto rank = cast<LayoutEncodingTrait>(enc).getRank();
+    if (!(!isSubview && (rank == shape.size() || rank == shape.size() - 1) ||
+          (isSubview && rank == shape.size()))) {
+      return emitError() << "rank must be equal to the shape size "
+                         << "perhaps with a pipelining dimension.";
+    }
   } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                  encoding)) {
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
