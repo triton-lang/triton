@@ -86,8 +86,7 @@ class AMDMFMALayout(DistributedLayout):
         assert self.element_bitwidth in [32, 64], "element bitwidth must be 32 or 64"
 
         rank = len(self.warps_per_cta)
-        if self.cga_layout:
-            assert all(len(vec) == rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
+        assert all(len(vec) == rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
 
     def __hash__(self):
         return hash((
@@ -171,8 +170,7 @@ class AMDWMMALayout(DistributedLayout):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
 
         rank = len(self.warps_per_cta)
-        if self.cga_layout:
-            assert all(len(vec) == rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
+        assert all(len(vec) == rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
 
     def __hash__(self):
         return hash((

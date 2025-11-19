@@ -268,7 +268,7 @@ class tensor_memory_descriptor(base_value):
             (layout.block[0], min(layout.block[1], length)),
             layout.col_stride,
             layout.cta_split_num,
-            two_ctas=layout.two_ctas,
+            layout.two_ctas,
         )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder

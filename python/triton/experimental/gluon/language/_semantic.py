@@ -32,11 +32,6 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
 
     if cga_layout is None:
         cga_layout = []
-    else:
-        normalized_layout = []
-        for basis in cga_layout:
-            normalized_layout.append([int(v) for v in basis])
-        cga_layout = normalized_layout
     splitn = instr_variant == "32x32b_splitn"
     atom_variant = "32x32b" if splitn else instr_variant
 

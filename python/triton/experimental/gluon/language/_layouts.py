@@ -319,21 +319,22 @@ class SharedLayout:
 
 @constexpr_function
 def _get_shape_per_cta(shape, cga_layout):
-    shape_per_cta = shape
-    if cga_layout:
-        rank = len(cga_layout[0])
-        cga_shape = [1] * rank
-        for basis in cga_layout:
-            assert len(basis) == rank
-            for i in range(rank):
-                cga_shape[i] = max(cga_shape[i], basis[i])
-        # The shape is the largest stride * 2
+    if not cga_layout:
+        return shape
+    shape_per_cta = list(shape)
+    rank = len(cga_layout[0])
+    cga_shape = [1] * rank
+    for basis in cga_layout:
+        assert len(basis) == rank
         for i in range(rank):
-            cga_shape[i] *= 2
-        for dim in range(rank):
-            assert shape_per_cta[dim] % cga_shape[dim] == 0, f"Shape {shape} is not divisible by CGA layout {cga_layout}"
-            shape_per_cta[dim] //= cga_shape[dim]
-    return cga_shape
+            cga_shape[i] = max(cga_shape[i], basis[i])
+    # The shape is the largest stride * 2
+    for i in range(rank):
+        cga_shape[i] *= 2
+    for dim in range(rank):
+        assert shape_per_cta[dim] % cga_shape[dim] == 0, f"Shape {shape} is not divisible by CGA layout {cga_layout}"
+        shape_per_cta[dim] //= cga_shape[dim]
+    return shape_per_cta
 
 
 @dataclass(frozen=True)
