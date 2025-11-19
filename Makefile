@@ -82,6 +82,8 @@ test-python: test-unit test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
+	$(PYTEST) python/test/gluon/test_frontend.py
+	$(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python
