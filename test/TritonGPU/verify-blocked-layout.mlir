@@ -50,10 +50,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1],
-    CTAsPerCGA=[1, 1],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,

@@ -66,11 +66,31 @@ namespace {
 
 // ----------------------------------------------------------------------------
 
+struct PartitionWsTagIds {
+  std::optional<int> wsTag;
+  SetVector<int> partitionIds;
+};
+std::optional<PartitionWsTagIds> getPartitionWsTagIds(Operation *op) {
+  std::optional<PartitionWsTagIds> partitionWsTagIds;
+  if (hasPartition(op)) {
+    partitionWsTagIds =
+        PartitionWsTagIds{std::nullopt, triton::gpu::getPartitionIds(op)};
+    if (auto wsTag = getWarpSpecializeTag(op)) {
+      partitionWsTagIds->wsTag = *wsTag;
+    }
+  }
+  return partitionWsTagIds;
+}
+
 using PartitionSet = SetVector<int>;
-void assignStageCluster(Operation *op, std::optional<PartitionSet> partitionIds,
+void assignStageCluster(Operation *op,
+                        std::optional<PartitionWsTagIds> partitionWsTagIds,
                         StageCluster stageCluster, OpBuilder &builder) {
-  if (partitionIds) {
-    setPartition(op, *partitionIds);
+  if (partitionWsTagIds) {
+    setPartition(op, partitionWsTagIds->partitionIds);
+    if (auto wsTag = partitionWsTagIds->wsTag) {
+      setWarpSpecializeTag(op, *wsTag);
+    }
     setStageCluster(builder, op, stageCluster);
   }
 }
@@ -109,19 +129,21 @@ struct ArefValue {
 };
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
-                      Value stage, std::optional<PartitionSet> partitionIds,
+                      Value stage,
+                      std::optional<PartitionWsTagIds> partitionWsTagIds,
                       StageCluster stageCluster) {
   auto barrier = createSingleBufferView(rewriter, aref.emptyMbars, stage);
-  assignStageCluster(barrier.getDefiningOp(), partitionIds, stageCluster,
+  assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
 }
 
 Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
-                     Value stage, std::optional<PartitionSet> partitionIds,
+                     Value stage,
+                     std::optional<PartitionWsTagIds> partitionWsTagIds,
                      StageCluster stageCluster) {
   auto barrier = createSingleBufferView(rewriter, aref.fullMbars, stage);
-  assignStageCluster(barrier.getDefiningOp(), partitionIds, stageCluster,
+  assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
 }
@@ -144,17 +166,17 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
-    auto partitionIds = getPartitionIds(user);
-    if (!partitionIds)
+    if (!hasPartition(user))
       continue;
+    auto partitionIds = getPartitionIds(user);
 
-    assert(partitionIds->size() == 1);
+    assert(partitionIds.size() == 1);
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (producerGroups.count(partitionIds->front())) {
+      if (producerGroups.count(partitionIds.front())) {
         continue;
       }
-      producerGroups.insert(partitionIds->front());
+      producerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -167,10 +189,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds->front())) {
+      if (consumerGroups.count(partitionIds.front())) {
         continue;
       }
-      consumerGroups.insert(partitionIds->front());
+      consumerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -234,10 +256,10 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
                    op.getOperands()};
 }
 
-SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
-                               OpBuilder &rewriter,
-                               std::optional<PartitionSet> partitionIds,
-                               StageCluster stageCluster) {
+SmallVector<Value>
+getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
+            std::optional<PartitionWsTagIds> partitionWsTagIds,
+            StageCluster stageCluster) {
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
@@ -253,7 +275,8 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
           memDescType.getMemorySpace(), true);
       auto singleBuffer =
           MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
-      assignStageCluster(singleBuffer, partitionIds, stageCluster, rewriter);
+      assignStageCluster(singleBuffer, partitionWsTagIds, stageCluster,
+                         rewriter);
       views.push_back(singleBuffer);
     }
   }
@@ -267,16 +290,26 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       rewriter, op.getLoc(),
       op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
   for (auto [newIdx, oldIdx] : llvm::zip(indices, op.getIndices())) {
+    // translateTMAIndices may create ops, we need to annotated them
     if (newIdx != oldIdx) {
-      assignStageCluster(newIdx.getDefiningOp(), getPartitionIds(op),
-                         getStageCluster(op), rewriter);
+      auto partitionIds = getPartitionWsTagIds(op);
+      auto stageCluster = getStageCluster(op);
+      assignStageCluster(newIdx.getDefiningOp(), partitionIds, stageCluster,
+                         rewriter);
+      for (auto val : newIdx.getDefiningOp()->getOperands()) {
+        if (auto op = val.getDefiningOp()) {
+          if (!hasPartition(op)) {
+            assignStageCluster(op, partitionIds, stageCluster, rewriter);
+          }
+        }
+      }
     }
   }
   auto newLoadOp =
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
           pred);
-  assignStageCluster(newLoadOp, getPartitionIds(op), getStageCluster(op),
+  assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
 
@@ -286,7 +319,7 @@ void createTMAGather(triton::nvws::DescriptorGatherOp op,
   auto newGatherOp = triton::nvidia_gpu::AsyncTMAGatherOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred);
-  assignStageCluster(newGatherOp, getPartitionIds(op), getStageCluster(op),
+  assignStageCluster(newGatherOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 }
 
@@ -309,10 +342,12 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   if (loadOps.empty())
     return;
 
-  Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+  auto pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+  assignStageCluster(pred, getPartitionWsTagIds(op), getStageCluster(op),
+                     rewriter);
   auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
       rewriter, loc, fullBarrier, txCount, pred);
-  assignStageCluster(expectOp, getPartitionIds(op), getStageCluster(op),
+  assignStageCluster(expectOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 
   for (auto loadOp : loadOps) {
@@ -332,7 +367,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
-  assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op),
+  assignStageCluster(waitOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 }
 
@@ -345,11 +380,11 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   // get empty barrier at a given stage
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
-                      getPartitionIds(op), getStageCluster(op));
+                      getPartitionWsTagIds(op), getStageCluster(op));
 
   insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   // Use the token to find the matching enter / exit pair
@@ -379,7 +414,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
         getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                       getPartitionIds(op), getStageCluster(op));
+                       getPartitionWsTagIds(op), getStageCluster(op));
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
@@ -415,11 +450,12 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
-  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                                     getPartitionIds(op), getStageCluster(op));
+  Value fullBarrier =
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
@@ -435,7 +471,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
   for (int i = 0; i < op.getBuffers().size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
@@ -443,7 +479,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                          PatternRewriter &rewriter, Value mbar,
-                         std::optional<SetVector<int>> partitionIds,
+                         std::optional<PartitionWsTagIds> partitionWsTagIds,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
@@ -464,7 +500,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
       llvm_unreachable("unknown async op");
     }
     if (arriveOp)
-      assignStageCluster(arriveOp, partitionIds, stageCluster, rewriter);
+      assignStageCluster(arriveOp, partitionWsTagIds, stageCluster, rewriter);
   }
 }
 
@@ -504,13 +540,15 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
-    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+    assignStageCluster(fence, getPartitionWsTagIds(op), stageCluster, rewriter);
   }
 
-  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                                     getPartitionIds(op), getStageCluster(op));
+  Value fullBarrier =
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionIds(op), getStageCluster(op));
+                      fullBarrier, getPartitionWsTagIds(op),
+                      getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -541,22 +579,21 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
-    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+    assignStageCluster(fence, getPartitionWsTagIds(op), stageCluster, rewriter);
   }
 
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
-                      getPartitionIds(op), getStageCluster(op));
+                      getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      getPartitionIds(op), stageCluster);
+                      getPartitionWsTagIds(op), stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   DenseSet<MMAv5OpInterface> mmav5Ops;
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
-      auto id = getPartitionIds(getEnter);
-      if (id && id->front() == 0) {
+      if (hasPartition(getEnter) && getPartitionIds(getEnter).front() == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
@@ -713,6 +750,8 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
 
   builder.setInsertionPointAfter(aref);
   auto zero = arith::ConstantIntOp::create(builder, aref.getLoc(), 0, 32);
+  assignStageCluster(zero, getPartitionWsTagIds(firstEnter),
+                     getStageCluster(firstEnter), builder);
 
   if (combinedEnterInsertPoint) {
     // Combined get enter must be placed after combined put enter
@@ -723,7 +762,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedEnter =
       EnterOp::create(builder, firstEnter.getLoc(), arefEnterBuffers,
                       builder.getType<AsyncTokenType>(), aref, zero, zero);
-  assignStageCluster(combinedEnter, getPartitionIds(firstEnter),
+  assignStageCluster(combinedEnter, getPartitionWsTagIds(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
@@ -732,7 +771,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedExit = ExitOp::create(builder, firstEnter.getLoc(), aref,
                                      combinedEnter.getToken(), zero,
                                      builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(combinedExit, getPartitionIds(lastExit),
+  assignStageCluster(combinedExit, getPartitionWsTagIds(lastExit),
                      getStageCluster(lastExit), builder);
 
   std::function<void(Operation *, Operation *)> moveUserAfter =
@@ -793,9 +832,10 @@ void combineArefs(scf::ForOp loop) {
   for (auto getEnterOp : getEnterOps) {
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
+      assert(hasPartition(getEnterOp));
       auto partitionIds = getPartitionIds(getEnterOp);
-      assert(partitionIds && partitionIds->size() == 1);
-      liveBeforeGroups[{liveBeforeOp, partitionIds->front()}].push_back(
+      assert(partitionIds.size() == 1);
+      liveBeforeGroups[{liveBeforeOp, partitionIds.front()}].push_back(
           getEnterOp);
     }
   }
@@ -818,7 +858,7 @@ void combineArefs(scf::ForOp loop) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getPartitionIds(putEnterOp)->front());
+          producerGroupIds.push_back(getPartitionIds(putEnterOp).front());
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
@@ -868,6 +908,11 @@ void combineArefs(scf::ForOp loop) {
   }
 }
 
+void hoistPoissonOps(triton::FuncOp funcOp) {
+  SmallVector<ub::PoisonOp> poisonOps;
+  auto block = &funcOp.getBody().front();
+  funcOp.walk([&](ub::PoisonOp op) { op->moveBefore(&block->front()); });
+}
 } // anonymous namespace
 
 class NVWSLowerAref : public impl::NVWSLowerArefBase<NVWSLowerAref> {
@@ -905,8 +950,14 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context);
     GreedyRewriteConfig config;
+    config.enableConstantCSE(false);
+    config.enableFolding(false);
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
       signalPassFailure();
+
+    // Hoist all poison ops to the top of function from nvws.wg regions.
+    // They are unannotated and will trip subsequent passes, same to hoist.
+    m.walk([&](triton::FuncOp funcOp) { hoistPoissonOps(funcOp); });
   }
 }; // namespace triton
 

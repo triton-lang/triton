@@ -300,8 +300,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 16]], warp = [[16, 0], [32, 0], [0, 32]], block = []}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [2, 1, 0]}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [2, 1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, rank = 3}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
 
@@ -339,6 +339,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       }
       // CHECK-NEXT: } else {
       // CHECK-NEXT: scf.yield {ttg.partition = array<i32: 0>}
+      // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
+      "use"(%23) : (tensor<128x64xbf16, #blocked>) -> ()
+      // CHECK: "use"
+      // CHECK-NEXT ttg.warp_specialize.tag = 0 : i32
+    } {tt.warp_specialize = true}
+
+    // CHECK: scf.for
+    scf.for %arg3 = %lb to %ub step %step : i32 {
+      %20 = tt.descriptor_load %arg1[%a0, %b0, %c0_i32] : !tt.tensordesc<tensor<1x128x64xbf16, #shared>> -> tensor<128x64xbf16, #blocked>
+      %22 = arith.cmpi sge, %arg3, %c3_i32 : i32
+      %23 = scf.if %22 -> (tensor<128x64xbf16, #blocked>) {
+        %32 = arith.muli %arg3, %c128_i32 {ttg.partition = array<i32: 0>} : i32
+        %36 = tt.splat %32 {ttg.partition = array<i32: 0>} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+        %38 = arith.cmpi slt, %36, %cst {ttg.partition = array<i32: 0>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+        %39 = tt.expand_dims %38 {axis = 1 : i32, ttg.partition = array<i32: 0>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+        %40 = tt.broadcast %39 {ttg.partition = array<i32: 0>} : tensor<128x1xi1, #blocked> -> tensor<128x64xi1, #blocked>
+        %41 = arith.select %40, %20, %cst_1 : tensor<128x64xi1, #blocked>, tensor<128x64xbf16, #blocked>
+        scf.yield %41 : tensor<128x64xbf16, #blocked>
+      } else {
+        scf.yield %20 : tensor<128x64xbf16, #blocked>
+      }
+      "use"(%23) : (tensor<128x64xbf16, #blocked>) -> ()
+      // CHECK: "use"
+      // CHECK-NEXT: ttg.warp_specialize.tag = 1 : i32
+    } {tt.warp_specialize = true}
+
+
+    // CHECK: scf.for
+    scf.for %arg4 = %lb to %ub step %step : i32 {
+      %20 = tt.descriptor_load %arg1[%a0, %b0, %c0_i32] : !tt.tensordesc<tensor<1x128x64xbf16, #shared>> -> tensor<128x64xbf16, #blocked>
+      %22 = arith.cmpi sge, %arg4, %c3_i32 : i32
+      // CHECK: scf.if
+      %23 = scf.if %22 -> (tensor<128x64xbf16, #blocked>) {
+        scf.yield %20 : tensor<128x64xbf16, #blocked>
+        // CHECK: scf.yield {ttg.partition = array<i32: 0>}
+        // CHECK-NEXT: } else {
+      } else {
+        %32 = arith.muli %arg4, %c128_i32 {ttg.partition = array<i32: 0>} : i32
+        %36 = tt.splat %32 {ttg.partition = array<i32: 0>} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+        %38 = arith.cmpi slt, %36, %cst {ttg.partition = array<i32: 0>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+        %39 = tt.expand_dims %38 {axis = 1 : i32, ttg.partition = array<i32: 0>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+        %40 = tt.broadcast %39 {ttg.partition = array<i32: 0>} : tensor<128x1xi1, #blocked> -> tensor<128x64xi1, #blocked>
+        //  CHECK: arith.select {{.*}} {ttg.partition = array<i32: 0>} {{.*}}
+        //  CHECK-NEXT: scf.yield {ttg.partition = array<i32: 0>}
+        %41 = arith.select %40, %20, %cst_1 : tensor<128x64xi1, #blocked>, tensor<128x64xbf16, #blocked>
+        scf.yield %41 : tensor<128x64xbf16, #blocked>
+      }
       // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
       "use"(%23) : (tensor<128x64xbf16, #blocked>) -> ()
     } {tt.warp_specialize = true}

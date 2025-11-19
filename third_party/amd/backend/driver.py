@@ -342,6 +342,11 @@ static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
   FOR_EACH_STR_FN(hipGetLastError)                                            \\
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                     \\
+  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx,                                       \\
+                  const HIP_LAUNCH_CONFIG *config,                            \\
+                  hipFunction_t f,                                            \\
+                  void **kernelParams,                                        \\
+                  void **extra)                                               \\
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                     \\
                   unsigned int gridDimX, unsigned int gridDimY,               \\
                   unsigned int gridDimZ, unsigned int blockDimX,              \\
@@ -440,14 +445,37 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  if (gridX * gridY * gridZ == 0)
+    return;
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
-  if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
+  if(num_ctas > 1) {{
+    hipLaunchAttribute attributes[2];
+    // Attribute0: Cluster dimensions
+    attributes[0].id = 4;
+    int *cluster_dims = (int*)attributes[0].val.pad;
+    cluster_dims[0] = num_ctas;
+    cluster_dims[1] = 1;
+    cluster_dims[2] = 1;
+    // Attribute1: Cooperative launch
+    attributes[1].id = hipLaunchAttributeCooperative;
+    attributes[1].val.cooperative = launch_cooperative_grid;
+
+    HIP_LAUNCH_CONFIG config = {{
+        gridX * num_ctas, gridY, gridZ, // Grid size
+        {warp_size} * num_warps, 1, 1, // Block size
+        shared_memory, stream,
+        attributes, 2 // Number of attributes
+    }};
+    HIP_CHECK(hipSymbolTable.hipDrvLaunchKernelEx(&config, function, params, 0));
+    return;
+  }}
+  else if (launch_cooperative_grid) {{
     HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     return;
   }}
-  if (gridX*gridY*gridZ > 0) {{
+  else {{
     HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
@@ -548,8 +576,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {' '.join(float_storage_decls)}
 
   // extract kernel metadata
-  int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
-  if (!PyArg_ParseTuple(kernel_metadata, \"iiiiii\", &num_warps, &num_ctas, &shared_memory, &clusterDimX, &clusterDimY, &clusterDimZ)) {{
+  int num_warps, num_ctas, shared_memory;
+  if (!PyArg_ParseTuple(kernel_metadata, \"iii\", &num_warps, &num_ctas, &shared_memory)) {{
     return NULL;
   }}
   // extract launch metadata
@@ -571,7 +599,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, (hipDeviceptr_t)profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, (hipDeviceptr_t)profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);

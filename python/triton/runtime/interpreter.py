@@ -32,6 +32,11 @@ class TensorHandle:
     dtype: tl.dtype
     attr: Dict = dataclasses.field(default_factory=dict)
 
+    def __post_init__(self):
+        if not _validate_np_data_size(self.data, self.dtype):
+            raise ValueError(f"numpy data itemsize ({self.data.itemsize * 8} bits) exceeds dtype primitive_bitwidth "
+                             f"({self.dtype.primitive_bitwidth} bits) for triton type {self.dtype}")
+
     def __bool__(self):
         return bool(self.data.all())
 
@@ -91,8 +96,11 @@ class TensorDescHandle:
         assert len(self.block_shape) == self.ndim
         assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
+        scalar_ty = self.base.dtype.element_ty
+        itemsize = scalar_ty.primitive_bitwidth // 8
         for stride in self.strides[:-1]:
-            assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
+            byte_stride = stride.data.item() * itemsize
+            assert byte_stride % 16 == 0, "stride must be 16-byte aligned"
         assert self.strides[-1].data.item() == 1, "last dim must be contiguous"
 
     def materialize_pointers(self, offsets: List[TensorHandle]):
@@ -126,6 +134,22 @@ class InterpreterOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
+
+
+def _validate_np_data_size(np_array, tl_dtype):
+    if isinstance(tl_dtype, tl.pointer_type):
+        return True
+
+    np_dtype_bitwidth = np_array.itemsize * 8
+    tl_dtype_bitwidth = tl_dtype.primitive_bitwidth
+
+    # numpy lowest itemsize is at least 8 bits
+    if tl_dtype_bitwidth < 8:
+        tl_dtype_bitwidth = 8
+
+    if np_dtype_bitwidth > tl_dtype_bitwidth:
+        return False
+    return True
 
 
 def _get_signed_np_dtype(dtype):
@@ -460,7 +484,13 @@ class InterpreterBuilder:
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype.scalar)
+        output = op(lhs.data, rhs.data)
+        tl_dtype = lhs.dtype.scalar
+
+        if not _validate_np_data_size(output, tl_dtype):
+            output = output.astype(_get_np_dtype(tl_dtype))
+
+        return TensorHandle(output, tl_dtype)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -541,7 +571,13 @@ class InterpreterBuilder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype.scalar)
+        output = op(lhs.data, rhs.data, other.data)
+        tl_dtype = other.dtype.scalar
+
+        if not _validate_np_data_size(output, tl_dtype):
+            output = output.astype(_get_np_dtype(tl_dtype))
+
+        return TensorHandle(output, tl_dtype)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)

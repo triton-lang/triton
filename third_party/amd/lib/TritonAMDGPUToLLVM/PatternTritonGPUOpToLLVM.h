@@ -59,6 +59,10 @@ void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns);
 void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
+
+void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     PatternBenefit benefit);
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_

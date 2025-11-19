@@ -116,6 +116,7 @@ def make_tensor_descriptor(
     _semantic=None,
 ) -> tensor_descriptor:
     padding_option = _unwrap_if_constexpr(padding_option)
+    block_shape = _unwrap_if_constexpr(block_shape)
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):

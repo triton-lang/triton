@@ -2096,6 +2096,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_k_pack: bool, optional
     """
     out_dtype = _unwrap_if_constexpr(out_dtype)
+    acc = _unwrap_if_constexpr(acc)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2799,6 +2800,8 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
 
