@@ -305,6 +305,9 @@ bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
 
+std::optional<ConstantIntRanges> getBoundFromCmpOp(arith::CmpIOp cmpOp,
+                                                   Value anchor);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
