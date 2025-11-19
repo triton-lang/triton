@@ -1245,7 +1245,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.join %3, %4 : tensor<4xi32> -> tensor<4x2xi32>
     // expected-remark@+2 {{unsigned : [0, 7] signed : [0, 7]}}
     // expected-remark@+1 {{non-neg}}
-    %6 = tt.cat %5, %5 : tensor<4x2xi32> -> tensor<8x2xi32>
+    %tmp = tt.join %5, %5 : tensor<4x2xi32> -> tensor<4x2x2xi32>
+    %6 = tt.reshape %tmp : tensor<4x2x2xi32> -> tensor<8x2xi32>
     // expected-remark@+2 {{unsigned : [0, 16] signed : [0, 16]}}
     // expected-remark@+1 {{non-neg}}
     %7 = arith.addi %2, %6 : tensor<8x2xi32>
