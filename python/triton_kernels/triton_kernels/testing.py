@@ -325,5 +325,6 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
                 mx_axis=mxfp_dim, num_warps=8)
             scales = convert_layout(scales, scale_layout, **scale_layout_opts)
+            print(scales.storage.data.shape)
             print(scales.storage.data.stride())
     return buffer, scales, ragged_metadata
