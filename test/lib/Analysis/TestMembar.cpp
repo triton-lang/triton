@@ -13,11 +13,6 @@ struct TestMembarPass
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMembarPass);
 
-  TestMembarPass() = default;
-  TestMembarPass(const TestMembarPass &other) : PassWrapper(other) {
-    printIntervals = other.printIntervals.getValue();
-  }
-
   StringRef getArgument() const final { return "test-print-membar"; }
   StringRef getDescription() const final {
     return "print the result of the allocation pass";
@@ -28,22 +23,10 @@ struct TestMembarPass
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-
-    if (printIntervals) {
-      ModuleMembarAnalysisPrint membarPass(
-          &allocation, mlir::triton::NVIDIA::canSkipBarSync);
-      membarPass.run();
-    } else {
-      ModuleMembarAnalysis membarPass(&allocation,
-                                      mlir::triton::NVIDIA::canSkipBarSync);
-      membarPass.run();
-    }
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::NVIDIA::canSkipBarSync);
+    membarPass.run();
   }
-
-  Option<bool> printIntervals{
-      *this, "print-intervals",
-      llvm::cl::desc("Print memory intervals during membar analysis"),
-      llvm::cl::init(false)};
 };
 
 } // namespace
