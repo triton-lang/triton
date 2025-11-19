@@ -34,7 +34,7 @@ class HeaderParser:
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
         # [name, hash, suffix]
-        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
+        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]*)$")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
         # [d|c]
