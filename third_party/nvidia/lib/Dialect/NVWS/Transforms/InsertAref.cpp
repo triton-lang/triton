@@ -1,5 +1,4 @@
 #include "Utilities.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Support/DebugStringHelper.h"
@@ -35,6 +34,22 @@ using namespace triton::nvws;
 struct ProducedValueInfo {
   SetVector<int> partitions;
   Value result;
+};
+
+struct ValueDepthInfo {
+  Value val;
+  int depth = 0;
+};
+
+struct LoopRootInfo {
+  ValueDepthInfo desc;
+  bool isLocal = true;
+};
+
+struct ArefInfo {
+  DenseMap<int, ValueDepthInfo> lastLoad;
+  int storeDepth = 0;
+  ArefCreateOp aref;
 };
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op,
@@ -365,7 +380,9 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
 
 void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
                    const SetVector<Value> &results, int consumerPartition,
-                   SmallVector<OpOperand *> &uses) {
+                   SmallVector<OpOperand *> &uses,
+                   DenseMap<Value, ArefInfo> &arefs,
+                   std::optional<LoopRootInfo> root = std::nullopt) {
   OpBuilder::InsertionGuard g(builder);
   // The vector "results" contains either
   // 1. One of local_load(desc_load()) or desc_load()
@@ -390,7 +407,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
     }
   };
   auto [stageClusterEnter, stageClusterExit] =
-      getEnterAndExitStageClustersOfUses(results, filterUse, scheduledLoop);
+      getEnterAndExitStageClustersOfUses(results, filterUse, loop);
 
   SetVector<int> consumerPartitions;
   consumerPartitions.insert(consumerPartition);
@@ -409,6 +426,19 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
 
   Operation *exitInsertPointAfter = nullptr;
 
+  auto cacheLoad = [&](Value result, Value load) {
+    if (!root) {
+      auto defOp = result.getDefiningOp();
+      bool isLocal = defOp && defOp->getBlock() == loop.getBody();
+      root = LoopRootInfo{{result, 0}, isLocal};
+    }
+    if (root->isLocal) { // Only cache loads from the same scope.
+      arefs[root->desc.val].lastLoad[consumerPartition] =
+          ValueDepthInfo{load, root->desc.depth};
+      arefs[root->desc.val].aref = aref;
+    }
+  };
+
   auto replaceUsesWithLocalLoad = [&](Value result, StageCluster stageCluster) {
     auto localLoadOp = triton::gpu::createInto<LocalLoadOp>(
         builder, loc, consumerPartitions, stageCluster, result.getType(),
@@ -425,6 +455,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
       // after local load.
       exitInsertPointAfter = localLoadOp;
     }
+    cacheLoad(result, localLoadOp.getResult());
   };
 
   for (auto result : results) {
@@ -447,6 +478,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
         use->set(scalar);
       }
       exitInsertPointAfter = localLoadOp;
+      cacheLoad(result, localLoadOp.getResult());
     } else {
       std::string msg = "createArefGet: unsupported produced value type: " +
                         mlir::debugString(result.getType());
@@ -477,7 +509,9 @@ Operation *getEarliestUserInBlock(Block *block, ArrayRef<OpOperand *> uses) {
 }
 
 bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
-                 ProducedValueInfo producedValue) {
+                 ProducedValueInfo producedValue,
+                 DenseMap<Value, ArefInfo> &arefs,
+                 std::optional<LoopRootInfo> root = std::nullopt) {
   // Collect uses of local_alloc(desc_load()) or desc_load() results by each
   // partition
   DenseMap<int, SetVector<Value>> resultsPerPartition;
@@ -527,7 +561,7 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
         getEarliestUserInBlock(block, usesPerPartition[consumerPartition]);
     builder.setInsertionPoint(earliestUser);
     createArefGet(builder, loop, aref, results, consumerPartition,
-                  usesPerPartition[consumerPartition]);
+                  usesPerPartition[consumerPartition], arefs, root);
   }
 
   for (auto op : staleOps) {
@@ -537,7 +571,93 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
   return true;
 }
 
-} // namespace
+void rewriteArg(Value arg, int index, Value root, int depth, bool isLocal,
+                DenseMap<Value, LoopRootInfo> &parsedArgs, scf::ForOp &forOp,
+                DenseMap<Value, ArefInfo> &arefs) {
+  LoopRootInfo rootInfo{{root, depth}, isLocal};
+  parsedArgs.insert({arg, rootInfo});
+  auto partitionOutputs = getPartitionOutputs(forOp);
+
+  // Collect cross-partition uses.
+  auto usesPerPartition = DenseMap<int, SmallVector<OpOperand *>>();
+  for (auto &use : arg.getUses()) {
+    Operation *op = use.getOwner();
+    if (!op || isa<scf::YieldOp>(op))
+      continue;
+    auto userPartitions = getPartitionIds(op);
+    for (auto id : userPartitions) {
+      if (!partitionOutputs[index].contains(id))
+        usesPerPartition[id].push_back(&use);
+    }
+  }
+
+  // Create the store and load ops for uncached values.
+  if (!usesPerPartition.empty() && !arefs.contains(root)) {
+    ProducedValueInfo producedValue{partitionOutputs[index], arg};
+    OpBuilder builder(forOp);
+    builder.setInsertionPointToStart(forOp.getBody());
+    insertArefs(builder, forOp, forOp.getBody(), producedValue, arefs,
+                rootInfo);
+
+    if (arefs.contains(root)) { // Out-of-scope consumptions won't be cached.
+      arefs[root].storeDepth = depth;
+    }
+    return;
+  }
+
+  for (auto [id, uses] : usesPerPartition) {
+    auto arefInfo = arefs[root];
+    // Load unloaded values at the same depth as other consumer loads.
+    if (!arefInfo.lastLoad.contains(id)) {
+      OpBuilder builder(forOp);
+      if (depth == arefInfo.storeDepth) {
+        builder.setInsertionPoint(
+            getEarliestUserInBlock(arg.getParentBlock(), uses));
+      } else {
+        builder.setInsertionPoint(forOp.getBody()->getTerminator());
+      }
+      auto results = SetVector<Value>();
+      results.insert(arg);
+      auto emptyUses = SmallVector<OpOperand *>(); // Will replace uses below.
+      LoopRootInfo rootLoadInfo{{root, arefs[root].storeDepth}, isLocal};
+      createArefGet(builder, forOp, arefInfo.aref, results, id, emptyUses,
+                    arefs, rootLoadInfo);
+    }
+    // Add loop carries to buffer between load iteration and use iteration.
+    if (int dist = depth - arefs[root].lastLoad[id].depth; dist > 0) {
+      OpBuilder rewriter(forOp.getContext());
+      SmallVector<Value> initVals;
+      Value init = forOp.getInitArgs()[index];
+      auto newOutputPartitions = SetVector<int>();
+      newOutputPartitions.insert(id);
+      for (int i = 0; i < dist; i++) {
+        initVals.push_back(init); // Intermediate carries will have no uses.
+        partitionOutputs.push_back(newOutputPartitions);
+      }
+      setPartitionOutputs(forOp, partitionOutputs);
+
+      // The first (dist - 1) new args are carries. The last one is the load.
+      forOp = addIterArgsToLoop(rewriter, forOp, ValueRange{initVals});
+      SmallVector<Value> newYieldOperands = {arefs[root].lastLoad[id].val};
+      auto newArgs =
+          forOp.getRegionIterArgs().take_back(static_cast<size_t>(dist));
+      llvm::append_range(newYieldOperands, newArgs.take_front(dist - 1));
+      appendToForOpYield(forOp, newYieldOperands);
+      arefs[root].lastLoad[id] = ValueDepthInfo{newArgs.back(), depth};
+    }
+    for (auto use : uses) {
+      use->set(arefs[root].lastLoad[id].val);
+    }
+  }
+}
+
+bool isCycle(Value parent, Value child, DenseMap<Value, Value> parents) {
+  for (Value cur = parents.lookup(parent); cur; cur = parents.lookup(cur)) {
+    if (cur == child)
+      return true;
+  }
+  return false;
+};
 
 class NVWSArefInsertion
     : public triton::impl::NVWSInsertArefBase<NVWSArefInsertion> {
@@ -551,22 +671,7 @@ public:
     });
 
     for (scf::ForOp loop : loops) {
-      loop.walk([&](scf::ForOp forOp) {
-        // Communicate tensor arguments in iter_args from producer partition in
-        // current iteration to consumer partition in previous iteration or
-        // initial value
-        for (auto arg : forOp.getRegionIterArgs()) {
-          if (isa<RankedTensorType, FloatType, IntegerType>(arg.getType())) {
-            auto producerPartition =
-                getPartitionOutputs(forOp)[arg.getArgNumber() - 1];
-            ProducedValueInfo producedValue{producerPartition, arg};
-            OpBuilder builder(forOp);
-            builder.setInsertionPointToStart(forOp.getBody());
-            insertArefs(builder, loop, forOp.getBody(), producedValue);
-          }
-        }
-      });
-
+      auto arefs = DenseMap<Value, ArefInfo>();
       // To handle cases where desc_load result in registers is used as is in
       // addition to being consumed by local_alloc op, we process
       // local_alloc(desc_load()) first, followed by remaining register uses of
@@ -584,7 +689,7 @@ public:
         auto producedValues = getProducedValues(op, loop.getBody());
         for (auto producedValue : producedValues) {
           OpBuilder builder(op);
-          insertArefs(builder, loop, op->getBlock(), producedValue);
+          insertArefs(builder, loop, op->getBlock(), producedValue, arefs);
         }
       }
 
@@ -597,10 +702,40 @@ public:
         for (auto producedValue : producedValues) {
           OpBuilder builder(op);
           builder.setInsertionPointAfter(op);
-          insertArefs(builder, loop, op->getBlock(), producedValue);
+          insertArefs(builder, loop, op->getBlock(), producedValue, arefs);
         }
         return WalkResult::advance();
       });
+
+      // Handle block arguments by processing parents before children. This way,
+      // no matter how the value propagates, we can ensure that for each value,
+      // there is at most one store per producer, and one load per consumer.
+      auto parsedArgs = DenseMap<Value, LoopRootInfo>();
+      auto parents = DenseMap<Value, Value>();
+      SmallVector<BlockArgument> args(loop.getRegionIterArgs());
+      for (std::size_t head = 0; head < args.size(); ++head) {
+        auto arg = args[head];
+        if (!isa<RankedTensorType, FloatType, IntegerType>(arg.getType())) {
+          continue;
+        }
+        int index = arg.getArgNumber() - 1;
+        auto parent = loop.getYieldedValues()[index];
+        if (!isa<BlockArgument>(parent)) {
+          auto defOp = parent.getDefiningOp();
+          bool isLocal = defOp && defOp->getBlock() == loop.getBody();
+          rewriteArg(arg, index, parent, 1, isLocal, parsedArgs, loop, arefs);
+        } else if (auto it = parsedArgs.find(parent); it != parsedArgs.end()) {
+          auto &info = it->second;
+          rewriteArg(arg, index, info.desc.val, info.desc.depth + 1,
+                     info.isLocal, parsedArgs, loop, arefs);
+        } else if (isCycle(parent, arg, parents)) {
+          // Treat the first arg to create a cycle as the root.
+          rewriteArg(arg, index, arg, 0, false, parsedArgs, loop, arefs);
+        } else {
+          parents.insert({arg, parent});
+          args.push_back(arg);
+        }
+      }
     }
   }
 
@@ -609,5 +744,6 @@ public:
   }
 };
 
+} // namespace
 } // namespace triton
 } // namespace mlir
