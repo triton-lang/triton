@@ -673,6 +673,14 @@ bool isProducerLoad(ArefCreateOp arefOp) {
   return false;
 }
 
+bool isTMEMAllocScale(Operation *op) {
+  if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
+    return isa<TensorMemoryScalesEncodingAttr>(
+        tmemAlloc.getType().getEncoding());
+  }
+  return false;
+}
+
 void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
   SmallVector<Operation *> allocsToErase;
   for (auto arefOp : arefOps) {
@@ -681,7 +689,7 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 
     bool eligible = true;
     for (auto opnd : arefOp.getOperands()) {
-      if (!opnd.getDefiningOp() || isa<TMEMAllocOp>(opnd.getDefiningOp())) {
+      if (!opnd.getDefiningOp() || !isTMEMAllocScale(opnd.getDefiningOp())) {
         eligible = false;
       }
     }
@@ -693,9 +701,10 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
     OpBuilder builder(arefOp);
     for (auto opnd : arefOp.getOperands()) {
       auto oldAlloc = opnd.getDefiningOp();
+      int numBuffers = isTMEMAllocScale(opnd.getDefiningOp()) ? 2 : numStages;
       auto arefBufType = cast<MemDescType>(opnd.getType());
-      arefBufType =
-          getMultiBufferedType(getBufferViewType(arefBufType, true), numStages);
+      arefBufType = getMultiBufferedType(getBufferViewType(arefBufType, true),
+                                         numBuffers);
       Operation *newAlloc = triton::nvws::createAlloc(
           builder, oldAlloc->getLoc(), arefBufType, Value());
       allocOps.push_back(newAlloc->getResult(0));
@@ -814,6 +823,7 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
+// TODO: Need to fix when there are multiple producer partitions
 void combineArefs(scf::ForOp loop) {
   SmallVector<ArefGetEnterOp> getEnterOps;
   loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
@@ -927,9 +937,12 @@ public:
 
     SmallVector<ArefCreateOp> arefOps;
     m.walk([&](ArefCreateOp arefOp) {
+      auto arefType = cast<ArefType>(arefOp.getType());
+      auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
       // Only handles arefs whose producer (a partition with PutEnter / Exit)
       // does load from global to shared memory.
-      if (isProducerLoad(arefOp)) {
+      if (isProducerLoad(arefOp) ||
+          isa<TensorMemoryScalesEncodingAttr>(arefBufType.getEncoding())) {
         arefOps.push_back(arefOp);
       }
     });
