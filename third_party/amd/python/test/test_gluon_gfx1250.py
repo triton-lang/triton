@@ -12,7 +12,7 @@ import triton
 import triton.language as tl
 from triton.language.core import _aggregate as aggregate
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype
+from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, dtypes_with_bfloat16, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -1146,6 +1146,102 @@ def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
 
 
 @gluon.jit
+def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape, out_strides,
+                                           SHARED_LAYOUT: ttgl.constexpr):
+    ndim: ttgl.constexpr = len(BLOCK_SHAPE)
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
+                                                       block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+
+    offs = (0, ) * ndim
+    block_shared = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=out_shape, strides=out_strides,
+                                                           block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
+@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    out = inp.new_empty(BLOCK_SHAPE)
+    # uint_dtypes require special handling because PyTorch only has full native support
+    # for uint8. While PyTorch 2.1+ added limited support for uint16, uint32, and uint64,
+    # they still lack complete functionality across all PyTorch ops. They are stored as
+    # signed tensors with the same bit width and wrapped in TensorWrapper for reinterpretation
+    # to unsigned. The .base attribute accesses the underlying signed tensor for CUDA transfer.
+    if dtype_str in uint_dtypes:
+        inp.base = inp.base.cuda()
+        out.base = out.base.cuda()
+    else:
+        inp = inp.cuda()
+        out = out.cuda()
+
+    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+    k = tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
+                                                      out.shape, out.stride(), SHARED_LAYOUT)
+
+    amdgcn = k.asm["amdgcn"]
+    for pattern in ("tensor_load_to_lds", "tensor_store_from_lds", "s_wait_tensorcnt 0x0"):
+        assert re.search(pattern, amdgcn)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out.cpu())
+    expect = unwrap_tensor(inp.cpu())
+    idx = tuple(slice(None, s) for s in inp.shape)
+    assert torch.equal(expect, actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].zero_()
+    expect = expect.new_zeros(BLOCK_SHAPE)
+    assert torch.equal(expect, actual)
+
+
+def test_tensor_descriptor_load_store_invalid_blocksize():
+    """Test that TDM operations fail when block size exceeds 2^16 (65536)"""
+    ndim = 2
+    INNER_BLOCK = 2**17  # 131072, exceeds 2^16 limit
+    dtype_str = 'float32'
+
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    alloc_shape = [7, INNER_BLOCK]
+    BLOCK_SHAPE = (8, INNER_BLOCK)
+
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    out = inp.new_empty(BLOCK_SHAPE)
+    inp = inp.cuda()
+    out = out.cuda()
+
+    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+
+    # Expect compilation to fail due to block size exceeding maximum
+    try:
+        tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
+                                                      out.shape, out.stride(), SHARED_LAYOUT)
+        pytest.fail(
+            f"Expected compilation to fail for block size {INNER_BLOCK} (2^17) > 65536 (2^16), but it succeeded")
+    except Exception as e:
+        error_msg = str(e)
+        assert "error encountered during parsing" in error_msg.lower(), \
+            f"Expected parsing error for block size > 65536, but got: {error_msg}"
+
+
+@gluon.jit
 def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
                   stride_cn, stride_scale, DTYPE_A: ttgl.constexpr, DTYPE_B: ttgl.constexpr,
                   SCALE_BLOCK: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
@@ -1317,6 +1413,69 @@ def test_runtime_mxgemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
                         group_size_m, num_warps=4, num_ctas=1)
 
     torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)
+
+
+@gluon.jit
+def cluster_load_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                       blocked_layout: ttgl.constexpr):
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    a = ttgl.load(a_ptrs, mask)
+
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.store(out_ptrs, a, mask)
+
+
+@pytest.mark.parametrize("blocked_layout", [
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 2], order=[1, 0],
+                       ctas_per_cga=[1, 2], cta_split_num=[1, 2]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
+                       ctas_per_cga=[2, 1], cta_split_num=[2, 1]),
+    ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, 8], warps_per_cta=[4, 1], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+    ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
+    ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 4], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
+    ttgl.BlockedLayout(size_per_thread=[1, 16], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
+                       ctas_per_cga=[2, 8], cta_split_num=[1, 8]),
+])
+@pytest.mark.parametrize("dtype", [
+    # Test from 1 byte -> 8 bytes dtypes
+    torch.float64, torch.float32, torch.float16, torch.float8_e4m3fn
+])
+def test_runtime_cluster_load(blocked_layout, dtype):
+    M = 128
+    N = 128
+    BLOCK_M = 64
+    BLOCK_N = 64
+    num_ctas = blocked_layout.ctas_per_cga[0] * blocked_layout.ctas_per_cga[1]
+
+    if dtype == torch.float8_e4m3fn:
+        # range from min normal (0 00001 00) to max normal (0 11110 11)
+        a = torch.randint(0x04, 0x7B, (M, N), dtype=torch.uint8).view(dtype)
+    else:
+        a = torch.rand((M, N), dtype=dtype)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    num_warps = blocked_layout.warps_per_cta[0] * blocked_layout.warps_per_cta[1]
+    out_handle = out.cuda()
+    cluster_load_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N, blocked_layout,
+                                             num_warps=num_warps, num_ctas=num_ctas)
+    out_tri = out_handle.cpu()
+    out_ref = a.cpu()
+    assert torch.equal(out_tri, out_ref)
 
 
 @gluon.jit
@@ -1703,7 +1862,7 @@ def tensor_async_copy_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), bars.index(i))
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         prior_phase = ttgl.amd.gfx1250.mbarrier.arrive(bars.index(i))
@@ -1767,3 +1926,39 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_tdm_load_pred():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr):
+        shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 32], [1, 0])
+        reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+
+        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
+                                                           block_shape=(16, 32), layout=shared_layout)
+        smem = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
+        b_offs_m = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, reg_layout))
+        b_offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, reg_layout))
+        b_ptrs = b_ptr + b_offs_m[:, None] * 64 + b_offs_n[None, :]
+
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=False)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        tile1 = smem.load(reg_layout)
+        ttgl.store(b_ptrs, tile1)
+
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=True)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        tile2 = smem.load(reg_layout)
+        ttgl.store(b_ptrs + 32, tile2)
+
+    a = torch.randint(0x0, 0xFFFF, (16, 64), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    kernel[(1, )](a_device, b_device)
+
+    b = b_device.cpu()
+    assert torch.equal(a[:, 32:], b[:, 32:]) and not torch.equal(a[:, :32], b[:, :32])
