@@ -24,16 +24,13 @@ from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 # numerics stuff
 # ---------------
 
-def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
-    dtype_str = dtype_str.strip("mx")
-    return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
-
 class DType:
 
     def __init__(self, dtype_str):
         self.has_global_scale = dtype_str.startswith("float8")
         self.has_mx_scale = dtype_str.startswith("mx")
-        self.torch_dtype = dtype_str_to_torch(dtype_str.strip("mx"))
+        to_torch_dtype = lambda name: torch.uint8 if name == "float4_e2m1" else getattr(torch, name)
+        self.torch_dtype = to_torch_dtype(dtype_str.strip("mx"))
         self.is_mxfloat4 = self.has_mx_scale and "float4" in dtype_str
 
 
