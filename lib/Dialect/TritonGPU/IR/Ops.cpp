@@ -86,7 +86,8 @@ struct CanonicalizeConvertFromTMEMStore
 
     // bail for incompatible layouts
     auto cvtSrcType = convert.getSrc().getType();
-    if (!nvidia_gpu::isDistributedLayoutTMemCompatible(
+    if (!cvtSrcType.getEncoding() ||
+        !nvidia_gpu::isDistributedLayoutTMemCompatible(
             op.getOperation(), cvtSrcType, op.getDst().getType())) {
       return failure();
     }
