@@ -4,6 +4,7 @@
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked_ws = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
@@ -75,6 +76,114 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %view = ttg.memdesc_index %bar[%idx] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // expected-remark @below {{Barrier: [8192, 8], [8200, 8]}}
     ttng.init_barrier %view, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @cf_block_arg() {
+    %alloc = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    cf.br ^use(%alloc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^use(%arg0: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    // expected-remark @below {{Shared: [16384, 4096]}}
+    ttg.local_load %arg0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    cf.br ^exit
+  ^exit:
+    tt.return
+  }
+
+  tt.func public @cf_if_same_size(%cond: i1) {
+    %alloc_then = ttg.local_alloc {allocation.offset = 20480 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %alloc_else = ttg.local_alloc {allocation.offset = 24576 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    cf.cond_br %cond, ^then(%alloc_then : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>), ^else(%alloc_else : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^then(%arg_then: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_then : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^else(%arg_else: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_else : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    // expected-remark @below {{Shared: [20480, 4096], [24576, 4096]}}
+    ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    cf.br ^exit
+  ^exit:
+    tt.return
+  }
+
+  tt.func public @cf_memdesc_index_select(%cond: i1) {
+    %alloc_multi = ttg.local_alloc {allocation.offset = 28672 : i32} : () -> !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>
+    %alloc_simple = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %c0 = arith.constant 0 : i32
+    %view = ttg.memdesc_index %alloc_multi[%c0] : !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    cf.cond_br %cond, ^use_view(%view : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>), ^use_simple(%alloc_simple : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^use_view(%arg_view: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_view : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^use_simple(%arg_simple: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_simple : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    // expected-remark @below {{Shared: [4096, 4096], [28672, 4096], [32768, 4096]}}
+    ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    cf.br ^exit
+  ^exit:
+    tt.return
+  }
+
+  tt.func public @cf_loop_carried() {
+    %alloc = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %trip = arith.constant 1 : index
+    cf.br ^loop(%alloc, %trip : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, index)
+  ^loop(%arg_alloc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %iv: index):
+    // expected-remark @below {{Shared: [32768, 4096]}}
+    ttg.local_load %arg_alloc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %cond = arith.cmpi eq, %iv, %c0 : index
+    %next = arith.subi %iv, %c1 : index
+    cf.cond_br %cond, ^exit, ^loop(%arg_alloc, %next : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, index)
+  ^exit:
+    tt.return
+  }
+
+  tt.func public @cf_pessimistic_join(%cond: i1, %incoming: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
+    %alloc = ttg.local_alloc {allocation.offset = 36864 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    cf.cond_br %cond, ^has_alloc(%alloc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>), ^no_alloc(%incoming : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^has_alloc(%arg: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^no_alloc(%arg_in: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_in : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    // expected-remark @below {{Shared: [36864, 4096]}}
+    ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    tt.return
+  }
+
+  tt.func public @cf_overwrite_before_merge(%cond: i1) {
+    %alloc_a = ttg.local_alloc {allocation.offset = 40960 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %alloc_b = ttg.local_alloc {allocation.offset = 45056 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    cf.cond_br %cond, ^path_a(%alloc_a : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>), ^path_b(%alloc_a : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^path_a(%arg_a: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%arg_a : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^path_b(%arg_from_entry: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    cf.br ^merge(%alloc_b : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
+  ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
+    // expected-remark @below {{Shared: [45056, 4096], [40960, 4096]}}
+    ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    tt.return
+  }
+}
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  tt.func public @warp_specialize_propagation() {
+    %smem = ttg.local_alloc {allocation.offset = 49152 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 53248 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 64, 16>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 16>, warpGroupStartIds = array<i32: 0>} default {
+      // expected-remark @below {{Shared: [49152, 4096]}}
+      ttg.local_load %smem : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked_ws>
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %arg1: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
+      // expected-remark @below {{Shared: [49152, 4096]}}
+      ttg.local_load %arg0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked_ws>
+      ttg.warp_return
+    } : (!ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>) -> ()
     tt.return
   }
 }

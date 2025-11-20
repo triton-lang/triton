@@ -69,8 +69,31 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
+  auto propagateToWarpSpecializePartitions = [&](Value capture,
+                                                 const RegionInfo &info) {
+    for (Operation *user : capture.getUsers()) {
+      auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user);
+      if (!wsOp)
+        continue;
+      auto captures = wsOp.getExplicitCaptures();
+      auto it = llvm::find(captures, capture);
+      if (it == captures.end())
+        continue;
+      size_t idx = std::distance(captures.begin(), it);
+      for (Region *region : wsOp.getPartitionRegions()) {
+        if (region->empty())
+          continue;
+        auto blockArgs = region->front().getArguments();
+        if (idx >= blockArgs.size())
+          continue;
+        auto *argLat = getLatticeElement(blockArgs[idx]);
+        propagateIfChanged(argLat, argLat->join(info));
+      }
+    }
+  };
+  Value result = nullptr;
+  RegionInfo regionInfo;
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
-    RegionInfo regionInfo;
     uint64_t offset = getAllocationOffset(localAllocOp);
     uint64_t size = getAllocSize(localAllocOp);
     regionInfo.regions.insert({offset, size});
@@ -78,10 +101,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    return success();
+    result = localAllocOp.getResult();
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    RegionInfo regionInfo;
     uint64_t offset = getAllocationOffset(tmemAllocOp);
     uint64_t size = getAllocSize(tmemAllocOp);
     regionInfo.regions.insert({offset, size});
@@ -89,12 +111,11 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    return success();
+    result = tmemAllocOp.getResult();
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     int numSubBuffers = getNumBuffers(memdescIndexOp);
-    RegionInfo regionInfo;
     for (auto &region : in.regions) {
       for (int i = 0; i < numSubBuffers; i++) {
         uint64_t subBufferSize = region.length / numSubBuffers;
@@ -106,7 +127,10 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    return success();
+    result = memdescIndexOp.getResult();
+  }
+  if (result) {
+    propagateToWarpSpecializePartitions(result, regionInfo);
   }
   return success();
 }
@@ -115,7 +139,9 @@ void BufferRegionAnalysis::visitNonControlFlowArguments(
     Operation *op, const RegionSuccessor &successor,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
     unsigned firstIndex) {
-  return;
+  setAllToEntryStates(argLattices.take_front(firstIndex));
+  setAllToEntryStates(argLattices.drop_front(
+      firstIndex + successor.getSuccessorInputs().size()));
 }
 
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
