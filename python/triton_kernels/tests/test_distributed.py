@@ -9,7 +9,7 @@ import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, symm_mem_pool
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
-from triton_kernels.matmul import matmul, RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.matmul import matmul
 from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
@@ -123,12 +123,9 @@ def routing(logits, n_expts_act, all_gather=False, y_indx=None):
     dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
     combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-    gate_scal = sparse_logits.vals.flatten()[combine_indx]
-    routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
-                               ragged_batch_metadata)
-    gather_idx = GatherIndx(combine_indx, dispatch_indx)
-    scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
-    return routing_data, gather_idx, scatter_idx, sparse_logits.indx
+    gather_idx = combine_indx // n_expts_act
+    scatter_idx = combine_indx
+    return ragged_batch_metadata, gather_idx, scatter_idx, sparse_logits.indx
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act, y_indx=None):
@@ -154,9 +151,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx)
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_map)
     # matrix multiply
-    # TODO: clean-up API. `RoutingData` should not exist; we should be passing `y_ep_local_metadata`.
-    rdata_ep_local = RoutingData(None, expt_sizes, w_ep_local.shape[0], n_expts_act, y_ep_local_metadata)
-    y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
+    y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, y_ep_local_metadata)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
     # weighted average of the output token from experts
