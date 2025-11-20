@@ -1,6 +1,6 @@
 #include "Data/Metric.h"
 
-#include <bit>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 
@@ -47,10 +47,14 @@ const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
                                    sizeof(uint64_t), stream);
     runtime->synchronizeStream(stream);
     if (tensorMetric.index == variant_index_v<double, MetricValueType>) {
-      tensorMetricsHost[name] = reinterpret_cast<double &>(metricBits);
+      double value = 0.0;
+      std::memcpy(&value, &metricBits, sizeof(value));
+      tensorMetricsHost[name] = value;
     } else if (tensorMetric.index ==
                variant_index_v<int64_t, MetricValueType>) {
-      tensorMetricsHost[name] = reinterpret_cast<int64_t &>(metricBits);
+      int64_t value = 0;
+      std::memcpy(&value, &metricBits, sizeof(value));
+      tensorMetricsHost[name] = value;
     }
   }
   return tensorMetricsHost;
@@ -81,7 +85,9 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
         } else {
           static_assert(sizeof(T) == sizeof(uint64_t),
                         "MetricValueType alternative must be 8 bytes");
-          return std::bit_cast<uint64_t>(value);
+          uint64_t bits = 0;
+          std::memcpy(&bits, &value, sizeof(bits));
+          return bits;
         }
       },
       scalarMetric);

@@ -13,7 +13,7 @@ template <class T, class Variant> struct variant_index;
 template <class T, class... Ts> struct variant_index<T, std::variant<Ts...>> {
   static constexpr std::size_t value = []() constexpr {
     std::size_t i = 0;
-    ((std::is_same_v<T, Ts> ? true : (++i, false)) || ...);
+    (void)((std::is_same_v<T, Ts> ? true : (++i, false)) || ...);
     return i;
   }();
 };

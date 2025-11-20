@@ -11,17 +11,19 @@ void HipRuntime::launchKernel(void *kernel, unsigned int gridDimX,
                               unsigned int blockDimZ,
                               unsigned int sharedMemBytes, void *stream,
                               void **kernelParams, void **extra) {
-  hip::launchKernel<true>(reinterpret_cast<hipFunction_t>(kernel), gridDimX,
-                          gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
-                          sharedMemBytes, reinterpret_cast<hipStream_t>(stream),
-                          kernelParams, extra);
+  auto status = hip::launchKernel<true>(
+      reinterpret_cast<hipFunction_t>(kernel), gridDimX, gridDimY, gridDimZ,
+      blockDimX, blockDimY, blockDimZ, sharedMemBytes,
+      reinterpret_cast<hipStream_t>(stream), kernelParams, extra);
+  (void)status;
 }
 
 void HipRuntime::memset(void *devicePtr, uint32_t value, size_t size,
                         void *stream) {
-  hip::memsetD32Async<true>(reinterpret_cast<hipDeviceptr_t>(devicePtr), value,
-                            size / sizeof(uint32_t),
-                            reinterpret_cast<hipStream_t>(stream));
+  auto status = hip::memsetD32Async<true>(
+      reinterpret_cast<hipDeviceptr_t>(devicePtr), value,
+      size / sizeof(uint32_t), reinterpret_cast<hipStream_t>(stream));
+  (void)status;
 }
 
 void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {

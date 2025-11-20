@@ -399,17 +399,22 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i];
         if (metricTypeIndex == variant_index_v<int64_t, MetricValueType>) {
+          int64_t metricValueInt = 0;
+          std::memcpy(&metricValueInt, &metricValue, sizeof(metricValueInt));
           data->addMetrics(
               scopeId,
               /*scalarMetrics=*/{
-                  {metricName, reinterpret_cast<int64_t &>(metricValue)},
+                  {metricName, metricValueInt},
               });
         } else if (metricTypeIndex ==
                    variant_index_v<double, MetricValueType>) {
+          double metricValueDouble = 0.0;
+          std::memcpy(&metricValueDouble, &metricValue,
+                      sizeof(metricValueDouble));
           data->addMetrics(
               scopeId,
               /*scalarMetrics=*/{
-                  {metricName, reinterpret_cast<double &>(metricValue)},
+                  {metricName, metricValueDouble},
               });
         }
       }
@@ -579,16 +584,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto capacity = pImpl->metricBuffer->getSize(); // bytes
           auto newMetricNodes =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
-          auto [numMetricNodes, pendingGraphs] =
+          auto popResult =
               pImpl->pendingGraphQueue.popAllIfReachCapacity(newMetricNodes,
                                                              capacity);
-          if (numMetricNodes == 0) { // Not reach capacity yet
+          if (popResult.first == 0) { // Not reach capacity yet
             pImpl->pendingGraphQueue.push(externId, metricNodeScopeIds,
                                           newMetricNodes);
           } else {
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
               auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-              pImpl->emitMetricRecords(recordPtr, pendingGraphs);
+              pImpl->emitMetricRecords(recordPtr, popResult.second);
             });
           }
         }
@@ -656,8 +661,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
   auto dataSet = profiler.getDataSet();
-  auto [numMetricNodes, pendingGraphs] = pendingGraphQueue.popAll();
-  (void)numMetricNodes;
+  auto popResult = pendingGraphQueue.popAll();
+  auto pendingGraphs = std::move(popResult.second);
   metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
     auto *recordPtr = reinterpret_cast<uint64_t *>(data);
     emitMetricRecords(recordPtr, pendingGraphs);
