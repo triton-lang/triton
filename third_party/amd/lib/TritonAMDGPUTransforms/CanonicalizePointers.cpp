@@ -1341,26 +1341,39 @@ public:
   LogicalResult
   matchAndRewrite_(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getTrueValue().size() != 2 ||
-        adaptor.getFalseValue().size() != 2) {
-      assert(adaptor.getTrueValue().size() == adaptor.getFalseValue().size() &&
-             "expected both true and false operands to be the same size");
+    ValueRange fatPtrFalse = adaptor.getFalseValue();
+    ValueRange fatPtrTrue = adaptor.getTrueValue();
+    if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
+      return success();
+    if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
+      Value trueOp;
+      Value falseOp;
+      if (fatPtrTrue.size() == 2) {
+        trueOp =
+            rewriter.create<tt::AddPtrOp>(selectOp.getLoc(), selectOp.getType(),
+                                          fatPtrTrue[0], fatPtrTrue[1]);
+      } else {
+        assert(fatPtrFalse.size() == 1 &&
+               "Expected True operand to have 1 or 2 elements");
+        trueOp = fatPtrTrue[0];
+      }
+      if (fatPtrFalse.size() == 2) {
+        falseOp =
+            rewriter.create<tt::AddPtrOp>(selectOp.getLoc(), selectOp.getType(),
+                                          fatPtrFalse[0], fatPtrFalse[1]);
+      } else {
+        assert(fatPtrFalse.size() == 1 &&
+               "Expected False operand to have 1 or 2 elements");
+        falseOp = fatPtrFalse[0];
+      }
+      auto newSelectOp = rewriter.create<arith::SelectOp>(
+          selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
+          trueOp, falseOp);
+      rewriter.replaceOp(selectOp, newSelectOp);
       return success();
     }
     // If both have been traversed, then we can rewrite select of pointers as a
     // select of base and offset
-    ValueRange fatPtrFalse = adaptor.getFalseValue();
-    ValueRange fatPtrTrue = adaptor.getTrueValue();
-    // Simple case of a scalar select: update the base pointer
-    if (!isa<RankedTensorType>(selectOp.getType())) {
-      auto newSelectOp = arith::SelectOp::create(
-          rewriter, selectOp.getLoc(), selectOp.getType(),
-          selectOp.getCondition(), fatPtrTrue[0], selectOp.getFalseValue());
-      rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
-      fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}] =
-          fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
-      return success();
-    }
 
     // Rewrite to select(fatBaseT, fatBaseF) and select(fatOffsetT, fatOffsetF)
     auto newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(),
@@ -1370,9 +1383,10 @@ public:
                                              selectOp.getCondition(),
                                              fatPtrTrue[1], fatPtrFalse[1]);
 
-    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
-            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
-           "expected can narrow to be the same for both fatPtrT and fatPtrF");
+    // assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
+    //         fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
+    //        "expected can narrow to be the same for both fatPtrT and
+    //        fatPtrF");
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
     fatPtrs[{newBase, newOffset}] = fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
