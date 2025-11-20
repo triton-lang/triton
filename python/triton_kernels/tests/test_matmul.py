@@ -652,6 +652,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+test_op(4096, 4096, 4096, 1, True, True, None, False, True, 128,
+        4, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 128, True, True, None, False, False, False, "cuda", None)
+
 # Test that we don't use unsupported block sizes.
 @pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("n", [8, 16, 32, 64, 128])

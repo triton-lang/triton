@@ -477,3 +477,109 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+@triton.jit
+def mxfp_matmul(  #
+        a_ptr, b_ptr, output_ptr,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        stride_scale: tl.constexpr,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_k = tl.arange(0, BLOCK_K)
+    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b, scale_b, "e5m2", accumulator)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+        a_scale_ptr += BLOCK_K // 32
+        b_scale_ptr += BLOCK_K // 32
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
+
+
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128),  (128, 256, 128)])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+    def fp8e8m0_to_float32(scale):
+        scale = scale.view(torch.uint8)
+        scale = scale.to(torch.int32)
+        scale = scale << 23
+        scale = scale.view(torch.float32)
+        return scale
+
+    def f8_to_f16(x, dtype):
+
+        @triton.jit
+        def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+            pid = tl.program_id(0)
+            offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+            mask = offs < N
+            x = tl.load(X + offs, mask=mask)
+            tl.store(Y + offs, x, mask=mask)
+
+        ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+        grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
+        dtype = getattr(tl, dtype)
+        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+        return ret
+
+    M = 1024
+    N = 512
+    K = 2048
+
+    torch.manual_seed(42)
+    dtype_src_str = "float8e5"
+    dtype_dst_str = "float32"
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    a_f16 = f8_to_f16(a, dtype_src_str)
+    b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    b_f16 = f8_to_f16(b, dtype_src_str)
+    a_scale = torch.randint(64, 130, (M, K // 32), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(64, 130, (N, K // 32), dtype=torch.uint8, device=device)
+
+    dtype_dst = getattr(torch, dtype_dst_str)
+    output = torch.empty((M, N), dtype=dtype_dst, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    kernel_kwargs = {}
+
+    out = mxfp_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+                            b.stride(0), b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
+                            NUM_STAGES=3, **kernel_kwargs, num_warps=NUM_WARPS)
+    a_scale_f32 = fp8e8m0_to_float32(a_scale)
+    b_scale_f32 = fp8e8m0_to_float32(b_scale)
+    a_scale_f32 = a_scale_f32.repeat_interleave(32, dim=1)
+    b_scale_f32 = b_scale_f32.repeat_interleave(32, dim=1)
+
+    # b_scales are always col major
+    b_scale_f32 = b_scale_f32.T.contiguous()
+
+    a = a_f16 * a_scale_f32
+    b = b_f16 * b_scale_f32
+    ref_out = torch.matmul(a, b).to(torch.float32)
+    output = output.to(torch.float32)
+    atol = 0.0001
+    torch.testing.assert_close(ref_out, output, atol=atol, rtol=0)
