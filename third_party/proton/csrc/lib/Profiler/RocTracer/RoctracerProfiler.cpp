@@ -353,7 +353,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    // TODO(Keren): Roctracer doesn't support cuda graph yet.
     bool hasCorrelation =
         correlation.corrIdToExternId.contain(record->correlation_id);
     auto externId =
@@ -367,9 +366,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
                       externId, dataSet, record, isAPI, isGraph);
       // Track correlation ids from the same stream and erase those <
       // correlationId
-      if (!hasCorrelation) {
-        correlation.apiExternIds.erase(externId);
-      }
+    } else {
+      correlation.apiExternIds.erase(externId);
     }
     roctracer::getNextRecord<true>(record, &record);
   }
