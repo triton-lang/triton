@@ -1,0 +1,138 @@
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
+namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
+
+using namespace mlir;
+
+namespace {
+// TODO: move to Utility.cpp/unify with TritonInstrument/Utility.cpp
+uint64_t getAllocationOffset(ttg::LocalAllocOp op) {
+  auto offsetAttr = op->getAttr("allocation.offset");
+  if (!offsetAttr) {
+    llvm::report_fatal_error(
+        "ConcurrencySanitizer should run after AllocateSharedMemory pass.");
+  }
+  return cast<IntegerAttr>(offsetAttr).getInt();
+}
+
+uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
+  auto colOffsetAttr = op->getAttr("tensor_memory_col_offset");
+  auto rowOffsetAttr = op->getAttr("tensor_memory_row_offset");
+  if (!colOffsetAttr || !rowOffsetAttr) {
+    llvm::report_fatal_error(
+        "ConcurrencySanitizer should run after AllocateSharedMemory and "
+        "TensorMemoryAllocation pass.");
+  }
+  int colOffset = cast<IntegerAttr>(colOffsetAttr).getInt();
+  int rowOffset = cast<IntegerAttr>(rowOffsetAttr).getInt();
+  return colOffset | (rowOffset << 16);
+}
+
+unsigned getAllocSize(ttg::LocalAllocOp op) {
+  ttg::MemDescType ty = op.getType();
+  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+  return product(ty.getShape()) * elSize;
+}
+
+unsigned getAllocSize(ttng::TMEMAllocOp op) {
+  return ttng::getTmemAllocSizes(op.getType()).numCols;
+}
+
+unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
+  ttg::MemDescType ty =
+      cast<ttg::MemDescType>(memdescIndexOp.getSrc().getType());
+  return ty.getShape()[0];
+}
+
+mlir::triton::BufferRegionAnalysis::RegionType getRegionType(Operation *op) {
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op)) {
+    return mlir::triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
+  }
+  if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op)) {
+    return mlir::triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY;
+  }
+  if (isa<ttng::InitBarrierOp>(op)) {
+    return mlir::triton::BufferRegionAnalysis::RegionType::BARRIER;
+  }
+  llvm_unreachable("Unknown operation type");
+}
+
+} // namespace
+
+namespace mlir::triton {
+
+LogicalResult BufferRegionAnalysis::visitOperation(
+    Operation *op,
+    llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
+    llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
+  if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
+    RegionInfo regionInfo;
+    uint64_t offset = getAllocationOffset(localAllocOp);
+    uint64_t size = getAllocSize(localAllocOp);
+    regionInfo.regions.insert({offset, size});
+
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
+  }
+  if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
+    RegionInfo regionInfo;
+    uint64_t offset = getAllocationOffset(tmemAllocOp);
+    uint64_t size = getAllocSize(tmemAllocOp);
+    regionInfo.regions.insert({offset, size});
+
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
+  }
+  if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
+    RegionInfo in = operands[0]->getValue();
+    int numSubBuffers = getNumBuffers(memdescIndexOp);
+    RegionInfo regionInfo;
+    for (auto &region : in.regions) {
+      for (int i = 0; i < numSubBuffers; i++) {
+        uint64_t subBufferSize = region.length / numSubBuffers;
+        regionInfo.regions.insert(
+            {region.baseOffset + i * subBufferSize, subBufferSize});
+      }
+    }
+
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
+  }
+  return success();
+}
+
+void BufferRegionAnalysis::visitNonControlFlowArguments(
+    Operation *op, const RegionSuccessor &successor,
+    llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
+    unsigned firstIndex) {
+  return;
+}
+
+void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
+  op->walk([&](Operation *op) {
+    if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
+            ttng::TMEMStoreOp, ttng::InitBarrierOp>(op)) {
+      for (auto operand : op->getOperands()) {
+
+        RegionInfo regionInfo = getLatticeElement(operand)->getValue();
+        RegionType regionType = getRegionType(op);
+        // Note the buffer regions that may be accessed by the operation.
+        for (auto &region : regionInfo.regions) {
+          insertRegion(regionType, {region.baseOffset, region.length});
+        }
+      }
+    }
+  });
+}
+
+} // namespace mlir::triton
