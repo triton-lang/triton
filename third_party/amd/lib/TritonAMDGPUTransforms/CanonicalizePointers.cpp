@@ -1353,7 +1353,7 @@ public:
             rewriter.create<tt::AddPtrOp>(selectOp.getLoc(), selectOp.getType(),
                                           fatPtrTrue[0], fatPtrTrue[1]);
       } else {
-        assert(fatPtrFalse.size() == 1 &&
+        assert(fatPtrTrue.size() == 1 &&
                "Expected True operand to have 1 or 2 elements");
         trueOp = fatPtrTrue[0];
       }
