@@ -108,6 +108,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }
+  if (isa<ttng::TensormapUpdateOp>(op)) {
+    constexpr int32_t kTMASize = 128;
+    return kTMASize;
+  }
   return 0;
 }
 
