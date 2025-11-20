@@ -41,7 +41,6 @@ struct CircularStoreOpConversion
       // memory
       mlir::LLVM::AMD::llStore(rewriter, loc, dataPack.ptr, dataPack.record,
                                dataPack.isWriter);
-      rewriter.eraseOp(op);
     } else if (addrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(
           rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
