@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace mlir {
 namespace triton {
@@ -52,7 +53,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
           blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
-          blocked.getCTAsPerCGA()[*reductionAxis] == 1)
+          blocked.getCTALayout().getCTAsPerCGA()[*reductionAxis] == 1)
         return failure();
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
@@ -191,9 +192,7 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
   auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
-  auto ctaLayout =
-      CTALayoutAttr::get(ctx, baseLayout.getCTAsPerCGA(),
-                         baseLayout.getCTASplitNum(), baseLayout.getCTAOrder());
+  auto ctaLayout = getCTALayout(baseLayout);
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, ctaLayout);
 
@@ -551,14 +550,12 @@ private:
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
     auto order3d = insertValue(blocked.getOrder(), 0, rank);
-    auto ctasPerCGA3d =
-        insertValue(blocked.getCTALayout().getCTAsPerCGA(), rank, 1);
-    auto ctasSplitNum3d =
-        insertValue(blocked.getCTALayout().getCTASplitNum(), rank, 1);
-    auto ctaOrder3d =
-        insertValue(blocked.getCTALayout().getCTAOrder(), rank, rank);
-    auto ctaLayout3d = triton::gpu::CTALayoutAttr::get(
-        reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
+    auto ctaLl = blocked.getCTALayout().getLinearLayout();
+    auto kBlocked = *ctaLl.getInDimNames().begin();
+    auto *ctx = kBlocked.getContext();
+    auto dim = standardOutDimNames(ctx, rank + 1)[rank];
+    ctaLl *= LinearLayout::identity1D(1, kBlocked, dim);
+    auto ctaLayout3d = CTAEncodingAttr::get(ctx, ctaLl);
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
         order3d, ctaLayout3d);

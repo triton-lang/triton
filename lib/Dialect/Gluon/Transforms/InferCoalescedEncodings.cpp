@@ -25,12 +25,12 @@ namespace mlir::triton::gluon {
 
 namespace {
 
-ttg::CTALayoutAttr getDefaultCTALayout(RankedTensorType refTensorType,
-                                       int numCTAs) {
+ttg::CTAEncodingAttr getDefaultCTALayout(RankedTensorType refTensorType,
+                                         int numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
-                                        refTensorType.getShape().size());
+  return ttg::CTAEncodingAttr::getDefault(refTensorType.getContext(),
+                                          refTensorType.getShape().size());
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {
