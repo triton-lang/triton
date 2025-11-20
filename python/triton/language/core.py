@@ -118,6 +118,40 @@ def is_builtin(fn) -> bool:
     return getattr(fn, TRITON_BUILTIN, False)
 
 
+def _to_tensor_type(x):
+    if isinstance(x, tensor):
+        return x.type
+    elif isinstance(x, constexpr):
+        x = x.value
+    elif isinstance(x, constexpr_type):
+        x = x.value
+
+    if isinstance(x, bool):
+        return int1
+    elif isinstance(x, int):
+        if -2**31 <= x < 2**31:
+            return int32
+        elif 2**31 <= x < 2**32:
+            return uint32
+        elif -2**63 <= x < 2**63:
+            return int64
+        elif 2**63 <= x < 2**64:
+            return uint64
+        raise ValueError(f'Nonrepresentable integer {x}.')
+    elif isinstance(x, float):
+        min_float32 = 2**-126
+        max_float32 = (2 - 2**-23) * 2**127
+        abs_x = builtins.abs(x)
+        if abs_x == float("inf") or\
+           abs_x == 0.0 or \
+           x != x or \
+           min_float32 <= abs_x <= max_float32:
+            return float32
+        else:
+            return float64
+    raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+
+
 @builtin
 def to_tensor(x, _semantic=None):
     return _semantic.to_tensor(x)

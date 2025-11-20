@@ -623,4 +623,41 @@ def test_constexpr_return():
         x: tl.constexpr = get_constexpr_value()
         tl.static_assert(x == 42)
 
-    test[(1, )]()
+    run_parser(test)
+
+
+@pytest.mark.interpreter
+def test_return_promotion():
+
+    @triton.jit
+    def signbit(x):
+        if x < 0:
+            return 1
+        else:
+            return 0
+
+    @triton.jit
+    def tuple_return(x):
+        if x < 0:
+            return 1, x
+        else:
+            return 0, x
+
+    @triton.jit
+    def kernel():
+        # constexpr if -> constexpr returned
+        a: tl.constexpr = signbit(-1)
+        tl.static_assert(a == 1)
+
+        # dynamic if -> promote to tensor
+        tmp = -1
+        tl.static_assert(signbit(tmp).type == tl.int32)
+
+        # constexpr if -> single return
+        b: tl.constexpr = tuple_return(-1)
+        tl.static_assert(b[0] == 1 and b[1] == -1)
+
+        c = tuple_return(tmp)
+        tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)
