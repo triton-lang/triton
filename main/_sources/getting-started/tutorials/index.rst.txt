@@ -175,7 +175,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="Users can run the tutorial with each of the supported formats by passing the --format argument and can benchmark the performance of each by specifying matrix dimensions and iteration steps.">
+    <div class="sphx-glr-thumbcontainer" tooltip="    # FP4     python 10-block-scaled-matmul.py --format nvfp4     python 10-block-scaled-matmul.py --format mxfp4 --K_range 512 8192 --bench">
 
 .. only:: html
 
