@@ -553,6 +553,8 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
+        if ret_value is None:
+            ret_value = language.constexpr(None)
         self.return_vals.append(ret_value)
         self.return_ips.append(self._get_insertion_point_and_loc())
 
@@ -564,7 +566,7 @@ class CodeGenerator(ast.NodeVisitor):
     def decide_return_type(self):
         assert len(self.return_vals) == len(self.return_ips)
         if not self.return_vals:
-            return language.core.void
+            return language.constexpr_type(None)
 
         tl = language.core
 
@@ -581,6 +583,9 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(a, tl.constexpr_type):
                 if a == b:
                     return a
+                a = tl._to_tensor_type(a)
+                b = tl._to_tensor_type(b)
+            elif isinstance(b, tl.constexpr_type):
                 a = tl._to_tensor_type(a)
                 b = tl._to_tensor_type(b)
             _check(a == b, lambda: error_msg(a, b))
@@ -617,25 +622,18 @@ class CodeGenerator(ast.NodeVisitor):
             self._set_insertion_point_and_loc(*ret_ip)
             assert not self.builder.get_insertion_block().has_terminator()
             ret = self.cast_to(ret, return_type)
-            if return_type == language.void:
-                self.builder.ret([])
-            else:
-                ret_handles = flatten_values_to_ir([ret])
-                self.builder.ret(ret_handles)
+            ret_handles = flatten_values_to_ir([ret])
+            self.builder.ret(ret_handles)
 
         self._set_insertion_point_and_loc(ip, loc)
         self.ret_type = return_type
         assert not self.builder.get_insertion_block().has_terminator()
-        if return_type is None or return_type is language.void:
-            self.ret_type = language.void
-            self.builder.ret([])
+        if isinstance(self.ret_type, language.tuple_type):
+            self.prototype.ret_types = list(self.ret_type.types)
         else:
-            if isinstance(self.ret_type, language.tuple_type):
-                self.prototype.ret_types = list(self.ret_type.types)
-            else:
-                self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
+            self.prototype.ret_types = [self.ret_type]
+        self.fn.reset_type(self.prototype.serialize(self.builder))
+        self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -1380,8 +1378,6 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
-        if callee_ret_type == language.void:
-            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
