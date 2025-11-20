@@ -1383,10 +1383,9 @@ public:
                                              selectOp.getCondition(),
                                              fatPtrTrue[1], fatPtrFalse[1]);
 
-    // assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
-    //         fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
-    //        "expected can narrow to be the same for both fatPtrT and
-    //        fatPtrF");
+    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
+            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
+           "expected can narrow to be the same for both fatPtrT and fatPtrF");
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
     fatPtrs[{newBase, newOffset}] = fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
