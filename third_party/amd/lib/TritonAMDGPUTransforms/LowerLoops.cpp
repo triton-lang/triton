@@ -718,7 +718,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
 
-  for (auto [l, _] : loadToInfo) {
+  for (auto [l, _] : loadToStreamOps) {
     schedule.erase(l);
     l->erase();
   }
