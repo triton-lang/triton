@@ -1669,8 +1669,9 @@ public:
     int counter = 0;
     do {
       counter++;
-      if (counter > 10) {
-        llvm::errs() << "\n\n\n\n\n\n\n-------> Max number of iterations reached\n\n\n\n\n\n\n";
+      if (counter > 1) {
+        //llvm::errs() << "\n\n\n\n\n\n\n-------> Max number of iterations reached\n\n\n\n\n\n\n";
+        break;
       }
       changed = false;
       // 2. For remaining convert ops, try to rematerialize the slice of
