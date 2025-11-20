@@ -325,7 +325,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.prototype = prototype
 
         self.return_vals: List[base_value | None] = []
-        self.return_ips: List[ir.InsertPoint] = []
+        self.return_ips: List[Tuple[ir.InsertPoint, ir.Loc]] = []
 
         self.gscope = {}
         for k, v in gscope.items():
