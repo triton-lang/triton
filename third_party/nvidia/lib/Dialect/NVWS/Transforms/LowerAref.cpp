@@ -678,15 +678,22 @@ public:
   }
 };
 
-bool isProducerLoad(ArefCreateOp arefOp) {
+ArefPutEnterOp getPutEnterOp(ArefCreateOp arefOp) {
   for (auto user : arefOp.getResult().getUsers()) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
-      if (llvm::any_of(putOp->getUsers(), [](auto user) {
-            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
-          })) {
-        return true;
-      }
+      return putOp;
     }
+  }
+  llvm_unreachable("No put enter op is found for an aref");
+  return nullptr;
+}
+
+bool isProducerLoad(ArefCreateOp arefOp) {
+  auto putOp = getPutEnterOp(arefOp);
+  if (llvm::any_of(putOp->getUsers(), [](auto user) {
+        return isa<triton::nvws::DescriptorLoadOpInterface>(user);
+      })) {
+    return true;
   }
   return false;
 }
@@ -834,7 +841,6 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
-// TODO: Need to fix when there are multiple producer partitions
 void combineArefs(scf::ForOp loop) {
   SmallVector<ArefGetEnterOp> getEnterOps;
   loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
@@ -859,66 +865,65 @@ void combineArefs(scf::ForOp loop) {
       continue;
     }
 
-    SmallVector<ArefCreateOp> arefs;
+    DenseMap<int, SmallVector<ArefCreateOp>> arefsPerProducerPartition;
     for (auto getEnterOp : getEnterOps) {
-      arefs.push_back(cast<ArefCreateOp>(getEnterOp.getAref().getDefiningOp()));
+      auto aref = cast<ArefCreateOp>(getEnterOp.getAref().getDefiningOp());
+      auto putOp = getPutEnterOp(aref);
+      arefsPerProducerPartition[getPartitionIds(putOp).front()].push_back(aref);
     }
 
-    SmallVector<ArefPutEnterOp> putEnterOps;
-    SmallVector<ArefPutExitOp> putExitOps;
-    SmallVector<ArefGetExitOp> getExitOps;
-    SmallVector<int> producerGroupIds;
-    for (auto aref : arefs) {
-      for (auto user : aref->getUsers()) {
-        if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
-          putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getPartitionIds(putEnterOp).front());
-        } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-          putExitOps.push_back(putExitOp);
-        } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-          getExitOps.push_back(getExitOp);
+    for (auto arefs : llvm::make_second_range(arefsPerProducerPartition)) {
+      SmallVector<ArefPutEnterOp> putEnterOps;
+      SmallVector<ArefPutExitOp> putExitOps;
+      SmallVector<ArefGetEnterOp> getEnterOps;
+      SmallVector<ArefGetExitOp> getExitOps;
+      for (auto aref : arefs) {
+        for (auto user : aref->getUsers()) {
+          if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
+            putEnterOps.push_back(putEnterOp);
+          } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+            putExitOps.push_back(putExitOp);
+          } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(user)) {
+            getEnterOps.push_back(getEnterOp);
+          } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
+            getExitOps.push_back(getExitOp);
+          }
         }
       }
+
+      SmallVector<Type> arefBufTypes;
+      SmallVector<Value> arefBufs;
+      for (auto aref : arefs) {
+        arefBufTypes.push_back(aref.getOperands()[0].getType());
+        arefBufs.push_back(aref.getOperands()[0]);
+      }
+
+      // set insertion point at the last aref_create
+      auto lastAref = *llvm::max_element(arefs, [](auto a, auto b) {
+        assert(a->getBlock() == b->getBlock());
+        return a->isBeforeInBlock(b);
+      });
+
+      OpBuilder builder(lastAref);
+      auto aref = createArefCreateOp(builder, arefBufTypes, arefBufs,
+                                     lastAref->getLoc());
+
+      auto combinedPutExit =
+          createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
+      createCombinedArefOps(getEnterOps, getExitOps, aref, builder,
+                            combinedPutExit);
+
+      for (auto putExitOp : putExitOps)
+        putExitOp->erase();
+      for (auto putEnterOp : putEnterOps)
+        putEnterOp->erase();
+      for (auto getExitOp : getExitOps)
+        getExitOp->erase();
+      for (auto getEnterOp : getEnterOps)
+        getEnterOp->erase();
+      for (auto aref : arefs)
+        aref->erase();
     }
-
-    // Producer arefs must be in the same partition.
-    if (llvm::any_of(producerGroupIds,
-                     [&](auto id) { return id != producerGroupIds[0]; })) {
-      continue;
-    }
-
-    SmallVector<Type> arefBufTypes;
-    SmallVector<Value> arefBufs;
-    for (auto aref : arefs) {
-      arefBufTypes.push_back(aref.getOperands()[0].getType());
-      arefBufs.push_back(aref.getOperands()[0]);
-    }
-
-    // set insertion point at the last aref_create
-    auto lastAref = *llvm::max_element(arefs, [](auto a, auto b) {
-      assert(a->getBlock() == b->getBlock());
-      return a->isBeforeInBlock(b);
-    });
-
-    OpBuilder builder(lastAref);
-    auto aref =
-        createArefCreateOp(builder, arefBufTypes, arefBufs, lastAref->getLoc());
-
-    auto combinedPutExit =
-        createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
-    createCombinedArefOps(getEnterOps, getExitOps, aref, builder,
-                          combinedPutExit);
-
-    for (auto putExitOp : putExitOps)
-      putExitOp->erase();
-    for (auto putEnterOp : putEnterOps)
-      putEnterOp->erase();
-    for (auto getExitOp : getExitOps)
-      getExitOp->erase();
-    for (auto getEnterOp : getEnterOps)
-      getEnterOp->erase();
-    for (auto aref : arefs)
-      aref->erase();
   }
 }
 
