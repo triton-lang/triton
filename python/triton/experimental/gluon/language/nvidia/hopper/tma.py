@@ -15,6 +15,7 @@ __all__ = ["async_copy_global_to_shared", "async_copy_shared_to_global", "store_
 @dataclass(eq=True)
 class tensor_descriptor_type(base_type):
     block_type: ttgl.block_type
+    base_type: base_type
     shape_type: ttgl.tuple_type
     strides_type: ttgl.tuple_type
     layout: NVMMASharedLayout
@@ -33,9 +34,16 @@ class tensor_descriptor_type(base_type):
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor, int]:
         handle = handles[cursor]
         cursor += 1
+
+        # base is not flattened because it's embedded in the
+        # descriptor handle
+
+        base = None
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor(handle, shape, strides, self.block_type, layout=self.layout)
+        shape = shape.values
+        strides = strides.values
+        value = tensor_descriptor(handle, base, shape, strides, self.block_type, layout=self.layout, base_type=self.base_type)
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
@@ -46,6 +54,10 @@ class tensor_descriptor_type(base_type):
             self.layout._to_ir(builder),
         )
         out.append(ty)
+
+        # base_type is not flattened because base is embedded in
+        # the descriptor handle.
+
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
 
@@ -55,16 +67,26 @@ class tensor_descriptor_type(base_type):
 
 class tensor_descriptor(base_value):
 
-    def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout):
+    def __init__(self, handle, base: ttgl.tensor, shape: List[ttgl.tensor], strides: List[ttgl.tensor],
+                 block_type: ttgl.block_type, layout: NVMMASharedLayout, base_type=None):
         self.handle = handle
+        self.base = base
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                           layout=layout)
+        # If base_type is not provided, infer it from base
+        if base_type is None:
+            if base is None:
+                raise ValueError("Either base or base_type must be provided")
+            base_type = base.type
+        self.type = tensor_descriptor_type(block_type, base_type, self.shape.type,
+                                           self.strides.type, layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
+
+        # base is not flattened because it's embedded in the
+        # descriptor handle
+
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
@@ -155,7 +177,7 @@ def make_tensor_descriptor(
 
     shape_type = ttgl.tuple(shape).type
     strides_type = ttgl.tuple(strides).type
-    ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
+    ty = tensor_descriptor_type(block_type, base.type, shape_type, strides_type, layout)
 
     if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
         raise ValueError("Padding option `nan` is not supported for integer blocks")
@@ -166,4 +188,49 @@ def make_tensor_descriptor(
         [s.handle for s in strides],
         padding,
     )
-    return tensor_descriptor(handle, shape, strides, block_type, layout)
+    return tensor_descriptor(handle, base, shape, strides, block_type, layout)
+
+@builtin
+def update_tensor_descriptor(
+    desc: tensor_descriptor,
+    base: ttgl.tensor = None,
+    shape: List[ttgl.tensor] = None,
+    strides: List[ttgl.tensor] = None,
+    _semantic=None,
+) -> None:
+    if base is None and shape is None and strides is None:
+        raise ValueError("At least one descriptor field must be updated")
+
+    if shape is not None:
+        ndim = len(desc.block_shape)
+
+        if len(shape) != ndim:
+            raise ValueError(f"Expected shape of {ndim} dimensions but got {len(shape)} dimensions")
+
+        if strides is not None:
+            if len(strides) != ndim:
+                raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
+
+            last_stride = ttgl._unwrap_if_constexpr(strides[-1])
+            if last_stride != 1:
+                raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
+
+        shape = [_semantic.make_scalar(x, ttgl.int32) for x in shape]
+
+        if strides is not None:
+            strides = [_semantic.make_scalar(ttgl._unwrap_if_constexpr(x), ttgl.int64) for x in strides]
+
+    _semantic.builder.create_update_tensor_descriptor(
+        desc.handle,
+        base=base.handle if base is not None else None,
+        shape=[s.handle for s in shape] if shape is not None else [],
+        strides=[s.handle for s in strides] if strides is not None else []
+    )
+
+    # Update the Python-side metadata
+    if base is not None:
+        desc.base = base
+    if shape is not None:
+        desc.shape = ttgl.tuple(shape)
+    if strides is not None:
+        desc.strides = ttgl.tuple(strides)

@@ -210,6 +210,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: tensormap_update_address
+module attributes {"ttg.num-ctas" = 1 : i32   , "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tensormap_update_address(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    // CHECK: tensormap.replace.tile.global_address
+    // CHECK-NOT: tensormap.replace.tile.global_dim
+    // CHECK-NOT: tensormap.replace.tile.global_stride
+    ttng.tensormap_update %arg0 global_address = %arg1 : !tt.ptr<f16> {allocation.offset = 0 : i32} : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: tensormap_update_dim
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tensormap_update_dim(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) {
+    // CHECK-NOT: tensormap.replace.tile.global_address
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK-NOT: tensormap.replace.tile.global_stride
+    ttng.tensormap_update %arg0 global_dim = [%arg1, %arg2] {allocation.offset = 0 : i32} : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: tensormap_update_dim_and_stride
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tensormap_update_dim_and_stride(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64) {
+    // CHECK-NOT: tensormap.replace.tile.global_address
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_stride
+    ttng.tensormap_update %arg0 global_dim = [%arg1, %arg2] global_stride = [%arg3] {allocation.offset = 0 : i32} : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: tensormap_update_all_fields
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tensormap_update_all_fields(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: i32, %arg3: i32, %arg4: i64) {
+    // CHECK: tensormap.replace.tile.global_address
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_stride
+    ttng.tensormap_update %arg0 global_dim = [%arg2, %arg3] global_stride = [%arg4] global_address = %arg1 : !tt.ptr<f16> {allocation.offset = 0 : i32} : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 
 // CHECK-LABEL: async_copy_mbarrier_arrive
