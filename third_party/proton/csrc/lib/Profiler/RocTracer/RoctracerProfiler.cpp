@@ -195,6 +195,10 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   void doStart() override;
   void doFlush() override;
   void doStop() override;
+  void doAddMetrics(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &scalarMetrics,
+      const std::map<std::string, TensorMetric> &tensorMetrics) override;
 
   static void apiCallback(uint32_t domain, uint32_t cid,
                           const void *callbackData, void *arg);
@@ -405,6 +409,16 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
   roctracer::disableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX);
   roctracer::disableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::closePool<true>();
+}
+
+void RoctracerProfiler::RoctracerProfilerPimpl::doAddMetrics(
+    size_t scopeId,
+    const std::map<std::string, MetricValueType> &scalarMetrics,
+    const std::map<std::string, TensorMetric> &tensorMetrics) {
+  (void)tensorMetrics; // ROCm tensor metrics not yet supported
+  for (auto *data : profiler.getDataSet()) {
+    data->addMetrics(scopeId, scalarMetrics);
+  }
 }
 
 RoctracerProfiler::RoctracerProfiler() {

@@ -1,7 +1,28 @@
-#include "Profiler/Instrumentation/HipRuntime.h"
+#include "Runtime/HipRuntime.h"
+
 #include "Driver/GPU/HipApi.h"
+#include <algorithm>
 
 namespace proton {
+
+void HipRuntime::launchKernel(void *kernel, unsigned int gridDimX,
+                              unsigned int gridDimY, unsigned int gridDimZ,
+                              unsigned int blockDimX, unsigned int blockDimY,
+                              unsigned int blockDimZ,
+                              unsigned int sharedMemBytes, void *stream,
+                              void **kernelParams, void **extra) {
+  hip::launchKernel<true>(reinterpret_cast<hipFunction_t>(kernel), gridDimX,
+                          gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
+                          sharedMemBytes, reinterpret_cast<hipStream_t>(stream),
+                          kernelParams, extra);
+}
+
+void HipRuntime::memset(void *devicePtr, uint32_t value, size_t size,
+                        void *stream) {
+  hip::memsetD32Async<true>(reinterpret_cast<hipDeviceptr_t>(devicePtr), value,
+                            size / sizeof(uint32_t),
+                            reinterpret_cast<hipStream_t>(stream));
+}
 
 void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
   (void)hip::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
@@ -9,6 +30,17 @@ void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
 
 void HipRuntime::freeHostBuffer(uint8_t *buffer) {
   (void)hip::memFreeHost<true>(buffer);
+}
+
+void HipRuntime::allocateDeviceBuffer(uint8_t **buffer, size_t size) {
+  hipDeviceptr_t devicePtr;
+  (void)hip::memAlloc<true>(reinterpret_cast<void **>(&devicePtr), size);
+  *buffer = reinterpret_cast<uint8_t *>(devicePtr);
+}
+
+void HipRuntime::freeDeviceBuffer(uint8_t *buffer) {
+  hipDeviceptr_t devicePtr = reinterpret_cast<hipDeviceptr_t>(buffer);
+  (void)hip::memFree<true>(devicePtr);
 }
 
 uint64_t HipRuntime::getDevice() {
@@ -30,6 +62,14 @@ void HipRuntime::synchronizeStream(void *stream) {
   (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
 }
 
+void HipRuntime::synchronizeDevice() {
+  (void)hip::deviceSynchronize<true>();
+}
+
+void HipRuntime::destroyStream(void *stream) {
+  (void)hip::streamDestroy<true>(reinterpret_cast<hipStream_t>(stream));
+}
+
 void HipRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
@@ -43,6 +83,8 @@ void HipRuntime::processHostBuffer(
         reinterpret_cast<hipStream_t>(stream));
     (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
     callback(hostBuffer, chunkSize);
+    hostBuffer += chunkSize;
+    deviceBuffer += chunkSize;
     sizeLeftOnDevice -= chunkSize;
     chunkSize =
         std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);

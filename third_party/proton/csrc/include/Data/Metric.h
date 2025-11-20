@@ -1,11 +1,17 @@
 #ifndef PROTON_DATA_METRIC_H_
 #define PROTON_DATA_METRIC_H_
 
+#include "Runtime/Runtime.h"
+#include "Utility/Map.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <map>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <variant>
 #include <vector>
+#include <atomic>
 
 namespace proton {
 
@@ -13,7 +19,7 @@ enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 
-inline const char *typeNameForIndex(std::size_t idx) {
+inline const char *getTypeNameForIndex(std::size_t idx) {
   switch (idx) {
   case 0:
     return "uint64_t";
@@ -25,6 +31,21 @@ inline const char *typeNameForIndex(std::size_t idx) {
     return "std::string";
   default:
     return "<unknown>";
+  }
+}
+
+inline const size_t getMetricValueSize(size_t index) {
+  switch (index) {
+  case 0:
+    return sizeof(uint64_t);
+  case 1:
+    return sizeof(int64_t);
+  case 2:
+    return sizeof(double);
+  case 3:
+    throw std::runtime_error("[PROTON] MetricValueType string size is unknown");
+  default:
+    throw std::runtime_error("[PROTON] Unknown MetricValueType index");
   }
 }
 
@@ -63,8 +84,8 @@ public:
       throw std::runtime_error(
           std::string("Metric value type mismatch for valueId ") +
           std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
-          ": current=" + typeNameForIndex(values[valueId].index()) +
-          ", new=" + typeNameForIndex(value.index()));
+          ": current=" + getTypeNameForIndex(values[valueId].index()) +
+          ", new=" + getTypeNameForIndex(value.index()));
     }
     // Handle string and other values separately
     if (std::holds_alternative<std::string>(value)) {
@@ -337,6 +358,130 @@ private:
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
       "init_time",   "pre_final_time", "post_final_time"};
+};
+
+// Modeling a contiguous 1-d tensor
+struct TensorMetric {
+  uint8_t *ptr{}; // device pointer
+  size_t index{}; // MetricValueType index
+};
+
+class MetricBuffer {
+public:
+  struct MetricDescriptor {
+    size_t id{};
+    size_t typeIndex{};
+    std::string name{};
+  };
+
+public:
+  MetricBuffer(size_t size, Runtime *runtime)
+      : size(size), runtime(runtime) {}
+
+  ~MetricBuffer();
+
+  void receive(const std::map<std::string, MetricValueType> &scalarMetrics,
+               const std::map<std::string, TensorMetric> &tensorMetrics,
+               void *tensorMetricKernel, void *scalarMetricKernel,
+               void *stream);
+
+  const std::map<std::string, MetricValueType>
+  collectTensorMetrics(const std::map<std::string, TensorMetric> &tensorMetrics,
+                       void *stream) const;
+
+  template <typename Func> void flush(Func callback, bool flushAll = false) {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    std::vector<DeviceBuffer> buffersToFlush;
+    if (flushAll) {
+      for (auto &[device, buffer] : deviceBuffers) {
+        buffersToFlush.push_back(buffer);
+      }
+    } else {
+      auto device = runtime->getDevice();
+      buffersToFlush.push_back(getOrCreateBuffer());
+    }
+    for (auto &buffer : buffersToFlush) {
+      synchronize(buffer);
+      callback(buffer.hostPtr, buffer.hostOffset);
+    }
+  }
+
+  size_t getSize() const { return size; }
+
+  MetricDescriptor &getMetricDescriptor(size_t id) {
+    if (!MetricBuffer::metricDescriptors.contain(id)) {
+      throw std::runtime_error("[PROTON] MetricBuffer: unknown metric id: " +
+                               std::to_string(id));
+    }
+    return metricDescriptors.at(id);
+  }
+
+private:
+  struct DeviceBuffer {
+    uint8_t *devicePtr{};
+    uint8_t *deviceOffsetPtr{};
+    uint8_t *hostPtr{};
+    uint64_t hostOffset{};
+    void *priorityStream{};
+  };
+
+  DeviceBuffer &getOrCreateBuffer();
+
+
+  void queue(size_t metricId, TensorMetric tensorMetric, void *kernel,
+             void *stream);
+
+  void queue(size_t metricId, MetricValueType scalarMetric, void *kernel,
+             void *stream);
+
+  void synchronize(DeviceBuffer &buffer);
+
+  template <typename MetricT>
+  size_t getMetricIndex(const MetricT &metric) const {
+    using MetricType = std::decay_t<MetricT>;
+    if constexpr (std::is_same_v<MetricValueType, MetricType>) {
+      return metric.index();
+    } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
+      return metric.index;
+    } else {
+      static_assert(false, "Unsupported metric type for getMetricIndex");
+    }
+  }
+
+  template <typename MetricsT>
+  void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
+    for (const auto &[name, metric] : metrics) {
+      size_t index = getMetricIndex(metric);
+      auto descriptor = newMetricDescriptor(name, index);
+      queue(descriptor.id, metric, kernel, stream);
+    }
+  }
+
+  MetricDescriptor newMetricDescriptor(const std::string &name,
+                                       size_t typeIndex);
+
+protected:
+  static std::atomic<size_t> metricId;
+  static ThreadSafeMap<size_t, MetricDescriptor> metricDescriptors;
+
+  size_t size;       // byte
+  Runtime *runtime{};
+
+  std::map<void *, DeviceBuffer> deviceBuffers;
+  std::mutex bufferMutex;
+};
+
+class MetricInterface {
+public:
+  virtual ~MetricInterface() = default;
+
+  virtual void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &scalarMetrics,
+             const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
+
+  virtual void setMetricKernels(void *tensorMetricKernel,
+                                void *scalarMetricKernel, void *stream) = 0;
 };
 
 } // namespace proton

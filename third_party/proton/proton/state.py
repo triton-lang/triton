@@ -2,6 +2,7 @@ from triton._C.libproton import proton as libproton
 from .flags import flags
 from functools import wraps
 
+COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 class state:
     """

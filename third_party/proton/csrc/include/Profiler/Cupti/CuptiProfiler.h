@@ -2,6 +2,7 @@
 #define PROTON_PROFILER_CUPTI_PROFILER_H_
 
 #include "Profiler/GPUProfiler.h"
+#include "Data/Metric.h"
 
 namespace proton {
 
@@ -15,6 +16,7 @@ private:
 
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
+
 };
 
 } // namespace proton

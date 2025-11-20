@@ -51,6 +51,11 @@ public:
     map.clear();
   }
 
+  size_t size() {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return map.size();
+  }
+
 private:
   Container map;
   std::shared_mutex mutex;

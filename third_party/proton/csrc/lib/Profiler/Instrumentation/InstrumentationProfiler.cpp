@@ -2,8 +2,8 @@
 #include "TraceDataIO/CircularLayoutParser.h"
 
 #include "Driver/GPU/CudaApi.h"
-#include "Profiler/Instrumentation/CudaRuntime.h"
-#include "Profiler/Instrumentation/HipRuntime.h"
+#include "Runtime/CudaRuntime.h"
+#include "Runtime/HipRuntime.h"
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include <algorithm>
@@ -40,6 +40,10 @@ void InstrumentationProfiler::doStop() {
     runtime->freeHostBuffer(hostBuffer);
     hostBuffer = nullptr;
   }
+  for (auto &[device, deviceStream] : deviceStreams) {
+    runtime->destroyStream(deviceStream);
+  }
+  deviceStreams.clear();
 }
 
 void InstrumentationProfiler::doSetMode(
@@ -49,10 +53,10 @@ void InstrumentationProfiler::doSetMode(
   }
   if (proton::toLower(modeAndOptions[0]) ==
       proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
-    runtime = std::make_unique<CudaRuntime>();
+    runtime = &CudaRuntime::instance();
   } else if (proton::toLower(modeAndOptions[0]) ==
              proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
-    runtime = std::make_unique<HipRuntime>();
+    runtime = &HipRuntime::instance();
   } else {
     throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);
   }
@@ -259,6 +263,16 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
       });
 
   dataScopeIdMap.clear();
+}
+
+void InstrumentationProfiler::doAddMetrics(
+    size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
+    const std::map<std::string, TensorMetric> &tensorMetrics) {
+  // Currently no-op
+  for (auto *data : getDataSet()) {
+    data->addMetrics(scopeId, scalarMetrics);
+  }
+  // TODO(Keren): handle tensor metrics
 }
 
 } // namespace proton

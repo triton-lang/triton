@@ -2,6 +2,7 @@
 #define PROTON_PROFILER_GPU_PROFILER_H_
 
 #include "Context/Context.h"
+#include "Data/Metric.h"
 #include "Profiler.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
@@ -30,12 +31,14 @@ public:
       ThreadSafeMap<uint64_t,
                     std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
-  using GraphIdNodeIdToScopeIdMap = ThreadSafeMap<
-      uint32_t, std::unordered_map<uint64_t, size_t>,
-      std::unordered_map<uint32_t,
-                         std::unordered_map<uint64_t, size_t>>>; /*<graph_id,
-                                                                    node_id,
-                                                                    scope_id>*/
+  // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
+  // issue.
+  using ExternIdToGraphNodeScopeIdMap = ThreadSafeMap<
+      size_t,                                                 /*extern_id*/
+      std::map<Data *, std::unordered_map<uint64_t, size_t>>, /*<data, node_id,
+                                                                 scope_id>*/
+      std::unordered_map<
+          size_t, std::map<Data *, std::unordered_map<uint64_t, size_t>>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
@@ -51,6 +54,12 @@ protected:
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
+  virtual void doAddMetrics(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &scalarMetrics,
+      const std::map<std::string, TensorMetric> &tensorMetrics) override {
+    pImpl->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
+  }
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
@@ -58,6 +67,7 @@ protected:
     std::vector<Scope> scopeStack;
     size_t opId{Scope::DummyScopeId};
     bool isStreamCapturing{false};
+    bool isMetricKernelLaunching{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
@@ -95,8 +105,8 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from a graph id and a node id to contexts.
-    GraphIdNodeIdToScopeIdMap graphIdNodeIdToScopeId;
+    // Mapping from an external id to a mapping of graph node id to scope id.
+    ExternIdToGraphNodeScopeIdMap externIdToGraphNodeScopeId;
     // A set of kernels triggered by GPU runtime APIs (e.g., torch
     // kernels) other than Triton.
     // It stores a subset of external ids in corrIdToExternId.
@@ -156,9 +166,34 @@ protected:
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
+    void doAddMetrics(
+        size_t scopeId,
+        const std::map<std::string, MetricValueType> &scalarMetrics,
+        const std::map<std::string, TensorMetric> &tensorMetrics) {
+      if (threadState.isStreamCapturing) { // Graph capture mode
+        threadState.isMetricKernelLaunching = true;
+        // Launch metric kernels
+        metricBuffer->receive(
+            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
+            profiler.scalarMetricKernel, profiler.metricKernelStream);
+        threadState.isMetricKernelLaunching = false;
+      } else { // Eager mode, directly copy
+        // Populate tensor metrics
+        auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
+            tensorMetrics, profiler.metricKernelStream);
+        for (auto *data : profiler.getDataSet()) {
+          data->addMetrics(scopeId, scalarMetrics);
+          data->addMetrics(scopeId, tensorMetricsHost);
+        }
+      }
+    }
+
   protected:
     ConcreteProfilerT &profiler;
+    std::unique_ptr<MetricBuffer> metricBuffer;
+    Runtime *runtime{nullptr};
   };
+
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};

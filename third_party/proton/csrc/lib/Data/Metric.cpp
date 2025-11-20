@@ -1,0 +1,126 @@
+#include "Data/Metric.h"
+
+#include <bit>
+#include <stdexcept>
+#include <type_traits>
+
+namespace proton {
+
+ThreadSafeMap<size_t, MetricBuffer::MetricDescriptor>
+    MetricBuffer::metricDescriptors;
+
+std::atomic<size_t> MetricBuffer::metricId{0};
+
+MetricBuffer::~MetricBuffer() {
+  std::lock_guard<std::mutex> lock(bufferMutex);
+  for (auto &[device, buffer] : deviceBuffers) {
+    runtime->freeDeviceBuffer(buffer.devicePtr);
+    runtime->freeDeviceBuffer(buffer.deviceOffsetPtr);
+    runtime->freeHostBuffer(buffer.hostPtr);
+    runtime->destroyStream(buffer.priorityStream);
+  }
+}
+
+void MetricBuffer::receive(
+    const std::map<std::string, MetricValueType> &scalarMetrics,
+    const std::map<std::string, TensorMetric> &tensorMetrics,
+    void *tensorMetricKernel, void *scalarMetricKernel, void *stream) {
+  queueMetrics(tensorMetrics, tensorMetricKernel, stream);
+  queueMetrics(scalarMetrics, scalarMetricKernel, stream);
+}
+
+MetricBuffer::MetricDescriptor
+MetricBuffer::newMetricDescriptor(const std::string &name, size_t typeIndex) {
+  auto newMetricId = metricId.fetch_add(1);
+  MetricDescriptor descriptor{newMetricId, typeIndex, name};
+  metricDescriptors.insert(newMetricId, descriptor);
+  return descriptor;
+}
+
+const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
+    const std::map<std::string, TensorMetric> &tensorMetrics,
+    void *stream) const {
+  std::map<std::string, MetricValueType> tensorMetricsHost;
+  for (auto &[name, tensorMetric] : tensorMetrics) {
+    uint64_t metricBits = 0;
+    runtime->copyDeviceToHostAsync(&metricBits, tensorMetric.ptr,
+                                   sizeof(uint64_t), stream);
+    runtime->synchronizeStream(stream);
+    if (tensorMetric.index == variant_index_v<double, MetricValueType>) {
+      tensorMetricsHost[name] = reinterpret_cast<double &>(metricBits);
+    } else if (tensorMetric.index ==
+               variant_index_v<int64_t, MetricValueType>) {
+      tensorMetricsHost[name] = reinterpret_cast<int64_t &>(metricBits);
+    }
+  }
+  return tensorMetricsHost;
+}
+
+void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
+                         void *kernel, void *stream) {
+  std::lock_guard<std::mutex> lock(bufferMutex);
+  auto &buffer = getOrCreateBuffer();
+  void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
+                          reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
+                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&tensorMetric.ptr)};
+  runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
+                        nullptr);
+}
+
+void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
+                         void *kernel, void *stream) {
+  std::lock_guard<std::mutex> lock(bufferMutex);
+  auto &buffer = getOrCreateBuffer();
+  uint64_t metricBits = std::visit(
+      [](auto &&value) -> uint64_t {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, std::string>) {
+          throw std::runtime_error(
+              "[PROTON] String metrics are not supported in MetricBuffer");
+        } else {
+          static_assert(sizeof(T) == sizeof(uint64_t),
+                        "MetricValueType alternative must be 8 bytes");
+          return std::bit_cast<uint64_t>(value);
+        }
+      },
+      scalarMetric);
+  void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
+                          reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
+                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&metricBits)};
+  runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
+                        nullptr);
+}
+
+void MetricBuffer::synchronize(DeviceBuffer &buffer) {
+  runtime->synchronizeDevice();
+  runtime->copyDeviceToHostAsync(buffer.hostPtr, buffer.devicePtr, size,
+                                 buffer.priorityStream);
+  runtime->copyDeviceToHostAsync(&buffer.hostOffset, buffer.deviceOffsetPtr,
+                                 sizeof(uint64_t), buffer.priorityStream);
+  runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
+                  buffer.priorityStream);
+  runtime->synchronizeStream(
+      buffer.priorityStream); // Ensure memset is done
+}
+
+MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
+  auto device = runtime->getDevice();
+  if (deviceBuffers.find(reinterpret_cast<void *>(device)) ==
+      deviceBuffers.end()) {
+    deviceBuffers[reinterpret_cast<void *>(device)] = DeviceBuffer{};
+    auto &buffer = deviceBuffers.at(reinterpret_cast<void *>(device));
+    runtime->allocateDeviceBuffer(&buffer.devicePtr, size);
+    runtime->allocateDeviceBuffer(&buffer.deviceOffsetPtr, sizeof(uint64_t));
+    runtime->allocateHostBuffer(&buffer.hostPtr, size);
+    buffer.priorityStream = runtime->getPriorityStream();
+    buffer.hostOffset = 0;
+    runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
+                    buffer.priorityStream);
+    runtime->synchronizeStream(buffer.priorityStream);
+  }
+  return deviceBuffers.at(reinterpret_cast<void *>(device));
+}
+
+} // namespace proton
