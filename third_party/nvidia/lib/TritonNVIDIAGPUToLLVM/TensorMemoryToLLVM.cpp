@@ -654,7 +654,8 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
-    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+             triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
             srcTy.getEncoding())) {
       return failure();
     }
