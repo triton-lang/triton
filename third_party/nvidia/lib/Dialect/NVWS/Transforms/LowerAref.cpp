@@ -105,6 +105,9 @@ bool isTMEMAllocScale(Operation *op) {
 
 bool isOperandPipelineable(Value v, scf::ForOp forOp) {
   auto isPipelineable = [](Operation *op) {
+    if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op)) {
+      return true;
+    }
     if (auto index = dyn_cast<MemDescIndexOp>(op)) {
       if (isTMEMAllocScale(index.getSrc().getDefiningOp())) {
         auto tmemScaleAlloc = index.getSrc().getDefiningOp<TMEMAllocOp>();
