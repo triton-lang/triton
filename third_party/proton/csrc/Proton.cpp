@@ -122,9 +122,8 @@ static void initProton(pybind11::module &&m) {
 
   m.def("set_metric_kernels",
         [](void *tensorMetricKernel, void *scalarMetricKernel, void *stream) {
-          SessionManager::instance().setMetricKernels(tensorMetricKernel,
-                                                      scalarMetricKernel,
-                                                      stream);
+          SessionManager::instance().setMetricKernels(
+              tensorMetricKernel, scalarMetricKernel, stream);
         });
 
   m.def("get_context_depth", [](size_t sessionId) {

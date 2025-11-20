@@ -4,6 +4,7 @@ from functools import wraps
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
+
 class state:
     """
     A context manager and decorator for entering and exiting a state.

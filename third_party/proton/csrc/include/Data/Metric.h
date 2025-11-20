@@ -5,13 +5,13 @@
 #include "Utility/Map.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
 #include <variant>
 #include <vector>
-#include <atomic>
 
 namespace proton {
 
@@ -375,8 +375,7 @@ public:
   };
 
 public:
-  MetricBuffer(size_t size, Runtime *runtime)
-      : size(size), runtime(runtime) {}
+  MetricBuffer(size_t size, Runtime *runtime) : size(size), runtime(runtime) {}
 
   ~MetricBuffer();
 
@@ -427,7 +426,6 @@ private:
 
   DeviceBuffer &getOrCreateBuffer();
 
-
   void queue(size_t metricId, TensorMetric tensorMetric, void *kernel,
              void *stream);
 
@@ -464,7 +462,7 @@ protected:
   static std::atomic<size_t> metricId;
   static ThreadSafeMap<size_t, MetricDescriptor> metricDescriptors;
 
-  size_t size;       // byte
+  size_t size; // byte
   Runtime *runtime{};
 
   std::map<void *, DeviceBuffer> deviceBuffers;

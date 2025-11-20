@@ -412,8 +412,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doAddMetrics(
-    size_t scopeId,
-    const std::map<std::string, MetricValueType> &scalarMetrics,
+    size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   (void)tensorMetrics; // ROCm tensor metrics not yet supported
   for (auto *data : profiler.getDataSet()) {

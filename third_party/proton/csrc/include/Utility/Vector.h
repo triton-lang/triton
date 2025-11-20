@@ -24,8 +24,7 @@ public:
     vector.push_back(std::move(value));
   }
 
-  template <typename... Args>
-  void emplace_back(Args &&...args) {
+  template <typename... Args> void emplace_back(Args &&...args) {
     std::unique_lock<std::shared_mutex> lock(mutex);
     vector.emplace_back(std::forward<Args>(args)...);
   }

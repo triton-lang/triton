@@ -30,21 +30,15 @@ def scalar_metric_kernel(device_ptr, device_offset_ptr, metric_id, metric_value)
     tl.store(device_offset_ptr, device_offset)
 
 
-def _get_kernel(kernel_fn,  *args):
-    kernel = kernel_fn.warmup(*args, grid=(1,), num_warps=1)
+def _get_kernel(kernel_fn, *args):
+    kernel = kernel_fn.warmup(*args, grid=(1, ), num_warps=1)
     kernel._init_handle()
     return kernel.function
 
 
 def set_metric_kernels():
     mock_ptr = MockTensor(tl.int64)
-    tensor_metric_kernel_fn = _get_kernel(
-        tensor_metric_kernel,
-        mock_ptr,
-        mock_ptr,
-        tl.int64,
-        mock_ptr
-    )
+    tensor_metric_kernel_fn = _get_kernel(tensor_metric_kernel, mock_ptr, mock_ptr, tl.int64, mock_ptr)
     scalar_metric_kernel_fn = _get_kernel(
         scalar_metric_kernel,
         mock_ptr,
@@ -54,11 +48,7 @@ def set_metric_kernels():
     )
     device = driver.active.get_current_device()
     stream = driver.active.get_current_stream(device)
-    libproton.set_metric_kernels(
-        tensor_metric_kernel_fn,
-        scalar_metric_kernel_fn,
-        stream
-    )
+    libproton.set_metric_kernels(tensor_metric_kernel_fn, scalar_metric_kernel_fn, stream)
 
 
 def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], dict[str, libproton.TensorMetric]]:

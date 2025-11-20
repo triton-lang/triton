@@ -258,7 +258,7 @@ struct GraphState {
 };
 
 class PendingGraphQueue {
- public:
+public:
   struct PendingGraph {
     size_t externId;
     std::map<Data *, std::vector<size_t>> dataToScopeIds;
@@ -268,7 +268,8 @@ class PendingGraphQueue {
 
   PendingGraphQueue() = default;
 
-  void push(size_t externId, const std::map<Data *, std::vector<size_t>> &dataToScopeIds,
+  void push(size_t externId,
+            const std::map<Data *, std::vector<size_t>> &dataToScopeIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     pendingGraphs.push_back(PendingGraph{externId, dataToScopeIds, numNodes});
@@ -483,10 +484,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
           cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
           // Clone all node states
-          pImpl->graphStates[graphId]
-              .nodeIdToState[nodeId] = 
-              pImpl->graphStates[originalGraphId]
-                  .nodeIdToState[originalNodeId];
+          pImpl->graphStates[graphId].nodeIdToState[nodeId] =
+              pImpl->graphStates[originalGraphId].nodeIdToState[originalNodeId];
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         auto &numInstances = pImpl->graphStates[graphId].numInstances;
@@ -540,7 +539,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           numInstances = pImpl->graphStates[graphExecId].numInstances;
           findGraph = true;
         }
-        if (!findGraph && !pImpl->graphStates[graphExecId].captureStatusChecked) {
+        if (!findGraph &&
+            !pImpl->graphStates[graphExecId].captureStatusChecked) {
           pImpl->graphStates[graphExecId].captureStatusChecked = true;
           std::cerr << "[PROTON] Cannot find graph for graphExecId: "
                     << graphExecId
@@ -592,7 +592,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             });
           }
         }
-      } 
+      }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
@@ -700,6 +700,5 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
                                 mode);
   }
 }
-
 
 } // namespace proton

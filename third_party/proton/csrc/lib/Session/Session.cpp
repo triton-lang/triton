@@ -280,8 +280,7 @@ void SessionManager::addMetrics(
 }
 
 void SessionManager::setMetricKernels(void *tensorMetricKernel,
-                                      void *scalarMetricKernel,
-                                      void *stream) {
+                                      void *scalarMetricKernel, void *stream) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
     metricInterface->setMetricKernels(tensorMetricKernel, scalarMetricKernel,

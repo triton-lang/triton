@@ -219,8 +219,7 @@ private:
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
   // {context source, active count}
-  std::vector<std::pair<MetricInterface *, size_t>>
-      metricInterfaceCounts;
+  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
   // {metric, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

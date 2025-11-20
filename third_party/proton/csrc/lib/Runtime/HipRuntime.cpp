@@ -62,9 +62,7 @@ void HipRuntime::synchronizeStream(void *stream) {
   (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
 }
 
-void HipRuntime::synchronizeDevice() {
-  (void)hip::deviceSynchronize<true>();
-}
+void HipRuntime::synchronizeDevice() { (void)hip::deviceSynchronize<true>(); }
 
 void HipRuntime::destroyStream(void *stream) {
   (void)hip::streamDestroy<true>(reinterpret_cast<hipStream_t>(stream));

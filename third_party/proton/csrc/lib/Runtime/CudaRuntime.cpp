@@ -6,11 +6,11 @@
 namespace proton {
 
 void CudaRuntime::launchKernel(void *kernel, unsigned int gridDimX,
-                              unsigned int gridDimY, unsigned int gridDimZ,
-                              unsigned int blockDimX, unsigned int blockDimY,
-                              unsigned int blockDimZ, unsigned int sharedMemBytes,
-                              void *stream, void **kernelParams,
-                              void **extra) {
+                               unsigned int gridDimY, unsigned int gridDimZ,
+                               unsigned int blockDimX, unsigned int blockDimY,
+                               unsigned int blockDimZ,
+                               unsigned int sharedMemBytes, void *stream,
+                               void **kernelParams, void **extra) {
   cuda::launchKernel<true>(reinterpret_cast<CUfunction>(kernel), gridDimX,
                            gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
                            sharedMemBytes, reinterpret_cast<CUstream>(stream),

@@ -101,8 +101,7 @@ void MetricBuffer::synchronize(DeviceBuffer &buffer) {
                                  sizeof(uint64_t), buffer.priorityStream);
   runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
                   buffer.priorityStream);
-  runtime->synchronizeStream(
-      buffer.priorityStream); // Ensure memset is done
+  runtime->synchronizeStream(buffer.priorityStream); // Ensure memset is done
 }
 
 MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {

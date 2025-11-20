@@ -57,7 +57,7 @@ DEFINE_DISPATCH(ExternLibCuda, memFreeHost, cuMemFreeHost, void *)
 
 DEFINE_DISPATCH(ExternLibCuda, launchKernel, cuLaunchKernel, CUfunction,
                 unsigned int, unsigned int, unsigned int, unsigned int,
-                unsigned int, unsigned int, unsigned int, CUstream, void **, 
+                unsigned int, unsigned int, unsigned int, CUstream, void **,
                 void **)
 
 Device getDevice(uint64_t index) {

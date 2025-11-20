@@ -8,11 +8,12 @@ namespace proton {
 
 namespace hip {
 
-template <bool CheckSuccess> hipError_t launchKernel(
-    hipFunction_t f, unsigned int gridDimX, unsigned int gridDimY,
-    unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY,
-    unsigned int blockDimZ, unsigned int sharedMemBytes, hipStream_t stream,
-    void **kernelParams, void **extra);
+template <bool CheckSuccess>
+hipError_t launchKernel(hipFunction_t f, unsigned int gridDimX,
+                        unsigned int gridDimY, unsigned int gridDimZ,
+                        unsigned int blockDimX, unsigned int blockDimY,
+                        unsigned int blockDimZ, unsigned int sharedMemBytes,
+                        hipStream_t stream, void **kernelParams, void **extra);
 
 template <bool CheckSuccess> hipError_t ctxGetDevice(hipDevice_t *device);
 
