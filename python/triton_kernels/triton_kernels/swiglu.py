@@ -1,8 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from triton_kernels.numerics import InFlexData, OutFlexData
 import torch
 import triton
-from .swiglu_details._swiglu import _swiglu, _swiglu_fn
+from .swiglu_details._swiglu import _swiglu, _swiglu_fn, _standard_swiglu_fn
 from triton_kernels import target_info
 
 
@@ -20,12 +20,13 @@ class PrecisionConfig:
 
 
 swiglu_fn = _swiglu_fn
+standard_swiglu_fn = _standard_swiglu_fn
 
 
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, a, alpha, precision_config, routing_data):
+    def forward(ctx, a, alpha, precision_config, routing_data, add_bias=True):
         N = a.shape[-1]
         M = a.numel() // N
         assert a.stride()[-1] == 1
@@ -68,6 +69,7 @@ class SwiGLU(torch.autograd.Function):
             out.shape[-1],
             1,
             precision_config.limit,
+            add_bias,
             n_tokens,
             BLOCK_M=BLOCK_M,
             BLOCK_N=BLOCK_N,
@@ -82,11 +84,16 @@ class SwiGLU(torch.autograd.Function):
         return out
 
 
-def swiglu(a, alpha, precision_config, routing_data=None):
-    return SwiGLU.apply(a, alpha, precision_config, routing_data)
+def swiglu(a, alpha, precision_config, routing_data=None, add_bias=True):
+    return SwiGLU.apply(a, alpha, precision_config, routing_data, add_bias)
 
 
-def swiglu_torch(a, alpha, precision_config):
+def standard_swiglu(a, precision_config, routing_data=None):
+    pc = replace(precision_config, limit=None)
+    return SwiGLU.apply(a, 1.0, pc, routing_data, False)
+
+
+def swiglu_torch(a, alpha, precision_config, add_bias=True):
     limit = precision_config.limit
     a_gelu = a[..., ::2]
     if limit is not None:
@@ -96,5 +103,16 @@ def swiglu_torch(a, alpha, precision_config):
         a_linear = a_linear.clamp(min=-limit, max=limit)
 
     out_gelu = a_gelu * torch.sigmoid(alpha * a_gelu)
-    out = out_gelu * (a_linear + 1)
+    if add_bias:
+        out = out_gelu * (a_linear + 1)
+    else:
+        out = out_gelu * a_linear
+    return out
+
+
+def standard_swiglu_torch(a):
+    a_gelu = a[..., ::2]
+    a_linear = a[..., 1::2]
+    out_gelu = a_gelu * torch.sigmoid(a_gelu)
+    out = out_gelu * a_linear
     return out
