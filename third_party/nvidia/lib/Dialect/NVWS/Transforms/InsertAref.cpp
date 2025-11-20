@@ -590,11 +590,12 @@ public:
         if (op == loop || isa<MMAv5OpInterface, TMEMStoreOp>(op)) {
           return WalkResult::advance();
         }
-	if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
-	  if (!isa<TensorMemoryScalesEncodingAttr>(tmemAlloc.getType().getEncoding())) {
-	    return WalkResult::advance();
-	  }
-	}
+        if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
+          if (!isa<TensorMemoryScalesEncodingAttr>(
+                  tmemAlloc.getType().getEncoding())) {
+            return WalkResult::advance();
+          }
+        }
         auto producedValues = getProducedValues(op, loop.getBody());
         for (auto producedValue : producedValues) {
           OpBuilder builder(op);
