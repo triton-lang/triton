@@ -39,13 +39,6 @@ struct CircularStoreOpConversion
       // TODO(crobeck): see what buffer ops performance looks like here for
       // global mem (address space 1) compared to predicated ops to shared
       // memory
-      // auto store = LLVM::StoreOp::create(rewriter,
-      //   loc,
-      //   dataPack.record,
-      //   dataPack.ptr,
-      //   0,
-      //   0,
-      //   0);
       mlir::LLVM::AMD::llStore(rewriter, loc, dataPack.ptr, dataPack.record,
                                dataPack.isWriter);
       rewriter.eraseOp(op);
