@@ -199,6 +199,9 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
 
   Partition *scaleTmemCopyPartition = nullptr;
   auto setScaleCopyPartition = [&](Value scale) {
+    if (loop.isDefinedOutsideOfLoop(scale)) {
+      return;
+    }
     if (auto tmemAlloc = scale.getDefiningOp<ttng::TMEMAllocOp>()) {
       if (!scaleTmemCopyPartition) {
         scaleTmemCopyPartition = partitions.addPartition(0);
