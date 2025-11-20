@@ -858,6 +858,27 @@ LogicalResult TensormapCreateOp::verify() {
   return success();
 }
 
+// -- TensormapUpdateOp --
+LogicalResult TensormapUpdateOp::verify() {
+  auto hasAddress = (getGlobalAddress() != nullptr);
+  auto hasDim = !getGlobalDim().empty();
+  auto hasStride = !getGlobalStride().empty();
+  if (!hasAddress && !hasDim && !hasStride) {
+    return emitError("Must update at least one descriptor field");
+  }
+  if (hasStride && !hasDim) {
+    return emitError("Cannot update global stride without dim specified");
+  }
+  if (hasDim && hasStride) {
+    if (getGlobalStride().size() + 1 != getGlobalDim().size()) {
+      return emitError("Rank mismatch for global stride. Got ")
+        << getGlobalStride().size() << " but expected "
+        << getGlobalDim().size() - 1;
+    }
+  }
+  return success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

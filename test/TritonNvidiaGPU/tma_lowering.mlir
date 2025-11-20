@@ -55,6 +55,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#nvmma_32_update = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: update_tensor_descriptor
+  // CHECK: %[[DESC_PTR:.+]] = ttng.get_descriptor_ptr %arg0
+  // CHECK: ttng.tensormap_update %[[DESC_PTR]] global_address = %arg1
+  // CHECK: ttng.tensormap_fenceproxy_acquire %[[DESC_PTR]] : !tt.ptr<i8>
+  tt.func public @update_tensor_descriptor(%arg0: !tt.tensordesc<tensor<8x32xi8, #nvmma_32_update>>, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
+    tt.update_tensor_descriptor %arg0 base = %arg1 : !tt.ptr<i8> : !tt.tensordesc<tensor<8x32xi8, #nvmma_32_update>>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>

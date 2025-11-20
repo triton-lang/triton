@@ -1687,3 +1687,175 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_update_tensor_descriptor_base():
+    @gluon.jit
+    def kernel(input_ptr, output_ptr, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        # Create descriptor for input
+        desc = tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+        mbarrier.wait(bar, 0)
+        mbarrier.invalidate(bar)
+
+        tma.update_tensor_descriptor(desc, base=output_ptr)
+
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        data = smem.load(block_layout)
+        data_smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout, data)
+        tma.async_copy_shared_to_global(desc, [0, 0], data_smem)
+        tma.store_wait(0)
+        data_smem._keep_alive()
+
+    XBLOCK = 16
+    input_data = torch.randn((XBLOCK, XBLOCK), device="cuda", dtype=torch.float16)
+    output = torch.zeros_like(input_data)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1,)](input_data, output, XBLOCK, smem_layout)
+    torch.testing.assert_close(input_data, output)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_update_tensor_descriptor_shape():
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, M1: ttgl.constexpr, N1: ttgl.constexpr,
+               M2: ttgl.constexpr, N2: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        desc = tma.make_tensor_descriptor(
+            in_ptr,
+            shape=[M1, N1],
+            strides=[N1, 1],
+            block_shape=[M1, N1],
+            layout=smem_layout,
+        )
+
+        smem_small = ttgl.allocate_shared_memory(ttgl.float16, [M1, N1], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(desc, [0, 0], bar, smem_small)
+        mbarrier.wait(bar, 0)
+
+        tma.update_tensor_descriptor(desc, base=out_ptr, shape=[M2, N2], strides=[N2, 1])
+
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [8, 4], [4, 1], [1, 0])
+        data = smem_small.load(block_layout)
+        smem_large_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(
+            swizzle_byte_width=32,
+            element_bitwidth=16,
+            rank=2,
+            transposed=False,
+            fp4_padded=False,
+        )
+        data_smem = ttgl.allocate_shared_memory(ttgl.float16, [M1, N1], smem_large_layout, data)
+        tma.async_copy_shared_to_global(desc, [0, 0], data_smem)
+        tma.store_wait(0)
+        data_smem._keep_alive()
+
+    M1, N1 = 16, 16
+    M2, N2 = 32, 32
+    input_data = torch.randn((M1, N1), device="cuda", dtype=torch.float16)
+    output = torch.zeros((M2, N2), device="cuda", dtype=torch.float16)
+
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1,)](input_data, output, M1, N1, M2, N2, smem_layout)
+    torch.testing.assert_close(output[:M1, :N1], input_data)
+    torch.testing.assert_close(output[M1:, :], torch.zeros((M2 - M1, N2), device="cuda", dtype=torch.float16))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_update_tensor_descriptor_loop():
+    @gluon.jit
+    def kernel(tensors_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               num_batches: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        desc = tma.make_tensor_descriptor(
+            tensors_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M, N],
+            layout=smem_layout,
+        )
+
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [M, N], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+
+        for i in range(num_batches):
+            batch_offset = i * M * N
+            new_base = tensors_ptr + batch_offset
+            tma.update_tensor_descriptor(desc, base=new_base)
+
+            # Load, process, and store
+            mbarrier.init(bar, count=1)
+            mbarrier.expect(bar, desc.block_type.nbytes)
+            tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+            mbarrier.wait(bar, 0)
+
+            data = smem.load(block_layout)
+            data = data + ttgl.full([M, N], i + 1, ttgl.float16, block_layout)
+            data_smem = ttgl.allocate_shared_memory(ttgl.float16, [M, N], smem_layout, data)
+            tma.async_copy_shared_to_global(desc, [0, 0], data_smem)
+            tma.store_wait(0)
+            data_smem._keep_alive()
+
+    M, N = 16, 16
+    num_batches = 3
+    tensors = torch.randn((num_batches, M, N), device="cuda", dtype=torch.float16)
+    ref = tensors.clone()
+
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1,)](tensors, M, N, num_batches, smem_layout)
+
+    for i in range(num_batches):
+        expected = ref[i] + (i + 1)
+        torch.testing.assert_close(tensors[i], expected)

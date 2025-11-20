@@ -866,6 +866,18 @@ void init_gluon_ir(py::module &&m) {
              return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
                                                       strides, paddingOption);
            })
+      .def("create_update_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &desc,
+              std::optional<Value> base,
+              std::vector<Value> shape,
+              std::vector<Value> strides) -> void {
+             Value baseVal = base.has_value() ? base.value() : Value();
+             self.create<tt::UpdateTensorDescOp>(desc, baseVal, shape, strides);
+           },
+           py::arg("desc"),
+           py::arg("base") = std::nullopt,
+           py::arg("shape") = std::vector<Value>{},
+           py::arg("strides") = std::vector<Value>{})
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value result, Value pred, Value barrier) {

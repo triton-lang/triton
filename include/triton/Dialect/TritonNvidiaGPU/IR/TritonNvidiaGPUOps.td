@@ -766,6 +766,22 @@ def TTNG_ReinterpretTensorDescOp : TTNG_Op<"reinterpret_tensor_descriptor", [Pur
   }];
 }
 
+def TTNG_GetDescriptorPtrOp : TTNG_Op<"get_descriptor_ptr", [Pure]> {
+  let summary = "Get the underlying pointer from a tensor descriptor";
+
+  let description = [{
+     This Op extracts the underlying pointer from a tensor descriptor.
+     Used internally for TMA operations that need to access the raw descriptor pointer.
+  }];
+
+  let arguments = (ins TT_TensorDescType:$desc);
+  let results = (outs TT_PtrType:$result);
+
+  let assemblyFormat = [{
+    $desc attr-dict `:` qualified(type($desc)) `->` qualified(type($result))
+  }];
+}
+
 def TTNG_TensormapCreateOp: TTNG_Op<
   "tensormap_create",
   [
@@ -813,6 +829,32 @@ def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   let assemblyFormat = [{
     $desc_ptr attr-dict `:` qualified(type($desc_ptr))
   }];
+}
+
+def TTNG_TensormapUpdateOp: TTNG_Op<
+  "tensormap_update",
+  [
+    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
+    AttrSizedOperandSegments
+  ]
+> {
+  let summary = "Update in-place TMA descriptor fields selectively";
+  let arguments = (ins
+    TT_PtrType:$desc_ptr,
+    Optional<TT_PtrType>:$global_address,
+    Variadic<I32>:$global_dim,
+    Variadic<I64>:$global_stride
+  );
+  let assemblyFormat = [{
+    $desc_ptr
+    oilist(
+      `global_address` `=` $global_address `:` type($global_address) |
+      `global_dim` `=` `[` $global_dim `]` |
+      `global_stride` `=` `[` $global_stride `]`
+    )
+    attr-dict `:`  type($desc_ptr)
+  }];
+  let hasVerifier = 1;
 }
 
 #endif

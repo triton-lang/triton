@@ -32,6 +32,7 @@ from .core import (
     load_tensor_descriptor,
     store_tensor_descriptor,
     make_tensor_descriptor,
+    update_tensor_descriptor,
     tensor_descriptor,
     tensor_descriptor_type,
     add,
@@ -142,6 +143,7 @@ __all__ = [
     "load_tensor_descriptor",
     "store_tensor_descriptor",
     "make_tensor_descriptor",
+    "update_tensor_descriptor",
     "tensor_descriptor",
     "abs",
     "add",
@@ -310,6 +312,8 @@ def str_to_ty(name, c):
         # FIXME: Last dim stride should be constexpr(1)
         stride_type = tuple_type(([int64] * ndim))
         block = block_type(dtype, block_shape)
+        # Base type is a pointer to the element type
+        base_type = pointer_type(dtype)
         if is_gluon:
             from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout
             from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as nvidia_tensor_descriptor_type
@@ -319,10 +323,10 @@ def str_to_ty(name, c):
                 dict(NVMMASharedLayout=NVMMASharedLayout, PaddedSharedLayout=PaddedSharedLayout,
                      SwizzledSharedLayout=SwizzledSharedLayout))
             if isinstance(layout, NVMMASharedLayout):
-                return nvidia_tensor_descriptor_type(block, shape_type, stride_type, layout)
+                return nvidia_tensor_descriptor_type(block, base_type, shape_type, stride_type, layout)
             else:
-                return amd_tensor_descriptor_type(block, shape_type, stride_type, layout)
-        return tensor_descriptor_type(block, shape_type, stride_type)
+                return amd_tensor_descriptor_type(block, base_type, shape_type, stride_type, layout)
+        return tensor_descriptor_type(block, base_type, shape_type, stride_type)
 
     if name.startswith("constexpr"):
         return constexpr_type(c)

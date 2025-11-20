@@ -1456,28 +1456,34 @@ class tensor_descriptor_base(base_value):
 
 class tensor_descriptor_type(tensor_descriptor_base_type):
 
-    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type):
+    def __init__(self, block_type: block_type, base_type: base_type, shape_type: tuple_type, strides_type: tuple_type):
         self.block_type = block_type
+        self.base_type = base_type
         self.shape_type = shape_type
         self.strides_type = strides_type
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor_base, int]:
         handle = handles[cursor]
         cursor += 1
+        # Note: base is not unflattened, it's embedded in the
+        # descriptor handle.
+        base = None
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
         shape = shape.values
         strides = strides.values
-        value = tensor_descriptor(handle, shape, strides, self.block_type)
+        value = tensor_descriptor(handle, base, shape, strides, self.block_type, base_type=self.base_type)
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         super()._flatten_ir_types(builder, out)
+        # Note: base_type is not flattened, it's embedded in the
+        # descriptor handle.
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
 
     def __eq__(self, other):
-        return super().__eq__(other) and (self.shape_type == other.shape_type) and (self.strides_type
+        return super().__eq__(other) and (self.base_type == other.base_type) and (self.shape_type == other.shape_type) and (self.strides_type
                                                                                     == other.strides_type)
 
 
@@ -1485,21 +1491,32 @@ class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type):
+    def __init__(self, handle, base: tensor, shape: List[tensor], strides: List[tensor], block_type: block_type, base_type=None):
         """Not called by user code."""
         # IR handle
         super().__init__(handle, block_type)
-        # Global shape
+        # Base pointer to global memory tensor
+        self.base = base
+        # Global shape and strides
         self.shape = tuple(shape)
         self.strides = tuple(strides)
+        # If base_type is not provided, infer it from base.  If base
+        # is None, base_type must be provided
+        if base_type is None:
+            if base is None:
+                raise ValueError("Either base or base_type must be provided")
+            base_type = base.type
         self.type = tensor_descriptor_type(
             block_type,
-            shape_type=self.shape.type,
-            strides_type=self.strides.type,
+            base_type,
+            self.shape.type,
+            self.strides.type,
         )
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
+        # Note: base is NOT flattened - it's embedded in the descriptor handle
+        # self.base._flatten_ir(handles)
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
@@ -2347,6 +2364,87 @@ def make_tensor_descriptor(
 
     padding_option = _unwrap_if_constexpr(padding_option)
     return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
+
+
+@builtin
+def update_tensor_descriptor(
+    desc: tensor_descriptor,
+    base: tensor = None,
+    shape: List[tensor] = None,
+    strides: List[tensor] = None,
+    _semantic=None,
+) -> None:
+    """Update an existing TMA descriptor
+
+    Updates one or more fields of an existing TMA descriptor.
+
+    :param desc: The existing tensor descriptor to update
+    :param base: The new base pointer, must be 16-byte aligned (optional)
+    :param shape: The new tensor shape (optional)
+    :param strides: The new tensor strides (optional)
+
+    Notes
+    *****
+    - At least one field (base, shape, or strides) must be provided
+    - When providing strides, shape must also be provided
+    - Shape and strides must have the same length
+    - Same limitation for updates values hold as for `make_tensor_descriptor`
+
+    Example
+    *******
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(ptr, M: tl.constexpr, N: tl.constexpr):
+            # Create descriptor
+            desc = tl.make_tensor_descriptor(
+                ptr,
+                shape=[M, N],
+                strides=[N, 1],
+                block_shape=[16, 16]
+            )
+
+            # Update to new shape
+            tl.update_tensor_descriptor(
+                desc,
+                shape=[M//2, N],
+            )
+
+            # Use updated descriptor
+            data = desc.load([0, 0])
+    """
+    if base is None and shape is None and strides is None:
+        raise ValueError("At least one descriptor field must be updated")
+
+    if strides is not None and shape is None:
+        raise ValueError("Cannot update strides without providing shape")
+
+    if shape is not None and strides is not None:
+        if len(shape) != len(strides):
+            raise ValueError(f"Shape and strides must have the same length, got {len(shape)} and {len(strides)}")
+
+        last_stride = _unwrap_if_constexpr(strides[-1])
+        if last_stride != 1:
+            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
+
+    if shape is not None:
+        shape = [_semantic.make_scalar(s, int32) for s in shape]
+    if strides is not None:
+        strides = [_semantic.make_scalar(_unwrap_if_constexpr(s), int64) for s in strides]
+
+    _semantic.builder.create_update_tensor_descriptor(
+        desc.handle,
+        base=base.handle if base is not None else None,
+        shape=[s.handle for s in shape] if shape is not None else [],
+        strides=[s.handle for s in strides] if strides is not None else []
+    )
+
+    if base is not None:
+        desc.base = base
+    if shape is not None:
+        desc.shape = tuple(shape)
+    if strides is not None:
+        desc.strides = tuple(strides)
 
 
 # -----------------------

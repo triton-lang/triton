@@ -1760,3 +1760,249 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+@triton.jit
+def kernel_update_tensor_descriptor_base(desc, a_ptr, b_ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    moffset = MBLOCK * pid_m
+    noffset = NBLOCK * pid_n
+
+    a = desc.load([moffset, noffset])
+
+    tl.update_tensor_descriptor(desc, base=b_ptr)
+
+    desc.store([moffset, noffset], a + 10)
+
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_base(device):
+    M, N = 64, 128
+    MBLOCK, NBLOCK = 16, 32
+
+    torch.manual_seed(42)
+    A = torch.randn((M, N), dtype=torch.float32, device=device)
+    B = torch.zeros((M, N), dtype=torch.float32, device=device)
+
+    desc = TensorDescriptor.from_tensor(A, [MBLOCK, NBLOCK])
+
+    grid = (triton.cdiv(M, MBLOCK), triton.cdiv(N, NBLOCK))
+    kernel_update_tensor_descriptor_base[grid](
+        desc, A, B, M, N, MBLOCK=MBLOCK, NBLOCK=NBLOCK
+    )
+
+    ref_out = A + 10
+    torch.testing.assert_close(B, ref_out)
+
+
+@triton.jit
+def kernel_update_tensor_descriptor_shape(a_ptr, b_ptr, M1, N1, M2, N2,
+                                          MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    desc = tl.make_tensor_descriptor(
+        a_ptr,
+        shape=[M1, N1],
+        strides=[N1, 1],
+        block_shape=[MBLOCK, NBLOCK],
+    )
+
+    a = desc.load([0, 0])
+
+    tl.update_tensor_descriptor(desc, base=b_ptr, shape=[M2, N2], strides=[N2, 1])
+
+    desc.store([0, 0], a * 2)
+
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_shape(device):
+    M1, N1 = 32, 64
+    M2, N2 = 64, 128
+    MBLOCK, NBLOCK = 16, 32
+
+    torch.manual_seed(42)
+    A = torch.randn((M1, N1), dtype=torch.float32, device=device)
+    B = torch.zeros((M2, N2), dtype=torch.float32, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+    triton.set_allocator(alloc_fn)
+
+    kernel_update_tensor_descriptor_shape[(1,)](
+        A, B, M1, N1, M2, N2, MBLOCK=MBLOCK, NBLOCK=NBLOCK
+    )
+
+    ref_B = torch.zeros((M2, N2), dtype=torch.float32, device=device)
+    ref_B[:MBLOCK, :NBLOCK] = A[:MBLOCK, :NBLOCK] * 2
+    torch.testing.assert_close(B, ref_B)
+
+
+@triton.jit
+def kernel_update_tensor_descriptor_strides(a_ptr, b_ptr, M, N,
+                                            MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    desc = tl.make_tensor_descriptor(
+        a_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[MBLOCK, NBLOCK],
+    )
+
+    a = desc.load([0, 0])
+
+    tl.update_tensor_descriptor(desc, base=b_ptr, shape=[N, M], strides=[M, 1])
+
+    desc.store([0, 0], a)
+
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_strides(device):
+    M, N = 64, 128
+    MBLOCK, NBLOCK = 16, 32
+
+    torch.manual_seed(42)
+    A = torch.randn((M, N), dtype=torch.float32, device=device)
+    B = torch.zeros((N, M), dtype=torch.float32, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+    triton.set_allocator(alloc_fn)
+
+    kernel_update_tensor_descriptor_strides[(1,)](
+        A, B, M, N, MBLOCK=MBLOCK, NBLOCK=NBLOCK
+    )
+
+    ref_B = torch.zeros((N, M), dtype=torch.float32, device=device)
+    ref_B[:MBLOCK, :NBLOCK] = A[:MBLOCK, :NBLOCK]
+    torch.testing.assert_close(B, ref_B)
+
+
+@triton.jit
+def kernel_update_tensor_descriptor_loop(ptr, M, N, num_tensors: tl.constexpr,
+                                         MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offset = MBLOCK * pid
+
+    desc = tl.make_tensor_descriptor(
+        ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[MBLOCK, NBLOCK],
+    )
+
+    for i in range(num_tensors):
+        tensor_offset = i * M * N
+        new_base = ptr + tensor_offset
+        tl.update_tensor_descriptor(desc, base=new_base)
+
+        data = desc.load([offset, 0])
+        data = data + (i + 1) * 10
+        desc.store([offset, 0], data)
+
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_loop(device):
+    M, N = 64, 128
+    MBLOCK, NBLOCK = 16, 128
+    num_tensors = 3
+
+    torch.manual_seed(42)
+    tensors = torch.randn((num_tensors, M, N), dtype=torch.float32, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+    triton.set_allocator(alloc_fn)
+
+    grid = (triton.cdiv(M, MBLOCK),)
+    kernel_update_tensor_descriptor_loop[grid](
+        tensors, M, N, num_tensors=num_tensors, MBLOCK=MBLOCK, NBLOCK=NBLOCK
+    )
+
+    torch.manual_seed(42)
+    ref_tensors = torch.randn((num_tensors, M, N), dtype=torch.float32, device=device)
+    for i in range(num_tensors):
+        ref_tensors[i] = ref_tensors[i] + (i + 1) * 10
+
+    torch.testing.assert_close(tensors, ref_tensors)
+
+
+@triton.jit
+def kernel_update_tensor_descriptor_mixed(in_ptr, out_ptr, M, N, new_M, new_N,
+                                          MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    desc = tl.make_tensor_descriptor(
+        in_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[MBLOCK, NBLOCK],
+    )
+
+    data = desc.load([0, 0])
+
+    tl.update_tensor_descriptor(
+        desc,
+        base=out_ptr,
+        shape=[new_M, new_N],
+        strides=[new_N, 1]
+    )
+
+    desc.store([0, 0], data * 3)
+
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_all_fields(device):
+    M, N = 32, 64
+    new_M, new_N = 64, 128
+    MBLOCK, NBLOCK = 16, 32
+
+    torch.manual_seed(42)
+    A = torch.randn((M, N), dtype=torch.float32, device=device)
+    B = torch.zeros((new_M, new_N), dtype=torch.float32, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+    triton.set_allocator(alloc_fn)
+
+    kernel_update_tensor_descriptor_mixed[(1,)](
+        A, B, M, N, new_M, new_N,
+        MBLOCK=MBLOCK, NBLOCK=NBLOCK
+    )
+
+    ref_B = torch.zeros((new_M, new_N), dtype=torch.float32, device=device)
+    ref_B[:MBLOCK, :NBLOCK] = A[:MBLOCK, :NBLOCK] * 3
+    torch.testing.assert_close(B, ref_B)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["float16", "float32", "bfloat16"])
+def test_update_tensor_descriptor_dtypes(dtype_str, device):
+    @triton.jit
+    def kernel(desc, new_ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+        data = desc.load([0, 0])
+        tl.update_tensor_descriptor(desc, base=new_ptr)
+        desc.store([0, 0], data + 1)
+
+    M, N = 32, 64
+    MBLOCK, NBLOCK = 16, 32
+    torch_dtype = getattr(torch, dtype_str)
+
+    torch.manual_seed(42)
+    A = torch.randn((M, N), dtype=torch.float32, device=device).to(torch_dtype)
+    B = torch.zeros((M, N), dtype=torch_dtype, device=device)
+
+    desc = TensorDescriptor.from_tensor(A, [MBLOCK, NBLOCK])
+    kernel[(1,)](desc, B, M, N, MBLOCK=MBLOCK, NBLOCK=NBLOCK)
+
+    ref_B = torch.zeros((M, N), dtype=torch_dtype, device=device)
+    ref_B[:MBLOCK, :NBLOCK] = A[:MBLOCK, :NBLOCK] + 1
+    torch.testing.assert_close(B, ref_B)
+
+@triton.jit
+def kernel_update_tensor_descriptor_invalid_strides(desc, ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
+    tl.update_tensor_descriptor(desc, base=ptr, strides=[N, 1])
+
+@pytest.mark.interpreter
+def test_update_tensor_descriptor_invalid_strides_compile_error(device):
+    M, N = 32, 64
+    MBLOCK, NBLOCK = 16, 32
+    A = torch.empty((M, N), dtype=torch.float32, device=device)
+    desc = TensorDescriptor.from_tensor(A, [MBLOCK, NBLOCK])
+    with pytest.raises(triton.CompilationError):
+        kernel_update_tensor_descriptor_invalid_strides[(1,)](desc, A, M, N, MBLOCK=MBLOCK, NBLOCK=NBLOCK)
