@@ -12,7 +12,6 @@
 #include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -46,6 +45,7 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
+#include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {

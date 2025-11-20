@@ -29,21 +29,9 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
         TritonPluginsIncGen
 
         LINK_LIBS PUBLIC
-        MLIRIR
-        MLIRInferTypeOpInterface
-        MLIRFunctionInterfaces
-        MLIRFuncDialect
         MLIRPass
         LLVMSupport
         MLIRSupport
-        TritonGPUIR
-        TritonNvidiaGPUIR
-        TritonInstrumentIR
-        MLIROptLib
-        MLIRPass
-        MLIRRegisterAllDialects
-        MLIRRegisterAllPasses
-        MLIRTransforms
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
 
