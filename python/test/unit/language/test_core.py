@@ -4067,7 +4067,7 @@ def test_const(device, choose_const, constexpr, mode):
             error = "Cannot store to a constant pointer"
         else:
             if mode == "call":
-                error = "Inconsistent return types"
+                error = "Return type mismatch: "
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
@@ -5488,7 +5488,8 @@ def test_poison_return(device):
 
     @triton.jit
     def kernel(Out):
-        tl.store(Out, return_poison(0))
+        zero = 0
+        tl.store(Out, return_poison(zero))
 
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))

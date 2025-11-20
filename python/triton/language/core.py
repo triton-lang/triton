@@ -119,10 +119,8 @@ def is_builtin(fn) -> bool:
 
 
 def _to_tensor_type(x):
-    if isinstance(x, tensor):
-        return x.type
-    elif isinstance(x, constexpr):
-        x = x.value
+    if isinstance(x, dtype):
+        return x
     elif isinstance(x, constexpr_type):
         x = x.value
 
