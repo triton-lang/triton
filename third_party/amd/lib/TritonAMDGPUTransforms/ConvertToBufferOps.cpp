@@ -1,4 +1,3 @@
-
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -366,7 +365,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
         atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(op, "RMW FADD does not support F64");
     }
-    
+
     LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
