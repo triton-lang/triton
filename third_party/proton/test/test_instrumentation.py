@@ -823,3 +823,63 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
         warp1_events = [e for e in events if "warp 1" in e["tid"]]
         assert len(warp0_events) == 2
         assert len(warp1_events) == 2
+
+
+def test_threaded_kernel_call(tmp_path: pathlib.Path):
+
+    import threading
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+
+    temp_file = tmp_path / "test_threaded.chrome_trace"
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+    )
+
+    exception_holder = []
+
+    def run_kernel():
+        try:
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        except Exception as e:
+            exception_holder.append(e)
+
+    thread = threading.Thread(target=run_kernel)
+    thread.start()
+    thread.join()
+
+    proton.finalize()
+
+    assert len(exception_holder) == 0, f"Kernel raised exception: {exception_holder[0] if exception_holder else None}"
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) > 0
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        assert len(kernel_events) > 0

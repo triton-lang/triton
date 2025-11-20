@@ -5,9 +5,10 @@ import triton.language as tl
 
 @triton.jit
 def clip(x, limit, clip_lower: tl.constexpr):
-    res = tl.minimum(x, limit)
     if clip_lower:
-        res = tl.maximum(-limit, res)
+        res = tl.clamp(x, -limit, limit)
+    else:
+        res = tl.minimum(x, limit)
     return res
 
 

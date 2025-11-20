@@ -54,7 +54,8 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    const TargetInfo &targetInfo,
                                    PatternBenefit benefit);
 
-void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns);
+void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns,
+                                     const TargetInfo &targetInfo);
 
 void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

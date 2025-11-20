@@ -64,7 +64,7 @@ Type replaceLayout(const Type &type, const Attribute &newLayout) {
 ttg::DistributedEncodingTrait
 replaceCTALayout(ttg::DistributedEncodingTrait layout,
                  llvm::ArrayRef<int64_t> shape, int numWarps,
-                 const ttg::CTALayoutAttr &newCTALayout) {
+                 ttg::CTAEncodingAttr newCTALayout) {
   if (auto blockedLayout = mlir::dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     return ttg::BlockedEncodingAttr::get(
         layout.getContext(), shape, blockedLayout.getSizePerThread(),
@@ -259,8 +259,8 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
     auto numThreads = ttg::lookupThreadsPerWarp(builder);
     auto numWarps = ttg::lookupNumWarps(dot);
 
-    auto newCTALayout = ttg::CTALayoutAttr::get(ctx, {splitM, splitN},
-                                                {splitM, splitN}, {1, 0});
+    auto newCTALayout = ttg::CTAEncodingAttr::fromSplitParams(
+        ctx, {splitM, splitN}, {splitM, splitN}, {1, 0});
     auto newDLayout = ttg::BlockedEncodingAttr::get(
         ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
         numWarps, numThreads, newCTALayout);
@@ -326,8 +326,8 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
       CTAsPerCGA[order[rank - 1]] *= remainingCTAs;
 
     auto numWarps = ttg::lookupNumWarps(reduce);
-    auto CTALayout =
-        ttg::CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+    auto CTALayout = ttg::CTAEncodingAttr::fromSplitParams(
+        context, CTAsPerCGA, CTASplitNum, CTAOrder);
     if (!tiled)
       markTiled();
     auto newSrcLayout =
@@ -356,7 +356,7 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
   assert(stores.size() > 0 && "Cannot find store-like ops");
   auto numWarps = ttg::lookupNumWarps(funcOp);
 
-  ttg::CTALayoutAttr CTALayout;
+  ttg::CTAEncodingAttr CTALayout;
   for (Operation *store : stores) {
     auto val = [store]() -> Value {
       if (auto descStore =
