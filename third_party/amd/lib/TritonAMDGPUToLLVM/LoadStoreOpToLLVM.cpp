@@ -1894,6 +1894,10 @@ struct AtomicRMWOpConversion
     }
 
     auto vecTy = vec_ty(valueElemTy, vec);
+    bool forceIntraWaveReduce =
+        *binOp == LLVM::AtomicBinOp::add || *binOp == LLVM::AtomicBinOp::fadd;
+    if (forceIntraWaveReduce)
+      enableIntraWaveReduce = true;
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
