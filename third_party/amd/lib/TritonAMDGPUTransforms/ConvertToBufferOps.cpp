@@ -366,6 +366,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
         atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(op, "RMW FADD does not support F64");
     }
+    
     LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
