@@ -489,6 +489,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
           lowerInst) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto *ctx = rewriter.getContext();
+    int numCTAs = getNumCTAs(dstTy.getEncoding());
 
     // Build src to shared layout and remove broadcasted registers
     auto srcLayout = triton::gpu::toLinearLayout(srcTy);
@@ -514,7 +515,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         {str_attr("offset")});
 
     Value ctaMulticastMask;
-    if (isaFamily == ISAFamily::GFX1250) {
+    if (numCTAs > 1 && isaFamily == ISAFamily::GFX1250) {
       ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
           rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), srcLayout);
     }
@@ -1154,6 +1155,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+    int numCTAs = getNumCTAs(smemTy.getEncoding());
 
     triton::LinearLayout sharedLayout;
     unsigned padInterval = 0;
@@ -1167,8 +1169,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     } else {
       sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
-    Value multicastMask = LLVM::AMD::emitCtaMulticastMask(
-        rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), sharedLayout);
+    Value multicastMask;
+    if (numCTAs > 1) {
+      multicastMask = LLVM::AMD::emitCtaMulticastMask(
+          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
+          sharedLayout);
+    }
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
@@ -1200,7 +1206,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
-    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    auto ctaId =
+        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMOperation(
@@ -1234,6 +1241,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+    int numCTAs = getNumCTAs(smemTy.getEncoding());
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
@@ -1257,7 +1265,8 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
-    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    auto ctaId =
+        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMOperation(
