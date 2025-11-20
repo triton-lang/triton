@@ -10,20 +10,11 @@ class MBarrierLayout(SwizzledSharedLayout):
     Layout for mbarrier synchronization.
 
     Args:
-        ctas_per_cga (int): CTAs per CGA grouping. Defaults to 1.
-        cta_split_num (int): CTA split factor. Defaults to 1.
+        cga_layout (List[List[int]]): CTA layout bases. Defaults to [].
     """
 
-    def __init__(self, ctas_per_cga: int = 1, cta_split_num: int = 1):
-        super().__init__(
-            vec=1,
-            per_phase=1,
-            max_phase=1,
-            order=[0],
-            ctas_per_cga=[ctas_per_cga],
-            cta_split_num=[cta_split_num],
-            cta_order=[0],
-        )
+    def __init__(self, cga_layout=None):
+        super().__init__(vec=1, per_phase=1, max_phase=1, order=[0], cga_layout=cga_layout or [])
 
 
 @builtin

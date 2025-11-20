@@ -262,6 +262,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         pm.run(mod, 'make_ttgir')
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     @staticmethod
@@ -278,6 +279,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     @staticmethod
@@ -448,6 +450,12 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         flags = []
         features = '-real-true16' if 'gfx11' in options.arch else ''
+        ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        dump_file_id = names[0] + '_' + ir_hash
+        _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                  dump_file_id)
+        llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                            dump_file_id)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
         if knobs.amd.dump_amdgcn:

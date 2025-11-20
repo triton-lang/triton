@@ -1,16 +1,11 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
-include "mlir/IR/AttrTypeBase.td"
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrBase.td"
 
 //===----------------------------------------------------------------------===//
 // Traits, Interfaces and shared Parameters
 //===----------------------------------------------------------------------===//
-
-def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
-def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
 
 def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -18,28 +13,16 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
     Common trait for all TTGIR layouts.
   }];
   let methods = [
-    InterfaceMethod<"Get the shape of the CTAs per CGA.",
-                    "SmallVector<unsigned>",
-                    "getCTAsPerCGA", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTAsPerCGA());
-    }]>,
-    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getCTAOrder", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTAOrder());
-    }]>,
-    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
-                    "SmallVector<unsigned>",
-                    "getCTASplitNum", (ins), [{}], [{
-      return llvm::to_vector($_attr.getCTALayout().getCTASplitNum());
-    }]>,
-    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank", (ins), [{}], [{
-      return $_attr.getCTAOrder().size();
+    InterfaceMethod<"Get the CTA layout backing this encoding.",
+                    "CTAEncodingAttr", "getCTALayout">,
+    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank",
+                    (ins), [{}], [{
+      return $_attr.getCTALayout().getRank();
     }]>
   ];
 }
 def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum"]>;
+  LayoutEncodingTrait, ["getCTALayout"]>;
 
 def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -55,131 +38,14 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
 def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
   SharedEncodingTrait, ["getAlignment"]>;
 
-def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
-                                            "linear layout"> {
-  let cppAccessorType = "const LinearLayout &";
-}
-
-//===----------------------------------------------------------------------===//
-// Base Attribute
-//===----------------------------------------------------------------------===//
-
-class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = []>
-  : AttrDef<TritonGPU_Dialect, name, traits> {
-
-  let description = [{
-TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
-how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
-\mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
-to the indices of the CUDA threads allowed to access some data at index $i$.
-
-For example, let us consider the layout function:
-\mathcal{L}(0, 0) = {0, 4}
-\mathcal{L}(0, 1) = {1, 5}
-\mathcal{L}(1, 0) = {2, 6}
-\mathcal{L}(1, 1) = {3, 7}
-
-Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
-- T[0,0] is owned by both cuda thread 0 and 4
-- T[0,1] is owned by both cuda thread 1 and 5
-- T[1,0] is owned by both cuda thread 2 and 6
-- T[1,1] is owned by both cuda thread 3 and 7
-
-Right now, Triton implements two main classes of layouts: shared, and distributed.
-  }];
-  let attrName = "triton.gpu." # attrMnemonic;
-
-  code extraBaseClassDeclaration = [{
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// CTA Layout
-//===----------------------------------------------------------------------===//
-
-def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
-  let parameters = (
-    ins
-    ArrayRefParameter<"unsigned">:$CTAsPerCGA,
-    ArrayRefParameter<"unsigned">:$CTASplitNum,
-    ArrayRefParameter<"unsigned">:$CTAOrder
-  );
-
-  let description = [{
-Describes how blocks are distributed among the cooperate thread arrays (aka
-CTAs, aka thread blocks) in a cooperate thread group (aka CTG, aka thread group
-cluster).  CGAs were introduced in Hopper (sm90).
-
-The tensor is divided up into CTASplitNum pieces, which are distributed among
-the CTAsPerCGA thread blocks.  Each CTA processes a subtensor of shape
-`tensor_shape / CTASplitNum`.
-
-Example 0: The tensor shape is [64, 128] and, there are two CTAs, each
-processing half the tensor [64, 64]. Then CTAsPerCGA = [1, 2] and
-CTASplitNum = [1, 2].
-
-Example 1: The tensor shape is [64, 128] and, there are two CTAs, both
-processing the complete tensor [64, 128]. This happens when multicast is
-enabled. In this case, CTAsPerCTA = [1, 2] but CTASplitNum = [1, 1].
-
-Example 2: Consider a matmul AxB=C, where A=[M,K], B=[K,N], C=[M,N].  The
-CTAsPerCGA for A, B, C are the same, [SplitM, SplitN], but the CTASplitNum are
-different. CTASplitNum_A = [SplitM, 1], which means multicast on dim1,
-CTASplitNum_B = [1, SplitN], which means multicast on dim0, CTASplitNum_C =
-[SplitM, SplitN]  which means no multicast.
-
-Currently programs with multiple CTAs per CGA are an experimental feature in
-Triton, not enabled by default.
-
-You can leave off the CTALayout properties in the textual IR and Triton will
-fill in the "default" CTALayout of CTAsPerCGA = CTASplitNum = [1...1].  In
-addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
-[n-1,...,0] (it doesn't matter in this case).
-  }];
-
-  // CTALayout::get canonicalizes CTAOrder to [n,n-1,...,0] if CTAsPerCGA is
-  // [1...1].  The CTAOrder doesn't matter in this case.
-  //
-  // This is a little weird because if you write textual IR with a one order and
-  // then print it back out, you might get a different order.  But it seems this
-  // is the best way to canonicalize an attribute in MLIR.
-  let builders = [
-    AttrBuilder<(ins "ArrayRef<unsigned>":$CTAsPerCGA,
-                     "ArrayRef<unsigned>":$CTASplitNum,
-                     "ArrayRef<unsigned>":$CTAOrder), [{
-        if (llvm::all_of(CTAsPerCGA, [](unsigned x) { return x == 1; })) {
-          SmallVector<unsigned> order;
-          for (int i = CTAsPerCGA.size() - 1; i >= 0; --i)
-            order.push_back(i);
-          return $_get(context, CTAsPerCGA, CTASplitNum, order);
-        }
-        return $_get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
-    }]>,
-  ];
-
-  let extraClassDeclaration = [{
-    static CTALayoutAttr getDefault(MLIRContext *context, int rank) {
-      SmallVector<unsigned> CTAsPerCGA(rank, 1);
-      SmallVector<unsigned> CTASplitNum(rank, 1);
-      SmallVector<unsigned> CTAOrder;
-      for (int i = rank - 1; i >= 0; --i)
-        CTAOrder.push_back(i);
-      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
-    }
-    unsigned getRank() const { return getCTAOrder().size(); }
-  }];
-
-  let genVerifyDecl = 1;
-  let skipDefaultBuilders = 1;
-}
-
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
 def SwizzledSharedEncodingAttr
     : TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding",
-                     [SharedEncodingTrait, LayoutEncodingTrait]> {
+                     [SharedEncodingTrait, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "swizzled_shared";
 
   let description = [{
@@ -265,14 +131,14 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTALayoutAttr":$CTALayout
+    "CTAEncodingAttr":$CTALayout
   );
 
   let builders = [
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "unsigned":$typeWidthInBit), [{
         bool needTrans = false; // default value
         return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
@@ -284,7 +150,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
@@ -323,7 +189,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$kWidth,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "unsigned":$bitwidth,
                      "bool":$needTrans), [{
         int K =  getShapePerCTA(CTALayout.getCTASplitNum(), shape)[order[0]];
@@ -351,7 +217,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "Type":$eltTy), [{
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       return get(context, dotOpEnc, shape, order, CTALayout, bitwidth);
@@ -360,7 +226,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "Type":$eltTy,
                      "bool":$needTrans), [{
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
@@ -465,7 +331,7 @@ For identity mappings a short form based on order and shape is used to increase 
       // Builder to create an identity mapping as the linear component
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
-                       "CTALayoutAttr":$ctaLayout)>,
+                       "CTAEncodingAttr":$ctaLayout)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
@@ -495,7 +361,8 @@ For identity mappings a short form based on order and shape is used to increase 
 
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
-                     [SharedEncodingTrait, DeclareLayoutEncodingMethods]> {
+                     [SharedEncodingTrait, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "shared_linear";
 
   let description = [{
@@ -523,7 +390,9 @@ def SharedLinearEncodingAttr
   let hasCustomAssemblyFormat = 1;
 }
 
-def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [DeclareSharedEncodingMethods, LayoutEncodingTrait]> {
+def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding",
+                     [DeclareSharedEncodingMethods, LayoutEncodingTrait,
+                      DeclareLayoutEncodingMethods]> {
   let mnemonic = "nvmma_shared";
 
   let description = [{
@@ -544,13 +413,13 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "bool":$transposed,
     "unsigned":$elementBitWidth,
     "bool":$fp4Padded,
-    "CTALayoutAttr":$CTALayout
+    "CTAEncodingAttr":$CTALayout
   );
 
   let builders = [
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
         auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
@@ -592,7 +461,8 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
 
 def AMDRotatingSharedEncodingAttr :
   TritonGPU_Attr<"AMDRotatingSharedEncoding", "amd_rotating_shared_encoding",
-                 [SharedEncodingTrait, LayoutEncodingTrait]> {
+                 [SharedEncodingTrait, LayoutEncodingTrait,
+                  DeclareLayoutEncodingMethods]> {
   let mnemonic = "amd_rotating_shared";
 
   let description = [{
@@ -681,7 +551,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTALayoutAttr":$CTALayout
+    "CTAEncodingAttr":$CTALayout
   );
 
   let hasCustomAssemblyFormat = 1;
@@ -741,7 +611,10 @@ We call each individual tile "rep".
 }
 
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits)> {
+  : TritonGPU_Attr<name, attrMnemonic,
+                   !listconcat([DistributedEncodingTrait, LayoutEncodingTrait,
+                                DeclareLayoutEncodingMethods],
+                               traits)> {
 
   let description = [{
 Distributed encodings have a layout function L that is entirely characterized
@@ -788,7 +661,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Linear Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding", [DeclareLayoutEncodingMethods]> {
+def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
   let mnemonic = "linear";
 
   let description = [{
@@ -867,9 +740,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {1, 1}
-  CTASplitNum = {1, 1}
+  blocked = {{0, 1}}
 }>
 
 Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) as follows:
@@ -893,9 +764,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {1, 1}
-  CTASplitNum = {1, 1}
+  blocked = {{0, 1}}
 }>
 
 Example 3, A row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) and
@@ -923,9 +792,7 @@ for
 #ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
-  warpsPerCTA = {1, 2}
-  CTAsPerCGA = {2, 2}
-  CTASplitNum = {2, 2}
+  blocked = {{0, 1}, {1, 0}}
 }>
 }];
 
@@ -937,9 +804,8 @@ for
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
     // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
-    // single CTA (so CTAsPerCGA = [1,...,1], CTASplitNum = [1,...,1],
-    // CTAOrder=[n,n-1,...,0]).
-    "CTALayoutAttr":$CTALayout
+    // single CTA (i.e. the trivial map onto dim0..dimn-1)
+    "CTAEncodingAttr":$CTALayout
   );
   let genVerifyDecl = 1;
 
@@ -949,7 +815,7 @@ for
                      "ArrayRef<unsigned>":$order,
                      "unsigned":$numWarps,
                      "unsigned":$numThreadsPerWarp,
-                     "CTALayoutAttr":$CTALayout), [{
+                     "CTAEncodingAttr":$CTALayout), [{
       unsigned rank = sizePerThread.size();
       SmallVector<unsigned, 4> threadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
@@ -1004,7 +870,7 @@ for
 
       CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
 
-      CTALayoutAttr CTALayout = CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+      CTAEncodingAttr CTALayout = CTAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CTALayout);
     }]>
   ];
@@ -1158,7 +1024,7 @@ w2 w2 w3 w3
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$instrShape,
     "bool":$isTransposed,
-    "CTALayoutAttr":$CTALayout,
+    "CTAEncodingAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "unsigned":$elementBitWidth
   );
@@ -1168,7 +1034,7 @@ w2 w2 w3 w3
                      "ArrayRef<unsigned>":$warpsPerCTA,
                      "ArrayRef<unsigned>":$instrShape,
                      "bool":$isTransposed,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      CArg<"ArrayRef<unsigned>", "{}">:$tpw,
                      CArg<"unsigned", "0">:$elementBitWidth), [{
       SmallVector<unsigned> tilesPerWarp(tpw);
@@ -1191,7 +1057,7 @@ w2 w2 w3 w3
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
-        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        CTAEncodingAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
         unsigned elemBitWidth, bool needTrans) const;
   }];
@@ -1328,7 +1194,7 @@ w2 w2 w3 w3
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "CTALayoutAttr":$CTALayout,
+    "CTAEncodingAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
@@ -1339,7 +1205,7 @@ w2 w2 w3 w3
     AttrBuilder<(ins "unsigned":$version,
                      "bool":$isTransposed,
                      "ArrayRef<unsigned>":$warpsPerCTA,
-                     "CTALayoutAttr":$CTALayout,
+                     "CTAEncodingAttr":$CTALayout,
                      "ArrayRef<unsigned>":$instrShape), [{
       SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
       return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CTALayout, instrShape);
@@ -1360,7 +1226,7 @@ w2 w2 w3 w3
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
-        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        CTAEncodingAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned kWidth,
         unsigned elemBitWidth, bool needTrans) const;
   }];
@@ -1455,7 +1321,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTALayoutAttr":$CTALayout,
+    "CTAEncodingAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
@@ -1475,7 +1341,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [DeclareLayoutEncodingMethods]> {
+def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let mnemonic = "slice";
 
   let description = [{
@@ -1521,7 +1387,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [
   let genVerifyDecl = 1;
 }
 
-def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding", [DeclareLayoutEncodingMethods]> {
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding"> {
   let mnemonic = "dot_op";
 
   let description = [{

@@ -75,7 +75,7 @@ class TensorMemoryLayout:
         return f"TL{block_str}{stride_str}{cta_split_str}{two_ctas_str}TL"
 
     def __hash__(self):
-        return hash((self.block, self.col_stride, self.cta_split_num))
+        return hash((self.block, self.col_stride, self.cta_split_num, self.two_ctas))
 
 
 @dataclass(frozen=True, eq=True)
@@ -93,8 +93,8 @@ class TensorMemoryScalesLayout:
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
 
     def _to_ir(self, builder):
-        cta_split_num = self.cta_split_num or [1, 1]
-        return builder.get_tensor_memory_scales_layout(cta_split_num, )
+        cta_split_num = list(self.cta_split_num) if self.cta_split_num else [1, 1]
+        return builder.get_tensor_memory_scales_layout(cta_split_num)
 
     def mangle(self) -> str:
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
@@ -111,9 +111,7 @@ def get_tmem_reg_layout(
         layout,
         num_warps,
         instr_variant="32x32b",
-        ctas_per_cga=(1, 1),
-        cta_split_num=(1, 1),
-        cta_order=(1, 0),
+        cga_layout=(),
 ):
     """
     Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
@@ -124,9 +122,7 @@ def get_tmem_reg_layout(
         layout (TensorMemoryLayout): Tensor memory layout descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-        ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
-        cta_split_num (tuple[int, int]): CTA split factors along each dimension.
-        cta_order (tuple[int, int]): CTA order.
+        cga_layout (Sequence[Sequence[int]]): CTA layout bases describing CTA distribution.
     """
 
     def _unwrap(x):
@@ -144,9 +140,7 @@ def get_tmem_reg_layout(
         _unwrap(layout),
         _unwrap(num_warps),
         _unwrap(instr_variant),
-        _unwrap(ctas_per_cga),
-        _unwrap(cta_split_num),
-        _unwrap(cta_order),
+        _unwrap(cga_layout),
     )
 
 
@@ -274,7 +268,7 @@ class tensor_memory_descriptor(base_value):
             (layout.block[0], min(layout.block[1], length)),
             layout.col_stride,
             layout.cta_split_num,
-            two_ctas=layout.two_ctas,
+            layout.two_ctas,
         )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder

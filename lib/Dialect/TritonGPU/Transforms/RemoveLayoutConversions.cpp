@@ -127,7 +127,7 @@ public:
   }
 
   void cleanup();
-  void backwardRematerialization();
+  bool backwardRematerialization();
   void backwardRematerialization(ConvertLayoutOp convertOp);
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
   void hoistConvertDotOperand();
@@ -1019,7 +1019,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   return success();
 }
 
-void LayoutRematerialization::backwardRematerialization() {
+bool LayoutRematerialization::backwardRematerialization() {
+  bool changed = false;
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
@@ -1031,8 +1032,11 @@ void LayoutRematerialization::backwardRematerialization() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    } else {
+      changed = true;
     }
   }
+  return changed;
 }
 
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
@@ -1593,12 +1597,14 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-void backwardRematerialization(ModuleOp module) {
-  module.walk([](FuncOp funcOp) {
+bool backwardRematerialization(ModuleOp module) {
+  bool changed = false;
+  module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.backwardRematerialization();
+    changed |= layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
   });
+  return changed;
 }
 
 void hoistConvert(ModuleOp module) {
@@ -1659,17 +1665,20 @@ public:
 
     cleanupConvertOps();
 
-    // 2. For remaining convert ops, try to rematerialize the slice of producer
-    // operation to avoid having to convert.
-    backwardRematerialization(m);
-    LLVM_DEBUG({
-      DBGS() << "Module after backward remat:\n";
-      m.dump();
-    });
+    bool changed = false;
+    do {
+      changed = false;
+      // 2. For remaining convert ops, try to rematerialize the slice of
+      // producer operation to avoid having to convert.
+      changed = backwardRematerialization(m);
+      LLVM_DEBUG({
+        DBGS() << "Module after backward remat:\n";
+        m.dump();
+      });
 
-    // Cleanup dummy converts created during backward remat.
-    cleanupConvertOps();
-
+      // Cleanup dummy converts created during backward remat.
+      cleanupConvertOps();
+    } while (changed);
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
     hoistConvert(m);

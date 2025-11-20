@@ -16,7 +16,7 @@ from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
 from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
-from .._utils import find_paths_if, get_iterable_path, set_iterable_path
+from .._utils import find_paths_if, get_iterable_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -72,12 +72,8 @@ def _check_fn_args(node, fn, args):
                 )
 
 
-def _is_namedtuple(val):
-    return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
-
-
 def _apply_to_tuple_values(value, fn):
-    if _is_namedtuple(type(value)):
+    if is_namedtuple(type(value)):
         fields = value._fields
     elif isinstance(value, language.tuple):
         fields = value.type.fields
@@ -401,7 +397,7 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     getattr(val, "__module__", "").startswith("triton.experimental.gluon.language"),  #
                     isinstance(val, language.dtype),  #
-                    _is_namedtuple(val),
+                    is_namedtuple(val),
                     self._is_constexpr_global(name),  #
                     # Allow accesses to globals while visiting an ast.arg
                     # because you should be able to do
@@ -467,7 +463,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.restore_insertion_point(ip)
         self.builder.set_loc(loc)
 
-    def _find_carries(self, node, liveins):
+    def _find_carries(self, node, liveins, ignore: set[str] = set()):
         # create loop body block
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
@@ -485,6 +481,9 @@ class CodeGenerator(ast.NodeVisitor):
         names = []
 
         for name, live_val in liveins.items():
+            if name in ignore:
+                continue
+
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
                 self._verify_loop_carried_variable(name, loop_val, live_val)
@@ -1202,14 +1201,14 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_poison(iv_ir_type)
-        self.set_value(node.target.id, language.core.tensor(iv, iv_type))
+        iv_placeholder = self.builder.create_poison(iv_ir_type)
+        self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_tys = self._find_carries(node, liveins)
+            names, init_handles, init_tys = self._find_carries(node, liveins, ignore={node.target.id})
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1251,7 +1250,7 @@ class CodeGenerator(ast.NodeVisitor):
             if negative_step:
                 iv = self.builder.create_sub(ub, iv)
                 iv = self.builder.create_add(iv, lb)
-            self.lscope[node.target.id].handle.replace_all_uses_with(iv)
+            iv_placeholder.replace_all_uses_with(iv)
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
             self._maybe_set_loc_to_name(iv, node.target.id)
 

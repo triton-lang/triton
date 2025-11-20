@@ -10,14 +10,14 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
@@ -355,6 +355,12 @@ def mangle_type(arg, specialize=False):
 class KernelInterface(Generic[T]):
     run: T
 
+    def warmup(self, *args, grid, **kwargs):
+        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+
+    def run(self, *args, grid, warmup, **kwargs):
+        raise NotImplementedError("run not implemented")
+
     def __getitem__(self, grid) -> T:
         """
         A JIT function is launched with: fn[grid](*args, **kwargs).
@@ -486,7 +492,7 @@ class JITCallable:
         return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
             if self.hash is not None:
@@ -507,6 +513,9 @@ class JITCallable:
                               if isinstance(val, constexpr)])
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
+
+    def __hash__(self):
+        return hash(self.cache_key)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -557,7 +566,20 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     if cache_key is not None:
         return cache_key
 
-    cache_key = str(specialization) + str(options)
+    # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
+    def replace_callables(obj):
+        if isinstance(obj, list):
+            return [replace_callables(arg) for arg in obj]
+        elif is_namedtuple(obj):
+            results = [replace_callables(arg) for arg in obj]
+            return obj.__class__(*results)
+        elif isinstance(obj, tuple):
+            return tuple(replace_callables(arg) for arg in obj)
+        elif isinstance(obj, JITCallable):
+            return obj.cache_key
+        return obj
+
+    cache_key = str(replace_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 
@@ -762,9 +784,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
 
-    def warmup(self, *args, grid, **kwargs):
-        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
-
     def preload(self, specialization_data):
         import json
         import triton.language as tl
@@ -874,7 +893,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> KernelInterface[T]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -1032,6 +1051,10 @@ class BoundConstexprFunction(JITCallable):
     def __init__(self, instance, fn):
         self.__self__ = instance
         self.__func__ = fn
+
+    @property
+    def cache_key(self):
+        return self.__func__.cache_key
 
     def __call__(self, *args, **kwargs):
         return self.__func__(self.__self__, *args, **kwargs)
