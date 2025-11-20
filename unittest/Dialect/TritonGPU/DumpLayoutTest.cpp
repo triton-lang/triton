@@ -18,7 +18,8 @@ public:
                               ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
                               ArrayRef<unsigned> cOrd) {
     return BlockedEncodingAttr::get(
-        &ctx, spt, tpw, wpb, ord, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        &ctx, spt, tpw, wpb, ord,
+        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
   }
 
   SwizzledSharedEncodingAttr shared(unsigned vec, unsigned perPhase,
@@ -28,7 +29,7 @@ public:
                                     ArrayRef<unsigned> cOrd) {
     return SwizzledSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
-        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
   }
 
   void assertSameStr(const std::string &refStr, const std::string &output) {

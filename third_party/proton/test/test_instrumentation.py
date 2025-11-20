@@ -15,7 +15,6 @@ from triton._internal_testing import (
     is_cuda,
     is_hip,
     is_hip_cdna2,
-    is_hip_cdna4,
     supports_tma,
     supports_ws,
 )
@@ -644,7 +643,6 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
-@pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
 def test_globaltime(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
@@ -760,7 +758,6 @@ def test_overhead(tmp_path: pathlib.Path):
     assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
 
 
-@pytest.mark.skipif(is_hip(), reason="not implemented yet")
 def test_gmem_buffer(tmp_path: pathlib.Path):
 
     @triton.jit

@@ -23,7 +23,7 @@ struct UseInfo {
   Operation *use;
   Attribute desiredSharedEncoding;
   SmallVector<int64_t> shape;
-  ttg::CTALayoutAttr ctaLayout;
+  ttg::CTAEncodingAttr ctaLayout;
 };
 
 static bool isTMACompatibleEncoding(Attribute enc) {
@@ -96,7 +96,7 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
 
 struct EncodingInfo {
   Attribute desiredEncoding;
-  ttg::CTALayoutAttr ctaLayout;
+  ttg::CTAEncodingAttr ctaLayout;
   // Shape may be different from the descriptor block shape for gather/scatter
   // use case
   SmallVector<int64_t> shape;
@@ -154,7 +154,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
       result.shape.push_back(std::min(lhs.shape[i], rhs.shape[i]));
   }
 
-  SetVector<ttg::CTALayoutAttr> ctaLayouts;
+  SetVector<ttg::CTAEncodingAttr> ctaLayouts;
   if (lhs.ctaLayout)
     ctaLayouts.insert(lhs.ctaLayout);
   if (rhs.ctaLayout)
@@ -164,7 +164,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
   case 2:
     // if we find clashing CTALayouts, fallback to default
     result.ctaLayout =
-        ttg::CTALayoutAttr::getDefault(lhs.ctaLayout.getContext(), rank);
+        ttg::CTAEncodingAttr::getDefault(lhs.ctaLayout.getContext(), rank);
     break;
   case 1:
     result.ctaLayout = ctaLayouts[0];
@@ -194,7 +194,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
 }
 
 Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
-                                    ttg::CTALayoutAttr ctaLayout,
+                                    ttg::CTAEncodingAttr ctaLayout,
                                     ArrayRef<int64_t> usageShape) {
   auto ctx = tensorType.getContext();
   SmallVector<unsigned> order;
@@ -204,7 +204,7 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
   ArrayRef<int64_t> shape =
       usageShape.empty() ? tensorType.getShape() : usageShape;
   if (!ctaLayout)
-    ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
+    ctaLayout = ttg::CTAEncodingAttr::getDefault(ctx, tensorType.getRank());
   else if (ctaLayout.getRank() != tensorType.getRank())
     ctaLayout = updateCTALayoutForShape(ctaLayout, shape);
 

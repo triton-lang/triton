@@ -216,6 +216,7 @@ struct CoalesceAsyncCopyWrites
         copyOp.getMaskMutable().assign(mask);
       if (other)
         copyOp.getOtherMutable().assign(other);
+      copyOp.setContiguity(loadContig);
     });
     return success();
   }
