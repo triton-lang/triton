@@ -481,12 +481,10 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
 
 @triton.jit
 def mxfp_matmul(  #
-        a_ptr, b_ptr, output_ptr,  #
+        a_desc, b_desc, output_ptr,  #
         a_scale, b_scale,  #
         M, N, K,  #
         stride_scale: tl.constexpr,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
         NUM_STAGES: tl.constexpr):
@@ -494,23 +492,22 @@ def mxfp_matmul(  #
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
-    offs_k = tl.arange(0, BLOCK_K)
+    offs_am_scale = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn_scale = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_am = pid_m * BLOCK_M
+    offs_bn = pid_n * BLOCK_N
+    offs_k = 0
     offs_scale_k = tl.arange(0, BLOCK_K // 32)
-    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
-    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    a_scale_ptr = a_scale + offs_am_scale[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn_scale[:, None] * stride_scale + offs_scale_k[None, :]
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+    for _ in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=True):
+        a = a_desc.load([offs_am, offs_k])
+        b = b_desc.load([offs_bn, offs_k])
         scale_a = tl.load(a_scale_ptr)
         scale_b = tl.load(b_scale_ptr)
-        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b, scale_b, "e5m2", accumulator)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
+        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b.T, scale_b, "e5m2", accumulator)
+        offs_k += BLOCK_K
         a_scale_ptr += BLOCK_K // 32
         b_scale_ptr += BLOCK_K // 32
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -556,8 +553,11 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     dtype_dst_str = "float32"
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
     a_f16 = f8_to_f16(a, dtype_src_str)
-    b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
-    b_f16 = f8_to_f16(b, dtype_src_str)
+    b = torch.randint(20, 40, (N, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K])
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_N, BLOCK_K])
+
+    b_f16 = f8_to_f16(b.T.contiguous(), dtype_src_str)
     a_scale = torch.randint(64, 130, (M, K // 32), dtype=torch.uint8, device=device)
     b_scale = torch.randint(64, 130, (N, K // 32), dtype=torch.uint8, device=device)
 
@@ -566,8 +566,8 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     kernel_kwargs = {}
 
-    out = mxfp_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
-                            b.stride(0), b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
+    out = mxfp_matmul[grid](a_desc, b_desc, output, a_scale, b_scale, M, N, K, a_scale.stride(0),
+                            output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                             NUM_STAGES=3, **kernel_kwargs, num_warps=NUM_WARPS)
     a_scale_f32 = fp8e8m0_to_float32(a_scale)
     b_scale_f32 = fp8e8m0_to_float32(b_scale)
@@ -583,3 +583,8 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     output = output.to(torch.float32)
     atol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=0)
+
+    # print(out.asm["ttgir"])
+
+
+# test_mxfp(128, 256, 128, 8, "cuda")
