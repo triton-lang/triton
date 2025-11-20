@@ -1,0 +1,164 @@
+#ifndef TRITON_ANALYSIS_BUFFER_REGION_H
+#define TRITON_ANALYSIS_BUFFER_REGION_H
+
+#include <optional>
+#include <set>
+
+#include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+
+namespace mlir::triton {
+
+//===----------------------------------------------------------------------===//
+// BufferRegion: a single logical region derived from an alloc
+//===----------------------------------------------------------------------===//
+struct BufferRegion {
+  // TODO: Consider using narrower types
+  uint64_t baseOffset;
+  uint64_t length;
+
+  bool operator==(const BufferRegion &other) const {
+    return baseOffset == other.baseOffset && length == other.length;
+  }
+
+  bool operator<(const BufferRegion &other) const {
+    return baseOffset < other.baseOffset ||
+           (baseOffset == other.baseOffset && length < other.length);
+  }
+
+  template <typename T> void print(T &os) const {
+    os << "[" << baseOffset << ", " << length << "]";
+  }
+};
+
+} // namespace mlir::triton
+
+namespace llvm {
+
+using namespace mlir::triton;
+
+template <> struct DenseMapInfo<BufferRegion> {
+  static BufferRegion getEmptyKey() { return BufferRegion{0, 0}; }
+  static BufferRegion getTombstoneKey() { return BufferRegion{0, 0}; }
+  static unsigned getHashValue(const BufferRegion &r) {
+    return llvm::hash_combine(r.baseOffset, r.length);
+  }
+  static bool isEqual(const BufferRegion &a, const BufferRegion &b) {
+    return a == b;
+  }
+};
+
+} // namespace llvm
+
+namespace mlir::triton {
+
+//===----------------------------------------------------------------------===//
+// RegionInfo lattice
+//===----------------------------------------------------------------------===//
+//
+// This wraps a set of BufferRegions and provides lattice semantics
+//
+struct RegionInfo {
+  using RegionList = llvm::DenseSet<BufferRegion>;
+  RegionList regions;
+
+  RegionInfo() = default;
+  RegionInfo(const RegionList &r) : regions(r) {}
+
+  // Lattice join: union of regions
+  static RegionInfo join(const RegionInfo &lhs, const RegionInfo &rhs) {
+    RegionInfo result = lhs;
+    for (const auto &reg : rhs.regions)
+      if (llvm::find(result.regions, reg) == result.regions.end())
+        result.regions.insert(reg);
+    return result;
+  }
+
+  bool operator==(const RegionInfo &other) const {
+    if (regions.size() != other.regions.size())
+      return false;
+    for (auto &r : regions)
+      if (llvm::find(other.regions, r) == other.regions.end())
+        return false;
+    return true;
+  }
+
+  template <typename T> void print(T &os) const {
+    llvm::interleaveComma(regions, os,
+                          [&](const BufferRegion &r) { r.print(os); });
+  }
+
+  static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
+    return RegionInfo(); // means "unknown / empty"
+  }
+  static RegionInfo getPessimisticValueState(Value) { return RegionInfo(); }
+};
+
+//===----------------------------------------------------------------------===//
+// BufferRegionAnalysis (Sparse Forward Dataflow)
+//===----------------------------------------------------------------------===//
+//
+// Produces a RegionInfo lattice for each MemDesc/ptr-like SSA value,
+// and also collects a global list of all discovered BufferRegions.
+//
+class BufferRegionAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                                 dataflow::Lattice<RegionInfo>> {
+
+public:
+  using Base =
+      dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<RegionInfo>>;
+  using Base::getLatticeElement;
+  using Base::SparseForwardDataFlowAnalysis;
+
+  enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
+
+  // ------------------------------
+  // Public API for ConSan
+  // ------------------------------
+
+  /// Return the list of all unique (alloc,offset,len) buffer regions
+  /// discovered by the analysis.
+  llvm::SmallVector<BufferRegion>
+  getAllUsedBufferRegions(RegionType type) const {
+    return llvm::to_vector(usedBufferRegions[type]);
+  }
+
+  void calculateUsedBufferRegions(Operation *op);
+
+  // ------------------------------
+  // Required overrides
+  // ------------------------------
+
+  void setToEntryState(dataflow::Lattice<RegionInfo> *lat) override {
+    propagateIfChanged(
+        lat, lat->join(RegionInfo::getPessimisticValueState(lat->getAnchor())));
+  }
+
+  LogicalResult visitOperation(
+      Operation *op,
+      llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
+      llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) override;
+
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
+      unsigned firstIndex) override;
+
+private:
+  /// Insert a region during analysis
+  void insertRegion(RegionType type, const BufferRegion &region) {
+    usedBufferRegions[type].insert(region);
+  }
+
+  // Global registry of all regions
+  std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
+};
+
+} // namespace mlir::triton
+
+#endif // TRITON_ANALYSIS_BUFFER_REGION_H
