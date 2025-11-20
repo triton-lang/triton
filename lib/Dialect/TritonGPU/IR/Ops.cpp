@@ -342,6 +342,16 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
+    // cvt(cat) -> cat
+    if (auto cat = dyn_cast<CatOp>(arg)) {
+      if (isExpensiveCat(cat, op.getType().getEncoding()))
+        return failure();
+
+      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
+                                         cat.getOperands());
+      return success();
+    }
+
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
@@ -579,11 +589,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CTALayout = CTALayoutAttr::get(
-            ctx,
-            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+        auto CTALayout = CTAEncodingAttr::getDefault(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),

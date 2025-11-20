@@ -614,6 +614,8 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
+  if (isa<triton::CatOp>(op))
+    return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
   if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;
@@ -624,6 +626,9 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
 }
 
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
+  if (isa<triton::CatOp>(op))
+    return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
+                                        targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -927,6 +932,8 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
+      if (isa<triton::CatOp>(definingOp))
+        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -1076,7 +1083,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
 }
 
 inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
+swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
   // DotOperandEncodingAttr with a tile of this shape This works because

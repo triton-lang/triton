@@ -1437,19 +1437,19 @@ def cluster_load_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.const
 
 @pytest.mark.parametrize("blocked_layout", [
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 2], order=[1, 0],
-                       ctas_per_cga=[1, 2], cta_split_num=[1, 2]),
+                       cga_layout=[[0, 1]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
-                       ctas_per_cga=[2, 1], cta_split_num=[2, 1]),
+                       cga_layout=[[1, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, 8], warps_per_cta=[4, 1], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+                       cga_layout=[[1, 0], [2, 0], [0, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
+                       cga_layout=[[0, 1], [0, 0], [1, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+                       cga_layout=[[1, 0], [2, 0], [0, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 4], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
+                       cga_layout=[[0, 1], [0, 0], [1, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 16], threads_per_warp=[4, 8], warps_per_cta=[2, 2], order=[1, 0],
-                       ctas_per_cga=[2, 8], cta_split_num=[1, 8]),
+                       cga_layout=[[0, 1], [0, 2], [0, 4], [0, 0]]),
 ])
 @pytest.mark.parametrize("dtype", [
     # Test from 1 byte -> 8 bytes dtypes
@@ -1460,7 +1460,7 @@ def test_runtime_cluster_load(blocked_layout, dtype):
     N = 128
     BLOCK_M = 64
     BLOCK_N = 64
-    num_ctas = blocked_layout.ctas_per_cga[0] * blocked_layout.ctas_per_cga[1]
+    num_ctas = 2**len(blocked_layout.cga_layout)
 
     if dtype == torch.float8_e4m3fn:
         # range from min normal (0 00001 00) to max normal (0 11110 11)
@@ -1567,28 +1567,26 @@ def test_runtime_async_copy(M, N, vec_size, shared_layout, dtype):
 
 
 @pytest.mark.parametrize("blocked_layout", [
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[1, 1], cta_split_num=[1, 1]),
+                       cga_layout=[[0, 1]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[1, 2], cta_split_num=[1, 2]),
+                       cga_layout=[[1, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[2, 1], cta_split_num=[2, 1]),
+                       cga_layout=[[0, 1], [0, 2], [0, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+                       cga_layout=[[0, 1], [0, 0], [1, 0], [0, 0]]),
     ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
-    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
-                       ctas_per_cga=[2, 8], cta_split_num=[1, 8]),
+                       cga_layout=[[0, 1], [0, 2], [0, 4], [0, 0]]),
 ])
 def test_runtime_async_copy_layouts_multi_cta(blocked_layout):
     M = 1024
     N = 1024
     BLOCK_M = 128
     BLOCK_N = 128
-    num_ctas = blocked_layout.ctas_per_cga[0] * blocked_layout.ctas_per_cga[1]
+    num_ctas = 2**len(blocked_layout.cga_layout)
 
-    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], blocked_layout.ctas_per_cga,
-                                              blocked_layout.cta_split_num)
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], blocked_layout.cga_layout)
 
     a = torch.rand((M, N), dtype=torch.float32)
     out = torch.empty_like(a)
