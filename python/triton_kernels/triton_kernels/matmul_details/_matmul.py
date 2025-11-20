@@ -102,12 +102,13 @@ def _matmul(
     tl.assume(grid_m >= 0)
     tl.assume(grid_n >= 0)
 
+    w_type: tl.constexpr = W.dtype.element_ty
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_microscaled: tl.constexpr = WMxScale is not None
+    is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
+
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
-        w_type: tl.constexpr = W.dtype.element_ty
-        is_mxfp4: tl.constexpr = w_type == tl.uint8
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
@@ -116,7 +117,7 @@ def _matmul(
 
         # TODO: refactor if/else when triton front end improves
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-            tl.static_assert(is_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
+            tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             tl.static_assert(not is_x_microscaled)
             # We have pack 2 fp4 values in a byte but we divide the dimension by 2
             # when swizzling
@@ -125,7 +126,7 @@ def _matmul(
             W_N_DIVISOR: tl.constexpr = 4
         else:
             # We have pack 2 fp4 values in a  byte
-            W_K_DIVISOR: tl.constexpr = 2 if is_mxfp4 else 1
+            W_K_DIVISOR: tl.constexpr = 2 if is_w_mxfp4 else 1
             W_K_MULTIPLIER: tl.constexpr = 1
             W_N_DIVISOR: tl.constexpr = 1
 
@@ -196,6 +197,10 @@ def _matmul(
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
+        if PACKED_BLOCK_K_W > BLOCK_K:
+            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+        else:
+            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
         K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
@@ -226,6 +231,7 @@ def _matmul(
         offs_x_m = tl.load(GatherIndx + offs_x_m)
     offs_k = off_k_x + tl.arange(0, BLOCK_K)
     XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
+
 
     # TODO: refactor if/else when triton front end improves
     if is_w_microscaled:
@@ -291,25 +297,26 @@ def _matmul(
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
+
     for ki in range(k_tiles):
         x_k_limit -= BLOCK_K * SPLIT_K
         w_k_limit -= PACKED_BLOCK_K_W * SPLIT_K
         if EVEN_K:
-            mask_k = tl.full([BLOCK_K], True, dtype=tl.int1)
+            mask_k_x = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
             if is_x_microscaled:
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
-            mask_k = offs_k < x_k_limit
+            mask_k_x = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = offs_k_scale * MX_PACK_DIVISOR // 2 < w_k_limit
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+        x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)

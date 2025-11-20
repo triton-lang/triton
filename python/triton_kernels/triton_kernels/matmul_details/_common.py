@@ -83,7 +83,7 @@ def compute_offsets(
     W_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
     RAGGED_DIMENSION: tl.constexpr,
     BLOCK_M,
-    BLOCK_K_X,
+    BLOCK_K_X: tl.constexpr,
     PACKED_BLOCK_K_W: tl.constexpr,
     SPLIT_K: tl.constexpr,
 ):
@@ -97,7 +97,10 @@ def compute_offsets(
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
         off_x_k = tl.load(XSliceOffs + pid_z)
         off_w_k = tl.load(WSliceOffs + pid_z)
-        off_w_k = off_w_k // (BLOCK_K_X // PACKED_BLOCK_K_W)
+        if PACKED_BLOCK_K_W > BLOCK_K_X:
+            off_w_k = off_w_k * (PACKED_BLOCK_K_W // BLOCK_K_X)
+        else:
+            off_w_k = off_w_k // (BLOCK_K_X // PACKED_BLOCK_K_W)
         off_x_m = BLOCK_M * pid_m
         off_w_z, off_x_z, off_x_slice = 0, 0, 0
         off_y_z = pid_z

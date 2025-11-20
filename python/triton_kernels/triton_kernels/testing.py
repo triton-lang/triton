@@ -282,8 +282,9 @@ def pad_ragged_tensor(x, x_ragged_metadata, transpose):
         y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
     else:
         y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).contiguous()
+
     y_ragged_metadata = replace(x_ragged_metadata, slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
-                                slice_sizes_divisibility=multiple)
+                                slice_sizes_divisibility=64)
     return y, y_ragged_metadata
 
 
@@ -295,6 +296,7 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     buffer = alloc_rand(buffer_shape, device=device, dtype=buffer_dtype)
     if squeeze_batch_dim:
         buffer = buffer.squeeze(0)
+    # buffer[:] = 1
     # handle raggedness
     ragged_metadata = None
     if ragged_dim is not None:
@@ -325,5 +327,4 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
                 mx_axis=mxfp_dim, num_warps=8)
             scales = convert_layout(scales, scale_layout, **scale_layout_opts)
-            scales = convert_layout(scales, layout.StridedLayout)
     return buffer, scales, ragged_metadata
