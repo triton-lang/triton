@@ -3,11 +3,12 @@
 from dataclasses import dataclass
 
 import triton
+from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version
 from triton_kernels.tensor import FP4
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
-from triton_kernels.tensor import bitwidth
+from triton_kernels.tensor import bitwidth, get_layout
 
 
 @dataclass
@@ -215,8 +216,12 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
+    requires_persistent = (get_layout(precision_config.act_scale) is not None or get_layout(precision_config.weight_scale) is not None) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
+    elif requires_persistent:
+        assert supports_persistent, "persistent kernel required but not supported"
+        is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
         is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4

@@ -37,6 +37,7 @@ jobs:
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
               --env-file /etc/podinfo/gha-gpu-isolation-settings
               --volume /home/runner/.triton:/github/home/.triton
+              --volume /triton-data:/triton-data
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -102,6 +103,10 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
+            pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
+          fi
           make dev-install
       - name: Print ccache stats
         run: ccache --print-stats

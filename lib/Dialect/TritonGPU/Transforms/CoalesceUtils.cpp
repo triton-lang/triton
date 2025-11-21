@@ -16,7 +16,7 @@ namespace mlir::triton::gpu {
 BlockedEncodingAttr buildCoalescedEncoding(
     MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     Operation *op, int numWarps, int threadsPerWarp,
-    triton::gpu::CTALayoutAttr CTALayout, SmallVector<int64_t> shapePerCTA) {
+    triton::gpu::CTAEncodingAttr CTALayout, SmallVector<int64_t> shapePerCTA) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
