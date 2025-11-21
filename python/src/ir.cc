@@ -30,6 +30,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -362,6 +363,15 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
+
+    std::string pluginPath = "/home/plotfi/opt/dev/TRITON-DEV-DIALECT/triton/python/triton/dialect-plugins/libMLIRPluginLowering.so";
+    auto plugin = DialectPlugin::load(pluginPath);
+    if (!plugin) {
+      assert(false && "Failed to load dialect plugin: Request ignored");
+    } else {
+      plugin.get().registerDialectRegistryCallbacks(registry);
+    }
+
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     ::mlir::triton::instrument::TritonInstrumentDialect,
                     ::mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
