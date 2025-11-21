@@ -11,7 +11,6 @@
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @mxfp_matmul(%a_desc: !tt.tensordesc<tensor<128x128xf8E5M2, #shared>>, %b_desc: !tt.tensordesc<tensor<256x128xf8E5M2, #shared>>, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %a_scale_ptr_35: tensor<128x4x!tt.ptr<i8>, #blocked>, %b_scale_ptr_42: tensor<256x4x!tt.ptr<i8>, #blocked>, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %accumulator = arith.constant false
@@ -32,25 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %pid_m = arith.remsi %pid, %num_pid_m_10 : i32
     %pid_n = arith.divsi %pid, %num_pid_m_10 : i32
     %offs_am_scale = arith.muli %pid_m, %c128_i32 : i32
-    %offs_am_scale_11 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_am_scale_12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %offs_am_scale_13 = tt.splat %offs_am_scale : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_am_scale_14 = tt.splat %offs_am_scale : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %offs_am_scale_15 = arith.addi %offs_am_scale_13, %offs_am_scale_11 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_am_scale_16 = arith.addi %offs_am_scale_14, %offs_am_scale_12 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %offs_am_scale_17 = tt.splat %M : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_am_scale_18 = arith.remsi %offs_am_scale_15, %offs_am_scale_17 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %offs_bn_scale = arith.muli %pid_n, %c256_i32 : i32
-    %offs_bn_scale_19 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_bn_scale_20 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %offs_bn_scale_21 = tt.splat %offs_bn_scale : i32 -> tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_bn_scale_22 = tt.splat %offs_bn_scale : i32 -> tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %offs_bn_scale_23 = arith.addi %offs_bn_scale_21, %offs_bn_scale_19 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_bn_scale_24 = arith.addi %offs_bn_scale_22, %offs_bn_scale_20 : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %offs_bn_scale_25 = tt.splat %N : i32 -> tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_bn_scale_26 = arith.remsi %offs_bn_scale_23, %offs_bn_scale_25 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %a_scale_ptr_27 = tt.expand_dims %offs_am_scale_18 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
-
     %0 = arith.addi %K, %c127_i32 : i32
     %1 = arith.divsi %0, %c128_i32 : i32
     %accumulator_43, %accumulator_44 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
