@@ -32,7 +32,7 @@ def scalar_metric_kernel(device_ptr, device_offset_ptr, metric_id: tl.uint64, me
 
 def _get_kernel(kernel_fn, *args):
     kernel = kernel_fn.warmup(*args, grid=(1, ), num_warps=1)
-    kernel._init_handle()
+    kernel._init_handles()
     return kernel.function
 
 
