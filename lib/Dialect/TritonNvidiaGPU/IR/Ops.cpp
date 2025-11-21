@@ -876,6 +876,25 @@ LogicalResult TensormapUpdateOp::verify() {
         << getGlobalDim().size() - 1;
     }
   }
+
+  // Verify that the descriptor pointer comes from get_descriptor_ptr
+  // of a descriptor created in-kernel, not passed as a parameter.
+  // (This check only applies when using the Gluon API path, via
+  // get_descriptor_ptr.  Direct MLIR tests that bypass this are
+  // allowed for testing the lowering.)
+  auto descPtr = getDescPtr();
+  auto getDescPtrOp = descPtr.getDefiningOp<GetDescriptorPtrOp>();
+  if (getDescPtrOp) {
+    auto desc = getDescPtrOp.getDesc();
+    auto definingOp = desc.getDefiningOp();
+    if (!definingOp) {
+      return emitError("Descriptor must be created within the kernel using make_tensor_descriptor.");
+    }
+    if (!isa<triton::MakeTensorDescOp, ReinterpretTensorDescOp>(definingOp)) {
+      return emitError("Descriptor must be created within the kernel using make_tensor_descriptor.");
+    }
+  }
+
   return success();
 }
 
