@@ -131,6 +131,10 @@ def routing(logits, n_expts_act, all_gather=False, y_indx=None):
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act, y_indx=None):
     rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act, y_indx=y_indx)
     y_global = matmul(x_global, w_global, b_global, rdata, gather_indx=combine_indx, scatter_indx=dispatch_indx)
+    y_mask = (dispatch_indx != -1).view(y_global.shape[-2] // n_expts_act, n_expts_act, 1)
+    y_global = y_global.view(y_global.shape[-2] // n_expts_act, n_expts_act, -1)
+    y_mask = y_mask.expand_as(y_global)
+    y_global, _ = reduce(y_global, dim=1, mask=y_mask)
     return y_global
 
 
