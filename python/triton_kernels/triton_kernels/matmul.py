@@ -447,6 +447,7 @@ def matmul(a, b, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
+    n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -473,7 +474,7 @@ def matmul(a, b, bias,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.specs.reduction_n,
                    *epilogue.fn_arg_values_matmul,
-                   n_slices,
+                   n_valid_slices,
                    precision_config.max_num_imprecise_acc,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
