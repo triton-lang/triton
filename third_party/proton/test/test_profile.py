@@ -522,3 +522,16 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
         kernel = proton_scope["children"][0]
     assert "elementwise" in kernel["frame"]["name"]
     assert kernel["metrics"]["count"] == 1
+
+
+def test_tensor_metrics_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    x = torch.randn((10, 10), device="cuda")
+    with proton.scope("test", metrics={"x_mean": x.mean(), "x_std": x.std()}):
+        y = torch.randn((10, 10), device="cuda")
+        z = torch.zeros_like(x)
+
+    proton.finalize()
+

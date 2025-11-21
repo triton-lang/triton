@@ -14,9 +14,12 @@ static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
+  // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead
+  // of requiring a PyCapsule, which matches how tensor metric values are passed
+  // in transform_tensor_metrics.
   pybind11::class_<TensorMetric>(m, "TensorMetric")
       .def(pybind11::init<>())
-      .def(pybind11::init([](void *ptr, size_t index) {
+      .def(pybind11::init([](uintptr_t ptr, size_t index) {
              return TensorMetric{reinterpret_cast<uint8_t *>(ptr), index};
            }),
            pybind11::arg("ptr"), pybind11::arg("index"))

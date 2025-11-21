@@ -366,6 +366,7 @@ struct TensorMetric {
   size_t index{}; // MetricValueType index
 };
 
+/// Each metric buffer is owned by a profiler
 class MetricBuffer {
 public:
   struct MetricDescriptor {
