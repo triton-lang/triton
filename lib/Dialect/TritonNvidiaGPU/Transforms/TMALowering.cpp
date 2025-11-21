@@ -187,58 +187,6 @@ public:
   }
 };
 
-class TMAUpdateDescLowering : public OpRewritePattern<UpdateTensorDescOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(UpdateTensorDescOp op,
-                                PatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    Value desc = op.getDesc();
-
-    // Get the descriptor pointer
-    Value descPtr = rewriter.create<GetDescriptorPtrOp>(loc, getPointerType(rewriter.getI8Type()), desc);
-
-    ValueRange shape = op.getShape();
-    ValueRange strides = op.getStrides();
-
-    // Convert element strides to byte strides (same as in createTMADesc)
-    if (!strides.empty()) {
-      auto descType = mlir::cast<triton::TensorDescType>(desc.getType());
-      auto elemType = descType.getBlockType().getElementType();
-      auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
-      Value elemSizeVal = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(elemSize));
-
-      SmallVector<Value> byteStrides;
-      for (Value stride : strides) {
-        byteStrides.push_back(rewriter.create<arith::MulIOp>(loc, stride, elemSizeVal));
-      }
-      strides = byteStrides;
-    }
-
-    // Reverse shape and strides to match TMA descriptor layout (same
-    // as in createTMADesc)
-    SmallVector<Value> reversedShape(llvm::reverse(shape));
-    SmallVector<Value> reversedStrides;
-    if (!strides.empty()) {
-      for (int k = strides.size() - 2; k >= 0; --k) {
-        reversedStrides.push_back(strides[k]);
-      }
-    }
-    rewriter.create<TensormapUpdateOp>(loc, descPtr, op.getBase(),
-                                       reversedShape, reversedStrides);
-
-    // The fence ensures that that memory ordering is correct for
-    // subsequent TMA operations
-    TensormapFenceproxyAcquireOp::create(rewriter, loc, descPtr);
-
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-
 } // anonymous namespace
 
 class TritonNvidiaGPUTMALoweringPass
@@ -251,8 +199,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
-                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering,
-                 TMAUpdateDescLowering>(
+                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
         context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

@@ -1032,21 +1032,6 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                builder.getDenseI32ArrayAttr(order));
 }
 
-LogicalResult UpdateTensorDescOp::verify() {
-  if (!llvm::isa<triton::TensorDescType>(getDesc().getType()))
-    return emitOpError("first operand must be a !tt.tensordesc");
-  bool hasBase = (getBase() != nullptr);
-  bool hasShape = !getShape().empty();
-  bool hasStrides = !getStrides().empty();
-  if (!hasBase && !hasShape && !hasStrides)
-    return emitOpError("must update at least one of base/shape/strides");
-  if (hasStrides && !hasShape)
-    return emitOpError("cannot update strides without shape");
-  if (hasShape && hasStrides && getShape().size() != getStrides().size())
-    return emitOpError("shape and strides must have the same length");
-  return success();
-}
-
 //-- AddPtrOp --
 OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
   // addptr(ptr, 0) -> ptr

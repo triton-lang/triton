@@ -1831,20 +1831,7 @@ void init_triton_ir(py::module &&m) {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape, isSignedInteger,
                                                   paddingOption);
-           })
-      // Update a tensor descriptor
-      .def("create_update_tensor_descriptor",
-           [](TritonOpBuilder &self, Value &desc,
-              std::optional<Value> base,
-              std::vector<Value> shape,
-              std::vector<Value> strides) {
-             Value baseVal = base.has_value() ? base.value() : Value();
-             self.create<UpdateTensorDescOp>(desc, baseVal, shape, strides);
-           },
-           py::arg("desc"),
-           py::arg("base") = std::nullopt,
-           py::arg("shape") = std::vector<Value>{},
-           py::arg("strides") = std::vector<Value>{});
+           });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())

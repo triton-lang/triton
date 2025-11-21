@@ -1061,41 +1061,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   }];
 }
 
-//
-// Update Tensor Descriptor Op
-//
-def TT_UpdateTensorDescOp : TT_Op<"update_tensor_descriptor", [
-    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
-    AttrSizedOperandSegments,
-]> {
-  let summary = "Update an existing tensor descriptor";
-
-  let description = [{
-      `tt.update_tensor_descriptor` updates one or more fields of an existing tensor descriptor in-place.
-
-      At the moment, it allows for updating the base pointer, shape and strides of a tensor in global memory.
-  }];
-
-  let arguments = (ins
-    AnyTypeOf<[TT_TensorDescType]>:$desc,
-    Optional<TT_Ptr>:$base,
-    Variadic<I32>:$shape,
-    Variadic<I64>:$strides
-  );
-
-  let assemblyFormat = [{
-    $desc
-    oilist(
-      `base` `=` $base `:` type($base) |
-      `shape` `=` `[` $shape `]` |
-      `strides` `=` `[` $strides `]`
-    )
-    attr-dict `:` type($desc)
-  }];
-
-  let hasVerifier = 1;
-}
-
 // The following ops, including `call`, `func`, and `return` are copied and modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
 // We could revert it back once MLIR has a better inliner interface.
