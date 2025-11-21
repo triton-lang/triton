@@ -662,11 +662,10 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // Flush the tensor metric buffer
   auto dataSet = profiler.getDataSet();
   auto popResult = pendingGraphQueue.popAll();
-  auto pendingGraphs = std::move(popResult.second);
   metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
     auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-    emitMetricRecords(recordPtr, pendingGraphs);
-  });
+    emitMetricRecords(recordPtr, popResult.second);
+  }, /*flushAll=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
