@@ -565,7 +565,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.ones((10, ), device="cuda", dtype=torch.float32)
+    x = torch.ones((8, ), device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
 
     proton.start(str(temp_file.with_suffix("")), hook="triton")
