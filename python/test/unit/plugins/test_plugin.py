@@ -5,8 +5,8 @@ import os
 
 import triton
 import triton.language as tl
-from triton._C.libtriton import ir, passes
 from triton import knobs
+import custom_stages
 
 
 @pytest.mark.parametrize(None, [None])
@@ -19,19 +19,6 @@ def kernel1(BLOCK_SIZE: tl.constexpr):
 @triton.jit
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
-
-
-def inspect_stages_hook(self, stages, options, language, capability):
-
-    def make_ttir_wrapper(mod, metadata, opt, capability):
-        mod = self.make_ttir(mod, metadata, opt, capability)
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        passes.plugin.add_plugin(pm)
-        pm.run(mod, 'make_ttir_plugin')
-        return mod
-
-    stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
 
 
 def test_op(capfd, device: str):
@@ -47,6 +34,6 @@ def test_op(capfd, device: str):
     h = kernel1[grid](BLOCK_SIZE=1024)
     assert "tt.func public @foo" not in h.asm["ttgir"]
 
-    knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
+    knobs.runtime.add_stages_inspection_hook = custom_stages.inspect_stages_hook
     h = kernel2[grid](BLOCK_SIZE=1024)
     assert "tt.func public @foo" in h.asm["ttgir"]
