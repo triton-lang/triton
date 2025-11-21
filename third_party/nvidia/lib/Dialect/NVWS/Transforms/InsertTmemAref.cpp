@@ -387,7 +387,7 @@ struct TMEMAref {
                    paritionIdStageCluster) {
     auto arefBufType =
         cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-    Type dataBufType = getArefViewBufferType(arefBufType);
+    Type dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
     SmallVector<Type> buffers{dataBufType};
     SmallVector<Type> tokens{b.getType<AsyncTokenType>()};
     if (kind == PUT) {
@@ -426,7 +426,7 @@ struct TMEMAref {
       auto stageCluster = getStageCluster(op);
       auto arefBufType =
           cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-      Type dataBufType = getArefViewBufferType(arefBufType);
+      Type dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
       SmallVector<Type> buffers{dataBufType};
       auto bufferOp = createInto<ArefBufferOp>(
           b, op->getLoc(), {partitionId, stageCluster}, aref, buffers, token);
@@ -580,7 +580,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   }
   auto numStages = isMultiStaged ? (1 + *isMultiStaged) : 1;
   auto arefBufType =
-      getArefMultiBufferedType(allocOp.getResult().getType(), numStages);
+      getMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
 
   // alloc can be inside ws-loop, we need to find the entry point for ws-loop
@@ -774,9 +774,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    if (!isa<TensorMemoryScalesEncodingAttr>(allocOp.getType().getEncoding())) {
-      tmemDags.push_back(TmemAccessDag::build(allocOp));
-    }
+    tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {

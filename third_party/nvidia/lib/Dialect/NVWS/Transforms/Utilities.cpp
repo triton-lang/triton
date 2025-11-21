@@ -30,25 +30,4 @@ int getArefDepth(MemDescType bufTy) {
   return bufTy.getShape()[0];
 }
 
-MemDescType getArefViewBufferType(MemDescType bufTy) {
-  auto isScalesEnc =
-      isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding());
-  auto shape = bufTy.getShape();
-  return gpu::MemDescType::get(isScalesEnc ? shape : shape.drop_front(),
-                               bufTy.getElementType(), bufTy.getEncoding(),
-                               bufTy.getMemorySpace(),
-                               /*mutableMemory*/ true,
-                               /*allocShape=*/bufTy.getAllocShape());
-}
-
-MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
-  auto shape = bufTy.getShape();
-  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
-  if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding()))
-    bufferShape.insert(bufferShape.begin(), depth);
-  return gpu::MemDescType::get(bufferShape, bufTy.getElementType(),
-                               bufTy.getEncoding(), bufTy.getMemorySpace(),
-                               /*mutableMemory*/ true);
-}
-
 } // namespace mlir::triton::nvws

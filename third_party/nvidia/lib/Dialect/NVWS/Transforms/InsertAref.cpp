@@ -117,8 +117,6 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   } else if (isa<FloatType, IntegerType>(result.getType())) {
     auto tensorType = getTensorTypeFromScalar(builder, result);
     memDescType = getSmemDescType(tensorType, Value());
-  } else if (result.getDefiningOp<TMEMAllocOp>()) {
-    memDescType = dyn_cast<MemDescType>(result.getType());
   } else {
     std::string msg = "createAref: unsupported produced value type: " +
                       mlir::debugString(result.getType());
@@ -126,6 +124,7 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   }
 
   MemDescType arefBufType = getMultiBufferedType(memDescType, 1);
+  assert(isa<SharedMemorySpaceAttr>(arefBufType.getMemorySpace()));
   auto loc = result.getLoc();
   auto alloc = triton::nvws::createAlloc(builder, loc, arefBufType, Value());
   return createArefCreateOp(builder, {arefBufType}, {alloc->getResult(0)}, loc);
@@ -237,13 +236,6 @@ SmallVector<Operation *> createArefPut(OpBuilder &builder, ArefCreateOp aref,
         builder, loc, producerPartitions, stageCluster, tensorType, result);
     triton::gpu::createInto<LocalStoreOp>(builder, loc, producerPartitions,
                                           stageCluster, splatOp, dataBuf);
-    producerKind = AsyncOp::NONE;
-  } else if (auto tmemAlloc = result.getDefiningOp<TMEMAllocOp>()) {
-    auto vTrue = triton::gpu::createInto<arith::ConstantIntOp>(
-        builder, loc, producerPartitions, stageCluster, true, 1);
-    triton::gpu::createInto<TMEMStoreOp>(builder, loc, producerPartitions,
-                                         stageCluster, dataBuf,
-                                         tmemAlloc.getSrc(), vTrue);
     producerKind = AsyncOp::NONE;
   } else {
     std::string msg = "createArefPut: unsupported produced value type: " +
@@ -436,12 +428,6 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
         use->set(scalar);
       }
       exitInsertPointAfter = localLoadOp;
-    } else if (auto tmemAlloc = result.getDefiningOp<TMEMAllocOp>()) {
-      auto callback = [&](Operation *oldOp, Operation *newOp) {
-        assert(llvm::is_contained(getPartitionIds(oldOp), consumerPartition));
-        setPartition(newOp, consumerPartitions);
-      };
-      replaceUsesAndPropagateType(builder, tmemAlloc, dataBuf, callback);
     } else {
       std::string msg = "createArefGet: unsupported produced value type: " +
                         mlir::debugString(result.getType());
@@ -587,14 +573,8 @@ public:
 
       // handle non-tmem ops in the loop, including uses of desc_load results.
       loop.walk([&](Operation *op) {
-        if (op == loop || isa<MMAv5OpInterface, TMEMStoreOp>(op)) {
+        if (op == loop || isa<MMAv5OpInterface, TMEMAllocOp, TMEMStoreOp>(op)) {
           return WalkResult::advance();
-        }
-        if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
-          if (!isa<TensorMemoryScalesEncodingAttr>(
-                  tmemAlloc.getType().getEncoding())) {
-            return WalkResult::advance();
-          }
         }
         auto producedValues = getProducedValues(op, loop.getBody());
         for (auto producedValue : producedValues) {
