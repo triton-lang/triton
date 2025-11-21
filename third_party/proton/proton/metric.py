@@ -58,21 +58,31 @@ def set_metric_kernels():
     libproton.set_metric_kernels(tensor_metric_kernel_fn, scalar_metric_kernel_fn, stream)
 
 
+class _TensorMetric(libproton.TensorMetric):
+    # Hold a reference to the backing tensor so its device memory stays alive.
+    def __init__(self, value, metric_index):
+        super().__init__(value.data_ptr(), metric_index)
+        self._value = value
+
+
 def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], dict[str, libproton.TensorMetric]]:
     tensor_metrics = {}
     scalar_metrics: dict[str, Any] = {}
     for key, value in metrics.items():
         if hasattr(value, "data_ptr"):  # tensor
-            enter_state(COMPUTE_METADATA_SCOPE_NAME)
-            # implicit casting to double or int64 tensors
-            if value.is_floating_point():
-                value = value.double()
-                metric_index = libproton.metric_double_index
-            else:
-                value = value.long()
-                metric_index = libproton.metric_int64_index
-            exit_state()
-            tensor_metrics[key] = libproton.TensorMetric(value.data_ptr(), metric_index)
+            if value.device.type == "cpu":
+                scalar_metrics[key] = value
+            else: # device tensor
+                enter_state(COMPUTE_METADATA_SCOPE_NAME)
+                # implicit casting to double or int64 tensors
+                if value.is_floating_point():
+                    value = value.double()
+                    metric_index = libproton.metric_double_index
+                else:
+                    value = value.long()
+                    metric_index = libproton.metric_int64_index
+                exit_state()
+                tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:
             scalar_metrics[key] = value
     return scalar_metrics, tensor_metrics

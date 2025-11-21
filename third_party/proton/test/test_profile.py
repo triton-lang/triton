@@ -536,3 +536,18 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
         z = torch.zeros_like(x)
 
     proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 4
+    # get the test frame
+    test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test":
+            test_frame = child
+            break
+    assert test_frame is not None
+    assert test_frame["metrics"]["x_mean"] == 1.0
+    assert test_frame["metrics"]["x_std"] == 0.0
