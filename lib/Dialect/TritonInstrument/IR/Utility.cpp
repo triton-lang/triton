@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -58,12 +60,14 @@ RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
 
 std::pair<Value, RankedTensorType>
 createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
-                           SmallVector<int32_t> values) {
+                           SmallVector<uint32_t> values) {
   int64_t size = values.size();
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
   auto tensorType =
       getIntTensorType(builder.getInsertionBlock()->getParent(), {size}, 64);
-  return {ExperimentalBufferPointersOp::create(builder, tensorType, values,
+  auto valuesI32 = llvm::to_vector(llvm::map_range(
+      values, [](uint32_t v) { return static_cast<int32_t>(v); }));
+  return {ExperimentalBufferPointersOp::create(builder, tensorType, valuesI32,
                                                memType),
           tensorType};
 }
@@ -116,7 +120,7 @@ bool hasWGMMA(ModuleOp module) {
 bool hasTMAStore(ModuleOp module) {
   bool hasTMAStore = false;
   module.walk([&](Operation *op) {
-    if (isa<AsyncTMACopyLocalToGlobalOp, TMAStoreWaitOp>(op)) {
+    if (isa<AsyncTMACopyLocalToGlobalOp>(op)) {
       hasTMAStore = true;
     }
   });
@@ -368,8 +372,8 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
 }
 
 void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
-  SmallVector<SmallVector<int32_t>, 2> bufValues(numMemTypes);
-  SmallVector<int32_t> barrierValues;
+  SmallVector<SmallVector<uint32_t>, 2> bufValues(numMemTypes);
+  SmallVector<uint32_t> barrierValues;
   getBuffersAndBarriers(module, bufValues, barrierValues);
 
   FuncOp entryPoint = getEntryPoint(module);
@@ -484,56 +488,77 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 }
 
 void AuxDataMap::getBuffersAndBarriers(
-    ModuleOp module, SmallVector<SmallVector<int32_t>, 2> &bufValues,
-    SmallVector<int32_t> &barrierValues) {
+    ModuleOp module, SmallVector<SmallVector<uint32_t>, 2> &bufValues,
+    SmallVector<uint32_t> &barrierValues) {
   // Collect shared memory buffers allocated in the module
-  llvm::SmallVector<llvm::SetVector<int32_t>> bufSets(numMemTypes);
-  llvm::SetVector<int32_t> barrierSet;
-  module.walk([&](LocalAllocOp op) {
-    if (!canAllocBeInstrumented(op)) {
-      return WalkResult::advance();
-    }
-    int32_t baseOffset = getAllocationOffset(op);
-    auto &setToAdd =
-        isBarrier(op) ? barrierSet : bufSets[(int)MemType::SHARED_MEM];
-    setToAdd.insert(baseOffset);
-    if (isMultiBuffered(op)) {
-      unsigned numBuffers = getNumBuffers(op);
-      assert(numBuffers > 0 && "Expected at least one buffer");
-      unsigned subBufferSize = getSubBufferSize(op);
-      for (unsigned i = 1; i < numBuffers; ++i) {
-        setToAdd.insert(baseOffset + i * subBufferSize);
-      }
-    }
-    return WalkResult::advance();
-  });
 
-  module.walk([&](TMEMAllocOp op) {
-    if (!canAllocBeInstrumented(op)) {
-      return WalkResult::advance();
-    }
-    int32_t baseOffset = getAllocationOffset(op);
-    bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset);
-    if (isMultiBuffered(op)) {
-      unsigned numBuffers = getNumBuffers(op);
-      assert(numBuffers > 0 && "Expected at least one buffer");
-      unsigned subBufferSize = getSubBufferSize(op);
-      for (unsigned i = 1; i < numBuffers; ++i) {
-        bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset +
-                                                 i * subBufferSize);
-      }
-    }
-    return WalkResult::advance();
-  });
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  triton::BufferRegionAnalysis *analysis =
+      solver->load<triton::BufferRegionAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return;
 
-  barrierValues = llvm::to_vector(barrierSet);
+  analysis->calculateUsedBufferRegions(module);
+  bufValues[(int)MemType::SHARED_MEM] = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::SHARED_MEMORY),
+      [](const BufferRegion &region) { return region.baseOffset; }));
+  bufValues[(int)MemType::TENSOR_MEM] = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::TENSOR_MEMORY),
+      [](const BufferRegion &region) { return region.baseOffset; }));
+  barrierValues = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::BARRIER),
+      [](const BufferRegion &region) { return region.baseOffset; }));
+
+  // llvm::SmallVector<llvm::SetVector<int32_t>> bufSets(numMemTypes);
+  // llvm::SetVector<int32_t> barrierSet;
+  // module.walk([&](LocalAllocOp op) {
+  //   if (!canAllocBeInstrumented(op)) {
+  //     return WalkResult::advance();
+  //   }
+  //   int32_t baseOffset = getAllocationOffset(op);
+  //   auto &setToAdd =
+  //       isBarrier(op) ? barrierSet : bufSets[(int)MemType::SHARED_MEM];
+  //   setToAdd.insert(baseOffset);
+  //   if (isMultiBuffered(op)) {
+  //     unsigned numBuffers = getNumBuffers(op);
+  //     assert(numBuffers > 0 && "Expected at least one buffer");
+  //     unsigned subBufferSize = getSubBufferSize(op);
+  //     for (unsigned i = 1; i < numBuffers; ++i) {
+  //       setToAdd.insert(baseOffset + i * subBufferSize);
+  //     }
+  //   }
+  //   return WalkResult::advance();
+  // });
+
+  // module.walk([&](TMEMAllocOp op) {
+  //   if (!canAllocBeInstrumented(op)) {
+  //     return WalkResult::advance();
+  //   }
+  //   int32_t baseOffset = getAllocationOffset(op);
+  //   bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset);
+  //   if (isMultiBuffered(op)) {
+  //     unsigned numBuffers = getNumBuffers(op);
+  //     assert(numBuffers > 0 && "Expected at least one buffer");
+  //     unsigned subBufferSize = getSubBufferSize(op);
+  //     for (unsigned i = 1; i < numBuffers; ++i) {
+  //       bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset +
+  //                                                i * subBufferSize);
+  //     }
+  //   }
+  //   return WalkResult::advance();
+  // });
+
+  // barrierValues = llvm::to_vector(barrierSet);
   if (!barrierValues.empty()) {
     barrierValues.resize(llvm::NextPowerOf2(barrierValues.size() - 1), 0);
   }
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    bufValues[iMemType] = llvm::to_vector(bufSets[iMemType]);
+    // bufValues[iMemType] = llvm::to_vector(bufSets[iMemType]);
     if (bufValues[iMemType].empty()) {
       continue;
     }

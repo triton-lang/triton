@@ -18,17 +18,17 @@ namespace mlir::triton {
 // BufferRegion: a single logical region derived from an alloc
 //===----------------------------------------------------------------------===//
 struct BufferRegion {
-  // TODO: Consider using narrower types
-  uint64_t baseOffset;
-  uint64_t length;
+  uint32_t baseOffset;
+  uint32_t length;
 
   bool operator==(const BufferRegion &other) const {
     return baseOffset == other.baseOffset && length == other.length;
   }
 
   bool operator<(const BufferRegion &other) const {
-    return baseOffset < other.baseOffset ||
-           (baseOffset == other.baseOffset && length < other.length);
+    if (baseOffset != other.baseOffset)
+      return baseOffset < other.baseOffset;
+    return length < other.length;
   }
 
   template <typename T> void print(T &os) const {
@@ -89,7 +89,12 @@ struct RegionInfo {
   }
 
   template <typename T> void print(T &os) const {
-    llvm::interleaveComma(regions, os,
+    llvm::SmallVector<BufferRegion> sortedRegions(regions.begin(),
+                                                  regions.end());
+    llvm::sort(sortedRegions, [](const BufferRegion &a, const BufferRegion &b) {
+      return a < b;
+    });
+    llvm::interleaveComma(sortedRegions, os,
                           [&](const BufferRegion &r) { r.print(os); });
   }
 
@@ -130,6 +135,11 @@ public:
 
   void calculateUsedBufferRegions(Operation *op);
 
+  // TODO: Find a better place for this, maybe in some Utility.cpp.
+  // Maybe we already have some helper that does something like this?
+  // Check if any of the operands are MemDescType.
+  bool usesMemory(Operation *op) const;
+
   // ------------------------------
   // Required overrides
   // ------------------------------
@@ -154,6 +164,8 @@ private:
   void insertRegion(RegionType type, const BufferRegion &region) {
     usedBufferRegions[type].insert(region);
   }
+
+  std::optional<RegionType> getRegionType(Value v);
 
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];

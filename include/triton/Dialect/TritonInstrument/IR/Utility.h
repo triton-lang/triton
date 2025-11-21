@@ -75,8 +75,8 @@ struct AuxDataMap {
 
 private:
   void getBuffersAndBarriers(ModuleOp module,
-                             SmallVector<SmallVector<int32_t>, 2> &bufValues,
-                             SmallVector<int32_t> &barrierValues);
+                             SmallVector<SmallVector<uint32_t>, 2> &bufValues,
+                             SmallVector<uint32_t> &barrierValues);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map);
   void createInWarpSpecialize(

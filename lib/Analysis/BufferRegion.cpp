@@ -48,17 +48,38 @@ unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
   return ty.getShape()[0];
 }
 
-mlir::triton::BufferRegionAnalysis::RegionType getRegionType(Operation *op) {
-  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op)) {
-    return mlir::triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
+Value getBarrierOperand(Operation *op) {
+  if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
+    return initBarrierOp.getOperand();
   }
-  if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op)) {
-    return mlir::triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY;
+  if (auto asyncOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    return asyncOp.getBarrier();
   }
-  if (isa<ttng::InitBarrierOp>(op)) {
-    return mlir::triton::BufferRegionAnalysis::RegionType::BARRIER;
+  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+    return gatherOp.getBarrier();
   }
-  llvm_unreachable("Unknown operation type");
+  return nullptr;
+}
+
+bool isUsedAsBarrier(Value v) {
+  for (auto user : v.getUsers()) {
+    if (v == getBarrierOperand(user)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isUsedAsSharedMemory(Value v) {
+  auto type = dyn_cast<ttg::MemDescType>(v.getType());
+  return type &&
+         isa_and_nonnull<ttg::SharedMemorySpaceAttr>(type.getMemorySpace());
+}
+
+bool isUsedAsTensorMemory(Value v) {
+  auto type = dyn_cast<ttg::MemDescType>(v.getType());
+  return type &&
+         isa_and_nonnull<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
 }
 
 } // namespace
@@ -94,8 +115,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   Value result = nullptr;
   RegionInfo regionInfo;
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
-    uint64_t offset = getAllocationOffset(localAllocOp);
-    uint64_t size = getAllocSize(localAllocOp);
+    uint32_t offset = getAllocationOffset(localAllocOp);
+    uint32_t size = getAllocSize(localAllocOp);
     regionInfo.regions.insert({offset, size});
 
     for (auto *r : results) {
@@ -104,8 +125,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     result = localAllocOp.getResult();
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    uint64_t offset = getAllocationOffset(tmemAllocOp);
-    uint64_t size = getAllocSize(tmemAllocOp);
+    uint32_t offset = getAllocationOffset(tmemAllocOp);
+    uint32_t size = getAllocSize(tmemAllocOp);
     regionInfo.regions.insert({offset, size});
 
     for (auto *r : results) {
@@ -118,7 +139,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     int numSubBuffers = getNumBuffers(memdescIndexOp);
     for (auto &region : in.regions) {
       for (int i = 0; i < numSubBuffers; i++) {
-        uint64_t subBufferSize = region.length / numSubBuffers;
+        uint32_t subBufferSize = region.length / numSubBuffers;
         regionInfo.regions.insert(
             {region.baseOffset + i * subBufferSize, subBufferSize});
       }
@@ -146,19 +167,40 @@ void BufferRegionAnalysis::visitNonControlFlowArguments(
 
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   op->walk([&](Operation *op) {
-    if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
-            ttng::TMEMStoreOp, ttng::InitBarrierOp>(op)) {
+    if (usesMemory(op)) {
       for (auto operand : op->getOperands()) {
-
         RegionInfo regionInfo = getLatticeElement(operand)->getValue();
-        RegionType regionType = getRegionType(op);
+        std::optional<RegionType> regionType = getRegionType(operand);
+        if (!regionType) {
+          continue;
+        }
         // Note the buffer regions that may be accessed by the operation.
         for (auto &region : regionInfo.regions) {
-          insertRegion(regionType, {region.baseOffset, region.length});
+          insertRegion(*regionType, {region.baseOffset, region.length});
         }
       }
     }
   });
+}
+
+bool BufferRegionAnalysis::usesMemory(Operation *op) const {
+  return llvm::any_of(op->getOperands(), [](Value v) {
+    return isa<ttg::MemDescType>(v.getType());
+  });
+}
+
+std::optional<BufferRegionAnalysis::RegionType>
+BufferRegionAnalysis::getRegionType(Value v) {
+  if (isUsedAsBarrier(v)) {
+    return RegionType::BARRIER;
+  }
+  if (isUsedAsSharedMemory(v)) {
+    return RegionType::SHARED_MEMORY;
+  }
+  if (isUsedAsTensorMemory(v)) {
+    return RegionType::TENSOR_MEMORY;
+  }
+  return std::nullopt;
 }
 
 } // namespace mlir::triton
