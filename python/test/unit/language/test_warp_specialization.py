@@ -517,10 +517,11 @@ def mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128),  (128, 256, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 256, 128)])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+
     def fp8e8m0_to_float32(scale):
         scale = scale.view(torch.uint8)
         scale = scale.to(torch.int32)
@@ -566,15 +567,12 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     kernel_kwargs = {}
 
-    out = mxfp_matmul[grid](a_desc, b_desc, output, a_scale, b_scale, M, N, K, a_scale.stride(0),
-                            output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
-                            NUM_STAGES=3, **kernel_kwargs, num_warps=NUM_WARPS)
+    mxfp_matmul[grid](a_desc, b_desc, output, a_scale, b_scale, M, N, K, a_scale.stride(0), output.stride(0),
+                      output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=3, **kernel_kwargs, num_warps=NUM_WARPS)
     a_scale_f32 = fp8e8m0_to_float32(a_scale)
     b_scale_f32 = fp8e8m0_to_float32(b_scale)
     a_scale_f32 = a_scale_f32.repeat_interleave(32, dim=1)
     b_scale_f32 = b_scale_f32.repeat_interleave(32, dim=1)
-
-    # b_scales are always col major
     b_scale_f32 = b_scale_f32.T.contiguous()
 
     a = a_f16 * a_scale_f32
@@ -583,8 +581,3 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     output = output.to(torch.float32)
     atol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=0)
-
-    # print(out.asm["ttgir"])
-
-
-# test_mxfp(128, 256, 128, 8, "cuda")

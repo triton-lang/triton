@@ -315,7 +315,7 @@ template <class T> struct AssignStagePhase {
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
-        auto depth = getArefDepth(cast<MemDescType>(arefBuf.getType()));
+        auto depth = cast<MemDescType>(arefBuf.getType()).getShape()[0];
 
         auto cnd =
             createInto(arith::CmpIOp{}, arith::CmpIPredicate::eq, nextStage,
@@ -409,7 +409,7 @@ template <class T> struct AssignStagePhase {
     ImplicitLocOpBuilder b(arefOp.getLoc(), arefOp);
     b.setInsertionPointAfter(arefOp);
     auto depth =
-        getArefDepth(cast<MemDescType>(arefOp.getOperand(0).getType()));
+        cast<MemDescType>(arefOp.getOperand(0).getType()).getShape()[0];
     index.stage = arith::ConstantIntOp::create(b, depth - 1, 32);
 
     static_assert(std::is_same_v<T, ArefPutEnterOp> ||

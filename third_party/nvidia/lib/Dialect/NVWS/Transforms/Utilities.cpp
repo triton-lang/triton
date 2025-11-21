@@ -26,8 +26,4 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
   return ArefCreateOp::create(builder, loc, arefTy, allocOps);
 }
 
-int getArefDepth(MemDescType bufTy) {
-  return bufTy.getShape()[0];
-}
-
 } // namespace mlir::triton::nvws
