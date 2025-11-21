@@ -235,7 +235,7 @@ private:
         auto barrier = waitOp.getAlloc();
 
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-          if (auxData.writeVisibility[(int)memType][op].value) {
+          if (!auxData.writeVisibility[(int)memType].empty()) {
             // Transfer visible writes and reads to all peer threads
             funcBuilder.createTransferVisibleWritesCall(
                 b, barrier, getThreadPeersMask(thread), pred, memType, op);
@@ -243,7 +243,7 @@ private:
                 b, barrier, getThreadPeersMask(thread), pred, memType, op);
           }
         }
-        if (auxData.barriers[op].value && auxData.waiting[op].value) {
+        if (!auxData.barriers.empty() && !auxData.waiting.empty()) {
           funcBuilder.createClearWaitingCall(b, barrier, baseThread, pred,
                                              waitOp);
         }
@@ -259,19 +259,20 @@ private:
             auxData.writeVisibility[(int)MemType::SHARED_MEM][op], op);
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-
-        funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-            b, baseThread, getThreadPeersMask(thread),
-            wgmmaWaitOp.getPendings(), nullptr,
-            auxData.commits[CommitKind::Wgmma][op],
-            auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
+        if (!auxData.commits[CommitKind::Wgmma].empty())
+          funcBuilder.createClearOutstandingCommitsTransferReadsCall(
+              b, baseThread, getThreadPeersMask(thread),
+              wgmmaWaitOp.getPendings(), nullptr,
+              auxData.commits[CommitKind::Wgmma][op],
+              auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
       }
       if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-            b, baseThread, getThreadPeersMask(thread),
-            tmaStoreWaitOp.getPendings(), nullptr,
-            auxData.commits[CommitKind::TmaStore][op],
-            auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
+        if (!auxData.commits[CommitKind::TmaStore].empty())
+          funcBuilder.createClearOutstandingCommitsTransferReadsCall(
+              b, baseThread, getThreadPeersMask(thread),
+              tmaStoreWaitOp.getPendings(), nullptr,
+              auxData.commits[CommitKind::TmaStore][op],
+              auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);

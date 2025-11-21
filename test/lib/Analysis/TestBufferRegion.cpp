@@ -39,8 +39,7 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      if (!isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
-               ttng::TMEMStoreOp, ttng::InitBarrierOp>(op))
+      if (!analysis->usesMemory(op))
         return;
 
       auto maybeMemDesc = llvm::find_if(op->getOperands(), [](Value operand) {

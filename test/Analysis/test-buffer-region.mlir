@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @memdesc_index_multiple_access(%idx: i32) {
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>
     %view = ttg.memdesc_index %0[%idx] : !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // expected-remark @below {{Shared: [4096, 4096], [0, 4096]}}
+    // expected-remark @below {{Shared: [0, 4096], [4096, 4096]}}
     ttg.local_load %view : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
   }
@@ -57,9 +57,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %true = arith.constant true
     %tm = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %view = ttg.memdesc_index %tm[%idx] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-remark @below {{Tensor: [128, 128], [0, 128]}}
+    // expected-remark @below {{Tensor: [0, 128], [128, 128]}}
     ttng.tmem_load %view : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32>
-    // expected-remark @below {{Tensor: [128, 128], [0, 128]}}
+    // expected-remark @below {{Tensor: [0, 128], [128, 128]}}
     ttng.tmem_store %cst, %view, %true : tensor<128x128xf32> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -164,7 +164,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   ^path_b(%arg_from_entry: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
     cf.br ^merge(%alloc_b : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
   ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
-    // expected-remark @below {{Shared: [45056, 4096], [40960, 4096]}}
+    // expected-remark @below {{Shared: [40960, 4096], [45056, 4096]}}
     ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
   }
