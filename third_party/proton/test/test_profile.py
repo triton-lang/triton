@@ -551,3 +551,32 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
     assert test_frame is not None
     assert test_frame["metrics"]["x_mean"] == 1.0
     assert test_frame["metrics"]["x_std"] == 0.0
+
+
+def test_tensor_metrics_hook(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metric_value = torch.tensor(4.0, device="cuda")
+        return {"name": "foo_test", "flops": metric_value}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((10, ), device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, x.numel(), y, num_warps=4)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 1
+    foo_frame = children[0]
+    assert foo_frame["frame"]["name"] == "foo_test"
+    assert foo_frame["metrics"]["flops"] == 4.0
