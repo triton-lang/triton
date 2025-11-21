@@ -22,8 +22,8 @@ class CDNA4MXScaleLayout(Layout):
         self.B = math.prod(self.leading_shape)
         self.ALIGN_K_SCALE = 8
         self.ALIGN_N = 32
-        self.K_SCALE_pad = (self.K_SCALE + self.ALIGN_K_SCALE - 1) // self.ALIGN_K_SCALE * self.ALIGN_K_SCALE
-        self.N_pad = (self.N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N
+        self.K_SCALE_pad = math.ceil(self.K_SCALE / self.ALIGN_K_SCALE) * self.ALIGN_K_SCALE
+        self.N_pad = math.ceil(self.N / self.ALIGN_N) * self.ALIGN_N
 
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
