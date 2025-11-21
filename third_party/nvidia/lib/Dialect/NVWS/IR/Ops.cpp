@@ -55,7 +55,6 @@ static std::optional<Twine> verifySlice(T &origType, T &newType) {
     if (origType.getShape()[i + 1] != newType.getShape()[i])
       return "Dimensions don't match";
   }
-
   return std::nullopt;
 }
 

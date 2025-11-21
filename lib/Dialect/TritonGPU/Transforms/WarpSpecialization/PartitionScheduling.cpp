@@ -202,6 +202,11 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
     if (loop.isDefinedOutsideOfLoop(scale)) {
       return;
     }
+    // If scales are defined by tmem_alloc at this point, it implies that
+    // the scale layout is incompatible with tmem_copy. To make MMA asynchronous
+    // while scales are copied into TMEM via tmem_store, we need to double
+    // buffer scales in TMEM. We create a dedicated partition responsible for
+    // storing scales into double-buffered TMEM.
     if (auto tmemAlloc = scale.getDefiningOp<ttng::TMEMAllocOp>()) {
       if (!scaleTmemCopyPartition) {
         scaleTmemCopyPartition = partitions.addPartition(0);
