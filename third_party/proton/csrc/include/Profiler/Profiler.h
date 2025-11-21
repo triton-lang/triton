@@ -58,21 +58,21 @@ public:
   /// Register a data object to the profiler.
   /// A profiler can yield metrics to multiple data objects.
   Profiler *registerData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
     dataSet.insert(data);
     return this;
   }
 
   /// Unregister a data object from the profiler.
   Profiler *unregisterData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
     dataSet.erase(data);
     return this;
   }
 
   /// Get the set of data objects registered to the profiler.
   std::set<Data *> getDataSet() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
+    std::shared_lock<std::shared_mutex> lock(dataSetMutex);
     return dataSet;
   }
 
@@ -117,9 +117,10 @@ protected:
                const std::map<std::string, MetricValueType> &scalarMetrics,
                const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
+  mutable std::shared_mutex mutex;
   // `dataSet` can be accessed by both the user thread and the background
   // threads
-  mutable std::shared_mutex mutex;
+  mutable std::shared_mutex dataSetMutex;
   std::set<Data *> dataSet;
   static thread_local void *tensorMetricKernel;
   static thread_local void *scalarMetricKernel;
