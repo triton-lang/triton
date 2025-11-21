@@ -1,6 +1,7 @@
 #include "Runtime/HipRuntime.h"
 
 #include "Driver/GPU/HipApi.h"
+#include <cstdint>
 #include <algorithm>
 
 namespace proton {
@@ -52,10 +53,10 @@ void HipRuntime::copyDeviceToHostAsync(void *dst, const void *src, size_t size,
       reinterpret_cast<hipStream_t>(stream));
 }
 
-uint64_t HipRuntime::getDevice() {
+void *HipRuntime::getDevice() {
   hipDevice_t device;
   (void)hip::ctxGetDevice<true>(&device);
-  return static_cast<uint64_t>(device);
+  return reinterpret_cast<void *>(static_cast<uintptr_t>(device));
 }
 
 void *HipRuntime::getPriorityStream() {

@@ -112,10 +112,9 @@ void MetricBuffer::synchronize(DeviceBuffer &buffer) {
 
 MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
   auto device = runtime->getDevice();
-  if (deviceBuffers.find(reinterpret_cast<void *>(device)) ==
-      deviceBuffers.end()) {
-    deviceBuffers[reinterpret_cast<void *>(device)] = DeviceBuffer{};
-    auto &buffer = deviceBuffers.at(reinterpret_cast<void *>(device));
+  if (deviceBuffers.find(device) == deviceBuffers.end()) {
+    deviceBuffers[device] = DeviceBuffer{};
+    auto &buffer = deviceBuffers.at(device);
     runtime->allocateDeviceBuffer(&buffer.devicePtr, size);
     runtime->allocateDeviceBuffer(&buffer.deviceOffsetPtr, sizeof(uint64_t));
     runtime->allocateHostBuffer(&buffer.hostPtr, size);
@@ -125,7 +124,7 @@ MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
                     buffer.priorityStream);
     runtime->synchronizeStream(buffer.priorityStream);
   }
-  return deviceBuffers.at(reinterpret_cast<void *>(device));
+  return deviceBuffers.at(device);
 }
 
 } // namespace proton

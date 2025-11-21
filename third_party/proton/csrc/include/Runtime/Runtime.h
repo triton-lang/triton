@@ -36,7 +36,7 @@ public:
   virtual void copyDeviceToHostAsync(void *dst, const void *src, size_t size,
                                      void *stream) = 0;
 
-  virtual uint64_t getDevice() = 0;
+  virtual void *getDevice() = 0;
 
   virtual void *getPriorityStream() = 0;
 

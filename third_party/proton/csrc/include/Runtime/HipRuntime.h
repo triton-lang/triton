@@ -24,7 +24,7 @@ public:
   void freeDeviceBuffer(uint8_t *buffer) override;
   void copyDeviceToHostAsync(void *dst, const void *src, size_t size,
                              void *stream) override;
-  uint64_t getDevice() override;
+  void *getDevice() override;
   void *getPriorityStream() override;
   void synchronizeStream(void *stream) override;
   void synchronizeDevice() override;

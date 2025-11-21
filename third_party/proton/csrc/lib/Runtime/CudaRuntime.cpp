@@ -1,6 +1,7 @@
 #include "Runtime/CudaRuntime.h"
 
 #include "Driver/GPU/CudaApi.h"
+#include <cstdint>
 #include <algorithm>
 
 namespace proton {
@@ -49,10 +50,10 @@ void CudaRuntime::copyDeviceToHostAsync(void *dst, const void *src, size_t size,
                               reinterpret_cast<CUstream>(stream));
 }
 
-uint64_t CudaRuntime::getDevice() {
+void *CudaRuntime::getDevice() {
   CUdevice device;
   cuda::ctxGetDevice<true>(&device);
-  return static_cast<uint64_t>(device);
+  return reinterpret_cast<void *>(static_cast<uintptr_t>(device));
 }
 
 void *CudaRuntime::getPriorityStream() {

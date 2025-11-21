@@ -7,6 +7,7 @@
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -186,8 +187,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   if (!buffer || !hostBuffer)
     return;
 
-  uint64_t device = runtime->getDevice();
-  void *&priorityStream = deviceStreams[reinterpret_cast<void *>(device)];
+  void *device = runtime->getDevice();
+  void *&priorityStream = deviceStreams[device];
   if (!priorityStream) {
     priorityStream = runtime->getPriorityStream();
   }
@@ -253,7 +254,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                         event.first->cycle, event.second->cycle, duration,
                         normalizedDuration, kernelId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
-                        device, static_cast<uint64_t>(runtime->getDeviceType()),
+                        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+                            device)),
+                        static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost, blockTrace.initTime,
                         blockTrace.preFinalTime, blockTrace.postFinalTime));
               }
