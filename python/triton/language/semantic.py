@@ -1963,4 +1963,4 @@ class TritonSemantic(Generic[TensorTy]):
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
                                                             [s.handle for s in strides], block_shape, is_signed_int,
                                                             padding)
-        return tl.tensor_descriptor(handle, base, shape, strides, type)
+        return tl.tensor_descriptor(handle, shape, strides, type)

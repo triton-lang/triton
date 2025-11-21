@@ -1859,3 +1859,57 @@ def test_update_tensor_descriptor_loop():
     for i in range(num_batches):
         expected = ref[i] + (i + 1)
         torch.testing.assert_close(tensors[i], expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_update_tensor_descriptor_strides():
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, M: ttgl.constexpr, N: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        desc = tma.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M, N],
+            layout=smem_layout,
+        )
+
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [M, N], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+        mbarrier.wait(bar, 0)
+        mbarrier.invalidate(bar)
+
+        tma.update_tensor_descriptor(desc, base=b_ptr, shape=[N, M], strides=[M, 1])
+
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        data = smem.load(block_layout)
+        data_smem = ttgl.allocate_shared_memory(ttgl.float16, [M, N], smem_layout, data)
+        tma.async_copy_shared_to_global(desc, [0, 0], data_smem)
+        tma.store_wait(0)
+        data_smem._keep_alive()
+
+    M, N = 16, 32
+    input_data = torch.randn((M, N), device="cuda", dtype=torch.float16)
+    output = torch.zeros((N, M), device="cuda", dtype=torch.float16)
+
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(1,)](input_data, output, M, N, smem_layout)
+
+    ref = torch.zeros((N, M), device="cuda", dtype=torch.float16)
+    ref[:M, :M] = input_data[:, :M]
+    torch.testing.assert_close(output, ref)
