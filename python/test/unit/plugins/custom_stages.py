@@ -11,8 +11,7 @@ def get_hash():
     # Compute a stable hash from the contents returned by get_key
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
-
-# Keep custom pipeline stages in a seperate file from kernels are any change to the file
+# Keep custom pipeline stages in a seperate file from kernels as any change to the file
 # will trigger a recompile.
 def inspect_stages_hook(self, stages, options, language, capability):
 
