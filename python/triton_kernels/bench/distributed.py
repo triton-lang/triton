@@ -272,10 +272,10 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
                           (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), a_mx_scale=w1_scale)
+    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
     pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
     if rank == 0:
-        pc1_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex_full), a_mx_scale=w1_scale_full)
+        pc1_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex_full), b_mx_scale=w1_scale_full)
         pc2_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex_full), b_mx_scale=w2_scale_full)
     else:
         pc1_full = pc2_full = None
