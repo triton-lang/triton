@@ -11,10 +11,10 @@ from triton_kernels.tensor_details.layout import CDNA4MXScaleLayout
     "shape",
     [
         (3, 4096, 1024),
-        (10, 56, 256),
+        (10, 254, 60),
         (1, 320, 160),
-        (2, 8, 32),
-        (3, 24, 576),
+        (2, 16, 512),
+        (3, 2, 36),
     ],
 )
 def test_mxfp4_scale_roundtrip(shape):
