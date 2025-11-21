@@ -43,9 +43,10 @@ class LaunchHook(Hook):
         id.set(libproton.record_scope())
         if fn_metrics:
             set_metric_kernels()
+        # transform_tensor_metrics must happen before enter_op
+        scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
         libproton.enter_op(id.get(), lazy_metadata["name"])
-        # transform_tensor_metrics must happen after enter_op
-        libproton.add_metrics(id.get(), *transform_tensor_metrics(fn_metrics))
+        libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
 
     def exit(self, metadata: LazyDict) -> None:
         libproton.exit_op(id.get(), op_name.get())
