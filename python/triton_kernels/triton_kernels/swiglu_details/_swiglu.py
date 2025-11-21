@@ -43,7 +43,11 @@ def compute_swiglu(gelu, linear, scale, alpha, limit):
     linear = linear.to(tl.float32) * scale
     if limit is not None:
         linear = clip(linear, limit, clip_lower=True)
-    s = gelu / (1 + tl.exp(-alpha * gelu))
+
+    # exp(x) becomes exp2(log2(e) * x) in ptx. By expanding it early we can factor
+    # (alpha * log2_e) into a single scalar factor.
+    log2_e: tl.constexpr = 1.4426950408889634
+    s = gelu / (1 + tl.exp2(-(alpha * log2_e) * gelu))
     return tl.fma(s, linear, s)  # (s * (linear + 1))
 
 
