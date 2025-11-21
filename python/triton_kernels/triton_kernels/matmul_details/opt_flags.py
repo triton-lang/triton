@@ -122,6 +122,10 @@ def make_default_opt_flags_amd(
     if epilogue_subtile is None:
         epilogue_subtile = 1
 
+    # prevents OutOfSharedMemoryError for mxfp8 on CDNA3
+    if get_cdna_version() == 3 and bitwidth(rhs_dtype) == 8 and precision_config.b_mx_scale is not None:
+        num_stages = 1
+
     # specific configs for F16 x MXFP4 on CDNA4
     # Note that these configs will exceed LDS usage with async copy enabled
     if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.b_mx_scale is not None:
