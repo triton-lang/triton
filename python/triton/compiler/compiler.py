@@ -246,7 +246,8 @@ def compile(src, target=None, options=None, _env_vars=None):
     env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
     key = get_cache_key(src, backend, options, env_vars=env_vars)
     if knobs.runtime.add_stages_inspection_hook is not None:
-        key += inspect.getsource(knobs.runtime.add_stages_inspection_hook)
+        module = inspect.getmodule(knobs.runtime.add_stages_inspection_hook)
+        key += inspect.getsource(module)
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
