@@ -576,7 +576,12 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
         data = json.load(f)
 
     children = data[0]["children"]
-    assert len(children) == 1
-    foo_frame = children[0]
-    assert foo_frame["frame"]["name"] == "foo_test"
-    assert foo_frame["metrics"]["flops"] == 4.0
+    # metadata scope + foo_test
+    assert len(children) == 2
+    foo_test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+            break
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["flops"] == 8.0
