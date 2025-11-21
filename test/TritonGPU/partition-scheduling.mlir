@@ -11,8 +11,9 @@
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @mxfp_matmul(%a_desc: !tt.tensordesc<tensor<128x128xf8E5M2, #shared>>, %b_desc: !tt.tensordesc<tensor<256x128xf8E5M2, #shared>>, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %a_scale_ptr_35: tensor<128x4x!tt.ptr<i8>, #blocked>, %b_scale: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @mxfp_matmul(%a_desc: !tt.tensordesc<tensor<128x128xf8E5M2, #shared>>, %b_desc: !tt.tensordesc<tensor<256x128xf8E5M2, #shared>>, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %a_scale_ptr_35: tensor<128x4x!tt.ptr<i8>, #blocked>, %b_scale_ptr_42: tensor<256x4x!tt.ptr<i8>, #blocked>, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %accumulator = arith.constant false
     %a_scale_ptr = arith.constant dense<64> : tensor<128x1xi32, #blocked>
     %b_scale_ptr = arith.constant dense<64> : tensor<256x1xi32, #blocked>
@@ -49,16 +50,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %offs_bn_scale_25 = tt.splat %N : i32 -> tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %offs_bn_scale_26 = arith.remsi %offs_bn_scale_23, %offs_bn_scale_25 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %a_scale_ptr_27 = tt.expand_dims %offs_am_scale_18 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
-    %a_scale_ptr_28 = arith.muli %a_scale_ptr_27, %a_scale_ptr : tensor<128x1xi32, #blocked>
-    %a_scale_ptr_31 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %a_scale_ptr_32 = tt.expand_dims %a_scale_ptr_31 {axis = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x4xi32, #blocked>
-    %b_scale_ptr_36 = tt.expand_dims %offs_bn_scale_26 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
-    %b_scale_ptr_37 = arith.muli %b_scale_ptr_36, %b_scale_ptr : tensor<256x1xi32, #blocked>
-    %b_scale_ptr_38 = tt.splat %b_scale : !tt.ptr<i8> -> tensor<256x1x!tt.ptr<i8>, #blocked>
-    %b_scale_ptr_39 = tt.addptr %b_scale_ptr_38, %b_scale_ptr_37 : tensor<256x1x!tt.ptr<i8>, #blocked>, tensor<256x1xi32, #blocked>
-    %b_scale_ptr_40 = tt.broadcast %b_scale_ptr_39 : tensor<256x1x!tt.ptr<i8>, #blocked> -> tensor<256x4x!tt.ptr<i8>, #blocked>
-    %b_scale_ptr_41 = tt.broadcast %a_scale_ptr_32 : tensor<1x4xi32, #blocked> -> tensor<256x4xi32, #blocked>
-    %b_scale_ptr_42 = tt.addptr %b_scale_ptr_40, %b_scale_ptr_41 : tensor<256x4x!tt.ptr<i8>, #blocked>, tensor<256x4xi32, #blocked>
+
     %0 = arith.addi %K, %c127_i32 : i32
     %1 = arith.divsi %0, %c128_i32 : i32
     %accumulator_43, %accumulator_44 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
