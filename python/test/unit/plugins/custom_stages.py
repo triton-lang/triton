@@ -3,11 +3,17 @@ import hashlib
 import pathlib
 
 
-#These two methods must be implemented by the plugin
+# These two methods must be implemented by the plugin.
+# any changes in this entire file and the the plugin pipeline
+# will trigger a recompile since the hash will change. To be
+# less conservative, we could use a hash of the inspect_stages_hook
+# function but then changes outside of the function won't be considered
+# potentially causing a stale kernel hash
 def get_key():
     return pathlib.Path(__file__).read_text()
+
+
 def get_hash():
-    # Compute a stable hash from the contents returned by get_key
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
 

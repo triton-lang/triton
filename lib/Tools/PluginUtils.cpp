@@ -20,16 +20,6 @@ TritonPlugin::getAddressOfSymbol(const std::string &symbol) const {
   return getDetailsFn;
 }
 
-//   template <typename T, typename U>
-//   llvm::Expected<T> TritonPlugin::getAPI(const std::string &symbol) const {
-//     llvm::Expected<intptr_t> getDetailsFn = getAddressOfSymbol(symbol);
-//     if (auto Err = getDetailsFn.takeError()) {
-//       return Err;
-//     }
-//     auto func = reinterpret_cast<U>(*getDetailsFn);
-//     return func;
-//   }
-
 llvm::Expected<TritonPluginResult>
 TritonPlugin::checkAPIResult(TritonPluginResult result,
                              const char *handle) const {

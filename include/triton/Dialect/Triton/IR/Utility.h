@@ -3,13 +3,8 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "llvm/Support/DynamicLibrary.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/ErrorOr.h"
 #include <algorithm>
-#include <cstdint>
 #include <numeric>
 
 namespace mlir {
