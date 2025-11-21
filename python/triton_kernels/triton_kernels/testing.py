@@ -276,15 +276,15 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
     return torch.vstack(out)
 
 
-def pad_ragged_tensor(x, x_ragged_metadata, transpose):
-    multiple = 128
+def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
+    multiple = 128 if hbm_swizzling else 64
     if transpose:
         y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
     else:
         y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).contiguous()
 
     y_ragged_metadata = replace(x_ragged_metadata, slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
-                                slice_sizes_divisibility=64)
+                                slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
 
 
@@ -296,14 +296,13 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     buffer = alloc_rand(buffer_shape, device=device, dtype=buffer_dtype)
     if squeeze_batch_dim:
         buffer = buffer.squeeze(0)
-    # buffer[:] = 1
     # handle raggedness
     ragged_metadata = None
     if ragged_dim is not None:
         slice_sizes = make_slice_sizes(n_slices, shape[ragged_dim], device=device)
         ragged_metadata = make_ragged_tensor_metadata(slice_sizes, shape[ragged_dim])
     if ragged_padding:
-        buffer, ragged_metadata = pad_ragged_tensor(buffer, ragged_metadata, ragged_dim == 1)
+        buffer, ragged_metadata = pad_ragged_tensor(buffer, ragged_metadata, hbm_swizzling, ragged_dim == 1)
     # handle transpose
     if transpose:
         buffer = buffer.mT.contiguous().mT

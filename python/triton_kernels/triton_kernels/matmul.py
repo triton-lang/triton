@@ -306,20 +306,20 @@ def matmul(a, b, bias,
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(b.dtype) != 4)
-    can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx
+    can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx and ragged_dimension != "K"
+    block_k = None
+    if ragged_dimension == "K":
+        block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
+        # TODO: shouldn't be necessary ?
+        if torch.cuda.get_device_capability()[0] <= 9 and not can_use_tma:
+            block_k = min(64, block_k)
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
-        block_k = None if b_ragged_metadata is None else (a_ragged_metadata.slice_sizes_divisibility  or b_ragged_metadata.slice_sizes_divisibility),
+        block_k = block_k,
     )
     if ragged_dimension == "K":
-        if b_ragged_metadata.slice_sizes_divisibility is not None:
-            assert opt_flags.block_k % b_ragged_metadata.slice_sizes_divisibility == 0
-        if a_ragged_metadata.slice_sizes_divisibility is not None:
-            assert opt_flags.block_k % a_ragged_metadata.slice_sizes_divisibility == 0
-        assert opt_flags.split_k == 1
-        # For unpadded (row major) x, we cannot use tma because memory access isn't aligned.
         a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
         # (For unpadded input, we assume that the first block_k unused rows are zero-filled,

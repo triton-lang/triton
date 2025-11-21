@@ -123,7 +123,7 @@ def routing(logits, n_expts_act, all_gather=False, y_indx=None):
     dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
     combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-    gather_idx = combine_indx // n_expts_act
+    gather_idx = torch.div(combine_indx, n_expts_act, rounding_mode="trunc")
     scatter_idx = combine_indx
     return ragged_batch_metadata, gather_idx, scatter_idx, sparse_logits.indx
 
@@ -151,7 +151,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx)
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_map)
     # matrix multiply
-    y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, y_ep_local_metadata)
+    y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, a_ragged_metadata=y_ep_local_metadata)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
     # weighted average of the output token from experts
