@@ -557,7 +557,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        metric_value = torch.tensor(4.0, device="cuda")
+        metric_value = torch.tensor(8.0, device="cuda")
         return {"name": "foo_test", "flops": metric_value}
 
     @triton.jit(launch_metadata=metadata_fn)
