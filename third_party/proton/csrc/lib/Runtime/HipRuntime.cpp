@@ -45,6 +45,13 @@ void HipRuntime::freeDeviceBuffer(uint8_t *buffer) {
   (void)hip::memFree<true>(devicePtr);
 }
 
+void HipRuntime::copyDeviceToHostAsync(void *dst, const void *src, size_t size,
+                                       void *stream) {
+  (void)hip::memcpyDToHAsync<true>(
+      dst, reinterpret_cast<hipDeviceptr_t>(const_cast<void *>(src)), size,
+      reinterpret_cast<hipStream_t>(stream));
+}
+
 uint64_t HipRuntime::getDevice() {
   hipDevice_t device;
   (void)hip::ctxGetDevice<true>(&device);
