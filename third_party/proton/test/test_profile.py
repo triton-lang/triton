@@ -528,10 +528,11 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
-    x = torch.randn((10, 10), device="cuda")
-    with proton.scope("test", metrics={"x_mean": x.mean(), "x_std": x.std()}):
+    x = torch.ones((10, 10), device="cuda", dtype=torch.float32)
+    x_mean = x.mean()
+    x_std = x.std()
+    with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
         y = torch.randn((10, 10), device="cuda")
         z = torch.zeros_like(x)
 
     proton.finalize()
-
