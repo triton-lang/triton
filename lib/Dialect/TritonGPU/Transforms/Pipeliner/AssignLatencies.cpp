@@ -195,7 +195,8 @@ public:
           // a different partition than the MMA, so we can correctly set the
           // latency.
           if (isWarpSpecialized(forOp)) {
-            if (ttng::hasAccReadModifyWrite(mma, forOp))
+            if (ttng::hasAccReadModifyWrite(mma, forOp) ||
+                getDisallowAccMultiBuffer(forOp))
               opLatency.erase(&op); // can't pipeline the MMA
             else
               opLatency[&op] += 1;
