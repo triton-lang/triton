@@ -412,10 +412,8 @@ void fillTDMDescriptor(
 
   // We need to adjust the outer strides based on our CTAId and the block layout
   auto kBlock = str_attr("block");
-  auto orderedCtaLayout =
-      cgaLayout.transposeOuts(standardOutDimNames(loc.getContext(), numDims));
   auto cgaOffsets =
-      applyLinearLayout(loc, rewriter, orderedCtaLayout, {{kBlock, ctaId}});
+      applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
   // Apply CTA offsets to the base pointer
   // Compute the global address offset: sum(ctaOffsets[i] * tensorStride[i])
   Value cgaBaseOffset = b.i32_val(0);

@@ -482,14 +482,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   LogicalResult lowerDirectToLDSLoad(
       RewriterBase &rewriter, Location loc, RankedTensorType srcTy,
       MemDescType dstTy, SmallVector<Value> loadVals, Value llDst,
-      Type resElemTy, unsigned vec, triton::AMD::ISAFamily isaFamily,
+      Type resElemTy, unsigned vec, int numCTAs,
+      triton::AMD::ISAFamily isaFamily,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType,
                                        Value)>
           lowerInst) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto *ctx = rewriter.getContext();
-    int numCTAs = getNumCTAs(dstTy.getEncoding());
 
     // Build src to shared layout and remove broadcasted registers
     auto srcLayout = triton::gpu::toLinearLayout(srcTy);
@@ -941,9 +941,10 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
     auto res = lowerDirectToLDSLoad(
         rewriter, loc, ptrType, flatDstTy, loadVals, llDst, resElemTy, vec,
-        targetInfo.getISAFamily(), emitBufferLoadLds);
+        numCTAs, targetInfo.getISAFamily(), emitBufferLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1079,9 +1080,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
     auto res = lowerDirectToLDSLoad(
         rewriter, loc, srcTy, flatDstTy, loadVals, llDst, resElemTy, vec,
-        targetInfo.getISAFamily(), emitGlobalLoadLds);
+        numCTAs, targetInfo.getISAFamily(), emitGlobalLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1155,7 +1157,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    int numCTAs = getNumCTAs(smemTy.getEncoding());
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
     triton::LinearLayout sharedLayout;
     unsigned padInterval = 0;
@@ -1241,7 +1243,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    int numCTAs = getNumCTAs(smemTy.getEncoding());
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
