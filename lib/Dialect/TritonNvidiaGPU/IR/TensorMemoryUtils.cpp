@@ -214,7 +214,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   std::optional<TMemLdStEncodingInfo> msgInfo;
   for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
                     TMemAccessAtom::I16x64b, TMemAccessAtom::I16x128b}) {
-    auto tile = getTileLayout(ctx, atom, unpacked);
+    auto tile = getTileLayout(ctx, atom, unpacked, /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -227,7 +227,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked);
+    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked,
+                              /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
@@ -299,19 +300,9 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(bases, cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  // tmemBase already encodes CTA/block offsets so we just remove them from the
-  // cvt
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kCol = StringAttr::get(ctx, "col");
-  auto nCTAs = cvt.getInDimSize(kBlock);
-  auto maybeQuot =
-      divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
-  assert(maybeQuot.has_value());
-  auto quot = maybeQuot->unsqueezeIn(kBlock);
-
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(quot, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu

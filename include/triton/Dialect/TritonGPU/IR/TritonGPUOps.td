@@ -88,6 +88,9 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     This is analogue to tt.load except the data are copied to local memory pointed
     to by the memory descriptor instead of a distributed tensor. The rest of the
     operands are the same as tt.load.
+    Contiguity is the maximum number of elements that can be loaded in a single vector with
+    the given layout and mask.
+    This allows op to use async_copy_global_to_local even if the alignment cannot be proven based on IR.
   }];
 
   let arguments = (ins
@@ -97,7 +100,8 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
 
   let results = (outs TTG_AsyncToken:$token);

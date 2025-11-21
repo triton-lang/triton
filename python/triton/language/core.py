@@ -1544,13 +1544,15 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITCallable):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
-            if "_semantic" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_semantic"] = _semantic
-            if "_generator" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_generator"] = _generator
+            if isinstance(cls.__init__, JITCallable):
+                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                pass
+            else:
+                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_semantic"] = _semantic
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
             cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
@@ -1577,11 +1579,15 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
+    hash_attrs = [cls.__init__]
+
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+                hash_attrs.append(member)
 
+    aggregate_value.hash_attrs = hash_attrs
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
@@ -2090,6 +2096,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_k_pack: bool, optional
     """
     out_dtype = _unwrap_if_constexpr(out_dtype)
+    acc = _unwrap_if_constexpr(acc)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2793,6 +2800,8 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
 
@@ -3424,3 +3433,58 @@ def binary_op_type_legalization(lhs, rhs, semantic):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+_NOTHING = object()
+
+
+def is_negative_zero(x):
+    return x == 0.0 and math.copysign(1.0, x) < 0
+
+
+@builtin
+def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.max(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    max_val = args[0]
+    for arg in args[1:]:
+        max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if max_val.type.is_block():
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+    return max_val
+
+
+@builtin
+def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.min(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    min_val = args[0]
+    for arg in args[1:]:
+        min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if min_val.type.is_block():
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+    return min_val

@@ -1,10 +1,15 @@
+from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
 from .base import Layout
 
 
+@dataclass
 class HopperMXScaleLayout(Layout):
+    mx_axis: int
+    num_warps: int
+    leading_shape: list[int]
     name: str = "HOPPER_SCALE"
 
     def __init__(self, shape, mx_axis, num_warps=8) -> None:

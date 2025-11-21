@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -27,10 +28,6 @@ template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
     return std::gcd(a, b);
   else
     return gcd(std::gcd(a, b), args...);
-}
-
-constexpr int log2Int(int64_t num) {
-  return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
 // If lhs * rhs overflows, return max value possible value for the type
@@ -167,7 +164,6 @@ public:
                    axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
-  using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
   LogicalResult
   visitOperation(Operation *op,
@@ -322,7 +318,6 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisibility of 16 bytes
-      auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
@@ -341,7 +336,6 @@ private:
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
-        auto rank = lhs.getRank();
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
         auto rhsValue = rhs.getConstantValue().value() * elemSize;
@@ -375,14 +369,12 @@ private:
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
     auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 &&
-        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
+    if (lhs.getContiguity(dim) > 1 && rhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
-    if (rhs.getContiguity(dim) > 1 &&
-        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
+    if (rhs.getContiguity(dim) > 1 && lhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
@@ -681,7 +673,7 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint = 1;
+      int64_t constHint;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = shape[d];
@@ -903,7 +895,6 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    auto numBits = log2Int(lhsDivisibility);
     return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
@@ -1047,7 +1038,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
@@ -1083,11 +1075,10 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
 LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
-  // TODO: For sure not the right way to do this
-  // but why is scf.if not initialized otherwise?
+  // If any operands are not yet ready, skip this operation for now.
   for (auto op : operands)
     if (op->getValue().getRank() == 0)
-      setToEntryState((dataflow::Lattice<AxisInfo> *)op);
+      return success();
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0) {
     setAllToEntryStates(results);
@@ -1114,15 +1105,19 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
   ProgramPoint *programPoint = getProgramPointAfter(op);
-  const auto &lb =
-      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
-  const auto &step =
-      getLatticeElementFor(programPoint, op.getStep())->getValue();
+  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
+  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
+  // If lb or step is not yet ready, skip this operation for now.
+  if (lbLattice->getValue().getRank() == 0 ||
+      stepLattice->getValue().getRank() == 0) {
+    return;
+  }
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
   AxisInfo::DimVectorT knownConstancy(1, 1);
-  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
+  knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
+                             stepLattice->getValue().getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
@@ -1190,24 +1185,15 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
-                   op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+    } else if (isa<gpu::WarpSpecializePartitionsOp>(op)) {
+      // Initialize the arguments to gpu::WarpSpecializePartitionsOp with
+      // "unknown" state: the maximum possible divisibility, contiguity, and
+      // constancy.
       knownDivisibility = DimVectorT(rank, kMaxDivisor);
       knownConstancy = DimVectorT(rank, kMaxDivisor);
       knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
-    if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
-    }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
     AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
@@ -1360,6 +1346,10 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();
+    // If we could not determine the AxisInfo for this value, assume the
+    // pessimistic state.
+    if (axisInfo.getRank() == 0)
+      axisInfo = AxisInfo::getPessimisticValueState(value);
     AxisInfo curAxisInfo;
     if (axisInfoMap->count(value)) {
       curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));

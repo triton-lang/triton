@@ -30,7 +30,7 @@ namespace {
 using triton::AMD::ISAFamily;
 
 constexpr char AttrDecomposedDotScaledSource[] =
-    "amdgpu.decomposed_dot_scaled_source";
+    "amdg.decomposed_dot_scaled_source";
 
 int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
@@ -761,7 +761,8 @@ public:
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(dotOp);
 
-    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTAEncodingAttr ctaLayout =
+        ttg::getCTALayout(oldRetType.getEncoding());
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
@@ -1018,7 +1019,8 @@ public:
 
     MLIRContext *ctx = dotOp.getContext();
 
-    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTAEncodingAttr ctaLayout =
+        ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
     if (numWarps == 1)
       return rewriter.notifyMatchFailure(dotOp,
@@ -1234,7 +1236,8 @@ public:
 
     MLIRContext *ctx = dotOp.getContext();
 
-    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTAEncodingAttr ctaLayout =
+        ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
 
     constexpr unsigned mDim = 16;
@@ -1300,8 +1303,11 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      LinearLayout newLL =
-          ttg::chooseScaledWmmaScaleLayout(ctx, idx, warpsPerTile, shape);
+      // TODO: Select tilesPerWarp in Triton
+      SmallVector<unsigned> tilesPerWarp = {1, 1};
+
+      LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
+          ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);

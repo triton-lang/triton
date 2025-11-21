@@ -73,6 +73,7 @@ def _load_tile_attrs(
     SPLIT_K: tl.constexpr,
     GROUP_M: tl.constexpr,
     XCD_SWIZZLE: tl.constexpr,
+    SWIZZLE_MX_VALUE: tl.constexpr,
 ):
     # unpack and swizzle program ids
     pid_emnk = tile_id
@@ -116,6 +117,8 @@ def _load_tile_attrs(
             K_W = K * (PACKED_BLOCK_K_W // BLOCK_K)
         else:
             K_W = K // (BLOCK_K // PACKED_BLOCK_K_W)
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            K_W = tl.cdiv(K_W, 128) * 128
         k_tiles = tl.cdiv(K - off_k_x, BLOCK_K * SPLIT_K)
         if ExptData is None:
             tl.static_assert(M is not None)

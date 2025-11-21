@@ -7,6 +7,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace triton {
@@ -31,31 +33,28 @@ using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
 
 struct ProducedValueInfo {
-  Partition *partition;
+  SetVector<int> partitions;
   Value result;
 };
 
-bool samePartition(Operation *op1, Operation *op2) {
-  auto part1 = getPartitionIds(op1);
-  auto part2 = getPartitionIds(op2);
-
-  if (!part1 || !part2) {
-    return false;
-  }
-
-  return *part1 == *part2;
-}
-
-SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
-                                                 PartitionSet &partitions) {
+SmallVector<ProducedValueInfo> getProducedValues(Operation *op,
+                                                 Block *loopBody) {
   SmallVector<ProducedValueInfo> producedValues;
-  auto partitionIds = getPartitionIds(op);
 
-  if (partitionIds && partitionIds->size() == 1) {
-    for (auto result : op->getResults()) {
-      producedValues.push_back(
-          {partitions.getPartition(partitionIds->front()), result});
-    }
+  if (!hasPartition(op))
+    return {};
+
+  // For ops without regions, all results share the same partition IDs
+  auto partitionOutputs = op->getNumRegions() == 0
+                              ? SmallVector<SetVector<int>, 4>(
+                                    op->getNumResults(), getPartitionIds(op))
+                              : getPartitionOutputs(op);
+
+  for (auto result : op->getResults()) {
+    if (isa<AsyncTokenType>(result.getType()))
+      continue;
+    producedValues.push_back(
+        {partitionOutputs[result.getResultNumber()], result});
   }
 
   return producedValues;
@@ -67,7 +66,7 @@ std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
   if (!alloc)
     return std::nullopt;
   if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>();
-      load && *getPartitionIds(alloc) == *getPartitionIds(load)) {
+      load && getPartitionIds(alloc) == getPartitionIds(load)) {
     // if alloc and load are in different partitions, they are treated as two
     // different producer operations.
     return std::make_pair(alloc, load);
@@ -85,38 +84,39 @@ template <typename AllocOp> auto isGlobalLoadAndAlloc(Value result) {
   return isLoadAndAlloc<AllocOp, triton::LoadOp>(result);
 }
 
+RankedTensorType getTensorTypeFromScalar(OpBuilder &builder, Value scalar) {
+  auto mod = scalar.getParentRegion()->getParentOfType<ModuleOp>();
+  auto nWarps = lookupNumWarps(mod);
+  auto threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  int CTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  Attribute encoding = getDefaultBlockedEncoding(builder.getContext(), {1},
+                                                 nWarps, threadsPerWarp, CTAs);
+  return RankedTensorType::get({1}, scalar.getType(), encoding);
+}
+
 ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   auto result = producedValue.result;
 
-  auto getSmemDescType = [](Value tensorResult) {
-    auto tensorType = cast<RankedTensorType>(tensorResult.getType());
-    MemDescType memDescType;
+  auto getSmemDescType = [](RankedTensorType tensorType, Value tensorResult) {
     Attribute SharedMemorySpace =
         SharedMemorySpaceAttr::get(tensorType.getContext());
-    if (auto load =
-            tensorResult.getDefiningOp<triton::DescriptorOpInterface>()) {
-      // A use of TMA which is not immediately consumed by LocalAlloc
-      // This case applies, for example, when TMA is followed by SIMT ops
-      // or MMAv2 is used.
-      auto encoding =
-          getEncodingFromDescriptor(load, tensorType, load.getDesc());
-      memDescType =
-          MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                           encoding, SharedMemorySpace);
-    } else {
-      llvm_unreachable("Only TMA is expected for now.");
-    }
+    Attribute encoding = tensorResult && tensorResult.getDefiningOp()
+                             ? getSharedEncoding(tensorResult.getDefiningOp())
+                             : getSharedEncoding(tensorType);
+    auto memDescType =
+        MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                         encoding, SharedMemorySpace);
     return memDescType;
   };
 
   MemDescType memDescType;
   if (result.getDefiningOp<LocalAllocOp>()) {
     memDescType = dyn_cast<MemDescType>(result.getType());
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
-    auto descLoadResult = opt->first.getSrc();
-    memDescType = getSmemDescType(descLoadResult);
-  } else if (isa<RankedTensorType>(result.getType())) {
-    memDescType = getSmemDescType(result);
+  } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
+    memDescType = getSmemDescType(tensorType, result);
+  } else if (isa<FloatType, IntegerType>(result.getType())) {
+    auto tensorType = getTensorTypeFromScalar(builder, result);
+    memDescType = getSmemDescType(tensorType, Value());
   } else {
     std::string msg = "createAref: unsupported produced value type: " +
                       mlir::debugString(result.getType());
@@ -149,22 +149,23 @@ int getTxCount(Operation *descOp) {
 }
 
 void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
-                                Value dataBuf, Partition *producerPartition,
-                                PartitionSet &partitions, Location loc) {
+                                Value dataBuf,
+                                SetVector<int> const &producerPartitions,
+                                Location loc) {
   auto txCount = getTxCount(ttDescLoadOp);
   if (auto descLoad = dyn_cast<triton::DescriptorLoadOp>(ttDescLoadOp)) {
     auto newDescLoad = triton::nvws::DescriptorLoadOp::create(
         builder, loc, descLoad.getDesc(), descLoad.getIndices(), txCount,
         dataBuf, descLoad.getCache(), descLoad.getEvict());
     newDescLoad->setAttrs(descLoad->getAttrs());
-    setPartition(newDescLoad, producerPartition);
+    setPartition(newDescLoad, producerPartitions);
   } else if (auto descGather =
                  dyn_cast<triton::DescriptorGatherOp>(ttDescLoadOp)) {
     auto newDescGather = triton::nvws::DescriptorGatherOp::create(
         builder, loc, descGather.getDesc(), descGather.getXOffsets(),
         descGather.getYOffset(), txCount, dataBuf);
     newDescGather->setAttrs(descGather->getAttrs());
-    setPartition(newDescGather, producerPartition);
+    setPartition(newDescGather, producerPartitions);
   } else {
     llvm_unreachable("unknown descriptor op.");
   }
@@ -173,112 +174,121 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
 StageCluster getStageClusterForProducer(Value producedValue) {
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue)) {
-    return getStageCluster(opt->second);
   } else if (auto opt = isGlobalLoadAndAlloc<LocalAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
-  } else if (auto opt = isGlobalLoadAndAlloc<TMEMAllocOp>(producedValue)) {
-    return getStageCluster(opt->second);
+  } else if (auto op = producedValue.getDefiningOp()) {
+    return getStageCluster(op);
+  } else {
+    return {};
   }
-  return getStageCluster(producedValue.getDefiningOp());
 }
 
-SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
-                                       ArefCreateOp aref, std::string arefTag,
-                                       ProducedValueInfo producedValue,
-                                       PartitionSet &partitions) {
+SmallVector<Operation *> createArefPut(OpBuilder &builder, ArefCreateOp aref,
+                                       ProducedValueInfo producedValue) {
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getBuffers()[0].getType());
   Value result = producedValue.result;
   Type dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
   StageCluster stageCluster = getStageClusterForProducer(result);
-  Partition *producerPartition = producedValue.partition;
+
+  // elect a partition to put result into aref-buffer
+  SetVector<int> producerPartitions;
+  producerPartitions.insert(producedValue.partitions.front());
 
   Type token{builder.getType<AsyncTokenType>()};
-  auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, aref, TypeRange{dataBufType}, token);
-  setPartition(putEnterOp, producerPartition);
+  auto putEnterOp = triton::gpu::createInto<ArefPutEnterOp>(
+      builder, loc, producerPartitions, stageCluster, aref,
+      TypeRange{dataBufType}, token);
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = AsyncOp::NONE;
   SmallVector<Operation *> staleOps;
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
     auto [alloc, descOp] = *opt;
-    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
-                               partitions, loc);
+    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartitions,
+                               loc);
     producerKind = AsyncOp::TMALoad;
     staleOps.push_back(alloc);
     staleOps.push_back(descOp);
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
-    auto descOp = opt->second;
-    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
-                               partitions, loc);
-    producerKind = AsyncOp::TMALoad;
-    staleOps.push_back(descOp);
-  } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result) ||
-             isGlobalLoadAndAlloc<TMEMAllocOp>(result)) {
+  } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result)) {
     llvm_unreachable("cpasync not supported yet");
   } else if (auto alloc = result.getDefiningOp<LocalAllocOp>()) {
-    builder.createInto<LocalStoreOp>(*producerPartition, stageCluster,
-                                     alloc.getSrc(), dataBuf);
+    triton::gpu::createInto<LocalStoreOp>(builder, loc, producerPartitions,
+                                          stageCluster, alloc.getSrc(),
+                                          dataBuf);
     staleOps.push_back(alloc);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     if (auto descOp = result.getDefiningOp<triton::DescriptorOpInterface>()) {
-      createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
-                                 partitions, loc);
+      createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartitions,
+                                 loc);
       producerKind = AsyncOp::TMALoad;
       staleOps.push_back(descOp);
     } else if (auto loadOp = result.getDefiningOp<triton::LoadOp>()) {
       llvm_unreachable("cpasync not supported yet");
     } else {
-      // Create LocalStore of result into dataBuf. This is a value aref, not
-      // supported for now.
-      llvm_unreachable("Aref for values not supported yet");
+      triton::gpu::createInto<LocalStoreOp>(builder, loc, producerPartitions,
+                                            stageCluster, result, dataBuf);
+      producerKind = AsyncOp::NONE;
     }
+  } else if (isa<FloatType, IntegerType>(result.getType())) {
+    auto tensorType = getTensorTypeFromScalar(builder, result);
+    auto splatOp = triton::gpu::createInto<triton::SplatOp>(
+        builder, loc, producerPartitions, stageCluster, tensorType, result);
+    triton::gpu::createInto<LocalStoreOp>(builder, loc, producerPartitions,
+                                          stageCluster, splatOp, dataBuf);
+    producerKind = AsyncOp::NONE;
   } else {
     std::string msg = "createArefPut: unsupported produced value type: " +
                       mlir::debugString(result.getType());
     llvm::report_fatal_error(msg.c_str());
   }
 
-  auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref, putEnterOp.getToken(),
+  triton::gpu::createInto<ArefPutExitOp>(
+      builder, loc, producerPartitions, stageCluster, aref,
+      putEnterOp.getToken(),
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
-  setPartition(putExitOp, producerPartition);
 
   return staleOps;
 };
 
-SetVector<Operation *> getTransitiveConsumers(Operation *op,
-                                              Partition *consumerPartition,
-                                              PartitionSet &partitions) {
+SetVector<Operation *>
+getTransitiveConsumers(Operation *op,
+                       SetVector<int> const &consumerPartitions) {
   SetVector<Operation *> opConsumers;
   auto isMemDesc = [](auto res) { return isa<MemDescType>(res.getType()); };
-  for (auto user : op->getUsers()) {
-    if (llvm::count_if(user->getResults(), isMemDesc) > 0) {
+  for (auto &use : op->getUses()) {
+    if (llvm::count_if(use.getOwner()->getResults(), isMemDesc) > 0) {
       // Recurse into consumers of memdesc ops, since the liveness of the
       // produced value extends beyond such ops.
       auto consumers =
-          getTransitiveConsumers(user, consumerPartition, partitions);
+          getTransitiveConsumers(use.getOwner(), consumerPartitions);
       opConsumers.insert(consumers.begin(), consumers.end());
     } else {
-      if (partitions.getPartition(user) == consumerPartition) {
-        opConsumers.insert(user);
+      if (getPartitionIds(&use) == consumerPartitions) {
+        opConsumers.insert(use.getOwner());
       }
     }
   }
   return opConsumers;
 }
 
-SmallVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
-                                                Partition *consumerPartition,
-                                                PartitionSet &partitions) {
+SmallVector<Operation *>
+getTransitiveConsumers(const SetVector<Value> &results,
+                       SetVector<int> const &consumerPartitions) {
   SetVector<Operation *> opSet;
   for (auto result : results) {
-    auto consumers = getTransitiveConsumers(result.getDefiningOp(),
-                                            consumerPartition, partitions);
-    opSet.insert(consumers.begin(), consumers.end());
+    if (isa<BlockArgument>(result)) {
+      for (auto &use : result.getUses()) {
+        if (getPartitionIds(&use) == consumerPartitions) {
+          opSet.insert(use.getOwner());
+        }
+      }
+    } else {
+      auto consumers =
+          getTransitiveConsumers(result.getDefiningOp(), consumerPartitions);
+      opSet.insert(consumers.begin(), consumers.end());
+    }
   }
   return SmallVector<Operation *>{opSet.begin(), opSet.end()};
 }
@@ -315,7 +325,21 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
 
   SmallVector<Operation *> ops;
   for (auto res : producedResults) {
-    ops.push_back(res.getDefiningOp());
+    if (auto blockArg = dyn_cast<BlockArgument>(res)) {
+      // If the producer is a block argument, this means we need to communicate
+      // iteration arguments from the producer partition in the previous
+      // iteration to the consumer partition in the current iteration. There
+      // must be only one produced result in this case.
+      assert(producedResults.size() == 1);
+      auto block = blockArg.getOwner();
+      auto forOp = cast<scf::ForOp>(block->getParentOp());
+      auto opnd = forOp.getYieldedValues()[blockArg.getArgNumber() - 1];
+      auto op = opnd.getDefiningOp();
+      auto stageCluster = getStageCluster(op);
+      return std::make_pair(stageCluster, stageCluster);
+    }
+    auto op = res.getDefiningOp();
+    ops.push_back(op);
   }
 
   auto firstOp =
@@ -327,10 +351,9 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
   return std::make_pair(getStageCluster(firstOp), getStageCluster(lastOp));
 }
 
-void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
-                   ArefCreateOp aref, std::string arefTag,
-                   const SetVector<Value> &results,
-                   Partition *consumerPartition, PartitionSet &partitions) {
+void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
+                   const SetVector<Value> &results, int consumerPartition,
+                   SmallVector<OpOperand *> &uses) {
   OpBuilder::InsertionGuard g(builder);
   // The vector "results" contains either
   // 1. One of local_load(desc_load()) or desc_load()
@@ -340,25 +363,26 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   assert(results.size() == 1 || results.size() == 2);
   auto loc = results[0].getLoc();
 
-  auto filterUse = [&](Operation *use) {
-    if (partitions.isInRootPartition(use)) {
+  auto filterUse = [&](Operation *user) {
+    if (hasPartition(user)) {
+      return llvm::is_contained(getPartitionIds(user), consumerPartition);
+    } else {
       return false;
     }
-    return partitions.getPartition(use) == consumerPartition;
   };
   auto [stageClusterEnter, stageClusterExit] =
       getEnterAndExitStageClustersOfUses(results, filterUse, loop);
 
+  SetVector<int> consumerPartitions;
+  consumerPartitions.insert(consumerPartition);
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, /*mutable*/ false);
   Type tokenType = builder.getType<AsyncTokenType>();
-  auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageClusterEnter, aref, TypeRange{bufferType},
-      tokenType);
-  setPartition(getEnterOp, consumerPartition);
+  auto getEnterOp = triton::gpu::createInto<ArefGetEnterOp>(
+      builder, loc, consumerPartitions, stageClusterEnter, aref,
+      TypeRange{bufferType}, tokenType);
 
-  auto consumers =
-      getTransitiveConsumers(results, consumerPartition, partitions);
+  auto consumers = getTransitiveConsumers(results, consumerPartitions);
   assert(consumers.size() > 0);
   auto asyncKinds = getConsumerAsyncOpKinds(consumers, aref.getContext());
   Value dataBuf = getEnterOp.getBuffers()[0];
@@ -367,30 +391,43 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   Operation *exitInsertPointAfter = nullptr;
 
   auto replaceUsesWithLocalLoad = [&](Value result, StageCluster stageCluster) {
-    auto localLoadOp = builder.createInto<LocalLoadOp>(
-        *consumerPartition, stageCluster, result.getType(), dataBuf);
-    result.replaceAllUsesWith(localLoadOp.getResult());
-    setPartition(localLoadOp, consumerPartition);
-    if (consumers.size() == 1) {
-      // If there is only one consumer and we hit this code path, the empty
-      // barrier can be released after local load.
+    auto localLoadOp = triton::gpu::createInto<LocalLoadOp>(
+        builder, loc, consumerPartitions, stageCluster, result.getType(),
+        dataBuf);
+
+    for (auto use : uses) {
+      if (use->get() == result) {
+        use->set(localLoadOp.getResult());
+      }
+    }
+    if (dataBuf.hasOneUse()) {
+      // If there is only one consumer for dataBuf, it is localLoadOp created
+      // above, and we hit this code path, the empty barrier can be released
+      // after local load.
       exitInsertPointAfter = localLoadOp;
     }
   };
 
   for (auto result : results) {
     if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
-      auto memDescType = cast<MemDescType>(result.getType());
       auto callback = [&](Operation *oldOp, Operation *newOp) {
-        assert(partitions.getPartition(oldOp) == consumerPartition);
-        setPartition(newOp, consumerPartition);
+        assert(llvm::is_contained(getPartitionIds(oldOp), consumerPartition));
+        setPartition(newOp, consumerPartitions);
       };
       replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
-    } else if (auto tmemAlloc = result.getDefiningOp<TMEMAllocOp>()) {
-      builder.setInsertionPoint(tmemAlloc);
-      replaceUsesWithLocalLoad(tmemAlloc.getSrc(), stageClusterEnter);
     } else if (isa<RankedTensorType>(result.getType())) {
       replaceUsesWithLocalLoad(result, stageClusterEnter);
+    } else if (isa<FloatType, IntegerType>(result.getType())) {
+      auto tensorType = getTensorTypeFromScalar(builder, result);
+      auto localLoadOp = triton::gpu::createInto<LocalLoadOp>(
+          builder, loc, consumerPartitions, stageClusterEnter, tensorType,
+          dataBuf);
+      auto scalar = triton::gpu::createInto<triton::UnsplatOp>(
+          builder, loc, consumerPartitions, stageClusterEnter, localLoadOp);
+      for (auto use : uses) {
+        use->set(scalar);
+      }
+      exitInsertPointAfter = localLoadOp;
     } else {
       std::string msg = "createArefGet: unsupported produced value type: " +
                         mlir::debugString(result.getType());
@@ -405,23 +442,43 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
-  auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageClusterExit, aref, token,
-      builder.getArrayAttr(asyncKinds));
-  setPartition(getExitOp, consumerPartition);
+  triton::gpu::createInto<ArefGetExitOp>(builder, loc, consumerPartitions,
+                                         stageClusterExit, aref, token,
+                                         builder.getArrayAttr(asyncKinds));
 };
 
-bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
-                 PartitionSet &partitions, ProducedValueInfo producedValue,
-                 int arefTag) {
+Operation *getEarliestUserInBlock(Block *block, ArrayRef<OpOperand *> uses) {
+  OpOperand *use =
+      *llvm::min_element(uses, [block](OpOperand *lhs, OpOperand *rhs) {
+        auto lhsOwner = block->findAncestorOpInBlock(*lhs->getOwner());
+        auto rhsOwner = block->findAncestorOpInBlock(*rhs->getOwner());
+        return lhsOwner->isBeforeInBlock(rhsOwner);
+      });
+  return block->findAncestorOpInBlock(*use->getOwner());
+}
+
+bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
+                 ProducedValueInfo producedValue) {
   // Collect uses of local_alloc(desc_load()) or desc_load() results by each
   // partition
-  DenseMap<Partition *, SetVector<Value>> resultsPerPartition;
+  DenseMap<int, SetVector<Value>> resultsPerPartition;
+  DenseMap<int, SmallVector<OpOperand *>> usesPerPartition;
   auto processResultUses = [&](Value result) {
-    for (auto user : result.getUsers()) {
-      Partition *userPartition = partitions.getPartition(user);
-      if (producedValue.partition != userPartition) {
-        resultsPerPartition[userPartition].insert(result);
+    for (auto &use : result.getUses()) {
+      auto user = use.getOwner();
+      // if use is outside ttg.ws, it may not have partition ids, skip it
+      if (!hasPartition(user))
+        continue;
+      auto userPartitions = getPartitionIds(user);
+      if (isa<scf::YieldOp>(user)) {
+        userPartitions = getPartitionIds(&use);
+      }
+      for (auto id : producedValue.partitions) {
+        userPartitions.remove(id);
+      }
+      for (auto id : userPartitions) {
+        resultsPerPartition[id].insert(result);
+        usesPerPartition[id].push_back(&use);
       }
     }
   };
@@ -430,9 +487,6 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
 
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue.result)) {
     // Process the register use as well
-    auto alloc = opt->first;
-    processResultUses(alloc.getSrc());
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue.result)) {
     auto alloc = opt->first;
     processResultUses(alloc.getSrc());
   }
@@ -448,12 +502,15 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
     aref = createAref(builder, producedValue);
   }
 
-  auto tag = "aref_" + std::to_string(arefTag);
-  auto staleOps = createArefPut(builder, aref, tag, producedValue, partitions);
+  auto staleOps = createArefPut(builder, aref, producedValue);
 
   for (auto [consumerPartition, results] : resultsPerPartition) {
-    createArefGet(builder, loop, aref, tag, results, consumerPartition,
-                  partitions);
+    OpBuilder::InsertionGuard g(builder);
+    auto earliestUser =
+        getEarliestUserInBlock(block, usesPerPartition[consumerPartition]);
+    builder.setInsertionPoint(earliestUser);
+    createArefGet(builder, loop, aref, results, consumerPartition,
+                  usesPerPartition[consumerPartition]);
   }
 
   for (auto op : staleOps) {
@@ -468,54 +525,70 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
 class NVWSArefInsertion
     : public triton::impl::NVWSInsertArefBase<NVWSArefInsertion> {
 public:
-  void runOnOperation() override {
+  void runOnFunction(triton::FuncOp func) {
     SmallVector<scf::ForOp> loops;
-    getOperation().walk([&](scf::ForOp loop) {
+    func.walk([&](scf::ForOp loop) {
+      auto func = loop->getParentOfType<triton::FuncOp>();
       if (loop->hasAttr(triton::kWarpSpecializeAttrName))
         loops.push_back(loop);
     });
 
     for (scf::ForOp loop : loops) {
-      FailureOr<PartitionSet> partitions = PartitionSet::fromLoop(loop);
-      if (failed(partitions))
-        continue;
-
-      int arefTag = 0;
+      loop.walk([&](scf::ForOp forOp) {
+        // Communicate tensor arguments in iter_args from producer partition in
+        // current iteration to consumer partition in previous iteration or
+        // initial value
+        for (auto arg : forOp.getRegionIterArgs()) {
+          if (isa<RankedTensorType, FloatType, IntegerType>(arg.getType())) {
+            auto producerPartition =
+                getPartitionOutputs(forOp)[arg.getArgNumber() - 1];
+            ProducedValueInfo producedValue{producerPartition, arg};
+            OpBuilder builder(forOp);
+            builder.setInsertionPointToStart(forOp.getBody());
+            insertArefs(builder, loop, forOp.getBody(), producedValue);
+          }
+        }
+      });
 
       // To handle cases where desc_load result in registers is used as is in
       // addition to being consumed by local_alloc op, we process
       // local_alloc(desc_load()) first, followed by remaining register uses of
       // desc_load results.
-      for (auto allowDescLoadRegUse : {false, true}) {
-        SmallVector<Operation *> ops;
-        loop.walk([&](Operation *op) {
-          if (op->getNumResults() == 0) {
-            return WalkResult::advance();
-          }
-          // Only handles load ops for now.
-          if (isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0)) ||
-              isDescLoadAndAlloc<TMEMAllocOp>(op->getResult(0)) ||
-              (allowDescLoadRegUse &&
-               (isa<triton::DescriptorOpInterface>(op)))) {
-            ops.push_back(op);
-          } else if (isa<LocalAllocOp>(op)) {
-            ops.push_back(op);
-          }
-          return WalkResult::advance();
-        });
+      SmallVector<Operation *> memoryOps;
+      loop.walk([&](Operation *op) {
+        if (op->getNumResults() > 0 &&
+            (isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0)) ||
+             isa<LocalAllocOp>(op))) {
+          memoryOps.push_back(op);
+        }
+      });
 
-        for (auto op : ops) {
-          auto producedValues =
-              getProducedValues(op, loop.getBody(), *partitions);
-          for (auto producedValue : producedValues) {
-            PartitionBuilder builder(op->getLoc(), op);
-            builder.setInsertionPoint(op);
-            if (insertArefs(builder, loop, *partitions, producedValue, arefTag))
-              arefTag++;
-          }
+      for (auto op : memoryOps) {
+        auto producedValues = getProducedValues(op, loop.getBody());
+        for (auto producedValue : producedValues) {
+          OpBuilder builder(op);
+          insertArefs(builder, loop, op->getBlock(), producedValue);
         }
       }
+
+      // handle non-tmem ops in the loop, including uses of desc_load results.
+      loop.walk([&](Operation *op) {
+        if (op == loop || isa<MMAv5OpInterface, TMEMAllocOp, TMEMStoreOp>(op)) {
+          return WalkResult::advance();
+        }
+        auto producedValues = getProducedValues(op, loop.getBody());
+        for (auto producedValue : producedValues) {
+          OpBuilder builder(op);
+          builder.setInsertionPointAfter(op);
+          insertArefs(builder, loop, op->getBlock(), producedValue);
+        }
+        return WalkResult::advance();
+      });
     }
+  }
+
+  void runOnOperation() override {
+    getOperation().walk([&](triton::FuncOp func) { runOnFunction(func); });
   }
 };
 

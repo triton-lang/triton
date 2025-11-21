@@ -74,7 +74,7 @@ protected:
     if (cOrder.empty())
       cOrderStorage.assign(order.begin(), order.end());
 
-    auto cta = mlir::triton::gpu::CTALayoutAttr::get(
+    auto cta = mlir::triton::gpu::CTAEncodingAttr::fromSplitParams(
         &ctx, cpgStorage.empty() ? cpg : ArrayRef<unsigned>(cpgStorage),
         splitStorage.empty() ? split : ArrayRef<unsigned>(splitStorage),
         cOrderStorage.empty() ? cOrder : ArrayRef<unsigned>(cOrderStorage));
@@ -85,8 +85,8 @@ protected:
   mlir::triton::gpu::NvidiaMmaEncodingAttr mma(ArrayRef<unsigned> version,
                                                ArrayRef<unsigned> warpsPerCTA,
                                                ArrayRef<unsigned> instrShape) {
-    auto cta =
-        mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, warpsPerCTA.size());
+    auto cta = mlir::triton::gpu::CTAEncodingAttr::getDefault(
+        &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::NvidiaMmaEncodingAttr::get(
         &ctx, version[0], version[1], warpsPerCTA, cta, instrShape);
   }
@@ -96,7 +96,8 @@ protected:
               bool transposed = false) {
     SmallVector<unsigned> cpg(rank, 1), split(rank, 1), order(rank);
     std::iota(order.begin(), order.end(), 0);
-    auto cta = mlir::triton::gpu::CTALayoutAttr::get(&ctx, cpg, split, order);
+    auto cta = mlir::triton::gpu::CTAEncodingAttr::fromSplitParams(
+        &ctx, cpg, split, order);
     return mlir::triton::gpu::NVMMASharedEncodingAttr::get(
         &ctx, swizzle, transposed, bitwidth,
         /*fp4Padded=*/false, cta);
@@ -302,13 +303,13 @@ TEST_F(BankConflictTest, bankConflicts) {
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CTAEncodingAttr::getDefault(&ctx, 1)),
        {32},
        32},
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CTAEncodingAttr::getDefault(&ctx, 1)),
        {32},
        16},
       {mmaV3,

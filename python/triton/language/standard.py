@@ -22,6 +22,8 @@ def _is_power_of_two(i):
     return (i & (i - 1)) == 0 and i != 0
 
 
+_get_int_dtype = constexpr_function(core.get_int_dtype)
+
 # -----------------------
 # Standard library
 # -----------------------
@@ -38,7 +40,7 @@ def cdiv(x, div):
     :param div: the divisor
     :type div: Block
     """
-    return (x + div - 1) // div
+    return (x + (div - 1)) // div
 
 
 @core._tensor_member_fn
@@ -374,7 +376,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     n_dims: core.constexpr = _log2(x.numel)
 
     # flip along middle dimension (the bitwise XORs will be optimised away):
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ix = x.to(idtype, bitcast=True)
     iy = ix ^ xor_sum(ix, n_dims - 1 - i, True)
     y = iy.to(x.dtype, bitcast=True)
@@ -503,7 +505,7 @@ def flip(x, dim=None):
     steps: core.constexpr = _log2(x.shape[_dim])
 
     # reshape the swap dimension to (2, 2, ..., 2)
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
     for i in core.static_range(steps):
         y = y ^ xor_sum(y, _dim + i, True)

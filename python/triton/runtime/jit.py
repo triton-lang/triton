@@ -10,14 +10,14 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
@@ -120,6 +120,11 @@ class DependenciesFinder(ast.NodeVisitor):
         # might change.  Don't consider functions, modules, builtins, etc.  This
         # helps keep the list of vars we have to check small.
         if val is None or type(val) is ModuleType:
+            return
+
+        if getattr(val, "__triton_aggregate__", False):
+            for attr in val.hash_attrs:
+                self.record_reference(attr)
             return
 
         if getattr(val, "__triton_builtin__", False):
@@ -350,6 +355,12 @@ def mangle_type(arg, specialize=False):
 class KernelInterface(Generic[T]):
     run: T
 
+    def warmup(self, *args, grid, **kwargs):
+        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+
+    def run(self, *args, grid, warmup, **kwargs):
+        raise NotImplementedError("run not implemented")
+
     def __getitem__(self, grid) -> T:
         """
         A JIT function is launched with: fn[grid](*args, **kwargs).
@@ -361,7 +372,12 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
-    constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
+    constants = {
+        key: str(value) if value.__class__.__name__ == "dtype" else
+        {"constexpr": value.value} if value.__class__.__name__ == "constexpr" else value
+        for key, value in constants.items()
+    }
+
     import json
     obj = {
         'name': name, 'signature': signature, 'constant_keys': [list(x) for x in constants.keys()], 'constant_vals':
@@ -476,7 +492,7 @@ class JITCallable:
         return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
             if self.hash is not None:
@@ -497,6 +513,9 @@ class JITCallable:
                               if isinstance(val, constexpr)])
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
+
+    def __hash__(self):
+        return hash(self.cache_key)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -547,9 +566,34 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     if cache_key is not None:
         return cache_key
 
-    cache_key = str(specialization) + str(options)
+    # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
+    def replace_callables(obj):
+        if isinstance(obj, list):
+            return [replace_callables(arg) for arg in obj]
+        elif is_namedtuple(obj):
+            results = [replace_callables(arg) for arg in obj]
+            return obj.__class__(*results)
+        elif isinstance(obj, tuple):
+            return tuple(replace_callables(arg) for arg in obj)
+        elif isinstance(obj, JITCallable):
+            return obj.cache_key
+        return obj
+
+    cache_key = str(replace_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
+
+
+def convert_to_tuple_if_list(item):
+    # If the incoming item is a list, recursively iterate through it to convert all lists therein into tuples
+    if not isinstance(item, list):
+        return item
+
+    # The value must be a list at this point
+    for i, nested_value in enumerate(item):
+        item[i] = convert_to_tuple_if_list(nested_value)
+
+    return tuple(item)
 
 
 class JITFunction(JITCallable, KernelInterface[T]):
@@ -740,9 +784,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
 
-    def warmup(self, *args, grid, **kwargs):
-        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
-
     def preload(self, specialization_data):
         import json
         import triton.language as tl
@@ -754,13 +795,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constexprs = {
-            key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            key:
+            tl.dtype(value) if tl.dtype.is_dtype(value) else
+            tl.constexpr(value['constexpr']) if isinstance(value, dict) and 'constexpr' in value else value
             for key, value in zip(constant_keys, constant_vals)
         }
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
         attrs_vals = deserialized_obj['attrs_vals']
         attrs = dict(zip(attrs_keys, attrs_vals))
-        signature = dict(deserialized_obj['signature'].items())
+        # JSON serializes tuples as lists, so they need to be converted back;
+        # This can be done unconditionally, since lists are not accepted in Triton kernel signatures.
+        signature = {key: convert_to_tuple_if_list(value) for key, value in deserialized_obj['signature'].items()}
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()
@@ -848,7 +893,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> KernelInterface[T]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -1006,6 +1051,10 @@ class BoundConstexprFunction(JITCallable):
     def __init__(self, instance, fn):
         self.__self__ = instance
         self.__func__ = fn
+
+    @property
+    def cache_key(self):
+        return self.__func__.cache_key
 
     def __call__(self, *args, **kwargs):
         return self.__func__(self.__self__, *args, **kwargs)

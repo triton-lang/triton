@@ -1,4 +1,7 @@
-from ..._core import builtin, _unwrap_if_constexpr
+from triton.runtime.jit import constexpr_function
+from triton._C.libtriton.gluon_ir import get_amd_mfma_scale_layout as _get_mfma_scale_layout
+
+from ..._core import builtin
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from .._ops import _mma_scaled
@@ -8,19 +11,6 @@ from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
 __all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
-
-
-def _get_mfma_scale_layout(dot_operand_layout, shape, semantic):
-    dot_operand_layout = _unwrap_if_constexpr(dot_operand_layout)
-    shape = _unwrap_if_constexpr(shape)
-
-    op_idx = dot_operand_layout.operand_index
-    parent = dot_operand_layout.parent
-    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
-    mdim = parent.instr_shape[0]
-    tiles_per_warp = parent.tiles_per_warp
-    warps_per_cta = parent.warps_per_cta
-    return semantic.builder.get_amd_mfma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 @builtin
@@ -56,11 +46,18 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
-    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _get_mfma_scale_layout, _semantic)
+    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
 
 
-@builtin
-def get_mfma_scale_layout(dot_operand_layout, shape, _semantic=None):
+def _get_mfma_scale_layout_impl(*args, **kwargs):
+    return _get_mfma_scale_layout(*args, **kwargs)
+
+
+_get_mfma_scale_layout_impl.__triton_builtin__ = True
+
+
+@constexpr_function
+def get_mfma_scale_layout(dot_operand_layout, shape):
     """ Get the scale layout for MFMA scaled operands.
 
     Args:
@@ -70,7 +67,13 @@ def get_mfma_scale_layout(dot_operand_layout, shape, _semantic=None):
     Return:
         layout (DistributedLinearLayout): The scale layout.
     """
-    return _get_mfma_scale_layout(dot_operand_layout, shape, _semantic)
+    op_idx = dot_operand_layout.operand_index
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    mdim = parent.instr_shape[0]
+    tiles_per_warp = parent.tiles_per_warp
+    warps_per_cta = parent.warps_per_cta
+    return _get_mfma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 """
