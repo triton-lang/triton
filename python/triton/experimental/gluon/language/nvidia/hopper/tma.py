@@ -198,6 +198,63 @@ def update_tensor_descriptor(
     strides: List[ttgl.tensor] = None,
     _semantic=None,
 ) -> None:
+    """Update an existing TMA descriptor
+
+    Updates one or more fields of an existing TMA descriptor.
+
+    :param desc: The existing tensor descriptor to update
+    :param base: The new base pointer, must be 16-byte aligned (optional)
+    :param shape: The new tensor shape (optional)
+    :param strides: The new tensor strides (optional)
+
+    Notes
+    *****
+    - At least one field (base, shape, or strides) must be provided
+    - When providing strides, shape must also be provided
+    - Shape and strides must have the same length
+    - Same limitations for updated values hold as for `make_tensor_descriptor`
+    - The descriptor to be updated must be created within the kernel
+      using make_tensor_descriptor().  Descriptors passed as kernel
+      parameters (e.g., from TensorDescriptor.from_tensor()) cannot be
+      updated, as they reside in constant memory and updating them
+      would cause race conditions when the grid size exceeds the
+      number of SMs.
+
+    Example
+    *******
+    .. code-block:: python
+
+        @gluon.jit
+        def kernel(ptr, M: ttgl.constexpr, N: ttgl.constexpr, smem_layout: ttgl.constexpr):
+            # Create descriptor in-kernel
+            desc = tma.make_tensor_descriptor(
+                ptr,
+                shape=[M, N],
+                strides=[N, 1],
+                block_shape=[16, 16],
+                layout=smem_layout
+            )
+
+            # ...
+
+            # Later, update to point to second half, along M, of the tensor
+            new_ptr = ptr + M // 2 * N
+            tma.update_tensor_descriptor(
+                desc,
+                base=new_ptr,
+                shape=[M//2, N],
+                strides=[N, 1]
+            )
+
+            # Using updated descriptor, copy from second half to SMEM
+            smem = ttgl.allocate_shared_memory(ttgl.float16, [16, 16], smem_layout)
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+            mbarrier.init(bar, count=1)
+            mbarrier.expect(bar, desc.block_type.nbytes)
+            tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+            mbarrier.wait(bar, 0)
+
+    """
     if base is None and shape is None and strides is None:
         raise ValueError("At least one descriptor field must be updated")
 

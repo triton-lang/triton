@@ -1913,3 +1913,22 @@ def test_update_tensor_descriptor_strides():
     ref = torch.zeros((N, M), device="cuda", dtype=torch.float16)
     ref[:M, :M] = input_data[:, :M]
     torch.testing.assert_close(output, ref)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_update_tensor_descriptor_from_tensor_fails():
+    M, N = 16, 16
+    input_data = torch.randn((M, N), device="cuda", dtype=torch.float16)
+
+    block_shape = [M, N]
+    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, ttgl.float16)
+    desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input_data, block_shape, layout)
+
+    output_data = torch.zeros_like(input_data)
+
+    @gluon.jit
+    def kernel(desc, new_ptr):
+        tma.update_tensor_descriptor(desc, base=new_ptr)
+
+    with pytest.raises(Exception):
+        kernel[(1,)](desc, output_data)
