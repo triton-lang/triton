@@ -722,6 +722,8 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
     OpBuilder builder(arefOp);
     for (auto opnd : arefOp.getOperands()) {
       auto oldAlloc = opnd.getDefiningOp();
+      // Double buffer for scale copy via tmem_store, otherwise numStages
+      // buffers for global -> shared load pipelining.
       int numBuffers = isTMEMAllocScale(opnd.getDefiningOp()) ? 2 : numStages;
       auto arefBufType = cast<MemDescType>(opnd.getType());
       arefBufType = getMultiBufferedType(getBufferViewType(arefBufType, true),
@@ -958,8 +960,9 @@ public:
     m.walk([&](ArefCreateOp arefOp) {
       auto arefType = cast<ArefType>(arefOp.getType());
       auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
-      // Only handles arefs whose producer (a partition with PutEnter / Exit)
-      // does load from global to shared memory.
+      // Currently multibuffering applies to
+      // * Global -> shared load
+      // * Scale copy into TMEM via tmem_store
       if (isProducerLoad(arefOp) ||
           isa<TensorMemoryScalesEncodingAttr>(arefBufType.getEncoding())) {
         arefOps.push_back(arefOp);
