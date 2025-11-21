@@ -38,7 +38,6 @@ def test_op(capfd, device: str):
     h = kernel2[grid](BLOCK_SIZE=1024)
     assert "tt.func public @foo" in h.asm["ttgir"]
 
-
     knobs.runtime.add_stages_inspection_hook = None
     h = kernel2[grid](BLOCK_SIZE=1024)
     assert "tt.func public @foo" not in h.asm["ttgir"]

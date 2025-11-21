@@ -115,6 +115,12 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 def kernel(BLOCK_SIZE: tl.constexpr):
     return
 
+#These two methods must be implemented by the plugin
+def get_key():
+    return pathlib.Path(__file__).read_text()
+def get_hash():
+    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+
 def inspect_stages_hook(self, stages, options, language, capability):
 
     def make_ttir_wrapper(mod, metadata, opt, capability):
@@ -218,6 +224,10 @@ def kernel1(BLOCK_SIZE: tl.constexpr):
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
+def get_key():
+    return pathlib.Path(__file__).read_text()
+def get_hash():
+    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
 def dump_stages_hook(self, stages, options, language, capability):
     source_code = "# This is generated from Triton compiler.py"
