@@ -29,7 +29,19 @@ class CDNA4MXScaleLayout(Layout):
         return data.transpose(-1, -2)
 
     def unswizzle_data(self, data):
-        raise NotImplementedError()
+        block_shape = data.shape
+        N = block_shape[-1] * NON_K_PRESHUFFLE_BLOCK_SIZE
+        SCALE_K = block_shape[-2] // NON_K_PRESHUFFLE_BLOCK_SIZE
+        data = data.transpose(-1, -2)
+        data = data.view(-1, N // NON_K_PRESHUFFLE_BLOCK_SIZE, SCALE_K // 8, 4, 16, 2, 2, 1)
+        data = data.permute(0, 1, 6, 4, 2, 5, 3, 7)
+        if len(block_shape) == 3:
+            E = block_shape[0]
+            data = data.reshape(E, N, SCALE_K)
+        else:
+            assert len(block_shape) == 2
+            data = data.reshape(N, SCALE_K)
+        return data.transpose(-1, -2)
 
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]
