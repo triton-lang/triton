@@ -86,7 +86,10 @@ struct CanonicalizeConvertFromTMEMStore
 
     // bail for incompatible layouts
     auto cvtSrcType = convert.getSrc().getType();
-    if (!nvidia_gpu::isDistributedLayoutTMemCompatible(
+    // TODO: The "relayout" step in OptimizePartitionWarps might leave some ops
+    // without encoding
+    if (!cvtSrcType.getEncoding() ||
+        !nvidia_gpu::isDistributedLayoutTMemCompatible(
             op.getOperation(), cvtSrcType, op.getDst().getType())) {
       return failure();
     }

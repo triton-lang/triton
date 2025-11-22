@@ -654,7 +654,8 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
-    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+             triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
             srcTy.getEncoding())) {
       return failure();
     }
@@ -708,8 +709,10 @@ struct TMEMSubSliceOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
-    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-        srcTy.getEncoding());
+    assert(
+        isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcTy.getEncoding()));
+    auto encoding =
+        cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcTy.getEncoding());
     auto shapePerCTA = getShapePerCTA(srcTy);
     int blockN = encoding.getBlockN();
     int blockM = encoding.getBlockM();

@@ -95,9 +95,33 @@ void assignStageCluster(Operation *op,
   }
 }
 
+bool isTMEMAllocScale(Operation *op) {
+  if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(op)) {
+    return isa<TensorMemoryScalesEncodingAttr>(
+        tmemAlloc.getType().getEncoding());
+  }
+  return false;
+}
+
 bool isOperandPipelineable(Value v, scf::ForOp forOp) {
   auto isPipelineable = [](Operation *op) {
-    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
+    if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op)) {
+      return true;
+    }
+    if (auto index = dyn_cast<MemDescIndexOp>(op)) {
+      if (isTMEMAllocScale(index.getSrc().getDefiningOp())) {
+        auto tmemScaleAlloc = index.getSrc().getDefiningOp<TMEMAllocOp>();
+        if (tmemScaleAlloc.getType().getShape().size() != 3 ||
+            tmemScaleAlloc.getType().getShape()[0] == 1) {
+          // If scales are in TMEM at this point, it implies that tmem_copy is
+          // not applicable. For an MMA to work with tmem_store of scales, the
+          // scales need to be double buffered.
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
   };
 
   Operation *foundDef = nullptr;
@@ -110,9 +134,6 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
   auto forOp = mmaOp->getParentOfType<scf::ForOp>();
   if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
           mmaOp.getOperation())) {
-    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
-      isAsync = false;
-    }
     if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
         !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
       isAsync = false;
@@ -238,7 +259,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
-  auto depth = getArefDepth(arefBufTypes[0]);
+  auto depth = arefBufTypes[0].getShape()[0];
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())
@@ -263,22 +284,15 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
-    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-            memDescType.getEncoding())) {
-      // tmem scales encoding doesn't support multi-buffering, use buffer as-is
-      views.push_back(buffer);
-    } else {
-      auto shape = memDescType.getShape();
-      SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
-      auto memDescTypeNew = MemDescType::get(
-          tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
-          memDescType.getMemorySpace(), true);
-      auto singleBuffer =
-          MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
-      assignStageCluster(singleBuffer, partitionWsTagIds, stageCluster,
-                         rewriter);
-      views.push_back(singleBuffer);
-    }
+    auto shape = memDescType.getShape();
+    SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+    auto memDescTypeNew = MemDescType::get(
+        tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
+        memDescType.getMemorySpace(), true);
+    auto singleBuffer =
+        MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
+    assignStageCluster(singleBuffer, partitionWsTagIds, stageCluster, rewriter);
+    views.push_back(singleBuffer);
   }
 
   return views;
@@ -666,15 +680,22 @@ public:
   }
 };
 
-bool isProducerLoad(ArefCreateOp arefOp) {
+ArefPutEnterOp getPutEnterOp(ArefCreateOp arefOp) {
   for (auto user : arefOp.getResult().getUsers()) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
-      if (llvm::any_of(putOp->getUsers(), [](auto user) {
-            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
-          })) {
-        return true;
-      }
+      return putOp;
     }
+  }
+  llvm_unreachable("No put enter op is found for an aref");
+  return nullptr;
+}
+
+bool isProducerLoad(ArefCreateOp arefOp) {
+  auto putOp = getPutEnterOp(arefOp);
+  if (llvm::any_of(putOp->getUsers(), [](auto user) {
+        return isa<triton::nvws::DescriptorLoadOpInterface>(user);
+      })) {
+    return true;
   }
   return false;
 }
@@ -687,7 +708,8 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 
     bool eligible = true;
     for (auto opnd : arefOp.getOperands()) {
-      if (!opnd.getDefiningOp() || isa<TMEMAllocOp>(opnd.getDefiningOp())) {
+      if (!opnd.getDefiningOp() || (isa<TMEMAllocOp>(opnd.getDefiningOp()) &&
+                                    !isTMEMAllocScale(opnd.getDefiningOp()))) {
         eligible = false;
       }
     }
@@ -699,9 +721,12 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
     OpBuilder builder(arefOp);
     for (auto opnd : arefOp.getOperands()) {
       auto oldAlloc = opnd.getDefiningOp();
+      // Double buffer for scale copy via tmem_store, otherwise numStages
+      // buffers for global -> shared load pipelining.
+      int numBuffers = isTMEMAllocScale(opnd.getDefiningOp()) ? 2 : numStages;
       auto arefBufType = cast<MemDescType>(opnd.getType());
-      arefBufType =
-          getMultiBufferedType(getBufferViewType(arefBufType, true), numStages);
+      arefBufType = getMultiBufferedType(getBufferViewType(arefBufType, true),
+                                         numBuffers);
       Operation *newAlloc = triton::nvws::createAlloc(
           builder, oldAlloc->getLoc(), arefBufType, Value());
       allocOps.push_back(newAlloc->getResult(0));
@@ -844,66 +869,65 @@ void combineArefs(scf::ForOp loop) {
       continue;
     }
 
-    SmallVector<ArefCreateOp> arefs;
+    DenseMap<int, SmallVector<ArefCreateOp>> arefsPerProducerPartition;
     for (auto getEnterOp : getEnterOps) {
-      arefs.push_back(cast<ArefCreateOp>(getEnterOp.getAref().getDefiningOp()));
+      auto aref = cast<ArefCreateOp>(getEnterOp.getAref().getDefiningOp());
+      auto putOp = getPutEnterOp(aref);
+      arefsPerProducerPartition[getPartitionIds(putOp).front()].push_back(aref);
     }
 
-    SmallVector<ArefPutEnterOp> putEnterOps;
-    SmallVector<ArefPutExitOp> putExitOps;
-    SmallVector<ArefGetExitOp> getExitOps;
-    SmallVector<int> producerGroupIds;
-    for (auto aref : arefs) {
-      for (auto user : aref->getUsers()) {
-        if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
-          putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getPartitionIds(putEnterOp).front());
-        } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-          putExitOps.push_back(putExitOp);
-        } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-          getExitOps.push_back(getExitOp);
+    for (auto arefs : llvm::make_second_range(arefsPerProducerPartition)) {
+      SmallVector<ArefPutEnterOp> putEnterOps;
+      SmallVector<ArefPutExitOp> putExitOps;
+      SmallVector<ArefGetEnterOp> getEnterOps;
+      SmallVector<ArefGetExitOp> getExitOps;
+      for (auto aref : arefs) {
+        for (auto user : aref->getUsers()) {
+          if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
+            putEnterOps.push_back(putEnterOp);
+          } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+            putExitOps.push_back(putExitOp);
+          } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(user)) {
+            getEnterOps.push_back(getEnterOp);
+          } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
+            getExitOps.push_back(getExitOp);
+          }
         }
       }
+
+      SmallVector<Type> arefBufTypes;
+      SmallVector<Value> arefBufs;
+      for (auto aref : arefs) {
+        arefBufTypes.push_back(aref.getOperands()[0].getType());
+        arefBufs.push_back(aref.getOperands()[0]);
+      }
+
+      // set insertion point at the last aref_create
+      auto lastAref = *llvm::max_element(arefs, [](auto a, auto b) {
+        assert(a->getBlock() == b->getBlock());
+        return a->isBeforeInBlock(b);
+      });
+
+      OpBuilder builder(lastAref);
+      auto aref = createArefCreateOp(builder, arefBufTypes, arefBufs,
+                                     lastAref->getLoc());
+
+      auto combinedPutExit =
+          createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
+      createCombinedArefOps(getEnterOps, getExitOps, aref, builder,
+                            combinedPutExit);
+
+      for (auto putExitOp : putExitOps)
+        putExitOp->erase();
+      for (auto putEnterOp : putEnterOps)
+        putEnterOp->erase();
+      for (auto getExitOp : getExitOps)
+        getExitOp->erase();
+      for (auto getEnterOp : getEnterOps)
+        getEnterOp->erase();
+      for (auto aref : arefs)
+        aref->erase();
     }
-
-    // Producer arefs must be in the same partition.
-    if (llvm::any_of(producerGroupIds,
-                     [&](auto id) { return id != producerGroupIds[0]; })) {
-      continue;
-    }
-
-    SmallVector<Type> arefBufTypes;
-    SmallVector<Value> arefBufs;
-    for (auto aref : arefs) {
-      arefBufTypes.push_back(aref.getOperands()[0].getType());
-      arefBufs.push_back(aref.getOperands()[0]);
-    }
-
-    // set insertion point at the last aref_create
-    auto lastAref = *llvm::max_element(arefs, [](auto a, auto b) {
-      assert(a->getBlock() == b->getBlock());
-      return a->isBeforeInBlock(b);
-    });
-
-    OpBuilder builder(lastAref);
-    auto aref =
-        createArefCreateOp(builder, arefBufTypes, arefBufs, lastAref->getLoc());
-
-    auto combinedPutExit =
-        createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
-    createCombinedArefOps(getEnterOps, getExitOps, aref, builder,
-                          combinedPutExit);
-
-    for (auto putExitOp : putExitOps)
-      putExitOp->erase();
-    for (auto putEnterOp : putEnterOps)
-      putEnterOp->erase();
-    for (auto getExitOp : getExitOps)
-      getExitOp->erase();
-    for (auto getEnterOp : getEnterOps)
-      getEnterOp->erase();
-    for (auto aref : arefs)
-      aref->erase();
   }
 }
 
@@ -933,9 +957,13 @@ public:
 
     SmallVector<ArefCreateOp> arefOps;
     m.walk([&](ArefCreateOp arefOp) {
-      // Only handles arefs whose producer (a partition with PutEnter / Exit)
-      // does load from global to shared memory.
-      if (isProducerLoad(arefOp)) {
+      auto arefType = cast<ArefType>(arefOp.getType());
+      auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
+      // Currently multibuffering applies to
+      // * Global -> shared load
+      // * Scale copy into TMEM via tmem_store
+      if (isProducerLoad(arefOp) ||
+          isa<TensorMemoryScalesEncodingAttr>(arefBufType.getEncoding())) {
         arefOps.push_back(arefOp);
       }
     });
