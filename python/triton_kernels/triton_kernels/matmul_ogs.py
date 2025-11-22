@@ -15,12 +15,12 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
-
 
 @dataclass
 class GatherIndx:
@@ -361,7 +361,7 @@ def matmul_ogs(x, w, bias,
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if routing_data is None:
         routing_data = RoutingData(None, None, max(1, w.shape[0]), 1)
-    # unpack scales
+    # unpack w scale
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
@@ -377,11 +377,15 @@ def matmul_ogs(x, w, bias,
     if w_scale is not None:
         w_scale.storage.data = w_scale.data.view(torch.uint8)
         w_scale.dtype = torch.uint8
+    # unpack x scale
     x_scale = precision_config.act_scale
     x_has_mx = x_scale is not None
     if x_has_mx: assert x.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
     if x_scale is not None and not isinstance(x_scale, Tensor):
         x_scale = Tensor(x_scale)
+    if x_scale is not None:
+        x_scale.storage.data = x_scale.data.view(torch.uint8)
+        x_scale.dtype = torch.uint8
     if not isinstance(x, Tensor):
         x = Tensor(x, dtype=x.dtype)
     x_transpose = x.stride(-1) != 1
@@ -551,9 +555,26 @@ def matmul_ogs(x, w, bias,
         w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense", is_scale=True)
     else:
         w_scale_tensor_or_tma = w_scale
+    # create tma descriptor for x_scale
+    x_scale_has_tma = opt_flags.is_persistent and x_scale is not None
+    if x_scale_has_tma:
+        # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
+        if not isinstance(x_scale.storage.layout, BlackwellActMXScaleLayout):
+            x_scale_has_tma = False
+        if not is_input_batched:
+            x_scale_has_tma = False
+        if opt_flags.block_m < 128 or opt_flags.block_k < 128: # need to be at least 128 for TMA
+            x_scale_has_tma = False
+    if x_scale_has_tma:
+        x_scale_storage = x_scale.storage
+        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        x_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
+        x_scale_tensor_or_tma = x_scale_storage.make_tma(x_scale_tma_block_size, "dense", is_scale=True)
+    else:
+        x_scale_tensor_or_tma = x_scale
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
-    x_scale_strides = x_scale.stride() if x_has_mx else (None, None, None)
+    x_scale_strides = x_scale.stride() if x_has_mx and not x_scale_has_tma else (None, None, None)
     x_scale_strides = (0, ) * (3 - len(x_scale_strides)) + x_scale_strides
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
@@ -577,7 +598,7 @@ def matmul_ogs(x, w, bias,
                    *out_matmul_scale_strides[-4:],
                    x_tensor_or_tma, x_storage.data, *x_strides, x_transpose,
                    flex.lhs_data.scale,
-                   None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
+                   x_scale_tensor_or_tma, *x_scale_strides,
                    w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,

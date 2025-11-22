@@ -195,19 +195,7 @@ def make_default_opt_flags_nvidia(
     group_m = 8
     xcd_swizzle = 1
     # block_m
-    if constraints.get("block_m", None):
-        block_m = constraints["block_m"]
-    elif enforce_bitwise_invariance:
-        block_m = 128
-    else:
-        if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
-            # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and tokens_per_expt >= 16 and torch.cuda.get_device_capability()[0] >= 10:
-                block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
-            else:
-                block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
-        else:
-            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+    block_m = opt_flags_nvidia.compute_block_m(m, constraints, enforce_bitwise_invariance, tokens_per_expt, routing_data, lhs_dtype, rhs_dtype, precision_config)
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)

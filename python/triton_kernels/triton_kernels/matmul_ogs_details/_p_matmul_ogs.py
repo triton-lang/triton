@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
 from triton_kernels import target_info
-from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw, unswizzle_act_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import (
     float_to_flex,
     load_scale,
@@ -138,7 +138,7 @@ def _p_matmul_ogs(
     if is_x_microscaled:
         x_type: tl.constexpr = get_dtype(X)
         tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
-        tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        tl.static_assert(get_dtype(XMxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
@@ -244,15 +244,14 @@ def _p_matmul_ogs(
                 offs_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
 
-        if is_x_microscaled:
+        XMxScalePtrs = None
+        if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
             XMxScalePtrs = XMxScale + start_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += start_m * stride_x_mx_m
             offs_k_scale = off_k_x0 // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
-        else:
-            XMxScalePtrs = None
 
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -306,12 +305,18 @@ def _p_matmul_ogs(
                 off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
 
                 if is_x_microscaled:
-                    if EVEN_K:
-                        mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
-                    else:
-                        mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                    mask_m = off_m + tl.arange(0, BLOCK_M) < eM
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                    if XMxScalePtrs is not None: # not using TAM for x scale load
+                        if EVEN_K:
+                            mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+                        else:
+                            mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
+                        mask_m = off_m + tl.arange(0, BLOCK_M) < eM
+                        x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                    else: # use TMA for x scale load - only cover batched case for now
+                        off_m_scale = start_z * ((M + 127) // 128) + off_m // 128
+
+                        x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0]) # loaded block size is [1, BLOCK_M//128, BLOCK_K//32//4, 2, 256]
+                        x_scales = unswizzle_act_mx_scale_bw(x_scales)
                 elif x_format == "fp16" or x_format == "bf16":
                     x_scales: tl.constexpr = None
                 else:
@@ -326,13 +331,13 @@ def _p_matmul_ogs(
                     w_scales = WMxScale.load([expt_id, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
 
-            # --- update accumulator ---
+            # # --- update accumulator ---
             if is_w_microscaled:
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
-                if is_x_microscaled:
+                if is_x_microscaled and XMxScalePtrs is not None:
                     XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
             else:
                 if SWAP_XW:
