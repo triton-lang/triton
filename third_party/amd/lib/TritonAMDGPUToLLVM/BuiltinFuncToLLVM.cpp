@@ -142,13 +142,19 @@ private:
           LLVM::FSubOp::create(rewriter, loc, rewriter.getF32Type(), one,
                                ratio->getResult(0), defaultFlags);
 
-      // Apply the sign of the original input using copysign
+      // Apply the sign of the original input without using copysign intrinsic
       // tanh(x) = sign(x) * (1 - 2/(e^(2*|x|) + 1))
-      const char *intrinsic = "llvm.copysign.f32";
-      auto args =
-          llvm::SmallVector<Value>{posResult->getResult(0), operands[0]};
-      replacementOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
-                                                      returnType, args);
+      // Use FCmp + Select + FMul instead of copysign to avoid potential LLVM
+      // optimization side effects that may affect other operations
+      auto zero = LLVM::createConstantF32(loc, rewriter, 0.0);
+      auto negOne = LLVM::createConstantF32(loc, rewriter, -1.0);
+      auto isNegative = LLVM::FCmpOp::create(
+          rewriter, loc, LLVM::FCmpPredicate::olt, operands[0], zero);
+      auto sign = LLVM::SelectOp::create(rewriter, loc, rewriter.getF32Type(),
+                                         isNegative, negOne, one);
+      replacementOp = LLVM::FMulOp::create(rewriter, loc, returnType,
+                                           posResult->getResult(0),
+                                           sign->getResult(0), defaultFlags);
     }
 
     if (replacementOp) {

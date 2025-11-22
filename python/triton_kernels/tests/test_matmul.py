@@ -252,8 +252,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                 pytest.skip("Scale preshuffling on AMD GPU has not been emulated on non-CDNA4 arch yet.")
             if "mx" not in weight_dtype_str:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
-            if n % 32 != 0 or k % (32 * 8) != 0:
-                pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
         if torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("NYI. Ampere swizzling.")
         if torch.cuda.get_device_capability()[0] < 10:
