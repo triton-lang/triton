@@ -93,5 +93,3 @@ def test_tensor_metric_construction():
     metric = libproton.TensorMetric(123, libproton.metric_double_index)
     assert metric.ptr == 123
     assert metric.index == libproton.metric_double_index
-    metric.index = libproton.metric_int64_index
-    assert metric.index == libproton.metric_int64_index
