@@ -491,6 +491,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // Clone all node states
           pImpl->graphStates[graphId].nodeIdToState[nodeId] =
               pImpl->graphStates[originalGraphId].nodeIdToState[originalNodeId];
+          if (pImpl->graphStates[originalGraphId].metricKernelNodeIds.find(
+                  originalNodeId) !=
+              pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
+            pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
+          }
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         auto &numInstances = pImpl->graphStates[graphId].numInstances;
