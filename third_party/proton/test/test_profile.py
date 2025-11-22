@@ -606,7 +606,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def fn():
-        a = torch.ones((2, 2), device="cuda")
+        with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device="cuda")
         b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
