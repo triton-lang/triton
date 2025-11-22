@@ -50,7 +50,8 @@ llvm::Error TritonPlugin::loadPlugin() {
     return isValid;
 
   auto enumeratePassesAPIOrErr =
-      getAPI<enumeratePassesType, enumeratePassesCType>(ENUMERATE_PASSES);
+      getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+          ENUMERATE_PASSES);
   auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
   auto registerPassAPIOrErr =
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
@@ -69,20 +70,21 @@ llvm::Error TritonPlugin::loadPlugin() {
   return llvm::Error::success();
 }
 
-llvm::Expected<TritonPluginResult>
-TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
+llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
+    enumeratePyBindHandlesType &enumeratePyBindHandles,
+    std::vector<const char *> &handles) {
   if (auto Err = loadPlugin())
     return Err;
 
   uint32_t passCount = 0;
-  passNames.clear();
-  auto result = enumeratePassesAPI(&passCount, nullptr);
+  handles.clear();
+  auto result = enumeratePyBindHandles(&passCount, nullptr);
   if (result == TP_SUCCESS) {
     if (passCount == 0)
       return TP_SUCCESS;
 
-    passNames.resize(passCount);
-    result = enumeratePassesAPI(&passCount, passNames.data());
+    handles.resize(passCount);
+    result = enumeratePyBindHandles(&passCount, handles.data());
   }
 
   if (result == TP_SUCCESS)
@@ -91,6 +93,11 @@ TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
   llvm::raw_string_ostream os(msg);
   os << "Failed to retrive plugin pass handles, error code: " << result;
   return llvm::createStringError(msg);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
+  return enumeratePyBindHandles(enumeratePassesAPI, passNames);
 }
 
 llvm::Expected<TritonPluginResult>

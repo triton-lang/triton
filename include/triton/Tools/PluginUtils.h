@@ -20,11 +20,14 @@ struct TritonPlugin {
   TritonPlugin(std::string filename) : filename(filename) {}
 
 private:
-  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
-  using enumeratePassesType =
+  using enumeratePyBindHandlesType =
       std::function<TritonPluginResult(uint32_t *, const char **)>;
-  using enumeratePassesCType = TritonPluginResult (*)(uint32_t *,
-                                                      const char **);
+  using enumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
+                                                             const char **);
+
+  // Put enumerate API names here, these can be involved with
+  // enumeratePyBindHandles
+  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
 
   const std::string ADD_PASS = "tritonAddPluginPass";
   using addPassType =
@@ -52,6 +55,9 @@ private:
 
   llvm::Expected<TritonPluginResult> checkAPIResult(TritonPluginResult result,
                                                     const char *handle) const;
+  llvm::Expected<TritonPluginResult>
+  enumeratePyBindHandles(enumeratePyBindHandlesType &enumeratePyBindHandles,
+                         std::vector<const char *> &passNames);
 
 public:
   std::runtime_error err2exp(llvm::Error Err);
@@ -59,7 +65,7 @@ public:
   llvm::Error loadPlugin();
 
   llvm::Expected<TritonPluginResult>
-  getPassHandles(std::vector<const char *> &passNames);
+  getPassHandles(std::vector<const char *> &handles);
 
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
                                              const char *passHandle);
@@ -69,7 +75,7 @@ public:
 private:
   std::string filename = "";
   mutable llvm::sys::DynamicLibrary library;
-  enumeratePassesType enumeratePassesAPI;
+  enumeratePyBindHandlesType enumeratePassesAPI;
   addPassType addPassAPI;
   registerPassType registerPassAPI;
   bool isLoaded = false;
