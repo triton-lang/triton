@@ -58,6 +58,6 @@ class warp_pipeline_stage:
             attr = "cluster"
         else:
             attr = self.label
-        op = self._semantic.builder.create_warp_pipeline_border(attr)
+        self._semantic.builder.create_warp_pipeline_border(attr)
 
         return False
