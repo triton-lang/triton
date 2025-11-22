@@ -398,7 +398,15 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i];
-        if (metricTypeIndex == variant_index_v<int64_t, MetricValueType>) {
+        if (metricTypeIndex == variant_index_v<uint64_t, MetricValueType>) {
+          uint64_t metricValueUint = 0;
+          std::memcpy(&metricValueUint, &metricValue, sizeof(metricValueUint));
+          data->addMetrics(scopeId,
+                           /*scalarMetrics=*/{
+                               {metricName, metricValueUint},
+                           });
+        } else if (metricTypeIndex ==
+                   variant_index_v<int64_t, MetricValueType>) {
           int64_t metricValueInt = 0;
           std::memcpy(&metricValueInt, &metricValue, sizeof(metricValueInt));
           data->addMetrics(
