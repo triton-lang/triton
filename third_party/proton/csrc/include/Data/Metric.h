@@ -390,7 +390,6 @@ public:
                        void *stream) const;
   
   void reserve() {
-    std::lock_guard<std::mutex> lock(bufferMutex);
     getOrCreateBuffer();
   }
 

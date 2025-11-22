@@ -12,7 +12,6 @@ ThreadSafeMap<size_t, MetricBuffer::MetricDescriptor>
 std::atomic<size_t> MetricBuffer::metricId{0};
 
 MetricBuffer::~MetricBuffer() {
-  std::lock_guard<std::mutex> lock(bufferMutex);
   for (auto &[device, buffer] : deviceBuffers) {
     runtime->freeDeviceBuffer(buffer.devicePtr);
     runtime->freeDeviceBuffer(buffer.deviceOffsetPtr);
@@ -66,7 +65,9 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
-                          reinterpret_cast<void *>(&tensorMetric.ptr)};
+                          reinterpret_cast<void *>(&tensorMetric.ptr),
+                          /*global_scratch_ptr=*/nullptr,
+                          /*profile_scratch_ptr=*/nullptr};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
@@ -92,7 +93,9 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
-                          reinterpret_cast<void *>(&metricBits)};
+                          reinterpret_cast<void *>(&metricBits),
+                          /*global_scratch_ptr=*/nullptr,
+                          /*profile_scratch_ptr=*/nullptr};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
