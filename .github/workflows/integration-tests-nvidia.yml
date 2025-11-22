@@ -103,6 +103,10 @@ jobs:
         run: make test-cpp
       - name: Run Proton tests
         run: make test-proton
+      - name: Run Plugins tests
+        run: |
+          export LLVM_BUILD_SHARED_LIBS=1; make dev-install-llvm; 
+          make test-nogpu        
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
