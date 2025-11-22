@@ -357,13 +357,12 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
   Value laneId;
-  Value warpId;
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
     laneId = tid;
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = b.udiv(tid, warpSizeVal);
   }
 
   return {laneId, warpId};

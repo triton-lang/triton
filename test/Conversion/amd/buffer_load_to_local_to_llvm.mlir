@@ -338,18 +338,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // COMMON-LABEL: buffer_load_to_local_wave_id
   tt.func public @buffer_load_to_local_wave_id(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>, %arg3: i32) {
-    // COMMON: %0 = rocdl.workitem.id.x : i32
-    // COMMON-NEXT: %1 = llvm.mlir.constant(63 : i32) : i32
-    // COMMON-NEXT: %2 = llvm.and %0, %1 : i32
-    // COMMON-NEXT: %3 = llvm.mlir.constant(64 : i32) : i32
-    // COMMON-NEXT: %4 = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: %5 = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%4) : (i32) -> i32
-    // COMMON-NEXT: %6 = rocdl.workitem.id.x : i32
-    // COMMON-NEXT: %7 = llvm.mlir.constant(63 : i32) : i32
-    // COMMON-NEXT: %8 = llvm.and %6, %7 : i32
-    // COMMON-NEXT: %9 = llvm.mlir.constant(64 : i32) : i32
-    // COMMON-NEXT: %10 = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: %11 = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%10) : (i32) -> i32
+    //      COMMON: %[[C64:.+]] = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
+    // COMMON-NEXT: %[[C63:.+]] = llvm.mlir.constant(63 : i32) : i32
+    // COMMON-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C63]] : i32
+    // COMMON-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
+    // COMMON-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
+
+    //      COMMON: %[[C64:.+]] = llvm.mlir.constant(64 : i32) : i32
+    // COMMON-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
+    // COMMON-NEXT: %[[C63:.+]] = llvm.mlir.constant(63 : i32) : i32
+    // COMMON-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C63]] : i32
+    // COMMON-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
+    // COMMON-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
 
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %1 = amdg.buffer_load_to_local %arg0[%0] into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
