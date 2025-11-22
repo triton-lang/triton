@@ -591,3 +591,44 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
             break
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["flops"] == 8.0
+
+
+def test_tensor_metric_cudagraph(tmp_path: pathlib.Path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size()}
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        a = torch.ones((2, 2), device="cuda")
+        b = torch.ones((2, 2), device="cuda")
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_tensor_metric_cudagraph.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    # warmup
+    # four kernels
+    fn()
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for _ in range(10):
+            fn()
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    # CUDA/HIP graph may also invoke additional kernels to reset outputs
