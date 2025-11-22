@@ -118,24 +118,28 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # {torch.ones, add, foo, test}
     assert len(data[0]["children"]) >= 4
     # find the test frame
-    test_frame = None
+    test0_frame = None
+    test1_frame = None
     for child in data[0]["children"]:
-        if child["frame"]["name"] == "test":
-            test_frame = child
-            break
-    assert test_frame is not None
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+        if child["frame"]["name"] == "test1":
+            test1_frame = child
+    assert test0_frame is not None
+    assert test1_frame is not None
     # {torch.ones, add, foo}
     if is_hip():
-        assert len(test_frame["children"]) >= 2
-        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+        assert len(test0_frame["children"]) >= 2
+        assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
         # cuda backend supports "<captured_at>" annotation
-        child = test_frame["children"][0]
-        assert child["frame"]["name"] == "<captured_at>"
-        # 0...9 iterations
-        assert len(child["children"]) == 10
-        # check one of the iterations
-        assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+        for test_frame in [test0_frame, test1_frame]:
+            child = test_frame["children"][0]
+            assert child["frame"]["name"] == "<captured_at>"
+            # 0...9 iterations
+            assert len(child["children"]) == 10
+            # check one of the iterations
+            assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
