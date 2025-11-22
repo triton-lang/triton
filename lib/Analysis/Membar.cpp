@@ -3,22 +3,229 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
 namespace mlir {
 
-void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
+namespace {
+
+using IntervalVector = SmallVector<Interval<size_t>>;
+
+// Computes strides for `ty`, using allocShape if available.
+// Returns a vector with strides[i] is the stride in elements for dimension i.
+// Example: 4x32x64 will have strides [2048, 64, 1]
+SmallVector<int64_t> computeStrides(triton::gpu::MemDescType ty) {
+  auto shape = ty.getShape();
+  auto allocShape = ty.getAllocShape();
+  auto strideShape =
+      allocShape.empty() ? shape : allocShape.take_back(shape.size());
+
+  SmallVector<int64_t> strides(strideShape.size());
+  int64_t stride = 1;
+  for (int64_t i = strideShape.size() - 1; i >= 0; --i) {
+    strides[i] = stride;
+    stride *= strideShape[i];
+  }
+  return strides;
+}
+
+// Generates intervals for a given buffer type.
+// For a tensor of shape AxBxCxD, generates A*B*C intervals of size D
+// All interval offsets are generated assuming unswizzled row major layout
+IntervalVector generateIntervalsForType(triton::gpu::MemDescType srcTy,
+                                        int64_t baseElementOffset) {
+  IntervalVector intervals;
+  auto shape = srcTy.getShape();
+  auto bytesPerElement = srcTy.getElementTypeBitWidth() / 8;
+
+  // The total number of intervals is the product of all dimensions except
+  // the last one. This is because the last dimension is the size of each
+  // interval.
+  int64_t numIntervals = 1;
+  for (int64_t i = 0; i < shape.size() - 1; ++i) {
+    numIntervals *= shape[i];
+  }
+  int64_t intervalLength = shape[shape.size() - 1];
+
+  auto strides = computeStrides(srcTy);
+
+  // TODO: We could detect when multiple trailing dimensions are contiguous in
+  // memory (stride[i] == product of dims after it) and create larger intervals
+  // that include all those dimensions.
+  // For example, shape [4, 8, 16, 32] with strides [4096, 512, 32, 1] could
+  // generate 32 intervals of size 16*32=512 instead of 256 intervals of
+  // size 32. This would improve performance during interval overlap.
+
+  // Generate intervals by converting interval indices to memory offsets.
+  // Each intervalIdx is mapped into multi-dimensional coordinates, then
+  // converted to a linear memory offset using the tensor's strides.
+  // Example:
+  //   With intervalIdx=171 for shape [2, 16, 8, 32] -> coords [1, 5, 3]:
+  //   - flatIdx = intervalIdx = 171
+  //   - coord[2] = 171 % 8 = 3   (4th element in dim 2)
+  //     flatIdx = 171 / 8 = 21
+  //   - coord[1] = 21 % 16 = 5   (6th element in dim 1)
+  //     flatIdx = 21 / 16 = 1
+  //   - coord[0] = 1 % 2 = 1     (2nd element in dim 0)
+  //     flatIdx = 1 / 2 = 0
+  //   Moving to offset (in elements) calculation, we do the following:
+  //   - offset = 1*stride[0] + 5*stride[1] + 3*stride[2]
+  //            = 1*4096 + 5*256 + 3*32 = 5472
+  //   So intervalIdx=171 will be interval [5472, 5504)
+  for (int64_t intervalIdx = 0; intervalIdx < numIntervals; ++intervalIdx) {
+    // Extract coordinates from the interval index
+    SmallVector<int64_t> coords(shape.size() - 1);
+    int64_t flatIdx = intervalIdx;
+    for (int64_t dim = shape.size() - 2; dim >= 0; --dim) {
+      coords[dim] = flatIdx % shape[dim];
+      flatIdx /= shape[dim];
+    }
+
+    // Calculate the interval element offset using coordinates and strides
+    int64_t intervalElementOffset = baseElementOffset;
+    for (int64_t dim = 0; dim < shape.size() - 1; ++dim) {
+      intervalElementOffset += coords[dim] * strides[dim];
+    }
+
+    // Convert element offset to byte offset and create the interval
+    size_t intervalStart = intervalElementOffset * bytesPerElement;
+    size_t intervalEnd = intervalStart + intervalLength * bytesPerElement;
+    intervals.push_back(Interval<size_t>(intervalStart, intervalEnd));
+  }
+  return intervals;
+}
+
+// Processes all view ops top down to compute the memory intervals.
+// Starts with element based offsets and returns byte intervals
+// The intervals are generated using the shape and data type of `leafTy`
+IntervalVector applyViewOperations(int64_t baseElementOffset,
+                                   triton::gpu::MemDescType leafTy,
+                                   ArrayRef<Operation *> viewOps) {
+  if (viewOps.empty()) {
+    return generateIntervalsForType(leafTy, baseElementOffset);
+  }
+
+  Operation *op = viewOps[viewOps.size() - 1];
+  ArrayRef<Operation *> remainingOps = viewOps.drop_back();
+
+  // Each view operation just changes the starting offset of the buffer that
+  // we will be read/write to. The intervals generated only depend on the
+  // `leafTy`. This still holds when dealing with dynamic index, except in
+  // that case we recurse multiple times one for each of the possible indices.
+  // The processing for the various cases is:
+  // - MemdescSubslice: adjust starting element offset based on all strides
+  //                    and process next view operation
+  // - MemdescIndex (constant): adjust the starting element offset based on
+  //                            the dim0 stride and process next view op
+  // - MemdescIndex (dynamic): for each possible index of dim0, adjust the
+  //                           starting element offset based on dim0 stride
+  //                           and process the next view op
+  if (auto subsliceOp = dyn_cast<triton::gpu::MemDescSubsliceOp>(op)) {
+    auto srcTy = subsliceOp.getSrc().getType();
+    auto strides = computeStrides(srcTy);
+    auto offsets = subsliceOp.getOffsets();
+    assert(offsets.size() == strides.size());
+    int64_t elementOffset = 0;
+    for (size_t i = 0; i < offsets.size(); ++i) {
+      elementOffset += offsets[i] * strides[i];
+    }
+    return applyViewOperations(baseElementOffset + elementOffset, leafTy,
+                               remainingOps);
+  } else if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(op)) {
+    auto srcTy = indexOp.getSrc().getType();
+    int64_t elementStride = computeStrides(srcTy)[0];
+
+    if (auto constantIndex =
+            indexOp.getIndex().getDefiningOp<arith::ConstantIntOp>()) {
+      // Apply constant index offset
+      int64_t elementOffset = constantIndex.value() * elementStride;
+      return applyViewOperations(baseElementOffset + elementOffset, leafTy,
+                                 remainingOps);
+    } else {
+      // TODO: This can be made smarter in the future by looking at loop
+      // iterations and if we alternate index then we can reduce the analysis
+      // to just one of the slices
+      IntervalVector intervals;
+      int64_t dim0Size = srcTy.getDimSize(0);
+      // Dynamic index: recursively handle all possible values of dim0
+      for (int64_t i = 0; i < dim0Size; ++i) {
+        int64_t elementOffset = i * elementStride;
+        llvm::append_range(
+            intervals, applyViewOperations(baseElementOffset + elementOffset,
+                                           leafTy, remainingOps));
+      }
+      return intervals;
+    }
+  }
+
+  llvm_unreachable("Unexpected operation type in view chain");
+}
+
+// Computes all memory intervals touched by a memory operation.
+//
+// Computes the portions of shared memory that a memory operation accesses.
+// Returns a vector of intervals with byte offsets.
+IntervalVector getFineGrainedIntervals(Interval<size_t> baseInterval,
+                                       const Value value) {
+  // Get all view ops between the memory op and the allocation
+  SmallVector<Operation *> viewOps;
+
+  Value currentValue = value;
+  while (auto op = currentValue.getDefiningOp()) {
+    if (auto subsliceOp = dyn_cast<triton::gpu::MemDescSubsliceOp>(op)) {
+      viewOps.push_back(subsliceOp);
+      currentValue = subsliceOp.getSrc();
+    } else if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(op)) {
+      viewOps.push_back(indexOp);
+      currentValue = indexOp.getSrc();
+    } else {
+      // Start of the chain of ops (local_alloc/function parameter/...)
+      break;
+    }
+  }
+
+  // If there are no view operations then we are accessing the full allocation.
+  // Return the entire base interval instead of a lot of small intervals that
+  // will cover the full base interval.
+  if (viewOps.empty()) {
+    return {baseInterval};
+  }
+
+  auto ty = cast<triton::gpu::MemDescType>(value.getType());
+  auto bytesPerElement = ty.getElementTypeBitWidth() / 8;
+  auto baseElementOffset = baseInterval.start() / bytesPerElement;
+  auto intervals = applyViewOperations(baseElementOffset, ty, viewOps);
+
+  // Check maths, all intervals need to be within the original allocation
+  for (auto interval : intervals) {
+    assert(interval.start() >= baseInterval.start() &&
+           interval.end() <= baseInterval.end());
+  }
+
+  return intervals;
+}
+
+} // namespace
+
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::run(
+    FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
-      dyn_cast<FunctionOpInterface>(allocation->getOperation());
+      dyn_cast<FunctionOpInterface>(this->allocation->getOperation());
+  if constexpr (PrintIntervals) {
+    llvm::errs() << "Function: " << funcOp.getName() << "\n";
+  }
   OpBuilder builder(funcOp.getContext());
   resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
-void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::resolve(
+    FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
   // Initialize the blockList. Operations are organized into "virtual blocks",
   // which represent segments of straight-line code analyzed by each iteration
   // of the dataflow analysis. Virtual blocks abstract over both control flow
@@ -104,7 +311,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   });
 }
 
-void MembarOrFenceAnalysis::visitTerminator(
+template <bool PrintIntervals>
+void MembarOrFenceAnalysisImpl<PrintIntervals>::visitTerminator(
     Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
@@ -157,14 +365,17 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarAnalysisImpl<PrintIntervals>::insertBarrier(Operation *op,
+                                                       OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
   auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
 }
 
-void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            FuncBlockInfoMapT *funcBlockInfoMap,
-                            OpBuilder *builder) {
+template <bool PrintIntervals>
+void MembarAnalysisImpl<PrintIntervals>::update(
+    Operation *op, BlockInfo *blockInfo, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
   if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -198,18 +409,49 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
+          for (auto bufferId : this->allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
-              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+              auto baseInterval =
+                  this->allocation->getAllocatedInterval(bufferId);
+              IntervalVector intervals;
+
+              // Check that all operations on a buffer use the same layout.
+              // If not, we need to conservatively assume it touches the
+              // whole buffer.
+              auto valTy = cast<triton::gpu::MemDescType>(value.getType());
+              auto currentLayout = valTy.getEncoding();
+              // Track the layout for this operation. If we've already seen
+              // this buffer in this operation, encodings must match
+              auto [it, inserted] =
+                  curBlockInfo.bufferLayouts.emplace(bufferId, currentLayout);
+              assert(inserted ||
+                     it->second == currentLayout &&
+                         "Same buffer used with multiple layouts in same op");
+              auto previousLayout = blockInfo->bufferLayouts.find(bufferId);
+              bool layoutChanged =
+                  (previousLayout != blockInfo->bufferLayouts.end() &&
+                   previousLayout->second != currentLayout);
+
+              if (layoutChanged) {
+                // Layout changed, use the full interval as we tracking ranges
+                // across layouts is complex and not commonly needed
+                intervals.push_back(baseInterval);
+              } else {
+                // Get fine grained intervals for the operation
+                intervals = getFineGrainedIntervals(baseInterval, value);
+              }
+
+              if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
+                // Insert operation for each interval touched
+                for (auto interval : intervals) {
+                  curBlockInfo.syncWriteIntervals[interval].insert(op);
+                }
+              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
+                // Insert operation for each interval touched
+                for (auto interval : intervals) {
+                  curBlockInfo.syncReadIntervals[interval].insert(op);
+                }
+              }
             }
           }
         }
@@ -222,7 +464,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
       curBlockInfo.syncReadIntervals[allIntervals].insert(op);
     }
-    scratchBufferId = allocation->getBufferId(op);
+    scratchBufferId = this->allocation->getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
@@ -249,9 +491,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = this->allocation->getAllocatedInterval(scratchBufferId);
     curBlockInfo.syncWriteIntervals[interval].insert(op);
-    auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
+    auto insertCTABarrier =
+        blockInfo->isIntersected(curBlockInfo, this->filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
@@ -261,13 +504,28 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
     curBlockInfo.syncReadIntervals[interval].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
+  } else if (blockInfo->isIntersected(curBlockInfo, this->filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
   }
+  if constexpr (PrintIntervals) {
+    llvm::errs() << "Op: ";
+    op->print(llvm::errs());
+    llvm::errs() << "\n";
+    curBlockInfo.dump();
+    llvm::errs() << "---\n";
+  }
+
   // Update the region info, even if barrier is inserted, we have to maintain
-  // the current op's read/write buffers.
+  // the current op's read/write buffers and layout information.
   blockInfo->join(curBlockInfo);
 }
+
+// Explicit template instantiations
+template class MembarOrFenceAnalysisImpl<>;
+template class MembarOrFenceAnalysisImpl<true>;
+template class MembarAnalysisImpl<>;
+template class MembarAnalysisImpl<true>;
+
 } // namespace mlir

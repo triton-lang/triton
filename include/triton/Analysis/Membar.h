@@ -16,9 +16,11 @@ using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {
   using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
+  using BufferLayoutMapT = std::map<Allocation::BufferId, Attribute>;
 
   IntervalMapT syncReadIntervals;
   IntervalMapT syncWriteIntervals;
+  BufferLayoutMapT bufferLayouts;
 
   BlockInfo() = default;
 
@@ -30,6 +32,8 @@ struct BlockInfo {
     for (auto &interval : other.syncWriteIntervals)
       syncWriteIntervals[interval.first].insert(interval.second.begin(),
                                                 interval.second.end());
+    for (auto &[bufferId, layout] : other.bufferLayouts)
+      bufferLayouts[bufferId] = layout;
     return *this;
   }
 
@@ -38,14 +42,14 @@ struct BlockInfo {
     err << "Block Interval:\n";
     err << "  Read Intervals:\n";
     for (auto &[interval, ops] : syncReadIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      err << "    [" << interval.start() << ", " << interval.end() << ") ";
       for (auto &op : ops)
         err << op->getName() << " ";
       err << "\n";
     }
     err << "  Write Intervals:\n";
     for (auto &[interval, ops] : syncWriteIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      err << "    [" << interval.start() << ", " << interval.end() << ") ";
       for (auto &op : ops)
         err << op->getName() << " ";
       err << "\n";
@@ -62,16 +66,18 @@ struct BlockInfo {
            isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
   }
 
-  /// Clears the intervals because a barrier is inserted.
+  /// Clears the intervals and layout tracking because a barrier is inserted.
   void sync() {
     syncReadIntervals.clear();
     syncWriteIntervals.clear();
+    bufferLayouts.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadIntervals == other.syncReadIntervals &&
-           syncWriteIntervals == other.syncWriteIntervals;
+           syncWriteIntervals == other.syncWriteIntervals &&
+           bufferLayouts == other.bufferLayouts;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
@@ -97,7 +103,7 @@ private:
 //===----------------------------------------------------------------------===//
 
 // Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis {
+template <bool PrintIntervals = false> class MembarOrFenceAnalysisImpl {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
 
 public:
@@ -115,11 +121,12 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
+  MembarOrFenceAnalysisImpl() = default;
+  explicit MembarOrFenceAnalysisImpl(Allocation *allocation,
+                                     MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
 
-  virtual ~MembarOrFenceAnalysis() = default;
+  virtual ~MembarOrFenceAnalysisImpl() = default;
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
@@ -156,13 +163,20 @@ protected:
   MembarFilterFn filter = nullptr;
 };
 
-class MembarAnalysis : public MembarOrFenceAnalysis {
-public:
-  MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+// Type alias for backward compatibility
+using MembarOrFenceAnalysis = MembarOrFenceAnalysisImpl<>;
 
-  ~MembarAnalysis() override = default;
+template <bool PrintIntervals = false>
+class MembarAnalysisImpl : public MembarOrFenceAnalysisImpl<PrintIntervals> {
+public:
+  using FuncBlockInfoMapT =
+      typename MembarOrFenceAnalysisImpl<PrintIntervals>::FuncBlockInfoMapT;
+
+  MembarAnalysisImpl() = default;
+  explicit MembarAnalysisImpl(Allocation *allocation, MembarFilterFn filter)
+      : MembarOrFenceAnalysisImpl<PrintIntervals>(allocation, filter) {}
+
+  ~MembarAnalysisImpl() override = default;
 
 private:
   /// Updates the BlockInfo operation based on the operation.
@@ -172,6 +186,8 @@ private:
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
+
+using MembarAnalysis = MembarAnalysisImpl<>;
 
 /// Postorder traversal on the callgraph to insert membar instructions
 /// of each function.
@@ -206,7 +222,10 @@ private:
   MembarFilterFn filter;
 };
 
-typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;
+// Type aliases for common instantiations
+using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
+using ModuleMembarAnalysisPrint =
+    ModuleMembarOrFenceAnalysis<MembarAnalysisImpl<true>>;
 
 } // namespace mlir
 
