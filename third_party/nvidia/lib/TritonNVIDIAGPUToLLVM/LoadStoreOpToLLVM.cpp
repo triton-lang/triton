@@ -1803,8 +1803,8 @@ struct AsyncCopyMbarrierArriveOpConversion
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
     TritonLLVMOpBuilder b(loc, rewriter);
-    NVVM::CpAsyncMBarrierArriveSharedOp::create(rewriter, loc,
-                                                barrierMemObj.getBase(), noinc);
+    NVVM::CpAsyncMBarrierArriveOp::create(rewriter, loc,
+                                          barrierMemObj.getBase(), noinc);
     op->erase();
     return success();
   }

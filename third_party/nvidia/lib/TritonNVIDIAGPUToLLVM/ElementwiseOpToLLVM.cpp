@@ -650,7 +650,7 @@ struct ExpOpConversionApprox
     Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
     Type resultTy = operands[0][0].getType();
-    StringRef name = "llvm.nvvm.ex2.approx.f";
+    StringRef name = "llvm.nvvm.ex2.approx.f32";
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
     return {callOp.getResult(0)};
