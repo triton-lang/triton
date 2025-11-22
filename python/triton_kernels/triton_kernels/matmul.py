@@ -319,6 +319,8 @@ def matmul(a, b, bias,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
     )
+    if out_dtype.itemsize == 1:
+        print(block_k, opt_flags)
     if ragged_dimension == "K":
         a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
