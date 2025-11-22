@@ -152,23 +152,27 @@ private:
 
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
-        // fail conversion with executeRegion from unkown source.
+        // Fail conversion with executeRegion from unkown source.
         if (exeOp->getAttr("triton.warp_pipeline.stage") == nullptr)
           return failure();
         exeOp.setNoInline(false);
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
-      } else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp,
+      } else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp, gpu::BarrierOp,
                      triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
                      op)) {
         int currCluster = clusterBlocks.size();
+        // Reject if multiple barriers appear without an intervening cluster.
+        // This is functionally valid but may cause unpredictable timing. Users
+        // should insert a dummy cluster explicitly if a pipeline bubble is
+        // required.
         if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
-          return failure(); // Unreachable
+          return failure();
         existingBarrierMap[currCluster] = &op;
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
-      } else { // fail conversion if any other op found out out of the cluster.
+      } else { // Fail conversion if any other op found outside of the cluster.
         return failure();
       }
     }

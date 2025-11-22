@@ -866,11 +866,13 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
            })
-      .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
-        auto border = self.create<ROCDL::SchedBarrier>(0);
-        border->setAttr("triton.warp_pipeline.border",
-                        self.getBuilder().getUnitAttr());
-      });
+      .def("create_warp_pipeline_border",
+           [](GluonOpBuilder &self, const std::string &marker) {
+             auto border = self.create<ROCDL::SchedBarrier>(0);
+             auto ctx = self.getContext();
+             border->setAttr("triton.warp_pipeline.border",
+                             StringAttr::get(ctx, marker));
+           });
 
   m.def(
       "compute_tmem_reg_layout",
