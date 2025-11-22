@@ -523,6 +523,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz) {
         threadState.isStreamCapturing = true;
+        pImpl->metricBuffer->reserve();
         return;
       } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture ||
                  cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz) {
