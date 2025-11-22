@@ -709,6 +709,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
+        # add a cache field to the kernel specializations for kernel specific
+        # pass pipelines
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
+            specialization.append(f'("custom_pipeline", {inspect_stages_hash})')
+
         key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
