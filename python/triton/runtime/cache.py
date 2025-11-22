@@ -296,7 +296,6 @@ def triton_key():
                 break
             libtriton_hash.update(chunk)
     contents.append(libtriton_hash.hexdigest())
-
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
