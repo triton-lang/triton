@@ -1624,7 +1624,7 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 
 // -----
 
-#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [4], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: test_get_program_id
 tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
@@ -1667,7 +1667,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [4], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
     %blockdimx = tt.get_num_programs x : i32

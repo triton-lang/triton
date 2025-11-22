@@ -361,6 +361,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
         atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
     }
+    if (isaFamily == ISAFamily::RDNA4 && checkType.isF64() &&
+        atomicRmwOp == RMWOp::FADD) {
+      return rewriter.notifyMatchFailure(op, "RMW FADD does not support F64");
+    }
     LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
@@ -624,7 +628,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
     if (this->allowBufferAtomics &&
-        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily))
+        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily ||
+         ISAFamily::RDNA4 == isaFamily))
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily,
           this->analyzeSmallTensorOfst);

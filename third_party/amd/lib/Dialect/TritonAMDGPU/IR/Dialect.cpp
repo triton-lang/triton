@@ -31,6 +31,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <limits>
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -75,6 +76,20 @@ std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
                         [&](const auto &coord) { os << coord.second; });
   os << "]";
   return os.str();
+}
+
+// Helper function to verify TDM block dimensions
+static LogicalResult verifyTDMBlockSize(Operation *op,
+                                        ArrayRef<int64_t> blockShape) {
+  constexpr int64_t maxBlockSize = std::numeric_limits<uint16_t>::max();
+  for (size_t i = 0; i < blockShape.size(); ++i) {
+    if (blockShape[i] > maxBlockSize) {
+      return op->emitOpError("TDM block dimension ")
+             << i << " (" << blockShape[i] << ") exceeds maximum size of "
+             << maxBlockSize;
+    }
+  }
+  return success();
 }
 
 LogicalResult ExtractSliceOp::verify() {
@@ -668,6 +683,12 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getResult().getType();
 
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
   if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
@@ -700,6 +721,12 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
 LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getSrc().getType();
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
 
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());

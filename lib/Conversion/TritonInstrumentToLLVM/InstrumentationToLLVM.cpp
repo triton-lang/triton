@@ -27,7 +27,7 @@ Value createMemDescToI64(RewriterBase &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
   TritonLLVMOpBuilder b(loc, rewriter);
-  if (isa<ttng::TensorMemoryEncodingAttr>(memDescTy.getEncoding())) {
+  if (isa<ttng::TensorMemorySpaceAttr>(memDescTy.getMemorySpace())) {
     return b.ptrtoint(rewriter.getIntegerType(64), sharedMemStruct);
   }
   assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&

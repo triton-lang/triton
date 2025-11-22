@@ -1083,7 +1083,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
 }
 
 inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
+swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
   // DotOperandEncodingAttr with a tile of this shape This works because

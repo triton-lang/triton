@@ -17,7 +17,7 @@ class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
-class CTALayoutAttr;
+class CTAEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -77,9 +77,9 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 // given shape.
 //
 // See the nomenclature note at the top of LinearLayoutConversions.cpp for why
-// the variable with type CTALayoutAttr is called cgaLayoutAttr.
+// the variable with type CTAEncodingAttr is called cgaLayoutAttr.
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
+                                    CTAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape);
 
 // In this function, we construct a linear layout representing the
@@ -133,7 +133,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayout);
+                                          CTAEncodingAttr ctaLayout);
 
 // Create LinearLayout for nvidia mma tile.
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
@@ -149,16 +149,5 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 // Create the core layout (atom in the PTX manual) a given nvmma shared encoding
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
-
-// Make a LinearLayout that maps a block-id to an N-dimensional index.
-//
-// The tensor is split up into CTAsPerCGA pieces, which are distributed among
-// the CTAsPerCGA CTAs (i.e. blocks) in the CGA (i.e. groups).
-//
-// See the nomenclature note at the top of the LinearLayoutConversions.cpp file
-// for an explanation of why this is called makeCgaLayout when it accepts a
-// CTALayoutAttr.
-LinearLayout makeCgaLayout(CTALayoutAttr layout);
-
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

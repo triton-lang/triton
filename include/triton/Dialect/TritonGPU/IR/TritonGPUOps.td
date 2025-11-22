@@ -42,7 +42,7 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
-def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
+def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
   let summary = "async wait";
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);

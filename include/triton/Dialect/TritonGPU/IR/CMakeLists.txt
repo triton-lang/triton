@@ -15,10 +15,16 @@ set(LLVM_TARGET_DEFINITIONS TritonGPUAttrDefs.td)
 mlir_tablegen(AttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(AttrInterfaces.cpp.inc -gen-attr-interface-defs)
 mlir_tablegen(AttrDefs.h.inc -gen-attrdef-decls)
-mlir_tablegen(AttrDefs.cpp.inc -gen-attrdef-defs)
 mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
+
+set(LLVM_TARGET_DEFINITIONS TritonGPUAttrImpls.td)
+mlir_tablegen(AttrDefs.cpp.inc -gen-attrdef-defs)
 add_public_tablegen_target(TritonGPUAttrDefsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS CTAEncodingAttr.td)
+mlir_tablegen(CTAEncodingAttr.h.inc -gen-attrdef-decls)
+add_public_tablegen_target(TritonGPUCTAAttrIncGen)
 
 set(LLVM_TARGET_DEFINITIONS TritonGPUTypeInterfaces.td)
 mlir_tablegen(TypeInterfaces.h.inc -gen-type-interface-decls)

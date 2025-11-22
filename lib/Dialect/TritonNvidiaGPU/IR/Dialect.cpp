@@ -133,7 +133,8 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     const LinearLayout &ll, TMemAccessAtom atom, unsigned numWarps,
-    int bitwidth, std::optional<gpu::CTALayoutAttr> ctaLayout = std::nullopt) {
+    int bitwidth,
+    std::optional<gpu::CTAEncodingAttr> ctaLayout = std::nullopt) {
   auto dims = to_vector(ll.getOutDimNames());
   assert(dims.size() == 2);
   auto rowColDims = to_vector(ll.getInDimNames());
@@ -142,14 +143,12 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   if (ctaLayout) {
     // Get CTALayout without broadcasting to divide the ll
     // as the TMEM layout does not reflect CTA broadcasting
-    auto splitNum = ctaLayout->getCTASplitNum();
-    // The cta order in TMEM is always [0, 1]
-    auto ctaBlockSplit = CTALayoutAttr::get(ctx, splitNum, splitNum, {0, 1});
-    auto ctaBlockSplitLL = gpu::makeCgaLayout(ctaBlockSplit);
-    assert(ctaBlockSplitLL.getNumOutDims() == ll.getNumOutDims());
-    // rename block into col
+    auto cgaShape = to_vector(ctaLayout->getLinearLayout().getOutDimSizes());
     auto kBlock = StringAttr::get(ctx, "block");
-    auto ctaCol = ctaBlockSplitLL.renameInDim(kBlock, rowColDims[1]);
+    // The cta order in TMEM is always [0, 1]
+    auto ctaCol =
+        LinearLayout::identity1D(cgaShape[0], rowColDims[1], dims[0]) *
+        LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
     auto quot = divideRight(ll, ctaCol);
     assert(quot.has_value());
     auto maybeRet =
@@ -157,8 +156,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     if (!maybeRet)
       return maybeRet;
     // Add the full ctaBlock layout (with broadcasting)
-    auto ctaBlock = gpu::makeCgaLayout(*ctaLayout);
-    return *maybeRet * ctaBlock;
+    return *maybeRet * ctaLayout->getLinearLayout();
   }
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
@@ -307,7 +305,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps,
-                                gpu::CTALayoutAttr ctaLayout) {
+                                gpu::CTAEncodingAttr ctaLayout) {
   assert(memType.getMemorySpace() ==
          TensorMemorySpaceAttr::get(memType.getContext()));
   assert(numWarps >= 4 && llvm::isPowerOf2_32(numWarps) &&
@@ -322,7 +320,7 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
 
 DistributedEncodingTrait
 getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CTALayoutAttr ctaLayout) {
+                            gpu::CTAEncodingAttr ctaLayout) {
   auto *ctx = memType.getContext();
   bool prefer16x256 =
       triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");

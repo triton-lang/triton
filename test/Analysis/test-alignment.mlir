@@ -1089,3 +1089,18 @@ tt.func public @test_inductor_for() {
   }
   tt.return
 }
+
+// -----
+
+// Verify that if an operation is statically determined to be dead, we fall back
+// to assigning it a pessimistic value, rather than skipping it entirely.
+tt.func @dead_op_pessimistic() {
+  %c5 = arith.constant dense<5> : tensor<4xi32>
+  %c7 = arith.constant dense<7> : tensor<4xi32>
+  %false = arith.constant false
+  scf.if %false {
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+    %add = arith.addi %c5, %c7 : tensor<4xi32>
+  }
+  tt.return
+}
