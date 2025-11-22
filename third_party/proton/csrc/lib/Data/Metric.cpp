@@ -62,12 +62,14 @@ const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
 void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
+  void *globalScratchPtr = nullptr;
+  void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
-                          /*global_scratch_ptr=*/nullptr,
-                          /*profile_scratch_ptr=*/nullptr};
+                          globalScratchPtr,
+                          profileScratchPtr};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
@@ -90,12 +92,14 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
         }
       },
       scalarMetric);
+  void *globalScratchPtr = nullptr;
+  void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
-                          /*global_scratch_ptr=*/nullptr,
-                          /*profile_scratch_ptr=*/nullptr};
+                          globalScratchPtr,
+                          profileScratchPtr};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
