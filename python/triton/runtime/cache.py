@@ -7,7 +7,6 @@ import base64
 import hashlib
 import functools
 import sysconfig
-import subprocess
 
 from triton import __version__, knobs
 
@@ -297,31 +296,6 @@ def triton_key():
                 break
             libtriton_hash.update(chunk)
     contents.append(libtriton_hash.hexdigest())
-
-    # plugins
-    if "TRITON_PASS_PLUGIN_PATH" in os.environ:
-
-        def get_so_dependencies(lib_path):
-            result = subprocess.run(['ldd', lib_path], capture_output=True, text=True)
-            deps = []
-            for line in result.stdout.splitlines():
-                parts = line.split('=>')
-                if len(parts) == 2:
-                    dep_path = parts[1].strip().split(' ')[0]
-                    deps.append(dep_path)
-            return deps
-
-        def hash_file(path):
-            h = hashlib.sha256()
-            with open(path, "rb") as f:
-                while chunk := f.read(1024**2):
-                    h.update(chunk)
-            return h.hexdigest()
-
-        TRITON_PASS_PLUGIN_PATH = os.path.abspath(os.environ['TRITON_PASS_PLUGIN_PATH'])
-        all_paths = [TRITON_PASS_PLUGIN_PATH] + get_so_dependencies(TRITON_PASS_PLUGIN_PATH)
-        all_hashes = [hash_file(p) for p in sorted(all_paths)]
-        contents.append(hashlib.sha256("".join(all_hashes).encode()).hexdigest())
 
     # language
     language_path = os.path.join(TRITON_PATH, 'language')

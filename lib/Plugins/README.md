@@ -121,7 +121,12 @@ def get_key():
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
-def inspect_stages_hook(self, stages, options, language, capability):
+def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+    # If the hook is called with no arguments we assume were just after the key and hash and don't want to
+    # actually execute the pipeline yet.
+    # This no argument early return must be implemented.
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
 
     def make_ttir_wrapper(mod, metadata, opt, capability):
         mod = self.make_ttir(mod, metadata, opt, capability)
@@ -132,6 +137,8 @@ def inspect_stages_hook(self, stages, options, language, capability):
         return mod
 
     stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
+
+    return get_key(), get_hash()
 
 if __name__ == '__main__':
 
@@ -229,7 +236,9 @@ def get_key():
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
-def dump_stages_hook(self, stages, options, language, capability):
+def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+  if all(arg is None for arg in (stages, options, language, capability)):
+      return get_key(), get_hash()
     source_code = "# This is generated from Triton compiler.py"
     source_code = (
         source_code
@@ -242,8 +251,10 @@ def dump_stages_hook(self, stages, options, language, capability):
 
     with open("compiler_override.py", "w") as file:
         file.write(source_code)
-
-def override_stages(self, stages, options, language, capability):
+  return get_key(), get_hash()
+def override_stages(self=None, stages=None, options=None, language=None, capability=None):
+  if all(arg is None for arg in (stages, options, language, capability)):
+      return get_key(), get_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"
@@ -271,6 +282,7 @@ def override_stages(self, stages, options, language, capability):
         stages["ttir"] = make_lambda(module.make_ttir)
     if has_func(module, "make_ttgir"):
         stages["ttgir"] = make_lambda(module.make_ttgir)
+    return get_key(), get_hash()
 
 if __name__ == '__main__':
 

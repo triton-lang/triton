@@ -21,7 +21,7 @@ def get_hash():
 # will trigger a recompile.
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
-    # actaully execute the pipeline yet
+    # actually execute the pipeline yet
     if all(arg is None for arg in (stages, options, language, capability)):
         return get_key(), get_hash()
 
