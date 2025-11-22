@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritongpu-allocate-warp-groups --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s
 
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>

@@ -232,7 +232,6 @@ struct ConvertTritonAMDGPUToLLVM
                                                      targetInfo, commonBenefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, commonBenefit);
-
     AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,

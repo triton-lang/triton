@@ -1822,12 +1822,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 // -----
 
 // CHECK-LABEL: sum_reduction
-//       CHECK-DAG:   nvvm.redux.sync  add %{{.*}}, %[[M:[0-9]+]]
-//       CHECK-DAG:  %[[M]] = llvm.mlir.constant(-1 : i32) : i32
-//       CHECK-DAG:   nvvm.barrier0
-//       CHECK-DAG:   nvvm.shfl.sync bfly
-//       CHECK-DAG:   nvvm.shfl.sync bfly
-//       CHECK-DAG:   nvvm.barrier0
+//       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
+//       CHECK:   nvvm.barrier0
+//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:   nvvm.barrier0
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {

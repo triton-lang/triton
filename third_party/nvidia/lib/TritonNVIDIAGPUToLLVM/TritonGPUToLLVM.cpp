@@ -55,7 +55,11 @@ public:
     addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(
+        [](mlir::Operation *op) {
+          // We handle the warp ID op during NVGPUToLLVM.
+          return isa<triton::gpu::WarpIdOp>(op);
+        });
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -171,9 +175,6 @@ struct ConvertTritonGPUToLLVM
                                                         benefit);
     mlir::triton::populateInstrumentationToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
-
-    mlir::triton::populateWarpIdOpToLLVMPattern(typeConverter, patterns,
-                                                targetInfo, benefit);
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
