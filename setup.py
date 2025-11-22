@@ -200,11 +200,13 @@ def get_llvm_package_info():
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
+    system_suffix = ""
     if (env_system_suffix := os.environ.get("TRITON_LLVM_SYSTEM_SUFFIX", None)):
         system_suffix = env_system_suffix
     elif system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
+        vglibc = 0
         if arch == 'arm64' and is_linux_os('almalinux'):
             system_suffix = 'almalinux-arm64'
         elif arch == 'arm64':
@@ -212,18 +214,41 @@ def get_llvm_package_info():
         elif arch == 'x64':
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
             vglibc = vglibc[0] * 100 + vglibc[1]
-            if vglibc > 228:
-                # Ubuntu 24 LTS (v2.39)
-                # Ubuntu 22 LTS (v2.35)
-                # Ubuntu 20 LTS (v2.31)
-                system_suffix = "ubuntu-x64"
-            else:
-                # Manylinux_2.28 (v2.28)
-                # AlmaLinux 8 (v2.28)
-                system_suffix = "almalinux-x64"
-        else:
+
+            # NOTE: Update using `cmake/llvm-vglibc/update.sh` when new precompiled
+            # llvm builds are available
+            vglibc_dir = os.path.join(get_base_dir(), "cmake", "llvm-vglibc")
+
+            # Dynamically discover available system suffixes and
+            # read glibc version requirements by reading the folder
+            # Files should be named as <system-suffix>.txt (e.g., ubuntu-x64.txt)
+            configs_with_versions = []
+            if os.path.exists(vglibc_dir):
+                for filename in sorted(os.listdir(vglibc_dir)):
+                    if filename.endswith('.txt'):
+                        # Extract system suffix from filename (e.g., ubuntu-x64.txt -> ubuntu-x64)
+                        suffix = filename[:-4]
+                        config_path = os.path.join(vglibc_dir, filename)
+                        try:
+                            with open(config_path, 'r') as f:
+                                required_version = f.read().strip()
+                                required_parts = tuple(map(int, required_version.split('.')))
+                                required_vglibc = required_parts[0] * 100 + required_parts[1]
+                                configs_with_versions.append((suffix, required_vglibc))
+                        except (FileNotFoundError, ValueError, IndexError) as e:
+                            print(f"Warning: Could not read {filename}: {e}", file=sys.stderr)
+
+            # Sort by version (descending) to check highest version requirements first
+            configs_with_versions.sort(key=lambda x: x[1], reverse=True)
+
+            for suffix, required_vglibc in configs_with_versions:
+                if vglibc >= required_vglibc:
+                    system_suffix = suffix
+                    break
+
+        if len(system_suffix) == 0:
             print(
-                f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
+                f"LLVM pre-compiled image is not available for {arch} with glibc version {vglibc}. Proceeding with user-configured LLVM from source build."
             )
             return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     else:
