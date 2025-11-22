@@ -23,12 +23,12 @@ static void initProton(pybind11::module &&m) {
              return TensorMetric{reinterpret_cast<uint8_t *>(ptr), index};
            }),
            pybind11::arg("ptr"), pybind11::arg("index"))
+      .def_property_readonly("ptr",
+                             [](const TensorMetric &metric) {
+                               return reinterpret_cast<uintptr_t>(metric.ptr);
+                             })
       .def_property_readonly(
-          "ptr",
-          [](const TensorMetric &metric) {
-            return reinterpret_cast<uintptr_t>(metric.ptr);
-          })
-      .def_property_readonly("index", &TensorMetric::index);
+          "index", [](const TensorMetric &metric) { return metric.index; });
 
   m.attr("metric_int64_index") =
       pybind11::cast(variant_index_v<int64_t, MetricValueType>);
