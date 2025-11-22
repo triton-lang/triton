@@ -13,7 +13,7 @@ overriding the compiler.py pipeline entirely or inserting passes and custom ops 
 - Specialized per kernel passes (e.g. kernel/model specific warp specialization)
 
 Custom passes/ops are implemented as a shared library that is loaded by Triton at JIT compile/runtime. The plugins can be implement entirely out of tree or in the Triton source tree as
-long as the plugin is linked into the libtriton.so and the Triton include passes are used to build the plugin.
+long as the libtriton.so is linked to the plugin and the Triton include passes are used to build the plugin.
 
 ## Example 1: Developing a custom pass and running triton-opt to inspect the modified IR
 ``` bash
