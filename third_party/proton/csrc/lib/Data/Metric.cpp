@@ -68,8 +68,8 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
-                          globalScratchPtr,
-                          profileScratchPtr};
+                          reinterpret_cast<void *>(&globalScratchPtr),
+                          reinterpret_cast<void *>(&profileScratchPtr)};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
@@ -98,8 +98,8 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
-                          globalScratchPtr,
-                          profileScratchPtr};
+                          reinterpret_cast<void *>(&globalScratchPtr),
+                          reinterpret_cast<void *>(&profileScratchPtr)};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
                         nullptr);
 }
