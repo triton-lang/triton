@@ -87,7 +87,7 @@ Syntax:
 operation ::= `ttg.async_wait` ($asyncToken^)? attr-dict
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `MemWaitOpTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 

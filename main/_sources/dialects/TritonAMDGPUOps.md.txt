@@ -145,6 +145,8 @@ This operation waits until there are less than or equal to the given number
 of outstanding TDM operations, including both loads and stores. This is
 necessary to ensure that data is available in the LDS before it is used.
 
+Traits: `MemWaitOpTrait`
+
 Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
@@ -180,6 +182,8 @@ operation ::= `amdg.async_wait` ($asyncToken^)? attr-dict
 Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
 this op waits on the number of outstanding async instructions/intrinsics as required for the
 lowering to LLVM on the AMD backend.
+
+Traits: `MemWaitOpTrait`
 
 Interfaces: `InferTypeOpInterface`
 

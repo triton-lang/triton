@@ -436,6 +436,7 @@ operation does not support shared memory padding or swizzling.</p>
 <p>This operation waits until there are less than or equal to the given number
 of outstanding TDM operations, including both loads and stores. This is
 necessary to ensure that data is available in the LDS before it is used.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">MemWaitOpTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id5">
 <h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
@@ -485,6 +486,7 @@ necessary to ensure that data is available in the LDS before it is used.</p>
 <p>Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
 this op waits on the number of outstanding async instructions/intrinsics as required for the
 lowering to LLVM on the AMD backend.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">MemWaitOpTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id8">
 <h3>Attributes:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>

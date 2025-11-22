@@ -576,7 +576,7 @@ operation ::= `ttng.async_tma_store_wait` attr-dict
 Wait until all the read operations are done from the associated store operations.
 This is needed before the shared memory can be written to.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `MemWaitOpTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
