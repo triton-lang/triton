@@ -96,8 +96,8 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
-specializations = SpecializationModule(
-    "reduce",
+forward_specializations = SpecializationModule(
+    "reduce_forward",
     kernels=[("_reduce_forward", _reduce_forward)],
     closure_args={
         "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
@@ -217,8 +217,8 @@ def reduce_forward(
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else None
     scale_arg = scale if scale is not None else None
-    reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
-                                        postprocess_fn2=postprocess_fn2.specs)._reduce_forward
+    reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
+                                                postprocess_fn2=postprocess_fn2.specs)._reduce_forward
     reduce_kernel[grid](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
@@ -449,6 +449,15 @@ def reduce_backward(
 
 # ------------------------------------------------------------
 
+backward_specializations = SpecializationModule(
+    "reduce_backward",
+    kernels=[("_reduce_backward", _reduce_backward)],
+    closure_args={
+        "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
+        "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+    },
+)
+
 
 class _ReduceAutograd(torch.autograd.Function):
 
@@ -527,16 +536,16 @@ def reduce(
     scale: Optional[torch.Tensor] = None,
     x_mxscale: Optional[torch.Tensor] = None,
     x_flex: Optional[InFlexData] = InFlexData(),
-    c: Optional[torch.Tensor] = None,
-    c_dtype: Optional[torch.dtype] = None,
-    c_flex: Optional[OutFlexData] = OutFlexData(),
-    c_flex_saturate_inf: bool = False,
-    c_has_mx: Optional[bool] = None,
+    y: Optional[torch.Tensor] = None,
+    y_dtype: Optional[torch.dtype] = None,
+    y_flex: Optional[OutFlexData] = OutFlexData(),
+    y_flex_saturate_inf: bool = False,
+    y_has_mx: Optional[bool] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
 ):
-    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, c_dtype, c_flex,  #
-                                 c_flex_saturate_inf, c_has_mx, c, postprocess_fn1, postprocess_fn2)
+    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, y_dtype, y_flex,  #
+                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2)
 
 
 # ------------------------------------------------------------
