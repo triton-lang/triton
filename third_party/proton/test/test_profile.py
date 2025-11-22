@@ -103,11 +103,13 @@ def test_cudagraph(tmp_path: pathlib.Path):
             with proton.scope(f"iter_{i}"):
                 fn()
 
-    proton.enter_scope("test")
-    g.replay()
+    with proton.scope("test0"):
+        g.replay()
+
+    with proton.scope("test1"):
+        g.replay()
+
     g.reset()
-    torch.cuda.synchronize()
-    proton.exit_scope()
     proton.finalize()
 
     with temp_file.open() as f:
