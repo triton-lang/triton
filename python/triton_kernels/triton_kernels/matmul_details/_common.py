@@ -53,100 +53,80 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(
-    tile_id,
-    num_tiles,
-    unpadded_m,
-    grid_n,
-    M,
-    K,
-    ExptData,
-    ExptHist,
-    ExptOffs,
-    ExptTileOffs,
-    EXPT_IS_INNER: tl.constexpr,
-    X_IS_PADDED: tl.constexpr,
-    W_IS_PADDED: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    PACKED_BLOCK_K_W: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
-    XCD_SWIZZLE: tl.constexpr,
-    SWIZZLE_MX_VALUE: tl.constexpr,
-):
-    # unpack and swizzle program ids
-    pid_emnk = tile_id
+def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr,
+                 SPLIT_K: tl.constexpr):
+    pid_zmnk = block_id
     if XCD_SWIZZLE != 1:
-        pid_emnk = xcd_swizzle(pid_emnk, num_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
+        pid_zmnk = xcd_swizzle(pid_zmnk, num_blocks, XCD_SWIZZLE)
+    pid_z = pid_zmnk // (grid_m * grid_n * SPLIT_K)
+    pid_mnk = pid_zmnk % (grid_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
         pid_k = pid_mnk % SPLIT_K
         pid_mn = pid_mnk // SPLIT_K
     else:
         pid_k: tl.constexpr = 0
         pid_mn = pid_mnk
-    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
+    return pid_z, pid_m, pid_n, pid_k
 
-    # unpack expert data
-    if EXPT_IS_INNER:
-        # pid_e indicates expert ID: experts are laid sequentially along the K dimension
+
+@triton.jit
+def compute_offsets(
+    pid_z,
+    pid_m,
+    pid_k,
+    XBlockSchedule,
+    XSliceOffs,
+    X_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
+    WBlockSchedule,
+    WSliceOffs,
+    W_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
+    RAGGED_DIMENSION: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K_X: tl.constexpr,
+    PACKED_BLOCK_K_W: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+):
+    if RAGGED_DIMENSION == "K":
+        # pid_z indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
-        tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
+        tl.static_assert(X_SLICE_SIZE_DIVISIBILITY is not None or \
+                         W_SLICE_SIZE_DIVISIBILITY is not None,
+                         "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
-        tl.static_assert(M is not None)
-        expt_id, pid_z, pid_z_out, start_m, block_id, eM = 0, 0, pid_e, 0, pid_m, M
-        k_tiles = tl.cdiv(tl.load(ExptHist + pid_e), BLOCK_K)
-        padded_start_off_raw = tl.load(ExptTileOffs + pid_e)
-        padded_start_off = padded_start_off_raw * BLOCK_K
-        unpadded_start_off = tl.load(ExptOffs + pid_e)
-        off_k_x = padded_start_off if X_IS_PADDED else unpadded_start_off
-        # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
-        if W_IS_PADDED:
-            off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
-            K_W = tl.load(ExptTileOffs + pid_e + 1) * PACKED_BLOCK_K_W
+        off_x_k = tl.load(XSliceOffs + pid_z)
+        off_w_k = tl.load(WSliceOffs + pid_z)
+        if PACKED_BLOCK_K_W >= BLOCK_K_X:
+            off_w_k = off_w_k * (PACKED_BLOCK_K_W // BLOCK_K_X)
         else:
-            off_k_w = unpadded_start_off
-            K_W = tl.load(ExptOffs + pid_e + 1)
+            off_w_k = off_w_k // (BLOCK_K_X // PACKED_BLOCK_K_W)
+        off_x_m = BLOCK_M * pid_m
+        off_w_z, off_x_z, off_x_slice = 0, 0, 0
+        off_y_z = pid_z
+    elif RAGGED_DIMENSION == "M":
+        off_x_k = pid_k * BLOCK_K_X
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        block_schedule = tl.load(XBlockSchedule + pid_m)
+        off_w_z = block_schedule & 0x0000FFFF
+        block_id = block_schedule >> 16
+        off_x_slice = tl.load(XSliceOffs + off_w_z)
+        off_x_z, off_y_z = 0, 0
+        off_x_m = BLOCK_M * block_id
     else:
-        off_k_x = pid_k * BLOCK_K
-        off_k_w = pid_k * PACKED_BLOCK_K_W
-        if PACKED_BLOCK_K_W >= BLOCK_K:
-            K_W = K * (PACKED_BLOCK_K_W // BLOCK_K)
-        else:
-            K_W = K // (BLOCK_K // PACKED_BLOCK_K_W)
-        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-            K_W = tl.cdiv(K_W, 128) * 128
-        k_tiles = tl.cdiv(K - off_k_x, BLOCK_K * SPLIT_K)
-        if ExptData is None:
-            tl.static_assert(M is not None)
-            expt_id, pid_z, pid_z_out, start_m, block_id, eM = pid_e, pid_e, pid_e, 0, pid_m, M
-        else:
-            tl.static_assert(M is None)
-            expt_data = tl.load(ExptData + pid_m)
-            expt_id = expt_data & 0x0000FFFF
-            block_id = expt_data >> 16
-            eM = tl.load(ExptHist + expt_id)
-            start_m = tl.load(ExptOffs + expt_id)
-            pid_z, pid_z_out = 0, 0
-
-    off_m = BLOCK_M * block_id
-
+        tl.static_assert(RAGGED_DIMENSION is None)
+        off_x_k = pid_k * BLOCK_K_X
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        off_w_z, off_x_z, off_y_z, off_x_slice = pid_z, pid_z, pid_z, 0
+        off_x_m = BLOCK_M * pid_m
     return (
-        expt_id,
-        pid_z,
-        pid_z_out,
-        start_m,
-        eM,
-        off_m,
-        pid_n,
-        k_tiles,
-        pid_k,
-        off_k_x,
-        off_k_w,
-        K_W,
+        off_w_z,
+        off_x_z,
+        off_y_z,
+        off_x_slice,
+        off_x_m,
+        off_x_k,
+        off_w_k,
     )
 
 

@@ -10,12 +10,11 @@ from typing import Tuple, Optional
 import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.reduce import reduce
-from triton_kernels.matmul_ogs import RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.topk import topk
-from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
+from triton_kernels.tensor import RaggedTensorMetadata, make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment, symm_mem_pool
 
 from bench_utils import quantize_weight
@@ -40,7 +39,7 @@ def create_expt_assignment(EP: int, n_expts_tot: int, device: torch.device) -> O
     return make_expt_assignment(EP, n_expts_tot, expt_dict, device)
 
 
-def initialize_matmul_ogs(
+def initialize_matmul(
     batch: int,
     dim1: int,
     dim2: int,
@@ -52,7 +51,7 @@ def initialize_matmul_ogs(
         return
     world_size = dist.get_world_size()
     device = torch.cuda.current_device()
-    symm_mem_pool.initialize_matmul_ogs(
+    symm_mem_pool.initialize_matmul(
         n_tokens_global=batch,
         d_input=dim1,
         d_model=dim2,
@@ -146,8 +145,7 @@ def routing(
     TP: int = 1,
     expt_assignment: Optional[ExptAssignment] = None,
     mode: Optional[str] = None,
-) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
-    n_expts_tot = logits.shape[-1]
+) -> Tuple[torch.Tensor, RaggedTensorMetadata, torch.Tensor, torch.Tensor, Optional[ReduceScatterMetadata]]:
     if _is_distributed_launch() and mode:
         if mode == "ep_sharding":
             if not expt_assignment:
@@ -170,15 +168,13 @@ def routing(
             logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
             x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
-            gate_scal = logits_global.vals.flatten()[combine_indx]
-            rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot // EP, n_expts_act, logits_local_metadata)
             reduce_scatter_metadata = ReduceScatterMetadata(
                 mode=mode,
                 active_indx=active_indx,
                 dispatch_indx=dispatch_indx,
                 combine_indx=combine_indx,
             )
-            return x, rdata, None, None, reduce_scatter_metadata
+            return x, logits_local_metadata, None, None, reduce_scatter_metadata
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
@@ -186,13 +182,10 @@ def routing(
         logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
         dispatch_indx = logits.mask_metadata.row_sorted_indx
         combine_indx = logits.mask_metadata.col_sorted_indx
-        ragged_batch_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-        gate_scal = logits.vals.flatten()[combine_indx]
-        routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act,
-                                   ragged_batch_metadata)
-        gather_indx = GatherIndx(combine_indx, dispatch_indx)
-        scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
-        return x, routing_data, gather_indx, scatter_indx, None
+        ragged_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
+        gather_indx = combine_indx // n_expts_act
+        scatter_indx = combine_indx
+        return x, ragged_metadata, gather_indx, scatter_indx, None
 
 
 def gather_ep(rank, world_size, param, TP, EP):
@@ -276,14 +269,14 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         w1_full = w2_full = w1_flex_full = w2_flex_full = w1_scale_full = w2_scale_full = None
 
     # precision configs
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), weight_scale=wg_scale)
+    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
                           (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), weight_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), weight_scale=w2_scale)
+    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
+    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
     if rank == 0:
-        pc1_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex_full), weight_scale=w1_scale_full)
-        pc2_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex_full), weight_scale=w2_scale_full)
+        pc1_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex_full), b_mx_scale=w1_scale_full)
+        pc2_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex_full), b_mx_scale=w2_scale_full)
     else:
         pc1_full = pc2_full = None
 
@@ -296,7 +289,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
     x0 = all_gather(xd, dim=0)
     expt_assignment = create_expt_assignment(EP, n_expts_tot, torch.device(dev))
-    symm_mem_pool.initialize_matmul_ogs(
+    symm_mem_pool.initialize_matmul(
         n_tokens_global=batch,
         d_input=dim1,
         d_model=dim2,
@@ -312,25 +305,25 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     def single(x):
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:
-            logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+            logits = matmul(xg, wg, bg, precision_config=pcg)
             x, rdata, gi, si, _ = routing(x, logits, n_expts_act)
         else:
             rdata = gi = si = None
-        x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)
-        return matmul_ogs(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
+        x = matmul(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)
+        return matmul(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
 
     # distributed pass
     def distributed(x):
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:  # sparse
-            logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+            logits = matmul(xg, wg, bg, precision_config=pcg)
             x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment,
                                                  mode="ep_sharding")
         else:  # dense
             x = all_gather(x, dim=0)
             rdata = gi = si = metadata = None
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
-        x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
+        x = matmul(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
+        x = matmul(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
         x = reduce_scatter(x, n_expts_act, metadata=metadata, expt_assignment=expt_assignment)
         # gather the result from all GPUs, just for verification
         return all_gather(x, dim=0)

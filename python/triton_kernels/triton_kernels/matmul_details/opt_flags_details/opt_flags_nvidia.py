@@ -8,7 +8,7 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
     if routing_data is not None and batch_size == 1:
-        grid_m = routing_data.n_blocks(m, block_m)
+        grid_m = routing_data.n_blocks(routing_data.n_slices, m, block_m)
     else:
         grid_m = triton.cdiv(m, block_m)
     grid_n = (n + block_n - 1) // block_n
@@ -17,10 +17,10 @@ def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
 
 def compute_block_n(n: int, arch, precision_config):
     # block_n:
-    layout = get_layout(precision_config.weight_scale)
+    layout = get_layout(precision_config.b_mx_scale)
     if isinstance(layout, HopperMXScaleLayout):
         if layout.num_warps in [4, 8]:
-            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_ogs_details/_matmul_ogs.py#L265
+            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
             block_n = 2 * layout.num_warps * 2 * 8
             return block_n, block_n
     elif precision_config.max_num_imprecise_acc is None and n > 128:
@@ -41,7 +41,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     elif k is not None:
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
-    has_mx_weight_scale = precision_config is not None and precision_config.weight_scale is not None
+    has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
         block_k = min(block_k, 128)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
@@ -62,7 +62,7 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
 
 
 def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config):
-    layout = get_layout(precision_config.weight_scale)
+    layout = get_layout(precision_config.b_mx_scale)
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
     return max(block_m * block_n // 4096, 4 if is_persistent else 1)
@@ -90,7 +90,7 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and getattr(precision_config, "weight_scale", None) is not None:
+    if has_native_mxfp and getattr(precision_config, "b_mx_scale", None) is not None:
         if rhs_dtype == FP4:
             # 4-bit e2m1 weights are padded 2x
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
@@ -114,7 +114,7 @@ def compute_num_stages(
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
         if x_transpose:
             smem_capacity -= block_m * block_k * lhs_dtype.itemsize
-        if precision_config.weight_scale is not None:
+        if precision_config.b_mx_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
     elif has_native_mxfp:

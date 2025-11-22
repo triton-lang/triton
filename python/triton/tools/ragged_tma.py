@@ -12,7 +12,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
     of potentially unequal size.
 
     The load_ragged and store_ragged device functions can be used to read
-    and write from subarrays T[batch_offset : batch_offset + batch_size]
+    and write from subarrays T[slice_off : slice_off + slice_size]
     with hardware bounds-checking preventing any sort of leakage outside
     the subarray.
     """
@@ -46,22 +46,22 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
 
 
 @triton.jit
-def to_ragged_indices(batch_offset, batch_size, row):
+def to_ragged_indices(slice_off, slice_size, row):
     """
     Helper function for load_ragged and store_ragged.
     """
 
     billion = 0x40000000  # == 2**30
-    x = billion - batch_size + row
-    y = batch_offset + batch_size
+    x = billion - slice_size + row
+    y = slice_off + slice_size
 
     return billion, y, x
 
 
 @triton.jit
-def load_ragged(TMA, batch_offset, batch_size, coords, ragged_dim: tl.constexpr = 0):
+def load_ragged(TMA, slice_off, slice_size, coords, ragged_dim: tl.constexpr = 0):
     """
-    Read from a subarray T[batch_offset : batch_offset + batch_size] with
+    Read from a subarray T[slice_off : slice_off + slice_size] with
     hardware bounds-checking, where reading outside the subarray gives zeros.
 
     Coords should be an appropriately-sized list of integers, just like in
@@ -70,16 +70,16 @@ def load_ragged(TMA, batch_offset, batch_size, coords, ragged_dim: tl.constexpr 
 
     tl.static_assert(len(TMA.shape) == len(coords) + 2, "TMA must be a read-write ragged descriptor")
 
-    c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
+    c0, c1, c2 = to_ragged_indices(slice_off, slice_size, coords[ragged_dim])
     data = TMA.load([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:])
     data = tl.reshape(data, data.shape[2:])
     return data
 
 
 @triton.jit
-def store_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.constexpr = 0):
+def store_ragged(TMA, slice_off, slice_size, coords, data, ragged_dim: tl.constexpr = 0):
     """
-    Write to a subarray T[batch_offset : batch_offset + batch_size] with
+    Write to a subarray T[slice_off : slice_off + slice_size] with
     hardware bounds-checking, where writes outside the subarray are masked
     correctly.
 
@@ -87,15 +87,15 @@ def store_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.con
     TMA.store().
     """
 
-    c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
+    c0, c1, c2 = to_ragged_indices(slice_off, slice_size, coords[ragged_dim])
     data = tl.reshape(data, [1, 1] + data.shape)
     TMA.store([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)
 
 
 @triton.jit
-def atomic_add_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.constexpr = 0):
+def atomic_add_ragged(TMA, slice_off, slice_size, coords, data, ragged_dim: tl.constexpr = 0):
     """
-    Atomic add into a subarray T[batch_offset : batch_offset + batch_size] with
+    Atomic add into a subarray T[slice_off : slice_off + slice_size] with
     hardware bounds-checking, where adds outside the subarray are masked
     correctly.
 
@@ -103,6 +103,6 @@ def atomic_add_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: t
     TMA.atomic_add().
     """
 
-    c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
+    c0, c1, c2 = to_ragged_indices(slice_off, slice_size, coords[ragged_dim])
     data = tl.reshape(data, [1, 1] + data.shape)
     TMA.atomic_add([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)

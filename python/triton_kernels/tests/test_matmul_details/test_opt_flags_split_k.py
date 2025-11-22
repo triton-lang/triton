@@ -5,15 +5,15 @@ import types
 
 import torch
 
-import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
+import triton_kernels.matmul_details.opt_flags as opt_flags
 
 
 class _DummyPrecisionConfig:
     def __init__(self):
-        self.weight_scale = None
+        self.b_mx_scale = None
         self.max_num_imprecise_acc = None
-        self.act_scale = None
-        self.out_scale = None
+        self.a_mx_scale = None
+        self.c_mx_scale = None
         self.enforce_bitwise_invariance = False
 
 

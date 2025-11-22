@@ -45,6 +45,10 @@ class RaggedTensorMetadata:
     # NOTE 2: because the size of `block_schedule_data[k]` is data-dependent, we pad it with -1s
     # up to an user-provided upper bound
     block_schedule_data: torch.Tensor
+    # expected slice size (for heuristics)
+    expected_slice_size: int | None = None
+    # divisibility hint for values in `slice_sizes`
+    slice_sizes_divisibility: int = None
 
     def __post_init__(self):
         assert self.block_offs_data.shape[0] == len(RaggedTensorMetadata.block_sizes())
@@ -56,6 +60,10 @@ class RaggedTensorMetadata:
         if self.slice_offs is not None:
             assert self.slice_offs.dtype == torch.int32
 
+    @property
+    def n_slices(self):
+        return self.slice_sizes.shape[0]
+
     def block_offs(self, block_size):
         return self.block_offs_data[RaggedTensorMetadata.block_sizes().index(block_size)]
 
@@ -63,10 +71,14 @@ class RaggedTensorMetadata:
         return self.block_schedule_data[RaggedTensorMetadata.block_sizes().index(block_size)]
 
     @staticmethod
-    def max_n_tiles(n_slices, n_total_rows):
+    def n_blocks(n_slices, n_total_rows, block_size):
         if n_total_rows <= n_slices:
             return n_total_rows
-        return n_slices - 1 - ((n_slices - n_total_rows - 1) // min(RaggedTensorMetadata.block_sizes()))
+        return n_slices - 1 - ((n_slices - n_total_rows - 1) // block_size)
+
+    @staticmethod
+    def max_n_blocks(n_slices, n_total_rows):
+        return RaggedTensorMetadata.n_blocks(n_slices, n_total_rows, min(RaggedTensorMetadata.block_sizes()))
 
     @staticmethod
     def block_sizes_log2():
@@ -75,6 +87,11 @@ class RaggedTensorMetadata:
     @staticmethod
     def block_sizes():
         return [2**x for x in RaggedTensorMetadata.block_sizes_log2()]
+
+
+def ragged_metadata_fields(metadata, block_size):
+    return (metadata.slice_sizes, metadata.slice_offs, metadata.block_offs(block_size),
+            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility or 1)
 
 
 # utilities
@@ -171,7 +188,7 @@ def make_ragged_tensor_metadata(slice_sizes, n_total_rows):
     MEMSET_BLOCK = 512
     dtype = torch.int32
     device = slice_sizes.device
-    max_n_blocks = RaggedTensorMetadata.max_n_tiles(n_slices, n_total_rows)
+    max_n_blocks = RaggedTensorMetadata.max_n_blocks(n_slices, n_total_rows)
     slice_offs_combined, _ = empty_aligned((block_size_num + 1, n_slices + 1), dtype, device, MEMSET_BLOCK)
     block_schedule_data, n_memset_elts = empty_aligned((block_size_num, max_n_blocks), dtype, device, MEMSET_BLOCK)
     slice_offs, block_offs_data = slice_offs_combined[0], slice_offs_combined[1:]
@@ -200,7 +217,7 @@ def make_ragged_tensor_metadata(slice_sizes, n_total_rows):
 def make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows):
     assert slice_sizes.ndim == 1
     n_slices = slice_sizes.shape[0]
-    max_n_blocks = RaggedTensorMetadata.max_n_tiles(n_slices, n_total_rows)
+    max_n_blocks = RaggedTensorMetadata.max_n_blocks(n_slices, n_total_rows)
     # offset for each experts
     device = slice_sizes.device
     slice_offs = torch.cumsum(slice_sizes, dim=0)
@@ -226,11 +243,11 @@ def make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows):
     block_offs = dict()
     block_pid_map = dict()
     for block_size in RaggedTensorMetadata.block_sizes():
-        n_tiles = (slice_sizes + block_size - 1) // block_size
-        block = torch.cumsum(n_tiles, dim=0)
+        n_blocks = (slice_sizes + block_size - 1) // block_size
+        block = torch.cumsum(n_blocks, dim=0)
         block = torch.cat((torch.zeros(1, device=device), block)).int()
         block_offs[block_size] = block
-        block_pid_map[block_size] = _build_schedule(block, n_tiles)
+        block_pid_map[block_size] = _build_schedule(block, n_blocks)
     block_offs = torch.stack(list(block_offs.values()))
     block_pid_map = torch.stack(list(block_pid_map.values()))
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs, block_pid_map)
