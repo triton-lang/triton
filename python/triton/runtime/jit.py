@@ -712,11 +712,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines
         if knobs.runtime.add_stages_inspection_hook is not None:
-            get_hash_fn = getattr(inspect.getmodule(knobs.runtime.add_stages_inspection_hook), "get_hash", None)
-            if callable(get_hash_fn):
-                inspect_stages_hash = get_hash_fn()
-            else:
-                raise RuntimeError("A get_hash function must be implemented in the add_stages_inspection_hook file")
+            inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
             specialization.append(f'("custom_pipeline", {inspect_stages_hash})')
 
         key = compute_cache_key(kernel_key_cache, specialization, options)
