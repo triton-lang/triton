@@ -62,7 +62,6 @@ const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
 
 void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                          void *kernel, void *stream) {
-  std::lock_guard<std::mutex> lock(bufferMutex);
   auto &buffer = getOrCreateBuffer();
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
@@ -74,7 +73,6 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
 
 void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                          void *kernel, void *stream) {
-  std::lock_guard<std::mutex> lock(bufferMutex);
   auto &buffer = getOrCreateBuffer();
   uint64_t metricBits = std::visit(
       [](auto &&value) -> uint64_t {
@@ -111,6 +109,7 @@ void MetricBuffer::synchronize(DeviceBuffer &buffer) {
 }
 
 MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
+  std::lock_guard<std::mutex> lock(bufferMutex);
   auto device = runtime->getDevice();
   if (deviceBuffers.find(device) == deviceBuffers.end()) {
     deviceBuffers[device] = DeviceBuffer{};
