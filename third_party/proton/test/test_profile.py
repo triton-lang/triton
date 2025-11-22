@@ -593,7 +593,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-def test_tensor_metric_cudagraph(tmp_path: pathlib.Path):
+def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -601,7 +601,7 @@ def test_tensor_metric_cudagraph(tmp_path: pathlib.Path):
         x = args["x"]
         return {"name": "foo_test", "bytes": x.numel() * x.element_size()}
 
-    @triton.jit
+    @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 
@@ -611,7 +611,7 @@ def test_tensor_metric_cudagraph(tmp_path: pathlib.Path):
         c = a + b
         foo[(1, )](a, b, c)
 
-    temp_file = tmp_path / "test_tensor_metric_cudagraph.hatchet"
+    temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     # warmup
