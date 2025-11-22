@@ -858,6 +858,46 @@ LogicalResult TensormapCreateOp::verify() {
   return success();
 }
 
+// -- TensormapUpdateOp --
+LogicalResult TensormapUpdateOp::verify() {
+  auto hasAddress = (getGlobalAddress() != nullptr);
+  auto hasDim = !getGlobalDim().empty();
+  auto hasStride = !getGlobalStride().empty();
+  if (!hasAddress && !hasDim && !hasStride) {
+    return emitError("Must update at least one descriptor field");
+  }
+  if (hasStride && !hasDim) {
+    return emitError("Cannot update global stride without dim specified");
+  }
+  if (hasDim && hasStride) {
+    if (getGlobalStride().size() + 1 != getGlobalDim().size()) {
+      return emitError("Rank mismatch for global stride. Got ")
+        << getGlobalStride().size() << " but expected "
+        << getGlobalDim().size() - 1;
+    }
+  }
+
+  // Verify that the descriptor pointer comes from get_descriptor_ptr
+  // of a descriptor created in-kernel, not passed as a parameter.
+  // (This check only applies when using the Gluon API path, via
+  // get_descriptor_ptr.  Direct MLIR tests that bypass this are
+  // allowed for testing the lowering.)
+  auto descPtr = getDescPtr();
+  auto getDescPtrOp = descPtr.getDefiningOp<GetDescriptorPtrOp>();
+  if (getDescPtrOp) {
+    auto desc = getDescPtrOp.getDesc();
+    auto definingOp = desc.getDefiningOp();
+    if (!definingOp) {
+      return emitError("Descriptor must be created within the kernel using make_tensor_descriptor.");
+    }
+    if (!isa<triton::MakeTensorDescOp, ReinterpretTensorDescOp>(definingOp)) {
+      return emitError("Descriptor must be created within the kernel using make_tensor_descriptor.");
+    }
+  }
+
+  return success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir
