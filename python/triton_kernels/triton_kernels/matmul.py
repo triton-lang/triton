@@ -290,12 +290,12 @@ def matmul(a, b, bias,
         a.numel() > 0 and a.storage.is_tma_compliant() and
         b.numel() > 0 and b.storage.is_tma_compliant() and
         (b_scale is None or b_scale.storage.is_tma_compliant()) and
-        (not is_a_ragged or a.stride(-1) == 1) and
+        (ragged_dimension != "M" or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (c is None or c.stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (not is_b_ragged or b.stride(-1)==1 or b_ragged_metadata.slice_sizes_divisibility is not None)
+        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
@@ -401,7 +401,7 @@ def matmul(a, b, bias,
         c_acc_strides = (None, None, None)
 
     a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
-    a_tma_mode = None if not a_has_tma else "ragged" if is_a_ragged and not has_gather_tma else "dense"
+    a_tma_mode = None if not a_has_tma else "ragged" if ragged_dimension == "M" and not has_gather_tma else "dense"
     a_tensor_or_tma = a_storage.make_tma(a_tma_block_size, a_tma_mode) if a_has_tma else a_storage.data
     # create tma descriptor for y
     c_has_tma = (
