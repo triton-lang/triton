@@ -36,7 +36,7 @@ def swiglu_launch_metadata(grid, kernel, args):
 
 
 @triton.jit
-def compute_swiglu(gelu, linear, scale, alpha, limit):
+def compute_swiglu(gelu, linear, scale, alpha, limit, add_bias):
     gelu = gelu.to(tl.float32) * scale
     if limit is not None:
         gelu = clip(gelu, limit, clip_lower=False)
@@ -44,19 +44,28 @@ def compute_swiglu(gelu, linear, scale, alpha, limit):
     if limit is not None:
         linear = clip(linear, limit, clip_lower=True)
     s = gelu / (1 + tl.exp(-alpha * gelu))
-    return tl.fma(s, linear, s)  # (s * (linear + 1))
+    if add_bias:
+        return tl.fma(s, linear, s)  # (s * (linear + 1))
+    else:
+        return s * linear
 
 
 @triton.jit(repr=lambda _: "_swiglu")
-def _swiglu_fn(input, alpha, limit):
+def _swiglu_fn(input, alpha, limit, add_bias=True):
     gelu, linear = tl.split(tl.reshape(input, (input.shape[0], input.shape[1] // 2, 2)))
-    return compute_swiglu(gelu, linear, 1.0, alpha, limit)
+    return compute_swiglu(gelu, linear, 1.0, alpha, limit, add_bias)
+
+
+@triton.jit(repr=lambda _: "_standard_swiglu")
+def _standard_swiglu_fn(input):
+    gelu, linear = tl.split(tl.reshape(input, (input.shape[0], input.shape[1] // 2, 2)))
+    return compute_swiglu(gelu, linear, 1.0, 1.0, None, False)
 
 
 @triton.jit(repr=swiglu_repr, launch_metadata=swiglu_launch_metadata)
 def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, alpha, M, N, stride_am, stride_an,
-            stride_outm, stride_outn, limit: tl.constexpr, NTokens, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-            EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS, flexpoint_saturate_inf: tl.constexpr):
+            stride_outm, stride_outn, limit: tl.constexpr, add_bias: tl.constexpr, NTokens, BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr, EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS, flexpoint_saturate_inf: tl.constexpr):
     if NTokens is not None:
         M = tl.load(NTokens)
         M_BLOCKS = (M + BLOCK_M - 1) // BLOCK_M
@@ -88,7 +97,7 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
                 packed_mask = mask_m[:, None] & packed_mask_n[None, :]
                 a_packed = tl.load(A + packed_offs, mask=packed_mask, other=0.)
         a_gelu, a_linear = tl.split(tl.reshape(a_packed, (BLOCK_M, BLOCK_N, 2)))
-        out = compute_swiglu(a_gelu, a_linear, a_scale, alpha, limit)
+        out = compute_swiglu(a_gelu, a_linear, a_scale, alpha, limit, add_bias)
         # update flexpoint stats and divide by scale
         # we don't need masking because of the `other` when loading `A`
         if OutActualScale is not None:
