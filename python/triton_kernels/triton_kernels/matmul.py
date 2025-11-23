@@ -310,17 +310,12 @@ def matmul(a, b, bias,
     block_k = None
     if ragged_dimension == "K":
         block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
-        # TODO: shouldn't be necessary ?
-        if torch.cuda.get_device_capability()[0] <= 9 and not can_use_tma:
-            block_k = min(64, block_k)
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
     )
-    if out_dtype.itemsize == 1:
-        print(block_k, opt_flags)
     if ragged_dimension == "K":
         a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
