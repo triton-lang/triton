@@ -316,6 +316,10 @@ def matmul(a, b, bias,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
     )
+    # there seems to be a bug on A100
+    # pytest -vs test_matmul.py::test_op[False-False-False-False-pad_b-16-768-512-1024-ragged-float16-float16-10-1-False-None-False-False-False-True-None]
+    if ragged_dimension == "K" and torch.cuda.get_device_capability()[0] < 9:
+        opt_flags.num_stages = 1
     if ragged_dimension == "K":
         a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
