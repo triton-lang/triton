@@ -190,11 +190,17 @@ def _matmul(
             RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
         )
+    if X_SLICE_SIZES_DIVISIBILITY is not None:
+        off_k_x = off_k_x // X_SLICE_SIZES_DIVISIBILITY * X_SLICE_SIZES_DIVISIBILITY
+    if W_SLICE_SIZES_DIVISIBILITY is not None:
+        off_k_w = off_k_w // W_SLICE_SIZES_DIVISIBILITY * W_SLICE_SIZES_DIVISIBILITY
+
 
     if RAGGED_DIMENSION == "M":
         eM = tl.multiple_of(tl.load(XSliceSizes + expt_id), X_SLICE_SIZES_DIVISIBILITY)
     else:
         eM = M
+
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
@@ -206,7 +212,6 @@ def _matmul(
     else:
         K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = K
-
 
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
