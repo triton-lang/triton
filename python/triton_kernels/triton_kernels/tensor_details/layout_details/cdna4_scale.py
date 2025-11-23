@@ -1,3 +1,5 @@
+import math
+import torch
 from dataclasses import dataclass
 import triton
 import triton.language as tl
@@ -12,24 +14,31 @@ class CDNA4MXScaleLayout(Layout):
 
     def __init__(self, shape) -> None:
         super().__init__(shape)
+        (
+            *self.leading_shape,
+            self.K_SCALE,
+            self.N,
+        ) = shape
+        self.B = math.prod(self.leading_shape)
+        self.ALIGN_K_SCALE = 8
+        self.ALIGN_N = 32
+        self.K_SCALE_pad = math.ceil(self.K_SCALE / self.ALIGN_K_SCALE) * self.ALIGN_K_SCALE
+        self.N_pad = math.ceil(self.N / self.ALIGN_N) * self.ALIGN_N
 
     def swizzle_data(self, data):
-        block_shape = data.shape
-        SCALE_K = block_shape[-2]
-        N = block_shape[-1]
+        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
-        data = data.view(-1, N // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, SCALE_K // 8, 2, 4, 1)
+        data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()
-        if len(block_shape) == 3:
-            E = block_shape[0]
-            data = data.reshape(E, N // 32, SCALE_K * 32)
-        else:
-            assert len(block_shape) == 2
-            data = data.reshape(N // 32, SCALE_K * 32)
+        data = data.reshape(self.B, self.N_pad // 32, self.K_SCALE_pad * 32)
         return data.transpose(-1, -2)
 
     def unswizzle_data(self, data):
-        raise NotImplementedError()
+        data = data.transpose(-1, -2)
+        data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, self.K_SCALE_pad // 8, 4, 16, 2, 2, 1)
+        data = data.permute(0, 1, 6, 4, 2, 5, 3, 7)
+        data = data.reshape(*self.leading_shape, self.N_pad, self.K_SCALE_pad)
+        return data.transpose(-1, -2)[..., :self.K_SCALE, :self.N]
 
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]

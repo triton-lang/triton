@@ -376,8 +376,47 @@ void init_gluon_ir(py::module &&m) {
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();
              auto linearLayout = ttg::toLinearLayout(shape, layout);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
-             return layoutToGluon(attr);
+
+             if (isa<ttg::DistributedEncodingTrait>(layout)) {
+               auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
+               return layoutToGluon(attr);
+             }
+             if (isa<ttg::SharedEncodingTrait>(layout)) {
+               auto alignment =
+                   cast<ttg::SharedEncodingTrait>(layout).getAlignment();
+               auto attr = ttg::SharedLinearEncodingAttr::get(ctx, linearLayout,
+                                                              alignment);
+               return layoutToGluon(attr);
+             }
+
+             // TensorMemory encodings: keep the LinearLayout but wrap as
+             // print-only Python object carrying row/col bases -> dim0/dim1.
+             auto inNamesRange = linearLayout.getInDimNames();
+             auto inNames = llvm::to_vector(inNamesRange);
+             bool isTmemLayout =
+                 (inNames.size() == 2 && inNames[0].str() == "row" &&
+                  inNames[1].str() == "col");
+             if (!isTmemLayout)
+               throw std::invalid_argument(
+                   "Unsupported layout in to_linear_layout");
+
+             // Build Py _TensorMemoryLinearLayout(row_bases, col_bases, shape,
+             // repr)
+             py::object tmemCls =
+                 py::module::import(
+                     "triton.experimental.gluon.language.nvidia.blackwell")
+                     .attr("_TensorMemoryLinearLayout");
+             auto bases = linearLayout.getBases();
+             auto rowBases = bases[mlir::StringAttr::get(ctx, "row")];
+             auto colBases = bases[mlir::StringAttr::get(ctx, "col")];
+             auto outDims = linearLayout.getOutDims();
+             std::vector<int> shapeVec;
+             for (auto &od : outDims)
+               shapeVec.push_back(od.second);
+
+             py::object pyObj = tmemCls(py::cast(rowBases), py::cast(colBases),
+                                        py::cast(shapeVec));
+             return pyObj;
            })
       .def("get_dot_operand_layout",
            [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
