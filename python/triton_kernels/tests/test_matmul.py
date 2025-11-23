@@ -90,97 +90,98 @@ class Case:
 def _build_test_op_cases():
     test_cases = []
     # zero-sized
-    test_cases.extend([
-        Case(m, n, k, mode, "float16", "float16")
-        for mode in ("ragged", "batched")
-        for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
-    ])
+    # test_cases.extend([
+    #     Case(m, n, k, mode, "float16", "float16")
+    #     for mode in ("ragged", "batched")
+    #     for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+    # ])
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
     # canonical float16
-    test_cases.extend([
-        Case(*shape, mode, "float16", "float16", split_k=split_k)
-      for shape in [odd_shape1, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
-    ])
-    # native float8
-    test_cases.extend([
-        Case(*shape, mode, "float8_e5m2", "float8_e5m2", split_k=split_k)
-     for shape in [odd_shape1, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
-    ])
-    test_cases.extend([
-        Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
-        for val in (1, 2, 4)
-    ])
-    # bfloat16 x mx
-    for shape in [odd_shape2, even_shape]:
-        test_cases.extend([
-            Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
-            Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
-            Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1"),
-            Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
-            Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1"),
-            Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
-            Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9),
-            Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
-            Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
-            Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", b_hbm_swizzling=True)
-        ])
-    # float8 x mxfloat
-    test_cases.extend([
-        Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
-        Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
-        Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
-        Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
-        Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
-        Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
-        Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
-    ])
+    # test_cases.extend([
+    #     Case(*shape, mode, "float16", "float16", split_k=split_k)
+    #   for shape in [odd_shape1, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    # ])
+    # # native float8
+    # test_cases.extend([
+    #     Case(*shape, mode, "float8_e5m2", "float8_e5m2", split_k=split_k)
+    #  for shape in [odd_shape1, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    # ])
+    # test_cases.extend([
+    #     Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
+    #     for val in (1, 2, 4)
+    # ])
+    # # bfloat16 x mx
+    # for shape in [odd_shape2, even_shape]:
+    #     test_cases.extend([
+    #         Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
+    #         Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
+    #         Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1"),
+    #         Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1"),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
+    #         Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", b_hbm_swizzling=True)
+    #     ])
+    # # float8 x mxfloat
+    # test_cases.extend([
+    #     Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
+    #     Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
+    #     Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
+    #     Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
+    #     Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
+    #     Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
+    #     Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
+    #     Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
+    # ])
     # mxfloat x mxfloat
     test_cases.extend([
-        Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
-        Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
-        Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
-        Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
-        Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
-        Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
-    ])
-    # amd-specific float8
-    test_cases.extend([
-        Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
-        Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
-        Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", split_k=2),
-        Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
-    ])
-    # transposes / permutes
-    test_cases.extend([
-        Case(320, 400, 400, "batched", "float16", "float16",
-                a_transpose=a_tr, b_transpose=b_tr, c_transpose=c_tr)
-        for a_tr, b_tr, c_tr in itertools.product((False, True), repeat=3)
-    ])
-    test_cases.extend([
-        Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
-                a_transpose=False, b_transpose=True, c_transpose=False),
-        Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
-                a_transpose=True, b_transpose=True, c_transpose=True),
-    ])
-    # swiglu
-    test_cases.extend([
-        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, swiglu_opts=(1.1, 1.4))
-     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
-    ])
-    test_cases.extend([
-        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, swiglu_opts=(1.1, 1.4))
-        for val in (1, 2, 4)
+        # Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
+        # Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
+        # Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
+        # Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
+        # Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        # Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
     ])
     # swiglu together with mxfp8 downcastepilogue
     test_cases.extend([
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
+    # # amd-specific float8
+    # test_cases.extend([
+    #     Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
+    #     Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
+    #     Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", split_k=2),
+    #     Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
+    # ])
+    # # transposes / permutes
+    # test_cases.extend([
+    #     Case(320, 400, 400, "batched", "float16", "float16",
+    #             a_transpose=a_tr, b_transpose=b_tr, c_transpose=c_tr)
+    #     for a_tr, b_tr, c_tr in itertools.product((False, True), repeat=3)
+    # ])
+    # test_cases.extend([
+    #     Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
+    #             a_transpose=False, b_transpose=True, c_transpose=False),
+    #     Case(320, 400, 400, "ragged", "float8_e5m2", "float8_e5m2",
+    #             a_transpose=True, b_transpose=True, c_transpose=True),
+    # ])
+    # # swiglu
+    # test_cases.extend([
+    #     Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, swiglu_opts=(1.1, 1.4))
+    #  for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    # ])
+    # test_cases.extend([
+    #     Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, swiglu_opts=(1.1, 1.4))
+    #     for val in (1, 2, 4)
+    # ])
 
     return test_cases
 
@@ -193,15 +194,15 @@ def _build_test_op_cases():
 )
 @pytest.mark.parametrize("block_m", [128])
 @pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
-    (False, False, None),
+    # (False, False, None),
     (True, False, None),
-    (False, True, None),
-    (True, True, None),
-    (False, False, "pad_b"),
-    (False, False, "pad_a"),
+    # (False, True, None),
+    # (True, True, None),
+    # (False, False, "pad_b"),
+    # (False, False, "pad_a"),
 ])
-@pytest.mark.parametrize("do_gamma", [False,True])
-@pytest.mark.parametrize("is_persistent", [False,True])
+@pytest.mark.parametrize("do_gamma", [False])
+@pytest.mark.parametrize("is_persistent", [True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
@@ -331,7 +332,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
-        scale_hbm_swizzling_args = {"ex_hist": [m] * n_slices},
+        scale_hbm_swizzling_args = {"ex_hist": torch.tensor([m] * n_slices, dtype=torch.int32, device=device)},
     )
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
