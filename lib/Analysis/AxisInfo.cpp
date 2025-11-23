@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -27,10 +28,6 @@ template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
     return std::gcd(a, b);
   else
     return gcd(std::gcd(a, b), args...);
-}
-
-constexpr int log2Int(int64_t num) {
-  return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
 // If lhs * rhs overflows, return max value possible value for the type
@@ -91,23 +88,26 @@ public:
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
+    assert(isa<RankedTensorType>(op.getType()) ||
+           rank == 1 && "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
+    auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
+    if (constantValue.has_value()) {
+      auto resTy = dyn_cast<RankedTensorType>(op.getType());
+      AxisInfo::DimVectorT constancy =
+          resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
+      AxisInfo::DimVectorT contiguity(rank, 1);
+      AxisInfo::DimVectorT divisibility(
+          rank, highestPowOf2Divisor<int64_t>(constantValue.value()));
+      return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    }
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
-    auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
     for (auto d = 0; d < rank; ++d) {
-      if (constantValue.has_value()) {
-        contiguity.push_back(1);
-        constancy.push_back(
-            std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        divisibility.push_back(
-            highestPowOf2Divisor<int64_t>(constantValue.value()));
-      } else {
-        contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
-        constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
-        divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
-      }
+      contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
+      constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
+      divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
     }
     return AxisInfo(contiguity, divisibility, constancy, constantValue);
   }
@@ -125,9 +125,8 @@ protected:
 
   virtual int64_t getConstancy(OpTy op, const AxisInfo &lhs,
                                const AxisInfo &rhs, int dim) {
-    return 1;
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
-
   virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                                   const AxisInfo &rhs) {
     return {};
@@ -165,7 +164,6 @@ public:
                    axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
-  using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
   LogicalResult
   visitOperation(Operation *op,
@@ -188,6 +186,26 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
+  }
+};
+
+class UnrealizedConversionCastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
+public:
+  using AxisInfoVisitorImpl<
+      mlir::UnrealizedConversionCastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(mlir::UnrealizedConversionCastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto tensorType = dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
+    if (tensorType &&
+        tensorType.getRank() != operands[0]->getValue().getRank()) {
+      // Do not propagate AxisInfo with incorrect rank. This can cause a crash
+      // in future visitor applications.
+      return AxisInfo::getPessimisticValueState(op->getResult(0));
+    }
     return operands[0]->getValue();
   }
 };
@@ -254,7 +272,7 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
       rank = shape.getRank();
 
     // Poison values are never accessed, thus assume optimistic values.
@@ -300,17 +318,11 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisibility of 16 bytes
-      auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
     return gcd(lhs.getDivisibility(dim), rhsDivisibility);
-  }
-
-  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                       int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -324,7 +336,6 @@ private:
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
-        auto rank = lhs.getRank();
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
         auto rhsValue = rhs.getConstantValue().value() * elemSize;
@@ -355,22 +366,15 @@ private:
     return std::max(lhsContiguity, rhsContiguity);
   }
 
-  int64_t getConstancy(arith::MulIOp op, const AxisInfo &lhs,
-                       const AxisInfo &rhs, int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
     auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 &&
-        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
+    if (lhs.getContiguity(dim) > 1 && rhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
-    if (rhs.getContiguity(dim) > 1 &&
-        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
+    if (rhs.getContiguity(dim) > 1 && lhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
@@ -379,9 +383,13 @@ private:
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() * rhs.getConstantValue().value()};
+    auto lhsConst = lhs.getConstantValue();
+    auto rhsConst = rhs.getConstantValue();
+    if (lhsConst.has_value() && rhsConst.has_value())
+      return {lhsConst.value() * rhsConst.value()};
+    if ((lhsConst.has_value() && lhsConst.value() == 0) ||
+        (rhsConst.has_value() && rhsConst.value() == 0))
+      return 0;
     return {};
   }
 };
@@ -404,12 +412,11 @@ private:
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
     auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    auto constancy = BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     if (!resTy)
-      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+      return constancy;
     auto shape = resTy.getShape();
-    // Case 1: both lhs and rhs are constants.
-    auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-    // Case 2: lhs contiguous, rhs constant.
+    // Case: lhs contiguous, rhs constant.
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
     // rhs: d_rhs * p, d_rhs * p, ..., d_rhs * p
     // lhs / rhs = d_lhs * k / (d_rhs * p), (d_lhs * k + 1) / (d_rhs * p),
@@ -506,15 +513,15 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
+    auto constancy = BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (!resTy)
-      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
-    auto shape = resTy.getShape();
-    // lhs % 1 = 0
-    return rhs.getConstantValue().has_value() &&
-                   rhs.getConstantValue().value() == 1
-               ? shape[dim]
-               : gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+      return constancy;
+    // Case: lhs % 1 = 0
+    if (rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() == 1)
+      return resTy.getDimSize(dim);
+    return constancy;
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -666,10 +673,10 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint = 1;
+      int64_t constHint;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
-        constHint = lhsInfo.getConstancy(d);
+        constHint = shape[d];
         constantValue =
             compare(getPredicate(op), lhsInfo.getConstantValue().value(),
                     rhsInfo.getConstantValue().value())
@@ -828,6 +835,13 @@ public:
           rhsInfo.getConstantValue().has_value() &&
           lhsInfo.getConstantValue() == rhsInfo.getConstantValue())
         constantValue = lhsInfo.getConstantValue();
+
+      if (constantValue.has_value()) {
+        auto resTy = dyn_cast<RankedTensorType>(op.getType());
+        assert(resTy || rank == 1);
+        constancy =
+            resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
+      }
     }
 
     return AxisInfo(contiguity, divisibility, constancy, constantValue);
@@ -840,11 +854,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                       int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
@@ -886,13 +895,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    auto numBits = log2Int(lhsDivisibility);
     return multiplyDivisor(lhsDivisibility, 1ll << shift);
-  }
-
-  int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
-                       const AxisInfo &rhs, int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   std::optional<int64_t> getConstantValue(arith::ShLIOp op, const AxisInfo &lhs,
@@ -932,11 +935,6 @@ private:
     return std::max<int64_t>(1, lhsDivisibility / (int64_t(1) << shift));
   }
 
-  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                       int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
@@ -969,9 +967,15 @@ public:
         constantValue = {std::min(lhsInfo.getConstantValue().value(),
                                   rhsInfo.getConstantValue().value())};
       }
+      auto resTy = dyn_cast<RankedTensorType>(op.getType());
+      assert(resTy || rank == 1);
+      AxisInfo::DimVectorT constancy =
+          resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
+      AxisInfo::DimVectorT divisibility(
+          rank, highestPowOf2Divisor<int64_t>(constantValue.value()));
       return AxisInfo(/*knownContiguity=*/AxisInfo::DimVectorT(rank, 1),
-                      /*knownDivisibility=*/AxisInfo::DimVectorT(rank, 1),
-                      /*knownConstancy=*/AxisInfo::DimVectorT(rank, 1),
+                      /*knownDivisibility=*/divisibility,
+                      /*knownConstancy=*/constancy,
                       /*constantValue=*/constantValue);
     } else {
       AxisInfo::DimVectorT contiguity, divisibility, constancy;
@@ -1029,12 +1033,13 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
+  visitors.append<UnrealizedConversionCastOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
@@ -1070,11 +1075,10 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
 LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
-  // TODO: For sure not the right way to do this
-  // but why is scf.if not initialized otherwise?
+  // If any operands are not yet ready, skip this operation for now.
   for (auto op : operands)
     if (op->getValue().getRank() == 0)
-      setToEntryState((dataflow::Lattice<AxisInfo> *)op);
+      return success();
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0) {
     setAllToEntryStates(results);
@@ -1101,18 +1105,19 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
   ProgramPoint *programPoint = getProgramPointAfter(op);
-  const auto &lb =
-      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
-  const auto &step =
-      getLatticeElementFor(programPoint, op.getStep())->getValue();
+  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
+  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
+  // If lb or step is not yet ready, skip this operation for now.
+  if (lbLattice->getValue().getRank() == 0 ||
+      stepLattice->getValue().getRank() == 0) {
+    return;
+  }
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
   AxisInfo::DimVectorT knownConstancy(1, 1);
-  auto lbDivisibility = lb.getDivisibility();
-  auto stepDivisibility = step.getDivisibility();
-  if (!lbDivisibility.empty() && !stepDivisibility.empty())
-    knownDivisibility[0] = gcd(lbDivisibility[0], stepDivisibility[0]);
+  knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
+                             stepLattice->getValue().getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
@@ -1180,24 +1185,15 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
-                   op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+    } else if (isa<gpu::WarpSpecializePartitionsOp>(op)) {
+      // Initialize the arguments to gpu::WarpSpecializePartitionsOp with
+      // "unknown" state: the maximum possible divisibility, contiguity, and
+      // constancy.
       knownDivisibility = DimVectorT(rank, kMaxDivisor);
       knownConstancy = DimVectorT(rank, kMaxDivisor);
       knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
-    if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
-    }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
     AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
@@ -1217,6 +1213,7 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
     return rhs;
   if (rhs.getRank() == 0)
     return lhs;
+  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
   DimVectorT contiguity;
   DimVectorT divisibility;
   DimVectorT constancy;
@@ -1349,13 +1346,12 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();
-    AxisInfo curAxisInfo;
-    if (axisInfoMap->count(value)) {
-      curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
-    } else {
-      curAxisInfo = axisInfo;
-    }
-    (*axisInfoMap)[value] = curAxisInfo;
+    // If we could not determine the AxisInfo for this value, assume the
+    // pessimistic state.
+    if (axisInfo.getRank() == 0)
+      axisInfo = AxisInfo::getPessimisticValueState(value);
+    auto &valInfo = (*axisInfoMap)[value];
+    valInfo = AxisInfo::join(axisInfo, valInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
@@ -1387,7 +1383,10 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
       callee.setArgAttr(index, attrName, attr);
     };
     auto axisInfo = axisInfoMap->lookup(value);
-    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
+    // Only scalar arguments are supported. Do not forward multi-dimensional
+    // AxisInfo to the callee.
+    if (axisInfo.getRank() != 1)
+      continue;
     setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
     setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
     setAttrFn("tt.constancy", axisInfo.getConstancy(0));

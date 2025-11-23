@@ -459,6 +459,15 @@ public:
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
   // Relevant for reshaping
+
+  SmallVector<std::pair<StringAttr, int32_t>> getInDims() const {
+    SmallVector<std::pair<StringAttr, int32_t>> inDims;
+    inDims.reserve(bases.size());
+    for (auto [inDim, inDimBases] : bases) {
+      inDims.push_back({inDim, getInDimSize(inDim)});
+    }
+    return inDims;
+  }
   SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
     return to_vector(outDims);
   }
@@ -556,6 +565,25 @@ public:
       return reshapeOuts({});
     }
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
+  }
+
+  // Resizes the dimension to one that is smallre or equal to the given size.
+  // These operations are similar to `sublayout` but at a dimension level.
+  [[nodiscard]] LinearLayout resizeInDim(StringAttr inDim,
+                                         int32_t newSize) const;
+  [[nodiscard]] LinearLayout resizeOutDim(StringAttr outDim,
+                                          int32_t newSize) const;
+
+  [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
+                                         StringAttr newDim) const {
+    auto bases = getBases();
+    auto it = bases.find(oldDim);
+    assert(it != bases.end());
+    auto value = std::move(it->second);
+    bases.erase(it);
+    bases.insert({newDim, std::move(value)});
+    return LinearLayout(bases, getOutDims(),
+                        /*requireSurjective=*/isSurjective());
   }
 
   // Concatenates two layouts by their in (resp. out) dimensions. The layouts
@@ -868,6 +896,8 @@ inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
   os << action.toString();
   return os;
 }
+
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 
 } // namespace mlir::triton
 

@@ -36,7 +36,7 @@ template <typename OpT, typename... Args>
 OpT createInto(OpBuilder &b, Location loc,
                std::optional<SetVector<int>> partitionSet,
                StageCluster stageCluster, Args &&...args) {
-  auto op = b.create<OpT>(loc, std::forward<Args>(args)...);
+  auto op = OpT::create(b, loc, std::forward<Args>(args)...);
   if (partitionSet) {
     setPartition(op, *partitionSet);
     setStageCluster(b, op, stageCluster);

@@ -77,18 +77,16 @@ public:
 
   Type convertTensorDescType(triton::TensorDescType type) {
     auto ctx = type.getContext();
+    auto blockType = type.getBlockType();
+    auto shape = blockType.getShape();
 
-    RankedTensorType rankedTensorType = type.getBlockType();
-    auto eleType = rankedTensorType.getElementType();
-    auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 5> types;
-    // base ptr
-    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
-    // 32 bit shapes
-    types.append(shape.size(), IntegerType::get(ctx, 32));
-    // 64 bit strides
-    types.append(shape.size(), IntegerType::get(ctx, 64));
+    // Determine the number of dwords based on tensor dimensions
+    // 2D tensors: group0 (4) + group1 (8) = 12 dwords
+    // 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20
+    // dwords
+    int numDwords = (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
 
+    auto types = SmallVector<Type>(numDwords, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 };
@@ -129,7 +127,9 @@ struct ConvertTritonAMDGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
 
-    AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+    if (targetInfo.requiresAliasInfoForAsyncOps())
+      AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
@@ -204,7 +204,8 @@ struct ConvertTritonAMDGPUToLLVM
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
-    AMD::populateMaskedOpsToLLVMPatterns(patterns);
+    AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
+    AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                             AMDBenefit);
 
@@ -266,6 +267,7 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
+    AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
   }
 
@@ -282,8 +284,8 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = b.create<LLVM::GlobalOp>(
-        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));

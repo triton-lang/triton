@@ -39,8 +39,8 @@ using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
 ValueTable getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
-    int wmmaVer, Value value, int batch, int n0, int n1, int kBase, Type type,
-    Location loc) {
+    int wmmaVer, Value value, int batch, int n0, int n1, int kBase,
+    int kPadding, Type type, Location loc) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
@@ -50,11 +50,18 @@ ValueTable getValuesFromDotOperandLayoutStruct(
         Type elemTy = typeConverter->convertType(type);
         Type ty = vec_ty(elemTy, kBase);
         Value rawElems = tb.undef(ty);
+
         for (int k = 0; k < kBase; ++k) {
-          rawElems = tb.insert_element(
-              ty, rawElems,
-              elems[n0 * n1 * kBase * b + kBase * (n1 * i + j) + k],
-              tb.i32_val(k));
+          int idx = n0 * n1 * kBase * b + kBase * (n1 * i + j) + k;
+          if (k < kBase - kPadding) {
+            rawElems =
+                tb.insert_element(ty, rawElems, elems[idx], tb.i32_val(k));
+          } else {
+            // pad with zeros
+            Value zero = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                                  rewriter.getZeroAttr(elemTy));
+            rawElems = tb.insert_element(ty, rawElems, zero, tb.i32_val(k));
+          }
         }
 
         Value convertedElems;
@@ -65,12 +72,14 @@ ValueTable getValuesFromDotOperandLayoutStruct(
           // Before wmma v3, bf16 is converted to i16
           if (wmmaVer < 3)
             convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
-        } else if (kBase == 4 && type.getIntOrFloatBitWidth() == 8) {
-          convertedElems = tb.bitcast(rawElems, i32_ty);
         } else {
-          convertedElems = tb.bitcast(
-              rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
-                                           i32_ty.getIntOrFloatBitWidth()));
+          auto elems = kBase * type.getIntOrFloatBitWidth() /
+                       i32_ty.getIntOrFloatBitWidth();
+          assert(elems >= 1 && "unexpected number of elements");
+          if (elems == 1)
+            convertedElems = tb.bitcast(rawElems, i32_ty);
+          else
+            convertedElems = tb.bitcast(rawElems, vec_ty(i32_ty, elems));
         }
         vals[{b, i, j}] = convertedElems;
       }
@@ -150,7 +159,8 @@ Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
                                   Location loc, Value valA, Value valScaleA,
                                   Value valB, Value valScaleB, Value valC,
                                   Type aElType, Type bElType, Type dElType,
-                                  int scaleKWidth) {
+                                  int scaleKWidth, int opSelScaleA,
+                                  int opSelScaleB) {
   assert(scaleKWidth == 4 || scaleKWidth == 8);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   std::string name = "llvm.amdgcn.wmma.scale";
@@ -174,13 +184,14 @@ Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
   Value modC = b.i16_val(0);
   operands.push_back(modC);
   operands.push_back(valC);
-  // Set a_scale mantissa to zero as use E8M0 format (no mantissa bits)
-  operands.push_back(b.i32_val(0));
+  // Set scale_opsel bit. 0: Use scales in 0..15 lanes; 1: Use scales in 16..31
+  // lanes
+  operands.push_back(b.i32_val(opSelScaleA));
   // Set a_scale_fmt to 0 = E8M0
   operands.push_back(b.i32_val(0));
   operands.push_back(valScaleA);
-  // Set b_scale mantissa to zero as we use E8M0 format (no mantissa bits)
-  operands.push_back(b.i32_val(0));
+  // Set scale_opsel bit.
+  operands.push_back(b.i32_val(opSelScaleB));
   // Set b_scale fmt to 0 = E8M0
   operands.push_back(b.i32_val(0));
   operands.push_back(valScaleB);
@@ -228,8 +239,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   const auto kDimOperandSize = aTensorTy.getShape().back();
 
   std::string intrinsicName;
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::get(
-      wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2], aElemTy, bElemTy, dElemTy);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
+      wmmaLayout.getIsTransposed()
+          ? WmmaIntrinsic::get(wmmaVer, mnkDim[1], mnkDim[0], mnkDim[2],
+                               bElemTy, aElemTy, dElemTy)
+          : WmmaIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2],
+                               aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
     return op.emitError(
         "no matching matrix core intrinsic due to unsupported element type");
@@ -254,13 +269,19 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
-  int kBase = maybeWmmaIntrinsic->kBase;
+  // If kDim > kDimTensor, we need add zeros to the kBase vector. The amount of
+  // zeros is determined by kBase * (1 - kDimTensor / kDim)
+  auto kBase = maybeWmmaIntrinsic->kBase;
+  auto kDimTensor = aTensorTy.getShape().back();
+  auto paddingFactor = kDim > kDimTensor ? (kDim / kDimTensor) : 1;
+  auto kPadding = kBase - kBase / paddingFactor;
+
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
-      kBase, aTensorTy.getElementType(), loc);
+      kBase, kPadding, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
-      kBase, aTensorTy.getElementType(), loc);
+      kBase, kPadding, aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -361,6 +382,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto elemTy = aTensorTy.getElementType();
+  const auto rank = aTensorTy.getShape().size();
 
   unsigned kDim = mnkDim[2];
   unsigned kBase = 64;
@@ -373,8 +395,17 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   int kBaseB = isFp4B ? kBase / 2 : kBase;
   int kDimB = isFp4B ? kDim / 2 : kDim;
 
+  bool isFp6A = (op.getAElemType() == triton::ScaleDotElemType::E2M3) ||
+                (op.getAElemType() == triton::ScaleDotElemType::E3M2);
+  bool isFp6B = (op.getBElemType() == triton::ScaleDotElemType::E2M3) ||
+                (op.getBElemType() == triton::ScaleDotElemType::E3M2);
+  if (isFp6A || isFp6B)
+    return op.emitError("NYI: FP6 scaled dot");
+
   auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDimA, 0);
   auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDimB, 1);
+
+  auto tilesPerWarp = wmmaLayout.getTilesPerWarp();
 
   assert(repA[2] == repB[1]);
 
@@ -388,23 +419,28 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
-  auto scaleShapeA = aScaleTensorTy.getShape();
-  constexpr int scaleKWidthA = 4;
-  auto scaleShapeB = bScaleTensorTy.getShape();
-  constexpr int scaleKWidthB = 4;
+  // If kDim > kDimTensor, we need add zeros to the kBase vector. The amount of
+  // zeros is determined by kBase * (1 - kDimTensor / kDim)
+  auto kDimTensorA = aTensorTy.getShape().back();
+  auto paddingFactor = kDimA > kDimTensorA ? (kDimA / kDimTensorA) : 1;
+  auto kPaddingA = kBaseA - kBaseA / paddingFactor;
+  auto kPaddingB = kBaseB - kBaseB / paddingFactor;
+  auto KBaseScale = 4;
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
-      kBaseA, aTensorTy.getElementType(), loc);
+      kBaseA, kPaddingA, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
-      kBaseB, bTensorTy.getElementType(), loc);
+      kBaseB, kPaddingB, bTensorTy.getElementType(), loc);
   ValueTable sa = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, wmmaVer, loadedAScale, numRepB, numRepM, numRepK,
-      scaleKWidthA, aScaleTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedAScale, numRepB,
+      numRepM / tilesPerWarp[0], numRepK, KBaseScale, 0,
+      aScaleTensorTy.getElementType(), loc);
   ValueTable sb = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, wmmaVer, loadedBScale, numRepB, numRepN, numRepK,
-      scaleKWidthB, bScaleTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedBScale, numRepB,
+      numRepN / tilesPerWarp[1], numRepK, KBaseScale, 0,
+      bScaleTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -414,7 +450,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
 
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
-  constexpr unsigned vgprElemBitWidth = 32;
   // compute number of output elements that each thread holds for one WMMA
   // instruction.
   auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
@@ -434,15 +469,21 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
                                   tb.i32_val(v));
         }
         for (size_t k = 0; k < numRepK; k++) {
+          int scaleOpSelA = m % tilesPerWarp[rank - 2];
+          int scaleOpSelB = n % tilesPerWarp[rank - 1];
           acc = wmmaLayout.getIsTransposed()
                     ? generateScaledWMMAIntrinsic(
-                          rewriter, loc, hb[{b, n, k}], sb[{b, n, k}],
-                          ha[{b, m, k}], sa[{b, m, k}], acc, scaledBElemType,
-                          scaledAElemType, dstElemTy, scaleKWidthA)
+                          rewriter, loc, hb[{b, n, k}],
+                          sb[{b, n / tilesPerWarp[rank - 1], k}], ha[{b, m, k}],
+                          sa[{b, m / tilesPerWarp[rank - 2], k}], acc,
+                          scaledBElemType, scaledAElemType, dstElemTy,
+                          KBaseScale, scaleOpSelB, scaleOpSelA)
                     : generateScaledWMMAIntrinsic(
-                          rewriter, loc, ha[{b, m, k}], sa[{b, m, k}],
-                          hb[{b, n, k}], sb[{b, n, k}], acc, scaledAElemType,
-                          scaledBElemType, dstElemTy, scaleKWidthB);
+                          rewriter, loc, ha[{b, m, k}],
+                          sa[{b, m / tilesPerWarp[rank - 2], k}], hb[{b, n, k}],
+                          sb[{b, n / tilesPerWarp[rank - 1], k}], acc,
+                          scaledAElemType, scaledBElemType, dstElemTy,
+                          KBaseScale, scaleOpSelA, scaleOpSelB);
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
           fc[fcThreadOffIdx + v] =

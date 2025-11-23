@@ -35,6 +35,10 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
+// Emit the cta multicast mask for a given cta id based on the src layout
+Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value blockId,
+                           const LinearLayout &cvt);
+
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
@@ -44,7 +48,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 // signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
 // avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal,
+             Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
              bool forceNoAliasAsyncLoads = false);
 
@@ -149,8 +153,8 @@ upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
   }
   SmallVector<Value, 4> results;
   for (int srcSelIndex : llvm::seq(4))
-    results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                                 scaleF32, srcSelIndex));
+    results.push_back(ConvertOp::create(rewriter, loc, resType, packedVec,
+                                        scaleF32, srcSelIndex));
   return results;
 }
 
@@ -179,12 +183,12 @@ upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
     scaleF32 = b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
   }
   SmallVector<Value, 2> results;
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/false));
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/true));
+  results.push_back(ConvertOp::create(rewriter, loc, resType, packedVec,
+                                      scaleF32,
+                                      /*srcLoHiSel=*/false));
+  results.push_back(ConvertOp::create(rewriter, loc, resType, packedVec,
+                                      scaleF32,
+                                      /*srcLoHiSel=*/true));
   return results;
 }
 } // namespace mlir::LLVM::AMD

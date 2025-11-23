@@ -121,25 +121,6 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
   ];
 }
 
-def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
-  let summary = "test pass for rewriting partition dependencies";
-
-  let description = [{
-    The `tritongpu-rewrite-partition-dependencies` pass analyzes the partitions
-    assigned to a loop and their SSA dependencies. It rewrites the dependencies
-    to be passed through shared memory, applying multi-buffering according to
-    the assigned stages of the partitions.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-    "mlir::triton::nvws::NVWSDialect"
-  ];
-}
-
 def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"> {
   let summary = "split scheduled loops into `ttg.warp_specialize`";
 
@@ -177,15 +158,22 @@ def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir:
 }
 
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
-  let summary = "3xTF32 trick";
+  let summary = "Emulate dot-product tensor core precision using TF32s or BF16s";
 
   let description = [{
-    Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
-    to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385
+      Generic pass to emulate/decompose f32 `DotOp` instructions.
+    * Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
+      to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385.
+    * Decompose fp32 `DotOp` instructions into BF16 operations.
+      See https://arxiv.org/abs/1904.06376
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"emuTF32", "emu-tf32",
+           "bool", /*default*/"false",
+           "whether to handle InputPrecision TF32xN for Nvidia GPUs">
+  ];
 }
 
 def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {

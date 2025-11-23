@@ -5,8 +5,8 @@ namespace mlir {
 
 Value getRawThreadId(OpBuilder &rewriter, Location loc) {
   Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+      ::mlir::gpu::ThreadIdOp::create(rewriter, loc, ::mlir::gpu::Dimension::x);
+  Value threadId = arith::IndexCastOp::create(rewriter, loc, i32_ty, tid);
   return threadId;
 }
 
@@ -42,7 +42,7 @@ Value SegmentObject::getStruct(Location loc,
       mlir::cast<LLVM::LLVMPointerType>(indexPtr.getType()).getAddressSpace();
   auto structTy =
       getStructType(loc.getContext(), memorySpace, indexPtrAddrSpace);
-  Value segmentStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  Value segmentStruct = LLVM::UndefOp::create(rewriter, loc, structTy);
   segmentStruct = b.insert_val(structTy, segmentStruct, base, 0);
   segmentStruct = b.insert_val(structTy, segmentStruct, segmentBase, 1);
   segmentStruct = b.insert_val(structTy, segmentStruct, indexPtr, 2);
@@ -83,7 +83,6 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   // Update the index (could be register promoted).
   Value curIdx = b.load(i32_ty, indexPtr);
   Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry));
-  b.store(newIdx, indexPtr);
 
   // Compute the segment size in word (4 bytes).
   int selectedWarpNum = getTotalNumWarps(mod);
@@ -137,6 +136,7 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
       b.icmp_eq(b.urem(curThreadId, b.i32_val(warpSize)), b.i32_val(0));
   Value isWriter;
 
+  Value idxToStore = newIdx;
   auto granularity = segmentType.getGranularity();
   if (selectedIds.empty()) {
     if (granularity == proton::gpu::Granularity::WARP) {
@@ -148,7 +148,10 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   } else {
     Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
     isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
+    idxToStore = b.select(isCurWarpEnabled, newIdx, curIdx);
   }
+
+  b.store(idxToStore, indexPtr);
 
   uint32_t addrSpace =
       cast<LLVM::LLVMPointerType>(bufferBaseType).getAddressSpace();

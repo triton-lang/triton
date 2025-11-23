@@ -16,13 +16,7 @@ def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::Modul
   let options = [
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
-           "Number of Pipeline stages">,
-    Option<"useAsyncCopy", "use_async_copy",
-           "bool", /*default*/"false",
-           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
-    Option<"usePingpong", "use_pingpong",
-           "bool", /*default*/"false",
-           "Use schedules to enable block ping-pong">,
+           "Number of Pipeline stages">
   ];
 }
 
@@ -38,6 +32,9 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
+    Option<"usePingpong", "use_pingpong",
+           "bool", /*default*/"false",
+           "Use schedules to enable block ping-pong">
   ];
 }
 
@@ -126,6 +123,11 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
 
   let dependentDialects = [];
 
+  let options = [
+    Option<"enableLargeTensorPtrCanon", "enable-large-tensor-ptr-canon",
+           "bool", /*default=*/"false",
+           "Whether to enable canonicalization for pointers pointing to large-tensors (a specialization for tensors over 2GB)">
+  ];
 }
 
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
@@ -211,7 +213,7 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
       %loaded_data = tt.load ... : tensor<#transposable_layout>
       %tmp1 = ttg.convert_layout %loaded_data : tensor<#transposable_layout> -> tensor<#blocked>
       %tmp2 = ttg.convert_layout %tmp1 : tensor<#blocked> -> tensor<#transposable_layout>
-      %transposed = amdgpu.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
+      %transposed = amdg.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
       %local_data = ttg.local_alloc %transposed : tensor<#linear> -> !ttg.memdesc<#shared>
       %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     ```
@@ -255,7 +257,7 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
       compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
   }];
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"archGenerationName", "arch-generation-name",

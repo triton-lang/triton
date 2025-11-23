@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
+      - .github/workflows/llvm-build/almalinux.Dockerfile
+      - .github/workflows/llvm-build/centos.Dockerfile
   workflow_dispatch:
 
 env:
@@ -31,7 +33,6 @@ jobs:
         config:
         - {runner: 'Ubuntu 22.04', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'x64'}
         - {runner: 'Ubuntu 22.04 ARM64', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'arm64'}
-        - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
         - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64'}
         - {runner: 'MacOS X64', runs_on: 'macos-13', target-os: 'macos', arch: 'x64'}
@@ -41,7 +42,7 @@ jobs:
     steps:
 
     - name: Checkout Repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         path: llvm-build
 
@@ -61,14 +62,14 @@ jobs:
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
     - name: Checkout LLVM
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: llvm/llvm-project
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: 3.11
 
@@ -136,6 +137,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -233,36 +235,16 @@ jobs:
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
-
-    - name: Configure, Build, Test, and Install LLVM (CentOS)
-      if: matrix.config.target-os == 'centos'
-      run: |
-        # if this step crashes, it can leave behind a stale docker container
-        docker container prune -f
-        docker rmi -f $(docker images -q)
-
-        docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/llvm-build/centos.Dockerfile .
-
-        # Create temporary container to copy cache and installed artifacts.
-        CONTAINER_ID=$(docker create llvm-build)
-        docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-        # We remove the existing directory, otherwise docker will
-        # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}"
-        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
-
-        docker rm "${CONTAINER_ID}"
-
     - name: Configure, Build, Test, and Install LLVM (AlmaLinux)
       if: matrix.config.target-os == 'almalinux'
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
-        docker rmi -f $(docker images -q)
+
+        images=$(docker images -q)
+        if [ -n "$images" ]; then
+          docker rmi -f $images
+        fi
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
@@ -289,16 +271,16 @@ jobs:
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
-    - name: Azure Login
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+    - name: Azure login
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       uses: azure/login@v2
       with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID_LLVM }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       shell: bash -el {0}
       run: |
         az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
@@ -307,7 +289,7 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       run: |
         az logout
         az cache purge

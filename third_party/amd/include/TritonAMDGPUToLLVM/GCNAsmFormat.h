@@ -67,7 +67,7 @@ class GCNInstrExecution;
 //
 // create inst
 // auto &mul_inst =
-// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+// GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
 //
 // launch insts
 // mul_inst(res, lhs, rhs);
@@ -88,9 +88,9 @@ class GCNInstrExecution;
 // GCNBuilder can build a GCN asm with multiple instructions, sample code:
 //
 // GCNBuilder builder;
-// auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
+// auto &rcp = GCNInstr::create(gcnBuilder, "v_rcp")->float_op_type(bitwidth);
 // auto &mul_inst =
-// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+// GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
 //
 // rcp(...);
 // mul_inst(...);
@@ -100,8 +100,8 @@ class GCNInstrExecution;
 // multiple times with different operands, e.g.
 //
 //   auto &mul_inst =
-//   gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth); mul_inst(...
-//   some operands ...); mul_inst(... some different operands ...);
+//   GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
+//   mul_inst(... some operands ...); mul_inst(... some different operands ...);
 //
 // Finally, we will get a GCN code with two mov instructions.
 //

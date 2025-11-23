@@ -620,52 +620,7 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
 @pytest.mark.skipif(is_hip() and not is_hip_cdna4(), reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, FAST_MATH, mfma_nonkdim,
                                      preshuffle, device):
-    # This test primarily evaluates correctness for efficient scale packing for MFMA-scaled instructions.
-    #
-    # Scales are stored as 8-bit tensors, where each element scales 32 values from the A or B operand tensors.
-    # Since MFMA instructions are wave-level instructions, that means that each thread provides a fixed set of operand values to MFMA instructions.
-    #
-    # For example, in an MFMA instruction with shape 16x16x128:
-    # - 4 threads contribute elements along the K dimension.
-    # - 16 threads contribute elements along the M or N dimension.
-    #
-    # From the perspective of the scales tensor, even if the K dimension is stored contiguously in LDS,
-    # each thread sees its elements along K dim as strided due to interleaving with other threads.
-    # This striding limits the ability to load scale values using vectorized memory access.
-    #
-    # Our goal is to reorganize the scale tensor so that:
-    # 1. Each thread stores the 4 scale values it needs for 4 MFMA ops in contiguous memory.
-    # 2. Continuous threads access contiguous memory locations improving global memory coalescing when bypassing LDS,
-    #    which is especially beneficial for "skinny" matmuls.
-    #
-    # We consider two MFMA cases: one with non-K dimension 16, and one with 32.
-    # In both, the minimum tile size for preshuffling is 32x32x256.
-    # For example, for a 32x256 operand tile, the corresponding scale tensor has shape 32x8,
-    # where each scale covers 32 elements along the K dimension.
-    #
-    # Each thread holds one scale per MFMA operation. We pack the 4 scale values (for 4 different MFMA ops)
-    # next to each other in memory.
-    #
-    # Case 1: mfma_scaled_16x16x128
-    #
-    # Packing order: mfma_op_0, mfma_op_2, mfma_op_1, mfma_op_3
-    #
-    #            K = 128       K = 128
-    #        +------------+ +------------+
-    #    M=16|  MFMA op 0 | |  MFMA op 1 |
-    #        +------------+ +------------+
-    #    M=16|  MFMA op 2 | |  MFMA op 3 |
-    #        +------------+ +------------+
-    #
-    # Case 2: mfma_scaled_32x32x64
-    #
-    # Packing order: mfma_op_0, mfma_op_1, mfma_op_2, mfma_op_3
-    #
-    #            K=64     K=64     K=64     K=64
-    #        +--------+ +--------+ +--------+ +--------+
-    #    M=32| op 0   | | op 1   | | op 2   | | op 3   |
-    #        +--------+ +--------+ +--------+ +--------+
-
+    # For details about scale shuffling on AMD GPUs please take a look at documentation in 10-block-scaled-matmu.py.
     if preshuffle and (BLOCK_M < 32 or BLOCK_N < 32 or BLOCK_K < 256):
         pytest.skip("Minimal tile size for preshuffling is 32x32x256")
 
@@ -775,8 +730,11 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
     if is_hip() and preshuffle:
-        assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
         assert "ds_read_u8" not in k.asm["amdgcn"]
+        if mfma_nonkdim == 16:
+            assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
+        elif mfma_nonkdim == 32:  # default tilesPerWarp = [1, 1]
+            assert "tilesPerWarp" not in k.asm["ttgir"]
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
@@ -1031,8 +989,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("Requires compute capability == 10")
+        if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
+            pytest.skip("Requires compute capability == 10 or 12")
+        if torch.cuda.get_device_capability()[0] == 12 and pack_along_k is False:
+            pytest.skip("Packing along M, N is not supported on SM120")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():

@@ -2,17 +2,19 @@
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TargetInfo.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::AMD {
 namespace {
 constexpr const char *syncedViaAsyncWaitAttrName =
-    "ttg.amdgpu.syncedViaAsyncWait";
+    "ttg.amdg.syncedViaAsyncWait";
 // Traverses the def-chain including control flow of the token and returns true
 // if all defining operations are an AsyncWait
 bool comesFromAsyncWait(Value token) {
   if (auto defOp = token.getDefiningOp()) {
-    return isa<triton::gpu::AsyncWaitOp>(defOp);
+    return isa<triton::gpu::AsyncWaitOp, amdgpu::AsyncWaitOp>(defOp);
   }
 
   auto blockArg = dyn_cast<BlockArgument>(token);
@@ -50,21 +52,20 @@ bool comesFromAsyncWait(Value token) {
 } // namespace
 
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
-  SmallVector<triton::gpu::LocalLoadOp> localLoads;
-  mod->walk([&](triton::gpu::LocalLoadOp localLoadOp) {
-    localLoads.emplace_back(localLoadOp);
-  });
-
   auto *ctx = mod->getContext();
-  for (auto &loadOp : localLoads) {
-    auto token = loadOp.getToken();
-    if (loadOp->hasAttr(syncedViaAsyncWaitAttrName))
-      continue;
 
-    bool isSyncedViaAsyncWait = token && comesFromAsyncWait(token);
-    loadOp->setAttr(syncedViaAsyncWaitAttrName,
-                    BoolAttr::get(ctx, isSyncedViaAsyncWait));
-  }
+  mod->walk([&](Operation *op) {
+    TypeSwitch<Operation *, void>(op)
+        .Case<triton::gpu::LocalLoadOp,
+              triton::amdgpu::LocalLoadPackedTransposedOp>([&](auto loadOp) {
+          if (loadOp->hasAttr(syncedViaAsyncWaitAttrName))
+            return;
+          Value token = loadOp.getToken();
+          bool isSyncedViaAsyncWait = token && comesFromAsyncWait(token);
+          loadOp->setAttr(syncedViaAsyncWaitAttrName,
+                          BoolAttr::get(ctx, isSyncedViaAsyncWait));
+        });
+  });
 }
 
 bool isSyncedViaAsyncWait(Operation *op) {
@@ -84,7 +85,7 @@ namespace {
 LLVM::AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
   Builder b(ctx);
   return b.getAttr<LLVM::AliasScopeDomainAttr>(
-      b.getStringAttr("amdgpu.AsyncOps"),
+      b.getStringAttr("amdg.AsyncOps"),
       b.getStringAttr(
           "Domain to hold alias scopes to specify aliasing information between "
           "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
@@ -92,7 +93,7 @@ LLVM::AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
 
 LLVM::AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
   Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.AsyncCopies");
+  auto name = b.getStringAttr("amdg.AsyncCopies");
   auto desc = b.getStringAttr(
       "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
   return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
@@ -100,7 +101,7 @@ LLVM::AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
 
 LLVM::AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
   Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.LocalLoads");
+  auto name = b.getStringAttr("amdg.LocalLoads");
   auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
   return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
 }
@@ -112,8 +113,10 @@ void addAsyncCopyAliasScope(LLVM::AliasAnalysisOpInterface directToLdsOp) {
   directToLdsOp.setAliasScopes(b.getArrayAttr(getAsyncCopyScope(ctx)));
 }
 
-void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+void addLocalLoadNoAliasScope(Operation *localLoadOp,
                               LLVM::AliasAnalysisOpInterface llLoadOp) {
+  if (!localLoadOp->hasTrait<OpTrait::LocalLoadTrait>())
+    return;
   if (!isSyncedViaAsyncWait(localLoadOp))
     return;
 

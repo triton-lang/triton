@@ -143,11 +143,25 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << ll.getOutDimSize(dims[0]) << "x"
                          << ll.getOutDimSize(dims[1]);
     }
+    // Note the following holds for both M=64 and M=128 with 2CTA
+    auto nCol = ll.getInDimSize(StringAttr::get(ctx, "col"));
+    if (nCol / (enc.getCTASplitM() * enc.getCTASplitN()) >
+        512 * 32 / bitwidth) {
+      return emitError() << "nCol / (CTASplitM * CTASplitN) must be less than "
+                            "or equal to 512 * 32 / bitwidth but got "
+                         << nCol / (enc.getCTASplitM() * enc.getCTASplitN());
+    }
   } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
       return emitError()
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
+    }
+    auto rank = cast<LayoutEncodingTrait>(enc).getRank();
+    if (!(rank == shape.size() || rank == shape.size() - 1)) {
+      return emitError() << "rank must be equal to or one less than "
+                         << "the shape size. Got " << rank << " and "
+                         << shape.size();
     }
   } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                  encoding)) {
@@ -169,12 +183,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   // additional rules to verify.
   if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
-
-    if (rank != shape.size() && rank != shape.size() - 1) {
-      return emitError() << "padding rank must be equal to or one less than "
-                         << "the shape size when pipelining.";
-    }
-
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);

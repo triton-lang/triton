@@ -72,6 +72,8 @@ template <bool CheckSuccess>
 CUptiResult activitySetAttribute(CUpti_ActivityAttribute attr,
                                  size_t *valueSize, void *value);
 
+template <bool CheckSuccess> CUptiResult activityEnableHWTrace(uint8_t enable);
+
 template <bool CheckSuccess>
 CUptiResult unsubscribe(CUpti_SubscriberHandle subscriber);
 
@@ -82,6 +84,9 @@ CUptiResult getGraphExecId(CUgraphExec graph, uint32_t *pId);
 
 template <bool CheckSuccess>
 CUptiResult getGraphId(CUgraph graph, uint32_t *pId);
+
+template <bool CheckSuccess>
+CUptiResult getGraphNodeId(CUgraphNode node, uint64_t *pId);
 
 template <bool CheckSuccess>
 CUptiResult getCubinCrc(CUpti_GetCubinCrcParams *pParams);

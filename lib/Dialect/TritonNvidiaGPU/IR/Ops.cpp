@@ -25,12 +25,14 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton::gpu;
@@ -50,7 +52,7 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 
   // verify encodings
   auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto bEnc = cast<MemDescType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -70,10 +72,11 @@ LogicalResult WarpGroupDotOp::verify() {
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
     return emitOpError("WGMMA result layout must be Hopper NVMMA");
 
-  if (!isa<NVMMASharedEncodingAttr, DotOperandEncodingAttr>(
-          getA().getType().getEncoding()))
+  if (!isa<NVMMASharedEncodingAttr, DotOperandEncodingAttr,
+           SharedLinearEncodingAttr>(getA().getType().getEncoding()))
     return emitOpError("WGMMA A operand must have NVMMA shared or dot layout");
-  if (!isa<NVMMASharedEncodingAttr>(getB().getType().getEncoding()))
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
+          getB().getType().getEncoding()))
     return emitOpError("WGMMA B operand must have NVMMA shared layout");
 
   auto numWarps = gpu::lookupNumWarps(getOperation());
@@ -89,13 +92,12 @@ LogicalResult WarpGroupDotOp::verify() {
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
 
-  auto aElemTy = getA().getType().getElementType();
-  if (!(llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
-        aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
-        aElemTy.isF32()))
-    return emitOpError("WGMMA result element type must be F16, BF16, F32, "
-                       "F8E5M2, F8E4M3FN, or integer type");
+  // Verify MMA version is supported for operands.
+  int mmaVersion = nvmmaEnc.getVersionMajor();
+  if (!supportMMA(getA(), mmaVersion) || !supportMMA(getB(), mmaVersion))
+    return emitOpError("unsupported MMA version for the given operands");
 
+  auto aElemTy = getA().getType().getElementType();
   if (getMaxNumImpreciseAcc() < 32 &&
       (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
       resTy.getElementType().isF32()) {
@@ -207,6 +209,8 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
+  if (!isa<NVMMASharedEncodingAttr>(getResult().getType().getEncoding()))
+    return emitOpError("TMA result must have NVMMA shared layout");
   return success();
 }
 
@@ -295,12 +299,16 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-kind-shapes
   if (t.isF32()) {
     return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
   }
-  if (t.isF16() || t.isBF16()) {
+  if (t.isF16()) {
     return {
         {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  if (t.isBF16()) {
+    return {{MMADTypeKind::f16, {Float32Type::get(ctx)}}};
   }
   // TODO: float6 and explicit float4 types are not supported yet.
   // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
@@ -325,10 +333,11 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
            << strMMADTypeKind(akind->first) << " but RHS kind is "
            << strMMADTypeKind(bkind->first);
   }
-  if (!llvm::is_contained(akind->second, d)) {
+  if (!llvm::is_contained(akind->second, d) ||
+      !llvm::is_contained(bkind->second, d)) {
     InFlightDiagnostic diag =
-        op->emitOpError("unsupported accumulator dtype for operand kind ")
-        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << d
+        op->emitOpError("unsupported accumulator dtype for operand types ")
+        << a << " and " << b << ", accumulator dtype is " << d
         << " but must be one of [";
     llvm::interleaveComma(akind->second, diag, [&](Type t) { diag << t; });
     diag << "]";
@@ -346,6 +355,60 @@ LogicalResult TCGen5MMAOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
+
+  auto aEnc = getA().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           TensorMemoryEncodingAttr>(aEnc))
+    return emitOpError(
+        "LHS operand must have a NVMMAShared or TensorMemory encoding");
+  auto bEnc = getB().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
+    return emitOpError("RHS operand must have a NVMMAShared encoding");
+  auto retType = getD().getType();
+  auto retEnc = dyn_cast<TensorMemoryEncodingAttr>(retType.getEncoding());
+  if (!retEnc)
+    return emitOpError("Return operand must have a TensorMemory encoding");
+
+  // Check colStride of TMEM operands
+  if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmem.getColStride() != 1)
+      return emitOpError("The col stride of the LHS operand must be 1");
+  }
+  if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
+    return emitOpError("The col stride of the return operand must be 32 / ")
+           << retType.getElementTypeBitWidth() << " but got "
+           << retEnc.getColStride();
+
+  if (getTwoCtas()) {
+    // Once we have a `block` dimension in TMEM, we can look at this via the
+    // associated LL
+    auto checkSplitNum = [&](ArrayRef<unsigned> splitNum, std::string_view name,
+                             ArrayRef<unsigned> expected) -> LogicalResult {
+      if (splitNum != expected) {
+        return emitOpError("The op is two CTAs but the split num of the ")
+               << name << " is not " << expected << ". Got " << splitNum;
+      }
+      return success();
+    };
+    if (failed(checkSplitNum(getCTASplitNum(aEnc), "LHS", {2, 1})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(bEnc), "RHS", {1, 2})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(retEnc), "returned value", {2, 1})))
+      return failure();
+
+    if (!retEnc.getTwoCTAs())
+      return emitOpError(
+          "The returned value's encoding must have twoCTA=true to be used "
+          "in a twoCTA matmul");
+    if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+      if (!tmemEnc.getTwoCTAs())
+        return emitOpError(
+            "The LHS operand's encoding must have twoCTA=true to be used "
+            "in a twoCTA matmul");
+    }
+  }
+
   return success();
 }
 
@@ -590,31 +653,22 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
   if (type.getRank() != 2)
     return op->emitOpError(regName) << " must be a 2D tensor";
-  if (type.getEncoding()) {
-    auto enc = dyn_cast<DistributedEncodingTrait>(type.getEncoding());
-    if (!enc) {
-      return op->emitOpError(regName)
-             << " does not have an distributed encoding";
-    }
-    SmallVector<DistributedEncodingTrait> layouts =
-        getTmemCompatibleLayouts(op, type, memdesc);
-    if (layouts.empty()) {
-      return op->emitOpError(regName)
-             << " does not have any TMEM compatible layouts";
-    }
-    if (llvm::none_of(layouts, [&](DistributedEncodingTrait layout) {
-          return areLayoutsEquivalent(type.getShape(),
-                                      cast<LayoutEncodingTrait>(layout),
-                                      cast<LayoutEncodingTrait>(enc));
-        })) {
-      InFlightDiagnostic diag = op->emitOpError(regName)
-                                << " layout is not TMEM compatible";
-      for (Attribute layout : layouts)
-        diag.attachNote() << "potential TMEM layout: " << layout;
-      return diag;
-    }
-  }
-  return success();
+  if (!type.getEncoding())
+    return success();
+
+  auto maxnreg = getContextualMaxNReg(op);
+  if (isDistributedLayoutTMemCompatible(op, type, memdesc))
+    return success();
+
+  // If it failed, give the user a hint
+  SmallVector<DistributedEncodingTrait> layouts =
+      getTmemCompatibleLayouts(op, type, memdesc);
+
+  InFlightDiagnostic diag = op->emitOpError(regName);
+  diag.attachNote() << "Got: " << type.getEncoding();
+  for (Attribute layout : layouts)
+    diag.attachNote() << "potential TMEM layout: " << layout;
+  return diag;
 }
 
 LogicalResult TMEMStoreOp::verify() {
@@ -778,8 +832,8 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getColStride(), encoding.getCTASplitM(),
-      encoding.getCTASplitN());
+      encoding.getColStride(), encoding.getCTASplitM(), encoding.getCTASplitN(),
+      encoding.getTwoCTAs());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory(), allocTy.getAllocShape());

@@ -15,6 +15,7 @@ from ._common import (
     matmul_launch_metadata,
     swizzle2d,
     xcd_swizzle,
+    threadfence_system,
 )
 
 
@@ -53,7 +54,7 @@ def _matmul_ogs(
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
-             GatherIndx,
+             GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              ExptHist, ExptOffs, ExptTileOffs, ExptData,
@@ -70,7 +71,7 @@ def _matmul_ogs(
              # epilogue transform
              EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
              # MoE config
-             N_EXPTS_TOT: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+             N_EXPTS_TOT: tl.constexpr,
              # precision config
              MAX_NUM_IMPRECISE_ACC: tl.constexpr, ALLOW_TF32: tl.constexpr,
              FLEXPOINT_SATURATE_INF: tl.constexpr,
@@ -80,6 +81,7 @@ def _matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
@@ -94,6 +96,10 @@ def _matmul_ogs(
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             pYPtrs=None,
+             ScatterShardIndx=None,
+             reduce_rank = 0,
+             n_reduce_shards: tl.constexpr = 1,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -126,7 +132,7 @@ def _matmul_ogs(
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
-        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
 
         # TODO: refactor if/else when triton front end improves
@@ -193,7 +199,7 @@ def _matmul_ogs(
     # We are tiling Y here, so the tiling is independent of matmul (where we
     # tile X & W and scatter to different rows of Y).
     # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
+    if HAS_FUSED_SCATTER and INIT_OUTPUT_TO_ZERO:
         tl.device_assert(batch_size == 1)
         pid_mnk = pid
         if XCD_SWIZZLE != 1:
@@ -216,7 +222,7 @@ def _matmul_ogs(
                          M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
                          EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                         GROUP_M, XCD_SWIZZLE)
+                         GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
 
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
@@ -236,13 +242,12 @@ def _matmul_ogs(
     else:
         GatherIndx += start_m
         # no needs to bounds-check here because `offs_x_m` wraps around M dim
-        offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
+        offs_x_m = tl.load(GatherIndx + offs_x_m)
     offs_k = off_k_x + tl.arange(0, BLOCK_K)
     XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
 
     # TODO: refactor if/else when triton front end improves
     if is_w_microscaled:
-        tl.static_assert(not EXPT_IS_INNER, "Not supported yet")
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
@@ -276,7 +281,8 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        offs_k_scale = PACKED_MX_BLOCK * pid_k + tl.arange(0, PACKED_MX_BLOCK)
+        tl.static_assert(not EXPT_IS_INNER or W_IS_PADDED)
+        offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:
         WMxScalePtrs = None
@@ -284,13 +290,16 @@ def _matmul_ogs(
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
+    N_W = N
+    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+        N_W = tl.cdiv(N_W, 64) * 64
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N_W // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
         XMxScale += start_z.to(index_type) * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
-        offs_x_k_scale = MX_SCALE_BLOCK_K * pid_k + tl.arange(0, MX_SCALE_BLOCK_K)
+        offs_x_k_scale = off_k_x // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
@@ -366,6 +375,8 @@ def _matmul_ogs(
             if is_x_microscaled:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
+            # if w.dtype.is_fp8() and not x.dtype.is_fp8():
+            #     w = w.to(x.dtype)
             acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
         XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
@@ -448,7 +459,7 @@ def _matmul_ogs(
             YActualScale += start_m * stride_y_mx_m
             YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         else:
-            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs // N_EXPTS_ACT).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
+            YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         if PER_BATCH_OUT_SCALE:
@@ -457,4 +468,26 @@ def _matmul_ogs(
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
-    tl.store(YPtrs, out, mask=mask)
+    if pYPtrs is None:
+        tl.store(YPtrs, out, mask=mask)
+    else:
+        tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
+        if ScatterShardIndx is not None:
+            dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
+            for i in tl.static_range(n_reduce_shards):
+                peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
+                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+                tl.multiple_of(peer_Y_ptr, 16)
+                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                tl.store(peer_Y_ptr[:, None] + offs_y_mn, out, mask=mask)
+        else:
+            # full all gather
+            for i in tl.static_range(n_reduce_shards):
+                peer = (reduce_rank + i) % n_reduce_shards
+                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+                tl.multiple_of(peer_Y_ptr, 16)
+                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                tl.store(peer_Y_ptr + offs_y_mn, out, mask=mask)
+
+    if pYPtrs is not None:
+        threadfence_system()

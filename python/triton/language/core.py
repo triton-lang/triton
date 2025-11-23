@@ -570,7 +570,7 @@ class dtype(base_type):
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         if self.name.startswith("fp8"):
-            if self.name not in builder.options.supported_fp8_dtypes:
+            if hasattr(builder, "options") and self.name not in builder.options.supported_fp8_dtypes:
                 raise ValueError(f'type {self} not supported in this architecture. '
                                  f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
 
@@ -1544,13 +1544,15 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITCallable):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
-            if "_semantic" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_semantic"] = _semantic
-            if "_generator" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_generator"] = _generator
+            if isinstance(cls.__init__, JITCallable):
+                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                pass
+            else:
+                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_semantic"] = _semantic
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
             cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
@@ -1577,11 +1579,15 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
+    hash_attrs = [cls.__init__]
+
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+                hash_attrs.append(member)
 
+    aggregate_value.hash_attrs = hash_attrs
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
@@ -1725,8 +1731,9 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     Permutes the dimensions of a tensor.
 
-    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
-    effectively transposing a 2D tensor.
+    If the parameter :code:`dims` is not specified, the function defaults to
+    swapping the last two axes, thereby performing an (optionally batched)
+    2D transpose.
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
@@ -1743,7 +1750,10 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     dims = _unwrap_iterable(dims)
     if not dims:
-        dims = (1, 0)
+        n = len(input.shape)
+        if n < 2:
+            raise ValueError("tl.trans invoked with a 0- or 1-dimensional tensor")
+        dims = list(builtins.range(n - 2)) + [n - 1, n - 2]
     return _semantic.permute(input, dims)
 
 
@@ -1765,7 +1775,7 @@ def permute(input, *dims, _semantic=None):
         permute(x, 2, 1, 0)
 
     :py:func:`trans` is equivalent to this function, except when
-    :code:`dims` is empty, it tries to do a (1,0) permutation.
+    :code:`dims` is empty, it tries to swap the last two axes.
     """
     dims = _unwrap_iterable(dims)
     return _semantic.permute(input, dims)
@@ -2018,7 +2028,36 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     out_dtype = _unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
     acc = _unwrap_if_constexpr(acc)
-    return _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    # check shapes make sense:
+    a_shape = list(input.shape)
+    b_shape = list(other.shape)
+    assert len(a_shape) == len(b_shape) >= 2, "input and other must have equal ranks >= 2"
+    assert a_shape[:-2] == b_shape[:-2], "input and other must have equal batch shapes"
+    assert a_shape[-1] == b_shape[-2], "input and other must have equal reduction dimensions"
+
+    # compute shape of accumulator:
+    c_shape = a_shape[:-1] + [b_shape[-1]]
+    if acc is not None:
+        assert list(acc.shape) == c_shape, "accumulator shape is incompatible"
+    rank = len(c_shape)
+
+    if rank >= 4:
+        batch_size = 1
+        for i in builtins.range(rank - 2):
+            batch_size *= c_shape[i]
+        input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
+        other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
+        if acc is not None:
+            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
+
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    if rank >= 4:
+        res = _semantic.reshape(res, c_shape, can_reorder=False)
+
+    assert list(res.shape) == c_shape, "output shape is unexpected"
+    return res
 
 
 @builtin
@@ -2039,14 +2078,15 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
-    :param lhs_scale: Scale factor for lhs tensor.
-    :type lhs_scale: e8m0 type represented as an uint8 tensor.
+    :param lhs_scale: Scale factor for lhs tensor. Shape should be [M, K//group_size] when lhs is [M, K], where group_size is 32 if scales type are `e8m0`.
+    :type lhs_scale: e8m0 type represented as an uint8 tensor, or None.
     :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
-    :param rhs_scale: Scale factor for rhs tensor.
-    :type rhs_scale: e8m0 type represented as an uint8 tensor.
+    :param rhs_scale: Scale factor for rhs tensor. Shape should be [N, K//group_size] where rhs is [K, N].
+                      Important: Do NOT transpose rhs_scale
+    :type rhs_scale: e8m0 type represented as an uint8 tensor, or None.
     :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
@@ -2056,6 +2096,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_k_pack: bool, optional
     """
     out_dtype = _unwrap_if_constexpr(out_dtype)
+    acc = _unwrap_if_constexpr(acc)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2759,6 +2800,8 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
 
@@ -2805,9 +2848,10 @@ def map_elementwise(
     builder = _semantic.builder
     block = builder.new_block()
     scalar_args = []
+    original_loc = builder.get_loc()
     for i, ty in enumerate(in_scalar_tys):
         for j in builtins.range(pack):
-            block.add_argument(ty.to_ir(builder))
+            block.add_argument_at(ty.to_ir(builder), original_loc)
             scalar_args.append(tensor(block.arg(i * pack + j), ty))
 
     with _insertion_guard(builder):
@@ -2819,6 +2863,7 @@ def map_elementwise(
             scalar_results = scalar_results,
 
         handles = [r.handle for r in scalar_results]
+        builder.set_loc(original_loc)
         builder.create_map_elementwise_ret(handles)
 
     fn_result_types = [x.type for x in scalar_results]
@@ -2832,6 +2877,7 @@ def map_elementwise(
         region = elementwise_op.get_region(0)
         region.push_back(block)
 
+    builder.set_loc(original_loc)
     result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
     return result[0] if is_single else result
 
@@ -3387,3 +3433,58 @@ def binary_op_type_legalization(lhs, rhs, semantic):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+_NOTHING = object()
+
+
+def is_negative_zero(x):
+    return x == 0.0 and math.copysign(1.0, x) < 0
+
+
+@builtin
+def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.max(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    max_val = args[0]
+    for arg in args[1:]:
+        max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if max_val.type.is_block():
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+    return max_val
+
+
+@builtin
+def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.min(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    min_val = args[0]
+    for arg in args[1:]:
+        min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if min_val.type.is_block():
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+    return min_val

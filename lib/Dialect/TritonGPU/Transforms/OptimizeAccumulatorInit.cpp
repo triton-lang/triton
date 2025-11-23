@@ -215,9 +215,9 @@ public:
       rewriter.setInsertionPoint(forOp);
 
       Value vTrue =
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(true));
+          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
       Value vFalse =
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(false));
+          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(false));
 
       // Find the accumulator
       auto [accUse, accDef] = getAccumulatorUseAndDef(mmaOp);
@@ -283,8 +283,8 @@ public:
         rewriter.setInsertionPoint(zeroInitOp->first);
         bool zeroingBeforeMMA = zeroInitOp->first->isBeforeInBlock(mmaOp);
         Value prevFlagValue = zeroingBeforeMMA ? loopArgFlagValue : vTrue;
-        auto selectFlagOp = rewriter.create<arith::SelectOp>(
-            loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
+        auto selectFlagOp = arith::SelectOp::create(
+            rewriter, loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
             thenInitsToZero ? prevFlagValue : vFalse);
         setUseAccFlag(mmaOp,
                       zeroingBeforeMMA ? selectFlagOp : loopArgFlagValue);

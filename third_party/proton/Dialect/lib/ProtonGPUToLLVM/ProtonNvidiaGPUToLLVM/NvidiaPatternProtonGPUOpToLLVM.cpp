@@ -2,6 +2,7 @@
 #include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
 #include "Conversion/ProtonGPUToLLVM/Utility.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
@@ -44,7 +45,41 @@ struct CircularStoreOpConversion
 
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
-      llvm::report_fatal_error("unimplemented");
+      auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+      int numWarps = proton::gpu::getTotalNumWarps(mod);
+      PTXBuilder builder;
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      if (numWarps > 1) {
+        auto stInst = builder.create<>("st")->o("global").o("cg").v(2).b(32);
+        auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "l");
+
+        PTXBuilder::Operand *valOpr;
+        SmallVector<std::pair<Value, std::string>> vecVals;
+        auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+        vecVals.push_back({unPackedVals[0], "r"});
+        vecVals.push_back({unPackedVals[1], "r"});
+        valOpr = builder.newListOperand(vecVals);
+        stInst(ptrOpr, valOpr).predicate(dataPack.isWriter, "b");
+        builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+      } else {
+        // Non-vectorized version for num_warps=1 to handle potential
+        // misalignment
+        auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
+
+        auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+
+        // First store: write first 32-bit value at base address
+        auto *ptrOpr0 = builder.newAddrOperand(dataPack.ptr, "l", 0);
+        auto *valOpr0 = builder.newOperand(unPackedVals[0], "r");
+        stInst(ptrOpr0, valOpr0).predicate(dataPack.isWriter, "b");
+
+        // Second store: write second 32-bit value at offset +4 bytes
+        auto *ptrOpr1 = builder.newAddrOperand(dataPack.ptr, "l", 4);
+        auto *valOpr1 = builder.newOperand(unPackedVals[1], "r");
+        stInst(ptrOpr1, valOpr1).predicate(dataPack.isWriter, "b");
+
+        builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+      }
     } else if (addrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(
           rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,

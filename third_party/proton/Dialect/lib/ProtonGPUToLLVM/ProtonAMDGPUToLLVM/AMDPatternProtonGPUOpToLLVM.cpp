@@ -2,8 +2,10 @@
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/TargetInfo.h"
 #include "Conversion/ProtonGPUToLLVM/Utility.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -37,7 +39,8 @@ struct CircularStoreOpConversion
       // TODO(crobeck): see what buffer ops performance looks like here for
       // global mem (address space 1) compared to predicated ops to shared
       // memory
-      llvm::report_fatal_error("unimplemented");
+      mlir::LLVM::AMD::llStore(rewriter, loc, dataPack.ptr, dataPack.record,
+                               dataPack.isWriter);
     } else if (addrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(
           rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
