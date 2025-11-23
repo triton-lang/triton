@@ -1034,8 +1034,13 @@ struct AsyncCopyGlobalToLocalOpConversion
         zipLoadValues(rewriter, loc, vec, srcElems, srcPtrTy, maskElements,
                       otherElems, otherTy, swizzledLaneOffsets);
 
-    Value threadPred = emitRedundantThreadPredicate(getFreeVariableMasks(srcTy),
-                                                    rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(srcTy);
+    // We load redundant data on different CTAs so each CTA has a copy in its
+    // shared memory; the multicast mask will be used by the hardware to
+    // efficiently broadcast to different CTAs.
+    freeVarMasks[rewriter.getStringAttr("block")] = 0;
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto emitGlobalLoadLds =

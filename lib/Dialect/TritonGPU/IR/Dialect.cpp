@@ -360,6 +360,18 @@ SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
+bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
+  // If the new elements per thread is less than the old one, we will need to
+  // do convert encoding that goes through shared memory anyway. So we
+  // consider it as expensive.
+  RankedTensorType tensorTy = cat.getType();
+  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
+  auto shape = tensorTy.getShape();
+  auto newTotalElemsPerThread =
+      gpu::getTotalElemsPerThread(targetEncoding, shape);
+  return newTotalElemsPerThread < totalElemsPerThread;
+}
+
 static LogicalResult
 verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
                   ArrayRef<unsigned> order) {
@@ -2489,9 +2501,9 @@ LogicalResult DotOperandEncodingAttr::verify(
       return emitError()
              << "ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 "
                 "(including packed cases for `scaled_dot`)";
-    if (parentAttr.getVersion() == 3 && !llvm::is_contained({2, 8, 16}, kWidth))
+    if (parentAttr.getVersion() == 3 && kWidth == 0)
       return emitError()
-             << "ttg.dot_op kWidth parameter must be 2/8/16 for WMMA v3";
+             << "ttg.dot_op kWidth parameter is mandatory for WMMA v3 ";
     return success();
   }
 

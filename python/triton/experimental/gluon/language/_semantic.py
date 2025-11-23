@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout
+from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -301,15 +301,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                                                       distr_ty.element_ty.primitive_bitwidth)
 
     def to_linear_layout(self, layout, shape):
-        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
-               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
+        from triton.experimental.gluon.language.nvidia.blackwell import (
+            TensorMemoryLayout,
+            TensorMemoryScalesLayout,
+        )
+        _check(
+            isinstance(layout, (DistributedLayout, SharedLayout, TensorMemoryLayout, TensorMemoryScalesLayout)), lambda:
+            f"Expected a DistributedLayout, SharedLayout, or TensorMemoryLayout or TensorMemoryScalesLayout, got {type(layout)}"
+        )
 
-        if not isinstance(shape, list):
-            shape = list(shape)
-
-        layout = ttgl._unwrap_if_constexpr(layout)
-
-        if isinstance(layout, (AutoLayout, DistributedLinearLayout)):
+        if isinstance(layout, (AutoLayout, DistributedLinearLayout, SharedLinearLayout)):
             return ttgl.constexpr(layout)
 
         return ttgl.constexpr(self.builder.to_linear_layout(layout._to_ir(self.builder), shape))
@@ -467,6 +468,13 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         layout_attr = layout._to_ir(self.builder)
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
+
+    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool, layout) -> TensorTy:
+        _check(layout is not None, lambda: "cat requires a destination layout")
+        _check(can_reorder, lambda: "current implementation of `cat` always may reorder elements")
+        _check(len(lhs.shape) == 1, lambda: "cat requires a rank-1 input")
+        ret_type = ttgl.distributed_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]], layout)
+        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle, ret_type.to_ir(self.builder)), ret_type)
 
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
