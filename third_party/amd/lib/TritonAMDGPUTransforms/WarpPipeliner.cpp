@@ -56,7 +56,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
   }
 
   // Create the execute_region with the final result types.
-  auto exec = b.create<scf::ExecuteRegionOp>(loc, yieldedTypes);
+  auto exec = scf::ExecuteRegionOp::create(b, loc, yieldedTypes);
   Block *body = &exec.getRegion().emplaceBlock();
   b.setInsertionPointToStart(body);
 
@@ -77,7 +77,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
     assert(mapped && "mapped result missing");
     yieldVals[yieldIdx] = mapped;
   }
-  b.create<scf::YieldOp>(loc, yieldVals);
+  scf::YieldOp::create(b, loc, yieldVals);
 
   // Replace external uses of original results with exec results.
   // Internal uses were already remapped when cloning.
@@ -143,7 +143,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
         // This allows user to deliberately insert a pipeline bubble with a
         // cluster only contains a dummy operation.
         b.setInsertionPoint(op);
-        auto dummyOp = b.create<ROCDL::SchedBarrier>(loc, 0);
+        auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
         dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
         cluster.push_back(dummyOp);
       }

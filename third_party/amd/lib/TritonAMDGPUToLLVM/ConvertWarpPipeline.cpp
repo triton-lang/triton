@@ -77,14 +77,14 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   return info;
 }
 
-static void emitClusterBarrier(PatternRewriter &rewriter, Location loc,
+static void emitClusterBarrier(PatternRewriter &r, Location loc,
                                bool needLocal) {
-  rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+  ROCDL::SchedBarrier::create(r, loc, 0);
   if (needLocal)
-    rewriter.create<mlir::triton::gpu::LocalBarrierOp>(loc);
+    mlir::triton::gpu::LocalBarrierOp::create(r, loc);
   else
-    rewriter.create<ROCDL::SBarrierOp>(loc);
-  rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+    ROCDL::SBarrierOp::create(r, loc);
+  ROCDL::SchedBarrier::create(r, loc, 0);
 }
 
 class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
@@ -113,35 +113,35 @@ public:
   }
 
 private:
-  LogicalResult emitPipelinedFor(PatternRewriter &builder, Location loc,
+  LogicalResult emitPipelinedFor(PatternRewriter &b, Location loc,
                                  scf::ForOp forOp,
                                  Allocation *allocation) const {
     // 1. Insert conditional branch first,
-    builder.setInsertionPointAfter(forOp);
+    b.setInsertionPointAfter(forOp);
     // Set barrier before starting the loop. This resolves any outstanding
     // synchronization before beginning the specialized asymmetric
     // synchronization.
-    auto preBarrier = builder.create<gpu::BarrierOp>(loc);
+    auto preBarrier = gpu::BarrierOp::create(b, loc);
     preBarrier->moveBefore(forOp);
-    builder.setInsertionPointAfter(preBarrier);
+    b.setInsertionPointAfter(preBarrier);
 
     // Insert condbarrier::second_half before starting the loop
     // FIXME : correctly calculate numbers per the arch
-    auto i32ty = builder.getIntegerType(32);
-    auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
-    auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
-    auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
-    auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                 warpIDX, constZero);
-    auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                                  warpIDX, constZero);
+    auto i32ty = b.getIntegerType(32);
+    auto workIDX = ROCDL::ThreadIdXOp::create(b, loc, i32ty);
+    auto constZero = arith::ConstantIntOp::create(b, loc, 0, 32);
+    auto constWarpSize = arith::ConstantIntOp::create(b, loc, 256, 32);
+    auto warpIDX = arith::DivSIOp::create(b, loc, workIDX, constWarpSize);
+    auto warpLow = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                         warpIDX, constZero);
+    auto warpHigh = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
+                                          warpIDX, constZero);
 
-    builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
+    mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpHigh);
 
     // Insert condbarrier::first_half after the end of the loop
-    builder.setInsertionPointAfter(forOp);
-    builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
+    b.setInsertionPointAfter(forOp);
+    mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpLow);
 
     // 2. Collect existing barrier information.
     SmallVector<Block *> clusterBlocks;
@@ -232,24 +232,24 @@ private:
           exBar != existingBarrierMap.end()) {
         auto exBarOp = exBar->second;
         if (bars[i]) {
-          builder.setInsertionPointAfter(exBarOp);
-          emitClusterBarrier(builder, loc, /*needLocal=*/true);
+          b.setInsertionPointAfter(exBarOp);
+          emitClusterBarrier(b, loc, /*needLocal=*/true);
           if (!isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
                   exBarOp))
-            builder.eraseOp(exBarOp);
+            b.eraseOp(exBarOp);
         } else { // wrap with sched barrier
-          builder.setInsertionPoint(exBarOp);
-          builder.create<ROCDL::SchedBarrier>(loc, 0);
-          builder.setInsertionPointAfter(exBarOp);
-          builder.create<ROCDL::SchedBarrier>(loc, 0);
+          b.setInsertionPoint(exBarOp);
+          ROCDL::SchedBarrier::create(b, loc, 0);
+          b.setInsertionPointAfter(exBarOp);
+          ROCDL::SchedBarrier::create(b, loc, 0);
         }
       } else {
-        builder.setInsertionPoint(clusterOps[i]);
+        b.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
         if (i == 0 && topBar == existingBarrierMap.end())
           // inserts just before yield (=End of the loop).
-          builder.setInsertionPoint(terminatorOp);
-        emitClusterBarrier(builder, loc, /*needLocal=*/bars[i]);
+          b.setInsertionPoint(terminatorOp);
+        emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
       }
     }
     return success();
