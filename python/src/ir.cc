@@ -367,7 +367,7 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
 
-    std::string pluginPath = "/home/plotfi/opt/dev/TRITON-DEV-DIALECT/triton/python/triton/dialect-plugins/libMLIRPluginLowering.so";
+    std::string pluginPath = "python/triton/dialect-plugins/libMLIRPluginLowering.so";
     auto plugin = DialectPlugin::load(pluginPath);
     if (!plugin) {
       assert(false && "Failed to load dialect plugin: Request ignored");
