@@ -41,7 +41,7 @@ def _matmul(
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
-             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, _W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
@@ -157,6 +157,11 @@ def _matmul(
         tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
+
+    if PACKED_BLOCK_K_W > BLOCK_K:
+        W_SLICE_SIZES_DIVISIBILITY: tl.constexpr =  _W_SLICE_SIZES_DIVISIBILITY * (PACKED_BLOCK_K_W // BLOCK_K)
+    else:
+        W_SLICE_SIZES_DIVISIBILITY: tl.constexpr =  _W_SLICE_SIZES_DIVISIBILITY // (BLOCK_K // PACKED_BLOCK_K_W)
 
     OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
     yN = N // ACTIVATION_REDUCTION_N
