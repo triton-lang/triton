@@ -303,11 +303,14 @@ struct ConvertWarpPipeline
     ModuleOp m = getOperation();
     ModuleAllocation moduleAllocation(m);
 
-    RewritePatternSet patterns(&getContext());
-    patterns.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation);
-    patterns.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
+    RewritePatternSet patternFor(&getContext());
+    RewritePatternSet patternInline(&getContext());
+    patternFor.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation);
+    patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
 
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
+    if (failed(applyPatternsGreedily(m, std::move(patternFor))))
+      signalPassFailure();
+    if (failed(applyPatternsGreedily(m, std::move(patternInline))))
       signalPassFailure();
   }
 };

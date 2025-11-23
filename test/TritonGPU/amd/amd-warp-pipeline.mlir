@@ -12,13 +12,13 @@ tt.func @three_stage_example(%n: index) {
     %a2 = arith.muli %a, %c1 : index
 
     // explicit split point → next stage begins
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border}
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border="stage"}
 
     // Stage 1
     %b  = arith.addi %a2, %i : index
 
     // explicit split point → next stage begins
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border}
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border="stage"}
 
     // Stage 2
     %c  = arith.addi %b, %a : index
@@ -55,7 +55,7 @@ tt.func @two_stage_example(%n: index) {
     %x = arith.addi %i, %c1 : index
 
     // split to Stage 1
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border}
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border="stage"}
 
     // Stage 1
     %y = arith.muli %x, %c1 : index
