@@ -762,6 +762,7 @@ static LogicalResult rewriteTMABufferUpdates(
     // Finally, rewrite the loop level yield
     auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     forYield.setOperand(counter.getArgNumber() - 1, nextCounter);
+    makeDescOp.erase();
   }
   return success();
 }
