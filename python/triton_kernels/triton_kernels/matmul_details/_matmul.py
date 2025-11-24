@@ -9,36 +9,19 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import (
-    _load_tile_attrs,
+    compute_offsets,
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    swizzle2d,
-    xcd_swizzle,
     threadfence_system,
+    compute_pids,
 )
 
 
-@triton.jit
-def _zero_masked_rows(
-        pid_m, pid_n,
-        Y, stride_y_m, stride_y_n,
-        N,
-        ScatterSrcIndx, num_idxs,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    offs_m = BLOCK_M * pid_m.to(tl.int64) + tl.arange(0, BLOCK_M)
-    offs_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
-    src_idx = tl.load(ScatterSrcIndx + offs_m, mask=offs_m < num_idxs, other=0)
-    YPtrs = Y + offs_m[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
-    mask_n = offs_n < N
-    mask = (src_idx == -1)[:, None] & mask_n[None, :]
-    tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
-
-
-_matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
+_matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
-            repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
-def _matmul_ogs(
+            repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
+def _matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
@@ -54,14 +37,11 @@ def _matmul_ogs(
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
-             GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
-             ScatterSrcIndx, num_idxs,
+             GatherIndx,
              WriteBackIndx, writeback_size,
-             ExptHist, ExptOffs, ExptTileOffs, ExptData,
-             EXPT_IS_INNER: tl.constexpr,
-             X_IS_PADDED: tl.constexpr,
-             W_IS_PADDED: tl.constexpr,
-             ExptHistMax,
+             RAGGED_DIMENSION: tl.constexpr,
+             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, _W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
@@ -81,7 +61,6 @@ def _matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
-             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
@@ -123,12 +102,14 @@ def _matmul_ogs(
     tl.assume(grid_m >= 0)
     tl.assume(grid_n >= 0)
 
+
+    w_type: tl.constexpr = W.dtype.element_ty
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_microscaled: tl.constexpr = WMxScale is not None
+    is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
+
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
-        w_type: tl.constexpr = W.dtype.element_ty
-        is_mxfp4: tl.constexpr = w_type == tl.uint8
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
@@ -137,7 +118,7 @@ def _matmul_ogs(
 
         # TODO: refactor if/else when triton front end improves
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-            tl.static_assert(is_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
+            tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             tl.static_assert(not is_x_microscaled)
             # We have pack 2 fp4 values in a byte but we divide the dimension by 2
             # when swizzling
@@ -146,7 +127,7 @@ def _matmul_ogs(
             W_N_DIVISOR: tl.constexpr = 4
         else:
             # We have pack 2 fp4 values in a  byte
-            W_K_DIVISOR: tl.constexpr = 2 if is_mxfp4 else 1
+            W_K_DIVISOR: tl.constexpr = 2 if is_w_mxfp4 else 1
             W_K_MULTIPLIER: tl.constexpr = 1
             W_N_DIVISOR: tl.constexpr = 1
 
@@ -177,52 +158,71 @@ def _matmul_ogs(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
+    if _W_SLICE_SIZES_DIVISIBILITY is None:
+        W_SLICE_SIZES_DIVISIBILITY: tl.constexpr = 1
+    else:
+        if PACKED_BLOCK_K_W > BLOCK_K:
+            W_SLICE_SIZES_DIVISIBILITY: tl.constexpr =  _W_SLICE_SIZES_DIVISIBILITY * (PACKED_BLOCK_K_W // BLOCK_K)
+        else:
+            W_SLICE_SIZES_DIVISIBILITY: tl.constexpr =  _W_SLICE_SIZES_DIVISIBILITY // (BLOCK_K // PACKED_BLOCK_K_W)
+
     OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
     yN = N // ACTIVATION_REDUCTION_N
 
     pid = tl.program_id(0)
-    if ExptTileOffs is not None and (not EXPT_IS_INNER):
-        # Determine how much padding there is on the expert data. This allows us to
-        # know the true grid size and avoid processing padding tiles.
-        padding_m = grid_m - tl.load(ExptTileOffs + N_EXPTS_TOT)
+    if RAGGED_DIMENSION == "M":
+        padding_m = grid_m - tl.load(XBlockOffs + N_EXPTS_TOT)
     else:
         padding_m: tl.constexpr = 0
 
-    HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
 
     unpadded_m = grid_m - padding_m
     tl.assume(unpadded_m >= 0)
     total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
 
-    # set masked out rows to 0
-    # We are tiling Y here, so the tiling is independent of matmul (where we
-    # tile X & W and scatter to different rows of Y).
-    # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER and INIT_OUTPUT_TO_ZERO:
-        tl.device_assert(batch_size == 1)
-        pid_mnk = pid
-        if XCD_SWIZZLE != 1:
-            pid_mnk = xcd_swizzle(pid_mnk, grid_m * grid_n * SPLIT_K, XCD_SWIZZLE)
-        pid_k = pid_mnk % SPLIT_K
-        pid_mn = pid_mnk // SPLIT_K
-        pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
-        _zero_masked_rows(pid_m, pid_n,
-                          Y + pid_k.to(index_type) * stride_y_k, stride_y_m, stride_y_n,
-                          yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
-
     if padding_m > 0 and pid >= total_actual_tiles:
         return
 
+    pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K
+
     (
         expt_id, start_z, start_z_out,
-        start_m, eM, off_m, pid_n,
-        k_tiles, pid_k, off_k_x, off_k_w, K_W,
-    ) = _load_tile_attrs(pid, total_actual_tiles, unpadded_m, grid_n,
-                         M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-                         EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
-                         BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                         GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
+        start_m, off_m,
+        off_k_x, off_k_w
+    ) = compute_offsets(
+            pid_s, pid_m, pid_k,
+            XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+            RAGGED_DIMENSION,
+            BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+        )
+    if X_SLICE_SIZES_DIVISIBILITY is not None:
+        off_k_x = off_k_x // X_SLICE_SIZES_DIVISIBILITY * X_SLICE_SIZES_DIVISIBILITY
+    if W_SLICE_SIZES_DIVISIBILITY is not None:
+        off_k_w = off_k_w // W_SLICE_SIZES_DIVISIBILITY * W_SLICE_SIZES_DIVISIBILITY
+
+
+    if RAGGED_DIMENSION == "M":
+        eM = tl.multiple_of(tl.load(XSliceSizes + expt_id), X_SLICE_SIZES_DIVISIBILITY)
+    else:
+        eM = M
+
+
+    if RAGGED_DIMENSION == "K":
+        K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
+        if PACKED_BLOCK_K_W > BLOCK_K:
+            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+        else:
+            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
+        K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
+    else:
+        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
+        K_X = K
+
+    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
+    k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
@@ -246,6 +246,7 @@ def _matmul_ogs(
     offs_k = off_k_x + tl.arange(0, BLOCK_K)
     XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
 
+
     # TODO: refactor if/else when triton front end improves
     if is_w_microscaled:
         WMxScale += expt_id * stride_w_mx_e
@@ -262,6 +263,7 @@ def _matmul_ogs(
             # TODO: support non W_TRANSPOSE with Hopper swizzling
             tl.static_assert(W_TRANSPOSE)
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
+            tl.static_assert(n_warps == 8)
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
@@ -281,7 +283,6 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        tl.static_assert(not EXPT_IS_INNER or W_IS_PADDED)
         offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:
@@ -309,27 +310,28 @@ def _matmul_ogs(
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     # compute output
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    x_k_limit = K + BLOCK_K * SPLIT_K
+    x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
+
     for ki in range(k_tiles):
         x_k_limit -= BLOCK_K * SPLIT_K
         w_k_limit -= PACKED_BLOCK_K_W * SPLIT_K
         if EVEN_K:
-            mask_k = tl.full([BLOCK_K], True, dtype=tl.int1)
+            mask_k_x = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
             if is_x_microscaled:
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
-            mask_k = offs_k < x_k_limit
+            mask_k_x = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < x_k_limit
+                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR // 2 < w_k_limit
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+        x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
@@ -348,6 +350,7 @@ def _matmul_ogs(
             elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                tl.static_assert(num_warps == 8)
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
             elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                 w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
