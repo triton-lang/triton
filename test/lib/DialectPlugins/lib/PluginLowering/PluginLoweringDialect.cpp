@@ -1,12 +1,3 @@
-//===- PluginLoweringDialect.cpp - PluginLowering dialect ---------------*- C++
-//-*-===//
-//
-// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
 #include "PluginLowering/PluginLoweringDialect.h"
 #include "PluginLowering/PluginLoweringOps.h"
 #include "PluginLowering/PluginLoweringTypes.h"
@@ -28,15 +19,6 @@ void PluginLoweringDialect::initialize() {
   registerTypes();
 }
 
-//===- pluginlowering-plugin.cpp ------------------------------------*- C++
-//-*-===//
-//
-// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
@@ -45,24 +27,42 @@ void PluginLoweringDialect::initialize() {
 #include "PluginLowering/PluginLoweringPasses.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/Support/Compiler.h"
+#include "triton/Tools/PluginUtils.h"
 
 using namespace mlir;
-/// Dialect plugin registration mechanism.
-/// Observe that it also allows to register passes.
-/// Necessary symbol to register the dialect plugin.
-extern "C" LLVM_ATTRIBUTE_WEAK DialectPluginLibraryInfo
-mlirGetDialectPluginInfo() {
+
+// Key APIs:
+
+TRITON_PLUGIN_API
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+  return TP_GENERIC_FAILURE;
+}
+
+TRITON_PLUGIN_API
+tritonRegisterPluginPass(const char *passName) {
+  return TP_GENERIC_FAILURE;
+}
+
+TRITON_PLUGIN_API
+tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+  *passCount = 0;
+  return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API
+tritonEnumeratePluginDialects(uint32_t *dialectCount, const char **dialectNames) {
+  *dialectCount = 1;
+  if (!dialectNames)
+    return TP_SUCCESS;
+  dialectNames[0] = "PluginLowering";
+  return TP_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) DialectPluginLibraryInfo
+tritonGetDialectPluginInfo(const char *name) {
   return {MLIR_PLUGIN_API_VERSION, "PluginLowering", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {
             registry->insert<mlir::pluginlowering::PluginLoweringDialect>();
             mlir::pluginlowering::registerPasses();
           }};
-}
-
-/// Pass plugin registration mechanism.
-/// Necessary symbol to register the pass plugin.
-extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo mlirGetPassPluginInfo() {
-  return {MLIR_PLUGIN_API_VERSION, "PluginLoweringPasses", LLVM_VERSION_STRING,
-          []() { mlir::pluginlowering::registerPasses(); }};
 }
