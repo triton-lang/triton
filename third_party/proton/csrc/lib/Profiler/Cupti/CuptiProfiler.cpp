@@ -477,11 +477,12 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto contexts = data->getContexts();
             if (profiler.isOpInProgress()) {
               pImpl->graphStates[graphId]
-                  .nodeIdToState[nodeId]
-                  .captureContexts[data] = contexts;
-              pImpl->graphStates[graphId]
                   .apiNodeIds.insert(nodeId);
+              contexts.push_back(threadState.scopeStack.back());
             }
+            pImpl->graphStates[graphId]
+                .nodeIdToState[nodeId]
+                .captureContexts[data] = contexts;
           }
           if (threadState.isMetricKernelLaunching)
             pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
