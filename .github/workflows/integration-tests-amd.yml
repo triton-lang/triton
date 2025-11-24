@@ -166,6 +166,20 @@ jobs:
         if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
           cd third_party/amd/python/test/
+          # Check LLVM version for debugging
+          echo "=== Checking LLVM versions ==="
+          LLVM_CONFIG=$(find ~/.triton/llvm -name llvm-config 2>/dev/null | head -1)
+          if [ -n "$LLVM_CONFIG" ] && [ -f "$LLVM_CONFIG" ]; then
+            echo "Triton LLVM version:"
+            $LLVM_CONFIG --version
+            echo "Triton LLVM location: $LLVM_CONFIG"
+          else
+            echo "Triton LLVM not found at ~/.triton/llvm"
+          fi
+          echo "LLVM hash from cmake:"
+          cat ${GITHUB_WORKSPACE}/cmake/llvm-hash.txt
+          echo "=============================="
+
           ulimit -s 1024
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
           TORCH_PATH=$(find /opt -name libcaffe2_nvrtc.so -printf '%h\n')
