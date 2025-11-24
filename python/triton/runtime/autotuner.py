@@ -131,7 +131,6 @@ class Autotuner(KernelInterface):
                 import warnings
                 warnings.warn("Specified bailout_in_benchmarking but the given do_bench does not support bailout.")
                 self.bailout_in_benchmarking = None
-        self.best_timing = float("inf")
 
     @cached_property
     def do_bench(self):
@@ -234,6 +233,7 @@ class Autotuner(KernelInterface):
         return False
 
     def run(self, *args, **kwargs):
+        self.best_timing = float("inf")
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
