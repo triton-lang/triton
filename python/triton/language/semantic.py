@@ -118,13 +118,15 @@ class TritonSemantic(Generic[TensorTy]):
     def to_tensor(self, x, check_type=True):
         if isinstance(x, self.tensor):
             return x
-        x = tl._unwrap_if_constexpr(x)
-        dtype = self.to_tensor_type(x, check_type)
-        if dtype is None:
-            return x
-        return self.scalar_constant(x, dtype=dtype)
+        x = x.value if isinstance(x, tl.constexpr) else x
+        if isinstance(x, (int, float, bool)):
+            dtype = self.to_tensor_type(x)
+            return self.scalar_constant(x, dtype=dtype)
+        elif check_type:
+            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+        return x
 
-    def to_tensor_type(self, x, check_type=True):
+    def to_tensor_type(self, x):
         if isinstance(x, tl.dtype):
             return x
         elif isinstance(x, tl.constexpr_type):
@@ -153,9 +155,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return tl.float32
             else:
                 return tl.float64
-        if check_type:
-            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
-        return None
+        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
 
 # ===----------------------------------------------------------------------===//
 #                               Binary Operators
