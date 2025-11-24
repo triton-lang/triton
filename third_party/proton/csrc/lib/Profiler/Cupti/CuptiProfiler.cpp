@@ -398,32 +398,22 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i];
-        if (metricTypeIndex == variant_index_v<uint64_t, MetricValueType>) {
-          uint64_t metricValueUint = 0;
-          std::memcpy(&metricValueUint, &metricValue, sizeof(metricValueUint));
-          data->addMetrics(scopeId,
-                           /*scalarMetrics=*/{
-                               {metricName, metricValueUint},
-                           });
-        } else if (metricTypeIndex ==
-                   variant_index_v<int64_t, MetricValueType>) {
-          int64_t metricValueInt = 0;
-          std::memcpy(&metricValueInt, &metricValue, sizeof(metricValueInt));
-          data->addMetrics(
-              scopeId,
-              /*scalarMetrics=*/{
-                  {metricName, metricValueInt},
-              });
-        } else if (metricTypeIndex ==
-                   variant_index_v<double, MetricValueType>) {
-          double metricValueDouble = 0.0;
-          std::memcpy(&metricValueDouble, &metricValue,
-                      sizeof(metricValueDouble));
-          data->addMetrics(
-              scopeId,
-              /*scalarMetrics=*/{
-                  {metricName, metricValueDouble},
-              });
+        auto addMetricValue = [&](auto typedValue) {
+          std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
+          data->addMetrics(scopeId, {{metricName, typedValue}});
+        };
+        switch (metricTypeIndex) {
+        case variant_index_v<uint64_t, MetricValueType>:
+          addMetricValue(uint64_t{});
+          break;
+        case variant_index_v<int64_t, MetricValueType>:
+          addMetricValue(int64_t{});
+          break;
+        case variant_index_v<double, MetricValueType>:
+          addMetricValue(double{});
+          break;
+        default:
+          break;
         }
       }
     }
@@ -583,7 +573,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             }
           }
-          std::map<Data *, std::vector<size_t>> metricNodeScopeIds;
+          std::map<Data *, std::vector<size_t>> metricNodeScopesByData;
           for (auto *data : dataSet) {
             auto &nodeToScopeId =
                 profiler.correlation.externIdToGraphNodeScopeId[externId][data];
@@ -591,23 +581,23 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                  pImpl->graphStates[graphExecId].metricKernelNodeIds) {
               auto scopeIt = nodeToScopeId.find(nodeId);
               if (scopeIt != nodeToScopeId.end()) {
-                metricNodeScopeIds[data].push_back(scopeIt->second);
+                metricNodeScopesByData[data].push_back(scopeIt->second);
               }
             }
           }
-          auto capacity = pImpl->metricBuffer->getSize(); // bytes
-          auto newMetricNodes =
+          auto metricBufferCapacityBytes = pImpl->metricBuffer->getSize(); // bytes
+          auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
-          auto popResult =
-              pImpl->pendingGraphQueue.popAllIfReachCapacity(newMetricNodes,
-                                                             capacity);
-          if (popResult.first == 0) { // Not reach capacity yet
-            pImpl->pendingGraphQueue.push(externId, metricNodeScopeIds,
-                                          newMetricNodes);
+          auto drained =
+              pImpl->pendingGraphQueue.popAllIfReachCapacity(metricNodeCount,
+                                                             metricBufferCapacityBytes);
+          if (drained.first == 0) { // Not reach capacity yet
+            pImpl->pendingGraphQueue.push(externId, metricNodeScopesByData,
+                                          metricNodeCount);
           } else {
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
               auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-              pImpl->emitMetricRecords(recordPtr, popResult.second);
+              pImpl->emitMetricRecords(recordPtr, drained.second);
             });
           }
         }
