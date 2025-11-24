@@ -97,7 +97,9 @@ uint32_t processActivityKernel(
           // No captured context for this data
           continue;
         }
-        auto [isAPI, scopeId] = dataIt->second.at(kernel->graphNodeId);
+        auto res = dataIt->second.at(kernel->graphNodeId);
+        isAPI = res.second;
+        scopeId = res.first;
       }
       if (isAPI)
         scopeId = data->addOp(scopeId, kernel->name);
