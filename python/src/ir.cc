@@ -27,19 +27,21 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace {
 
@@ -364,12 +366,23 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
 
-    std::string pluginPath = "python/triton/dialect-plugins/libMLIRPluginLowering.so";
-    auto plugin = DialectPlugin::load(pluginPath);
-    if (!plugin) {
-      assert(false && "Failed to load dialect plugin: Request ignored");
-    } else {
-      plugin.get().registerDialectRegistryCallbacks(registry);
+    if (std::string filename =
+            mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+        !filename.empty()) {
+
+      TritonPlugin TP(filename);
+      std::vector<const char *> dialectNames;
+      if (auto result = TP.getDialectHandles(dialectNames); !result)
+        throw TP.err2exp(result.takeError());
+
+      for (unsigned i = 0; i < dialectNames.size(); ++i) {
+        const char *dialectName = dialectNames.data()[i];
+        auto result = TP.getDialectPluginInfo(dialectName);
+        if (!result)
+          throw TP.err2exp(result.takeError());
+        ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
+        dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
+      }
     }
 
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,

@@ -1,4 +1,5 @@
-//===- PluginLoweringPasses.cpp - PluginLowering passes -----------------*- C++ -*-===//
+//===- PluginLoweringPasses.cpp - PluginLowering passes -----------------*- C++
+//-*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -17,7 +18,8 @@ namespace mlir::pluginlowering {
 #include "PluginLowering/PluginLoweringPasses.h.inc"
 
 namespace {
-class PluginLoweringSwitchBarFooRewriter : public OpRewritePattern<func::FuncOp> {
+class PluginLoweringSwitchBarFooRewriter
+    : public OpRewritePattern<func::FuncOp> {
 public:
   using OpRewritePattern<func::FuncOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(func::FuncOp op,
