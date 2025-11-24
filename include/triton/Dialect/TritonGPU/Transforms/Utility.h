@@ -218,14 +218,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 // Skips operands if they're in shared encoding.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);
 
-// Returns the original memory allocation for a memdesc value
-triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
-
-// Returns MMAs inside a for loop that are multi-buffered for pipeline analysis
-SmallVector<Operation *>
-getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
-                                  SmallVector<Operation *> &mmaOps);
-
 // Given a list of ops, find the naerest common dominator of all ops or return
 // null if one could not be found. The ops are allowed to be in different
 // regions. The result op is not necessarily one of the ops in the list.

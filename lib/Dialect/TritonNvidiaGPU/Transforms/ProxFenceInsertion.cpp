@@ -98,9 +98,14 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                 OpBuilder *builder) {
   if (isa<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
     // If the current op is a fence, we clear previous reads and writes
-    blockInfo->sync();
+    blockInfo->sync(false);
     return;
   }
+  // Proxy fences are CTA-local; distributed shmem is not relevant here.
+  const unsigned numCTAs = triton::gpu::lookupNumCTAs(op);
+  const BlockInfo::CTA_UFDS readCTAs(numCTAs);
+  const BlockInfo::CTA_UFDS writeCTAs(numCTAs);
+
   BlockInfo curBlockInfo;
   BlockInfo proxyBlockInfo;
 
@@ -128,20 +133,21 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
                   proxyBlockInfo
-                      .syncWriteIntervals[allocation->getAllocatedInterval(
-                          bufferId)]
+                      .syncWriteIntervals[{
+                          allocation->getAllocatedInterval(bufferId),
+                          writeCTAs}]
                       .insert(op);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
                 curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
+                    .syncWriteIntervals[{
+                        allocation->getAllocatedInterval(bufferId), writeCTAs}]
                     .insert(op);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
                 curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
+                    .syncReadIntervals[{
+                        allocation->getAllocatedInterval(bufferId), readCTAs}]
                     .insert(op);
               }
             }
@@ -157,13 +163,13 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncReadIntervals[interval].insert(op);
+    curBlockInfo.syncReadIntervals[{interval, readCTAs}].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
-      blockInfo->sync();
+      blockInfo->sync(false);
     }
   }
 

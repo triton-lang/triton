@@ -414,7 +414,6 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
                    const triton::LinearLayout &dstLayout);
-
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

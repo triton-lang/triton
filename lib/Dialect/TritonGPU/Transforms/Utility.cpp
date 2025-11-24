@@ -1377,56 +1377,6 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
 }
 
-ttg::LocalAllocOp findShmemAlloc(Value operand) {
-  // If it's a shmem operand, it must either be defined outside the loop, or
-  // come from an MemDescIndex op. Only ConvertLayout and MemdescView ops are
-  // allowed in between.
-  Value transitiveOperand = operand;
-  while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
-                         ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
-             transitiveOperand.getDefiningOp()) ||
-         isa<BlockArgument>(transitiveOperand)) {
-    if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
-      assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
-             "Block argument must come from a for loop");
-      transitiveOperand =
-          cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
-              .getOperand(blockArg.getArgNumber() - 1);
-    } else {
-      transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
-    }
-  }
-  if (auto subView = dyn_cast_or_null<ttg::MemDescIndexOp>(
-          transitiveOperand.getDefiningOp())) {
-    // Multi-buffered operand
-    return dyn_cast_or_null<ttg::LocalAllocOp>(
-        subView.getSrc().getDefiningOp());
-  } else {
-    // Single bufferred operand that does not require a subview (not loaded in
-    // the loop)
-    return dyn_cast_or_null<ttg::LocalAllocOp>(
-        transitiveOperand.getDefiningOp());
-  }
-  return nullptr;
-}
-
-SmallVector<Operation *>
-getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
-                                  SmallVector<Operation *> &mmaOps) {
-  // The A and B operands of the mmaOp should be multi-buffered
-  SmallVector<Operation *> eligible;
-  for (auto mmaOp : mmaOps) {
-    auto a = findShmemAlloc(mmaOp->getOperand(0));
-    auto b = findShmemAlloc(mmaOp->getOperand(1));
-    if (a && forOp.isDefinedOutsideOfLoop(a) && b &&
-        forOp.isDefinedOutsideOfLoop(b)) {
-      eligible.push_back(mmaOp);
-    }
-  }
-
-  return eligible;
-}
-
 template <typename DomInfoT>
 static Operation *findNearestCommonDominatorImpl(
     ArrayRef<Operation *> ops, DomInfoT &domInfo,
