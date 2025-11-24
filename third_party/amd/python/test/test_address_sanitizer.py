@@ -33,8 +33,20 @@ def test_address_sanitizer():
     os.environ["AMDGCN_USE_BUFFER_OPS"] = "0"
 
     # Workaround: Code hangs if kernel compilation and kernel launch are done in the same step
-    subprocess.check_call(["python", "address_sanitizer_helper.py", "warmup"])
+    # Temporarily commented out to test if LLVM error occurs in launch phase
+    # subprocess.check_call(["python", "address_sanitizer_helper.py", "warmup"])
+
     out = subprocess.Popen(["python", "address_sanitizer_helper.py", "launch"], stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE)
-    assert "Begin function __asan_report" in out.stdout.read().decode()
-    assert "heap-buffer-overflow" in out.stderr.read().decode()
+    stdout_output = out.stdout.read().decode()
+    stderr_output = out.stderr.read().decode()
+
+    # Print outputs for debugging
+    print("\n=== LAUNCH STDOUT (first 500 chars) ===")
+    print(stdout_output[:500])
+    print("\n=== LAUNCH STDERR (first 1000 chars) ===")
+    print(stderr_output[:1000])
+    print("=" * 50)
+
+    assert "Begin function __asan_report" in stdout_output
+    assert "heap-buffer-overflow" in stderr_output
