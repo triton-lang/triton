@@ -294,6 +294,8 @@ def matmul(a, b, bias,
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (c is None or c.stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
+        # for simulated MXFP, not supported
+        (b_scale is None or target_info.has_native_mxfp()) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
