@@ -168,7 +168,7 @@ jobs:
           cd third_party/amd/python/test/
           ulimit -s 1024
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
-          export LD_LIBRARY_PATH=$(find /opt -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(find /opt -name libcaffe2_nvrtc.so -printf '%h\n')
           export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -wholename *lib/asan/libamdhip64.so -printf '%h\n'):$LD_LIBRARY_PATH
