@@ -4,6 +4,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
+#include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -408,7 +409,7 @@ void init_triton_amd(py::module &&m) {
 
         llvm::Triple triple(amdTargetTriple);
         const llvm::Target *target =
-            llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+            llvm::TargetRegistry::lookupTarget(triple, error);
         if (!target)
           throw std::runtime_error("target lookup error: " + error);
 
@@ -467,12 +468,16 @@ void init_triton_amd(py::module &&m) {
     std::string error;
     llvm::Triple triple(amdTargetTriple);
     const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+        llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
         target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
+  });
+
+  m.def("supports_multi_cta_launch", [](const std::string &arch) {
+    return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
   });
 
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {

@@ -1,5 +1,6 @@
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
+#include <triton/Tools/LayoutUtils.h>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -10,42 +11,47 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
                                        Attribute encoding,
                                        SmallVector<Value> indices) {
   if (isFp4Padded(encoding)) {
-    auto two = builder.create<arith::ConstantIntOp>(loc, 2, 32);
-    indices.back() = builder.create<arith::MulIOp>(loc, indices.back(), two);
+    auto two = arith::ConstantIntOp::create(builder, loc, 2, 32);
+    indices.back() = arith::MulIOp::create(builder, loc, indices.back(), two);
   }
   return indices;
 }
 
-ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
-                                           ArrayRef<int64_t> shape) {
+ttg::CTAEncodingAttr updateCTALayoutForShape(ttg::CTAEncodingAttr ctaLayout,
+                                             ArrayRef<int64_t> shape) {
   auto rank = shape.size();
   if (ctaLayout.getRank() == rank)
     return ctaLayout;
 
   auto ctx = ctaLayout.getContext();
   if (ctaLayout.getRank() > rank) {
+    auto ll = ctaLayout.getLinearLayout();
+    // Broadcast over the first rankDiff dims
     unsigned rankDiff = ctaLayout.getRank() - rank;
-    return ttg::CTALayoutAttr::get(
-        ctx, ctaLayout.getCTAsPerCGA().drop_front(rankDiff),
-        ctaLayout.getCTASplitNum().drop_front(rankDiff),
-        ctaLayout.getCTAOrder().drop_front(rankDiff));
+    for (int i = 0; i < rankDiff; ++i) {
+      ll = removeStandardDim(ll, 0);
+    }
+    return ttg::CTAEncodingAttr::get(ctx, ll);
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - ctaLayout.getRank();
   for (unsigned i = 0; i < rankDiff; ++i) {
     assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
   }
-  SmallVector<unsigned> CTAsPerCGA(rank, 1);
-  SmallVector<unsigned> CTASplitNum(rank, 1);
-  SmallVector<unsigned> CTAOrder(rank, 1);
-
-  llvm::copy(ctaLayout.getCTAsPerCGA(), CTAsPerCGA.begin() + rankDiff);
-  llvm::copy(ctaLayout.getCTASplitNum(), CTASplitNum.begin() + rankDiff);
-  for (unsigned i = 0; i < rankDiff; ++i) {
-    CTAOrder[i] = rank - i;
+  auto ll = ctaLayout.getLinearLayout();
+  auto kBlock = *ll.getInDimNames().begin();
+  auto standardOuts = standardOutDimNames(ctx, rank);
+  // Append to front
+  for (int i = ctaLayout.getRank(); i < rank; ++i) {
+    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
   }
-  llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
-  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder);
+  // Rename out dims to dim0..dimn-1
+  auto dimSizes = ll.getOutDims();
+  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
+    dimSizes[i].first = dim;
+  }
+  ll = LinearLayout(ll.getBases(), dimSizes, false);
+  return ttg::CTAEncodingAttr::get(ctx, ll);
 }
 
 ttg::SharedEncodingTrait
@@ -236,8 +242,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto mkI32Constant = [&](int32_t val) {
-    return builder.create<arith::ConstantOp>(loc, builder.getI32Type(),
-                                             builder.getI32IntegerAttr(val));
+    return arith::ConstantOp::create(builder, loc, builder.getI32Type(),
+                                     builder.getI32IntegerAttr(val));
   };
 
   auto elemType = op.getBase().getType().getPointeeType();
@@ -278,8 +284,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
     return failure();
   auto swizzleMode = *maybeSwizzleMode;
 
-  Value elemSizeVal = builder.create<arith::ConstantOp>(
-      loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
+  Value elemSizeVal = arith::ConstantOp::create(
+      builder, loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
 
   SmallVector<Value> globalDim(llvm::reverse(op.getShape()));
   SmallVector<Value> globalStride;
@@ -290,14 +296,14 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   if (fp4Padded) {
     // Convert number of bytes to number of mxfp4 elements
     globalDim[0] =
-        builder.create<arith::MulIOp>(loc, globalDim[0], mkI32Constant(2));
+        arith::MulIOp::create(builder, loc, globalDim[0], mkI32Constant(2));
   }
 
   SmallVector<Value> elementStride(globalDim.size(), mkI32Constant(1));
 
   for (int i = 0; i < globalStride.size(); ++i)
     globalStride[i] =
-        builder.create<arith::MulIOp>(loc, globalStride[i], elemSizeVal);
+        arith::MulIOp::create(builder, loc, globalStride[i], elemSizeVal);
 
   auto elemTypeEnum = getTMAElementType(op, op.getType());
   if (!elemTypeEnum) {
@@ -306,8 +312,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   auto fillMode = (op.getPadding() == triton::PaddingOption::PAD_NAN) ? 1 : 0;
 
-  builder.create<TensormapCreateOp>(
-      loc,
+  TensormapCreateOp::create(
+      builder, loc,
       /*desc_ptr=*/tmaPtr,
       /*global_address=*/op.getBase(),
       /*box_dim=*/boxDim,
