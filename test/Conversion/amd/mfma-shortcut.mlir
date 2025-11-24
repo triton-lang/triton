@@ -108,3 +108,19 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+
+// -----
+
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [8, 1], instrShape = [16, 16], isTransposed = true}>
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [16, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [4, 0], [8, 0]], warp = [[0, 16], [0, 32], [0, 64]], block = []}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: mfma_dotop_lds_layout_order
+  tt.func public @mfma_dotop_lds_layout_order(%arg0: tensor<128x32xbf16, #mma>) {
+    %1 = tt.trans %arg0 {order = array<i32: 1, 0>} : tensor<128x32xbf16, #mma> -> tensor<32x128xbf16, #linear>
+    // GFX950-COUNT-2: llvm.store
+    // GFX950-COUNT-8: lvm.call_intrinsic "rocdl.ds.read.tr16.b64"
+    %2 = ttg.convert_layout %1 : tensor<32x128xbf16, #linear> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    tt.return
+  }
+}
