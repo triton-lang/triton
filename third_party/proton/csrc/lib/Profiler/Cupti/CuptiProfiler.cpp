@@ -473,22 +473,24 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
           // only increase the numInstances in CREATED callback
-          for (auto *data : dataSet) {
-            auto contexts = data->getContexts();
-            // Trick: if the scope name is empty, it means the graph is created
-            // by an API kernel but not Triton op
-            if (profiler.isOpInProgress() &&
-                threadState.scopeStack.back().name.empty()) {
-              pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
-            } else {
-              contexts.push_back(threadState.scopeStack.back());
+          if (profiler.isOpInProgress()) {
+            for (auto *data : dataSet) {
+              auto contexts = data->getContexts();
+              // Trick: if the scope name is empty, it means the graph is created
+              // by an API kernel but not Triton op
+              if (threadState.scopeStack.back().name.empty()) {
+                pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
+              } else {
+                contexts.push_back(threadState.scopeStack.back());
+              }
+              pImpl->graphStates[graphId]
+                  .nodeIdToState[nodeId]
+                  .captureContexts[data] = contexts;
             }
-            pImpl->graphStates[graphId]
-                .nodeIdToState[nodeId]
-                .captureContexts[data] = contexts;
-          }
-          if (threadState.isMetricKernelLaunching)
-            pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
+            if (threadState.isMetricKernelLaunching)
+              pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
+          } // else no op in progress, the creation is triggered by graph
+            // clone/instantiate
           if (!pImpl->graphStates.contain(graphId))
             pImpl->graphStates[graphId] = GraphState();
           else
