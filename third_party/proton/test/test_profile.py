@@ -613,7 +613,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         foo[(1, )](a, b, c)
 
     temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
     # warmup
     # four kernels
