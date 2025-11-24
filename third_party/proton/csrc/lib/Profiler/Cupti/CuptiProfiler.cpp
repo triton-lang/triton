@@ -475,10 +475,12 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // only increase the numInstances in CREATED callback
           for (auto *data : dataSet) {
             auto contexts = data->getContexts();
-            if (profiler.isOpInProgress()) {
-              contexts.push_back(threadState.scopeStack.back());
-            } else {
+            // Trick: if the scope name is empty, it means the graph is created
+            // by an API kernel but not Triton op
+            if (threadState.scopeStack.back().name.empty()) {
               pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
+            } else {
+              contexts.push_back(threadState.scopeStack.back());
             }
             pImpl->graphStates[graphId]
                 .nodeIdToState[nodeId]
@@ -502,11 +504,15 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                   originalNodeId) !=
               pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
             pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
+          } else {
+            pImpl->graphStates[graphId].metricKernelNodeIds.erase(nodeId);
           }
           if (pImpl->graphStates[originalGraphId].apiNodeIds.find(
                   originalNodeId) !=
               pImpl->graphStates[originalGraphId].apiNodeIds.end()) {
             pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
+          } else {
+            pImpl->graphStates[graphId].apiNodeIds.erase(nodeId);
           }
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
