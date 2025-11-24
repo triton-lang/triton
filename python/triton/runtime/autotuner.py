@@ -79,10 +79,14 @@ class Autotuner(KernelInterface):
         self.perf_model = None
         self.configs_top_k = 1.0
         self.early_config_prune = None
+        self.bailout_in_estimation = None
+        self.bailout_in_benchmarking = None
         if prune_configs_by:
             self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
             self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
+            self.bailout_in_estimation = prune_configs_by.get("bailout_in_estimation", self.bailout_in_estimation)
+            self.bailout_in_benchmarking = prune_configs_by.get("bailout_in_benchmarking", self.bailout_in_benchmarking)
 
         self.fn = fn
         self.base_fn = fn
@@ -108,16 +112,26 @@ class Autotuner(KernelInterface):
                     rep=rep if rep is not None else 100,
                     quantiles=quantiles,
                 )
-                return
+            else:
+                import triton.testing
+                self._do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
+                    kernel_call,
+                    warmup=warmup if warmup is not None else 25,
+                    rep=rep if rep is not None else 100,
+                    quantiles=quantiles,
+                )
 
-            import triton.testing
-            self._do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
-                kernel_call,
-                warmup=warmup if warmup is not None else 25,
-                rep=rep if rep is not None else 100,
-                quantiles=quantiles,
-            )
-            return
+        if self.bailout_in_estimation:
+            if "bailout_in_estimation" not in inspect.signature(self.do_bench).parameters:
+                import warnings
+                warnings.warn("Specified bailout_in_estimation but the given do_bench does not support bailout.")
+                self.bailout_in_estimation = None
+        if self.bailout_in_benchmarking:
+            if "bailout_in_benchmarking" not in inspect.signature(self.do_bench).parameters:
+                import warnings
+                warnings.warn("Specified bailout_in_benchmarking but the given do_bench does not support bailout.")
+                self.bailout_in_benchmarking = None
+        self.best_timing = float("inf")
 
     @cached_property
     def do_bench(self):
@@ -160,8 +174,18 @@ class Autotuner(KernelInterface):
 
             self.post_hook(full_nargs, exception=None)
 
+        def make_bailout_kwargs():
+            bailout_kwargs = {}
+            if self.bailout_in_estimation:
+                bailout_kwargs["bailout_in_estimation"] = self.bailout_in_estimation(self.best_timing)
+            if self.bailout_in_benchmarking:
+                bailout_kwargs["bailout_in_benchmarking"] = self.bailout_in_benchmarking(self.best_timing)
+            return bailout_kwargs
+
         try:
-            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            timing = self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8), **make_bailout_kwargs())
+            self.best_timing = min(timing[0], self.best_timing)
+            return timing
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
                 print(f"Autotuning failed with {e}")
@@ -414,6 +438,10 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
+        'bailout_in_estimation': a function used to bailout in benchmarking, within the estimation loop, if a given config seems unlikely to perform well;
+                                           takes the best timing so far (of all configs) and returns a new function that takes the # of estimation iterations, the current
+                                           estimation iteration, and the current estimated timings and returns True if the given config should be abandoned
+        'bailout_in_benchmarking': same format as bailout_in_estimation, instead called during the benchmaring loop (post estimation/warmup)
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
