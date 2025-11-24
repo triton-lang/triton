@@ -476,9 +476,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           for (auto *data : dataSet) {
             auto contexts = data->getContexts();
             if (profiler.isOpInProgress()) {
-              pImpl->graphStates[graphId]
-                  .apiNodeIds.insert(nodeId);
               contexts.push_back(threadState.scopeStack.back());
+            } else {
+              pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
             }
             pImpl->graphStates[graphId]
                 .nodeIdToState[nodeId]
