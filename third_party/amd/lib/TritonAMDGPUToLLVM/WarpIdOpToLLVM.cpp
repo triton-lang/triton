@@ -33,8 +33,15 @@ public:
         &funcOp.getFunctionBody().getBlocks().front().front());
 
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto isaFamily = targetInfo.getISAFamily();
+    if (ISAFamily::RDNA4 == isaFamily || ISAFamily::GFX1250 == isaFamily) {
+      auto warpIdOp = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, "llvm.amdgcn.wave.id", {i32_ty}, ValueRange{});
+      rewriter.replaceOp(op, warpIdOp.getResult(0));
+      return success();
+    }
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
     Value warpSizeVal = b.i32_val(threadsPerWarp);
     Value tid = getThreadId(rewriter, loc);
