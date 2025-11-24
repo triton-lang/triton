@@ -49,9 +49,11 @@ public:
       // if input of convert_layout is transOp, actuall order is the order of
       // the transOp input. By setting lds order to be the same as input,
       // ds_write is more efficient
-      if (auto transOp = dyn_cast<TransOp>(inputOp)) {
-        order = getOrderForMemory(
-            cast<RankedTensorType>(transOp.getSrc().getType()));
+      if (inputOp) {
+        if (auto transOp = dyn_cast<TransOp>(inputOp)) {
+          order = getOrderForMemory(
+              cast<RankedTensorType>(transOp.getSrc().getType()));
+        }
       }
 
       auto sharedMemorySpace =
