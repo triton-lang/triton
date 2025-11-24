@@ -428,7 +428,7 @@ def _p_matmul(
 
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
-            N_MX_BLOCK: tl.constexpr = tl.cdiv(N, MXFP_BLOCK_SIZE)
+            N_MX_BLOCK = tl.cdiv(N, MXFP_BLOCK_SIZE)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]

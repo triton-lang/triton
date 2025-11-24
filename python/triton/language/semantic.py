@@ -115,14 +115,16 @@ class TritonSemantic(Generic[TensorTy]):
                             "this is unlikely to result in a useful answer. Cast them to the same signedness.")
         return self.integer_promote_impl(a_ty, b_ty)
 
-    def to_tensor(self, x):
+    def to_tensor(self, x, check_type=True):
         if isinstance(x, self.tensor):
             return x
         x = tl._unwrap_if_constexpr(x)
-        dtype = self.to_tensor_type(x)
+        dtype = self.to_tensor_type(x, check_type)
+        if dtype is None:
+            return x
         return self.scalar_constant(x, dtype=dtype)
 
-    def to_tensor_type(self, x):
+    def to_tensor_type(self, x, check_type=True):
         if isinstance(x, tl.dtype):
             return x
         elif isinstance(x, tl.constexpr_type):
@@ -151,7 +153,9 @@ class TritonSemantic(Generic[TensorTy]):
                 return tl.float32
             else:
                 return tl.float64
-        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+        if check_type:
+            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+        return None
 
 # ===----------------------------------------------------------------------===//
 #                               Binary Operators
