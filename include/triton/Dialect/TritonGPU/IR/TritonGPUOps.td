@@ -597,4 +597,9 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
   let assemblyFormat = "attr-dict";
 }
 
+def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 #endif // TRITONGPU_OPS

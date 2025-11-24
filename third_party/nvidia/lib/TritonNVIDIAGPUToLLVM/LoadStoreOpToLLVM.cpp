@@ -1334,7 +1334,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = nvgpu::WarpIdOp::create(rewriter, loc);
+    Value warpID = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
@@ -1432,7 +1432,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto mod = op->getParentOfType<ModuleOp>();
   int numWarps = ttg::lookupNumWarps(op);
   int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  Value warpID = nvgpu::WarpIdOp::create(rewriter, loc);
+  Value warpID = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   auto shapePerCTA = ttg::getShapePerCTA(srcTy);
 
   auto rank = coords.size();
@@ -1637,7 +1637,7 @@ static LogicalResult iterateGatherScatterIndices(
   if (freeVars[kLane] != (threadsPerWarp - 1))
     return op->emitError("x offsets must be broadcasted across each warp");
 
-  Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
 
   // Mask out warps with redundant x offsets.
