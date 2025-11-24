@@ -272,8 +272,12 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType())) {
       rank = shape.getRank();
+    } else if (auto ptrTy = dyn_cast<PointerType>(op.getType())) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
+        rank = tensorType.getRank();
+    }
 
     // Poison values are never accessed, thus assume optimistic values.
     return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
