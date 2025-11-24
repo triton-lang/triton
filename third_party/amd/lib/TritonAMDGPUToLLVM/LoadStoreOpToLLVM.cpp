@@ -1996,9 +1996,7 @@ struct AsyncWaitOpConversion
     case ISAFamily::GFX1250: {
       // Clamp asyncCnt to 6bits(hw imit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
-      LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                      "llvm.amdgcn.s.wait.asynccnt", {},
-                                      {b.i16_val(asyncCnt)});
+      ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
       break;
     }
     default:
@@ -2025,9 +2023,7 @@ struct AsyncTDMWaitConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                    "llvm.amdgcn.s.wait.tensorcnt", {},
-                                    {b.i16_val(op.getNum())});
+    ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getNum());
     rewriter.eraseOp(op);
     return success();
   }
