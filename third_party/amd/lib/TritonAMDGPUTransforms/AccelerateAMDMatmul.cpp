@@ -1732,19 +1732,6 @@ public:
   }
 };
 
-struct AssignKWidthOptions {
-  int kPack = 1;
-  std::string arch;
-};
-
-static inline bool isMfmaEncoding(Attribute attr) {
-  return attr && isa<ttg::AMDMfmaEncodingAttr>(attr);
-}
-
-static inline bool isWmmaEncoding(Attribute attr) {
-  return attr && isa<ttg::AMDWmmaEncodingAttr>(attr);
-}
-
 static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned kDim) {
   std::optional<unsigned> kBase = std::nullopt;
   switch (mDim) {
@@ -1768,26 +1755,6 @@ static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEnco
     return failure();
   }
   return kBase.value();
-}
-
-static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
-  auto kBase = getKBase(dotOpResultMfmaEncoding);
-  if (failed(kBase))
-    return failure();
-  return *kBase * opts.kPack;
-}
-
-static FailureOr<unsigned> computeKWidthForMfmaChainedDotOperand(Value operand, ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
-  unsigned candidate;
-  FailureOr<unsigned> kBase = getKBase(dotOpResultMfmaEncoding);
-  if (failed(kBase))
-    return failure();
-  RankedTensorType operandType = cast<RankedTensorType>(operand.getType());
-  if (operandType.getElementType().isF16() || operandType.getElementType().isBF16())
-    candidate = 8;
-  else
-    candidate = *kBase;
-  return candidate;
 }
 
 // Here is a brief explanation of kWidth, kBase, and kDim
@@ -1816,66 +1783,98 @@ static FailureOr<unsigned> computeKWidthForMfmaChainedDotOperand(Value operand, 
 //        can only consume kBase elements from each thread.
 //    Note that we cannot have larger kPack since kPack = 2 means
 //    ds_read_b128, which is the largest vector size for shared memory load.
-struct FixKWidthPattern : public OpRewritePattern<tt::DotOp> {
-  AssignKWidthOptions opts;
-  FixKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
-      : OpRewritePattern(ctx, b), opts(opts) {}
+// Helpers to extract MFMA dims and compute kBase for the encoding.
+// If your AMDMfmaEncodingAttr exposes a different accessor, adjust accordingly.
+static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase) {
+  bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
+  auto aElem = dotOp.getA().getType().getElementType();
+  bool is16BitElem = aElem.isF16() || aElem.isBF16();
+  if (tail && is16BitElem)
+    return 8;
+  return kBase;
+}
 
-  LogicalResult matchAndRewrite(mlir::triton::DotOp dotOp,
-                                PatternRewriter &rewriter) const override {
+static void fixKWidthOfDotOperand(ModuleOp m) {
+  m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
     auto cEnc = cTy.getEncoding();
     auto mfmaEnc = dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cEnc);
     if (!mfmaEnc)
-      return rewriter.notifyMatchFailure(dotOp, "not MFMA-encoded accumulator");
+      return;
 
-    auto kBase = getKBase(dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOp.getResult().getType().getEncoding()));
-    if (failed(kBase)) return failure();
-    unsigned desiredKWidth = *kBase;
+    auto kBaseCandidate = getKBase(mfmaEnc);
+    if (failed(kBaseCandidate))
+      return;
 
-    bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
-    auto aElem = dotOp.getA().getType().getElementType();
-    bool is16BitElem = aElem.isF16() || aElem.isBF16();
-    if (tail && is16BitElem) {
-      desiredKWidth = 8;
-    }
+    unsigned kBase = *kBaseCandidate;
+    unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase);
 
-    auto aType = dotOp.getA().getType();
-    auto bType = dotOp.getB().getType();
-    auto aEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aType.getEncoding());
-    auto bEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bType.getEncoding());
-    if (!aEnc || !bEnc)
-      return rewriter.notifyMatchFailure(dotOp, "dot operands not in DotOperandEncoding");
+    auto aVal = dotOp.getA();
+    auto bVal = dotOp.getB();
+    auto aRTy = cast<RankedTensorType>(aVal.getType());
+    auto bRTy = cast<RankedTensorType>(bVal.getType());
 
-    unsigned aKWidth = aEnc.getKWidth();
-    unsigned bKWidth = bEnc.getKWidth();
+    auto aDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aRTy.getEncoding());
+    auto bDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bRTy.getEncoding());
+    if (!aDotEnc || !bDotEnc)
+      return;
+
+    unsigned aKWidth = aDotEnc.getKWidth();
+    unsigned bKWidth = bDotEnc.getKWidth();
+
     if (aKWidth == desiredKWidth && bKWidth == desiredKWidth)
-      return rewriter.notifyMatchFailure(dotOp, "kWidth already matches desired policy");
+      return;
 
-    auto ctx = rewriter.getContext();
+    auto aDef = aVal.getDefiningOp();
+    auto bDef = bVal.getDefiningOp();
+
+    auto aCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(aDef);
+    auto bCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(bDef);
+
+    bool needA = (aKWidth != desiredKWidth);
+    bool needB = (bKWidth != desiredKWidth);
+    if ((needA && !aCvt) || (needB && !bCvt))
+      return;
+
+    OpBuilder builder(dotOp);
+
+    auto ctx = builder.getContext();
     auto loc = dotOp.getLoc();
 
-    auto newAEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mfmaEnc,
-                                                     desiredKWidth);
-    auto newBEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mfmaEnc,
-                                                     desiredKWidth);
+    Value newA = aVal, newB = bVal;
 
-    auto newAType = aType.cloneWith(std::nullopt, aType.getElementType());
-    newAType = RankedTensorType::get(newAType.getShape(), newAType.getElementType(), newAEnc);
-    auto newBType = bType.cloneWith(std::nullopt, bType.getElementType());
-    newBType = RankedTensorType::get(newBType.getShape(), newBType.getElementType(), newBEnc);
+    if (needA) {
+      auto newAEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mfmaEnc,
+                                                      desiredKWidth);
+      auto aSrc = aCvt.getSrc();
+      auto newATy = RankedTensorType::get(aRTy.getShape(), aRTy.getElementType(), newAEnc);
+      auto newCvtA = ttg::ConvertLayoutOp::create(builder, loc, newATy, aSrc);
+      aCvt.getResult().replaceAllUsesWith(newCvtA);
+      aCvt->erase();
+      newA = newCvtA;
+    }
 
-    Value newA = ttg::ConvertLayoutOp::create(rewriter, loc, newAType, dotOp.getA());
-    Value newB = ttg::ConvertLayoutOp::create(rewriter, loc, newBType, dotOp.getB());
+    if (needB) {
+      auto newBEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mfmaEnc,
+                                                      desiredKWidth);
+      auto bSrc = bCvt.getSrc();
+      auto newBTy = RankedTensorType::get(bRTy.getShape(), bRTy.getElementType(), newBEnc);
+      auto newCvtB = ttg::ConvertLayoutOp::create(builder, loc, newBTy, bSrc);
+      bCvt.getResult().replaceAllUsesWith(newCvtB);
+      bCvt->erase();
+      newB = newCvtB;
+    }
 
-    Value newDot = tt::DotOp::create(rewriter, loc, dotOp.getD().getType(), newA, newB,
-                                     dotOp.getC(), dotOp.getInputPrecision(),
-                                     dotOp.getMaxNumImpreciseAcc());
+    dotOp.setOperand(0, newA);
+    dotOp.setOperand(1, newB);
 
-    rewriter.replaceOp(dotOp, newDot);
-    return success();
-  }
-};
+    // If DotOp operands are immutable in your build, fallback to recreating the DotOp:
+    // auto newDot = tt::DotOp::create(builder, loc, dotOp.getD().getType(), newA, newB,
+    //                                 dotOp.getC(), dotOp.getInputPrecision(),
+    //                                 dotOp.getMaxNumImpreciseAcc());
+    // rewriter.replaceOp(dotOp, newDot);
+  });
+}
 
 } // namespace
 
@@ -1923,20 +1922,13 @@ struct TritonAMDGPUAccelerateMatmulPass
     if (applyPatternsGreedily(m, std::move(mfmaPatterns)).failed())
       signalPassFailure();
 
+    fixKWidthOfDotOperand(m);
+
     RewritePatternSet patterns(context);
     patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     decomposeMixedModeDotOp(m);
-
-    AssignKWidthOptions opts;
-    opts.kPack = kPack;
-    opts.arch = archGenerationName;
-
-    RewritePatternSet kwidth_patterns(context);
-    kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
-    if (failed(applyPatternsGreedily(m, std::move(kwidth_patterns))))
-      signalPassFailure();
   }
 };
 
