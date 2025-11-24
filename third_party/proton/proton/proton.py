@@ -1,7 +1,7 @@
 import argparse
 import sys
 import os
-from .profile import start, finalize, _select_backend
+from .profile import start, finalize, _select_backend, _normalize_backend
 from .flags import flags
 
 
@@ -14,7 +14,7 @@ def parse_arguments():
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
     parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default=None,
-                        choices=["cupti", "roctracer", "instrumentation"])
+                        choices=["cupti", "rocprofiler", "roctracer", "instrumentation"])
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
     parser.add_argument("-m", "--mode", type=str, help="Profiling mode", default=None)
@@ -71,6 +71,7 @@ def do_setup_and_execute(target_args):
 
 def run_profiling(args, target_args):
     backend = args.backend if args.backend else _select_backend()
+    backend = _normalize_backend(backend)
 
     start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
 

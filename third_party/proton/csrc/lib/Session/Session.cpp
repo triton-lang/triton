@@ -5,8 +5,10 @@
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
-#include "Profiler/Roctracer/RoctracerProfiler.h"
+#include "Profiler/Rocm/RocprofilerProfiler.h"
 #include "Utility/String.h"
+
+#include <iostream>
 
 namespace proton {
 
@@ -15,8 +17,15 @@ namespace {
 Profiler *makeProfiler(const std::string &name) {
   if (proton::toLower(name) == "cupti") {
     return &CuptiProfiler::instance();
-  } else if (proton::toLower(name) == "roctracer") {
-    return &RoctracerProfiler::instance();
+  } else if (proton::toLower(name) == "rocprofiler" ||
+             proton::toLower(name) == "roctracer") {
+    if (proton::toLower(name) == "roctracer") {
+      std::cerr << "[PROTON] The 'roctracer' backend has been renamed to "
+                   "'rocprofiler'. The old name will be removed in a future "
+                   "release."
+                << std::endl;
+    }
+    return &RocprofilerProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
   }

@@ -93,13 +93,13 @@ NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as neste
 
 ### Backend and mode
 
-Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumentation`.
+Proton supports three profiling backends: `cupti`, `rocprofiler`, and `instrumentation`.
 
 - **`cupti`**: Used for NVIDIA GPUs. It supports both the default profiling mode and `pcsampling` (instruction sampling).
-- **`roctracer`**: Used for AMD GPUs. It supports only the default profiling mode.
+- **`rocprofiler`**: Used for AMD GPUs (formerly referred to as `roctracer`). It supports only the default profiling mode. The legacy `roctracer` name is kept as an alias for backwards compatibility.
 - **`instrumentation`**: Available on both NVIDIA and AMD GPUs, this backend enables collection of custom metrics and advanced instrumentation.
 
-By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
+By default, Proton automatically selects either `cupti` or `rocprofiler` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
 
 #### Instruction sampling
 

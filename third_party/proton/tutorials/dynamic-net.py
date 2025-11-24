@@ -85,7 +85,7 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("--profile", action="store_true")
 argparser.add_argument("--engine", default="torch", choices=["torch", "torchinductor"])
 argparser.add_argument("--context", default="shadow", choices=["shadow", "python"])
-argparser.add_argument("--backend", default=None, choices=["cupti", "roctracer"])
+argparser.add_argument("--backend", default=None, choices=["cupti", "rocprofiler", "roctracer"])
 argparser.add_argument("--mode", default=None)
 
 args = argparser.parse_args()

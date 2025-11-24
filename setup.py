@@ -367,6 +367,88 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         shutil.copy(src_path, dst_path)
 
 
+def _rocprofiler_headers_present(include_dir: str) -> bool:
+    if not include_dir:
+        return False
+    header = os.path.join(include_dir, "rocprofiler-sdk", "agent.h")
+    return os.path.exists(header)
+
+
+def _run_command(cmd, cwd=None):
+    print(f"[setup.py] Running: {' '.join(cmd)} (cwd={cwd or os.getcwd()})")
+    subprocess.check_call(cmd, cwd=cwd)
+
+
+def _ensure_rocm_systems_checkout(repo_dir: str, repo_url: str, branch: str):
+    repo_parent = os.path.dirname(repo_dir)
+    os.makedirs(repo_parent, exist_ok=True)
+    if not os.path.exists(repo_dir):
+        _run_command(["git", "clone", "--no-checkout", "--filter=blob:none", repo_url, repo_dir], cwd=repo_parent)
+    _run_command(["git", "fetch", "--all", "--tags"], cwd=repo_dir)
+    sparse_file = os.path.join(repo_dir, ".git", "info", "sparse-checkout")
+    if not os.path.exists(sparse_file):
+        _run_command(["git", "sparse-checkout", "init", "--cone"], cwd=repo_dir)
+    _run_command(["git", "sparse-checkout", "set", "projects/rocprofiler-sdk"], cwd=repo_dir)
+    _run_command(["git", "checkout", branch], cwd=repo_dir)
+    _run_command(["git", "pull", "--ff-only", "origin", branch], cwd=repo_dir)
+
+
+def build_rocprofiler_sdk(install_prefix: str):
+    repo_dir = os.getenv(
+        "TRITON_ROCPROFILER_SDK_SOURCE_DIR",
+        os.path.join(get_triton_cache_path(), "rocprofiler-sdk", "rocm-systems"),
+    )
+    repo_url = os.getenv("TRITON_ROCPROFILER_SDK_GIT_URL", "https://github.com/ROCm/rocm-systems.git")
+    branch = os.getenv("TRITON_ROCPROFILER_SDK_GIT_REF", "develop")
+    _ensure_rocm_systems_checkout(repo_dir, repo_url, branch)
+
+    cmake_prefix_path = os.getenv("TRITON_ROCPROFILER_SDK_PREFIX_PATH", os.getenv("ROCM_PATH", install_prefix))
+    build_dir = os.path.join(repo_dir, "rocprofiler-sdk-build")
+    source_dir = os.path.join(repo_dir, "projects", "rocprofiler-sdk")
+
+    os.makedirs(install_prefix, exist_ok=True)
+    configure_cmd = [
+        "cmake",
+        "-B",
+        build_dir,
+        f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
+        f"-DCMAKE_PREFIX_PATH={cmake_prefix_path}",
+        source_dir,
+    ]
+    _run_command(configure_cmd, cwd=repo_dir)
+
+    parallel_jobs = os.getenv("MAX_JOBS") or str(os.cpu_count() or 1)
+    build_cmd = ["cmake", "--build", build_dir, "--target", "all", "--parallel", parallel_jobs]
+    install_cmd = ["cmake", "--build", build_dir, "--target", "install", "--parallel", parallel_jobs]
+    _run_command(build_cmd, cwd=repo_dir)
+    _run_command(install_cmd, cwd=repo_dir)
+
+
+def ensure_rocprofiler_sdk_headers() -> str:
+    include_dir = get_env_with_keys(["TRITON_ROCPROFILER_SDK_INCLUDE_PATH"])
+    if include_dir:
+        if not _rocprofiler_headers_present(include_dir):
+            raise RuntimeError(
+                f"TRITON_ROCPROFILER_SDK_INCLUDE_PATH={include_dir} does not contain rocprofiler-sdk headers")
+        return include_dir
+
+    rocm_root = os.getenv("ROCM_PATH", "/opt/rocm")
+    rocm_include_dir = os.path.join(rocm_root, "include")
+    if _rocprofiler_headers_present(rocm_include_dir):
+        return rocm_include_dir
+
+    default_install_prefix = os.path.join(get_base_dir(), "third_party", "amd", "backend")
+    default_include_dir = os.path.join(default_install_prefix, "include")
+    if not _rocprofiler_headers_present(default_include_dir):
+        if is_offline_build():
+            raise RuntimeError("ROCProfiler-SDK headers are unavailable. "
+                               "Set TRITON_ROCPROFILER_SDK_INCLUDE_PATH when TRITON_OFFLINE_BUILD is ON.")
+        build_rocprofiler_sdk(default_install_prefix)
+    if not _rocprofiler_headers_present(default_include_dir):
+        raise RuntimeError("Failed to prepare ROCProfiler-SDK headers. Please set TRITON_ROCPROFILER_SDK_INCLUDE_PATH.")
+    return default_include_dir
+
+
 # ---- cmake extension ----
 
 
@@ -436,10 +518,8 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
-        if roctracer_include_dir == "":
-            roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
-        cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
+        rocprofiler_include_dir = ensure_rocprofiler_sdk_headers()
+        cmake_args += ["-DROCPROFILER_SDK_INCLUDE_DIR=" + rocprofiler_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
