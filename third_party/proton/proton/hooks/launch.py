@@ -43,7 +43,6 @@ class LaunchHook(Hook):
         id.set(libproton.record_scope())
         if fn_metrics:
             set_metric_kernels()
-        # transform_tensor_metrics must happen before enter_op
         scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
         libproton.enter_op(id.get(), lazy_metadata["name"])
         libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)

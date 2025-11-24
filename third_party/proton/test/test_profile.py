@@ -79,7 +79,10 @@ def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
-    @triton.jit
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 

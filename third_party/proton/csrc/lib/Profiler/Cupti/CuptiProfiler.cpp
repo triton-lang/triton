@@ -88,6 +88,7 @@ uint32_t processActivityKernel(
     // - corrId -> numKernels
     for (auto *data : dataSet) {
       auto scopeId = parentId;
+      bool isAPI = true;
       if (externIdToGraphNodeScopeId.contain(scopeId)) {
         // We have a graph creation captured
         auto &dataToNodeScopes = externIdToGraphNodeScopeId.at(scopeId);
@@ -96,9 +97,10 @@ uint32_t processActivityKernel(
           // No captured context for this data
           continue;
         }
-        scopeId = dataIt->second.at(kernel->graphNodeId);
+        auto [isAPI, scopeId] = dataIt->second.at(kernel->graphNodeId);
       }
-      scopeId = data->addOp(scopeId, kernel->name);
+      if (isAPI)
+        scopeId = data->addOp(scopeId, kernel->name);
       data->addMetric(scopeId, convertActivityToMetric(activity));
     }
   }
@@ -248,6 +250,8 @@ struct GraphState {
   std::map<uint64_t, NodeState> nodeIdToState;
   // Identify whether a node is a metric kernel node
   std::set<uint64_t> metricKernelNodeIds;
+  // Identify if a node is launched by an API call or triton
+  std::set<uint64_t> apiNodeIds;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -261,7 +265,7 @@ class PendingGraphQueue {
 public:
   struct PendingGraph {
     size_t externId;
-    std::map<Data *, std::vector<size_t>> dataToScopeIds;
+    std::map<Data *, std::vector<std::pair<bool, size_t>>> dataToScopeIds;
     size_t numMetricNodes;
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
@@ -269,7 +273,7 @@ public:
   PendingGraphQueue() = default;
 
   void push(size_t externId,
-            const std::map<Data *, std::vector<size_t>> &dataToScopeIds,
+            const std::map<Data *, std::vector<std::pair<bool, size_t>>> &dataToScopeIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     pendingGraphs.push_back(PendingGraph{externId, dataToScopeIds, numNodes});
@@ -397,7 +401,7 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricName = metricDesc.name;
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
-        auto scopeId = scopeIds[i];
+        auto scopeId = scopeIds[i].second;
         auto addMetricValue = [&](auto typedValue) {
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
           data->addMetrics(scopeId, {{metricName, typedValue}});
@@ -471,9 +475,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // only increase the numInstances in CREATED callback
           for (auto *data : dataSet) {
             auto contexts = data->getContexts();
-            pImpl->graphStates[graphId]
-                .nodeIdToState[nodeId]
-                .captureContexts[data] = contexts;
+            if (profiler.isOpInProgress()) {
+              pImpl->graphStates[graphId]
+                  .nodeIdToState[nodeId]
+                  .captureContexts[data] = contexts;
+              pImpl->graphStates[graphId]
+                  .apiNodeIds.insert(nodeId);
+            }
           }
           if (threadState.isMetricKernelLaunching)
             pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
@@ -494,6 +502,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
             pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
           }
+          if (pImpl->graphStates[originalGraphId].apiNodeIds.find(
+                  originalNodeId) !=
+              pImpl->graphStates[originalGraphId].apiNodeIds.end()) {
+            pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
+          }
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         auto &numInstances = pImpl->graphStates[graphId].numInstances;
@@ -502,6 +515,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
         pImpl->graphStates[graphId].nodeIdToState.erase(nodeId);
         pImpl->graphStates[graphId].metricKernelNodeIds.erase(nodeId);
+        pImpl->graphStates[graphId].apiNodeIds.erase(nodeId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
         pImpl->graphStates.erase(graphId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
@@ -567,13 +581,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                 auto captureContexts = nodeState.captureContexts.at(data);
                 auto scopeId = data->addOp(externId, GraphState::captureTag);
                 scopeId = data->addOp(scopeId, captureContexts);
+                bool isAPI = 
+                    pImpl->graphStates[graphExecId].apiNodeIds.find(nodeId) !=
+                    pImpl->graphStates[graphExecId].apiNodeIds.end();
                 profiler.correlation
                     .externIdToGraphNodeScopeId[externId][data][nodeId] =
-                    scopeId;
+                    {isAPI, scopeId};
               }
             }
           }
-          std::map<Data *, std::vector<size_t>> metricNodeScopesByData;
+          std::map<Data *, std::vector<std::pair<bool, size_t>>> metricNodeScopes;
           for (auto *data : dataSet) {
             auto &nodeToScopeId =
                 profiler.correlation.externIdToGraphNodeScopeId[externId][data];
@@ -581,18 +598,21 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                  pImpl->graphStates[graphExecId].metricKernelNodeIds) {
               auto scopeIt = nodeToScopeId.find(nodeId);
               if (scopeIt != nodeToScopeId.end()) {
-                metricNodeScopesByData[data].push_back(scopeIt->second);
+                bool isAPI =
+                    pImpl->graphStates[graphExecId].apiNodeIds.find(nodeId) !=
+                    pImpl->graphStates[graphExecId].apiNodeIds.end();
+                metricNodeScopes[data].push_back(scopeIt->second);
               }
             }
           }
-          auto metricBufferCapacityBytes = pImpl->metricBuffer->getSize(); // bytes
+          auto metricBufferCapacity = pImpl->metricBuffer->getSize(); // bytes
           auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
           auto drained =
               pImpl->pendingGraphQueue.popAllIfReachCapacity(metricNodeCount,
-                                                             metricBufferCapacityBytes);
+                                                             metricBufferCapacity);
           if (drained.first == 0) { // Not reach capacity yet
-            pImpl->pendingGraphQueue.push(externId, metricNodeScopesByData,
+            pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                           metricNodeCount);
           } else {
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {

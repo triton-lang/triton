@@ -34,21 +34,28 @@ public:
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
   // issue.
   using ExternIdToGraphNodeScopeIdMap = ThreadSafeMap<
-      size_t,                                                 /*extern_id*/
-      std::map<Data *, std::unordered_map<uint64_t, size_t>>, /*<data, node_id,
-                                                                 scope_id>*/
+      size_t, /*extern_id*/
+      std::map<Data *,
+               std::unordered_map<uint64_t, std::pair<size_t, bool>>>, /*<data,
+                                                         node_id, <is_api,
+                                                         scope_id>>*/
       std::unordered_map<
-          size_t, std::map<Data *, std::unordered_map<uint64_t, size_t>>>>;
+          size_t, std::map<Data *, std::unordered_map<
+                                       uint64_t, std::pair<size_t, bool>>>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->correlation.pushExternId(scope.scopeId);
+    this->threadState.scopeStack.push_back(scope);
     for (auto data : getDataSet())
       data->addOp(scope.scopeId, scope.name);
   }
-  void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
+  void stopOp(const Scope &scope) override {
+    this->threadState.scopeStack.pop_back();
+    this->correlation.popExternId();
+  }
 
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
@@ -64,7 +71,7 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope> scopeStack;
+    std::vector<Scope> scopeStack; // Used for nvtx range tracking or triton op tracking
     size_t opId{Scope::DummyScopeId};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
