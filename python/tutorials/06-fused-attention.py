@@ -361,32 +361,20 @@ def _attn_bwd_dq(dq, q, K, V,  #
 
 
 @triton.jit
-def _attn_bwd(
-    Q,
-    K,
-    V,
-    sm_scale,  #
-    DO,  #
-    DQ,
-    DK,
-    DV,  #
-    M,
-    D,
-    # shared by Q/K/V/DO.
-    stride_z,
-    stride_h,
-    stride_tok,
-    stride_d,  #
-    H,
-    N_CTX,  #
-    BLOCK_M1: tl.constexpr,  #
-    BLOCK_N1: tl.constexpr,  #
-    BLOCK_M2: tl.constexpr,  #
-    BLOCK_N2: tl.constexpr,  #
-    BLK_SLICE_FACTOR: tl.constexpr,  #
-    HEAD_DIM: tl.constexpr,
-    CAUSAL: tl.constexpr,
-):
+def _attn_bwd(Q, K, V, sm_scale,  #
+              DO,  #
+              DQ, DK, DV,  #
+              M, D,
+              # shared by Q/K/V/DO.
+              stride_z, stride_h, stride_tok, stride_d,  #
+              H, N_CTX,  #
+              BLOCK_M1: tl.constexpr,  #
+              BLOCK_N1: tl.constexpr,  #
+              BLOCK_M2: tl.constexpr,  #
+              BLOCK_N2: tl.constexpr,  #
+              BLK_SLICE_FACTOR: tl.constexpr,  #
+              HEAD_DIM: tl.constexpr,  #
+              CAUSAL: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
