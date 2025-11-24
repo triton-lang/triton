@@ -176,6 +176,11 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, swiglu_opts=(1.1, 1.4))
         for val in (1, 2, 4)
     ])
+    # swiglu together with mxfp8 downcastepilogue
+    test_cases.extend([
+        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
+     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    ])
 
     return test_cases
 

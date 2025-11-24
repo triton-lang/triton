@@ -434,7 +434,6 @@ def _p_matmul(
 
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
-            N_MX_BLOCK = tl.cdiv(N, MXFP_BLOCK_SIZE)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -490,7 +489,7 @@ def _p_matmul(
                 out, out_scale = EPILOGUE_FN(out, mask_m[:, None] & mask_n[None, :], *epilogue_fn_args)
                 tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
                 offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MXFP_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
-                mask_n_scale = offs_y_n_scale < N_MX_BLOCK
+                mask_n_scale = offs_y_n_scale < tl.cdiv(yN, MXFP_BLOCK_SIZE)
                 offs_y_mx_k = 0
                 if USE_SCATTER_TMA:
                     # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
