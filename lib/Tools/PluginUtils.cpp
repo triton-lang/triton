@@ -58,15 +58,18 @@ llvm::Error TritonPlugin::loadPlugin() {
   auto enumeratePassesAPIOrErr =
       getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
           ENUMERATE_PASSES);
-
   auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
   auto registerPassAPIOrErr =
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
   if (auto Err = enumeratePassesAPIOrErr.takeError())
     return Err;
+  if (auto Err = enumerateDialectsAPIOrErr.takeError())
+    return Err;
   if (auto Err = addPassAPIOrErr.takeError())
     return Err;
   if (auto Err = registerPassAPIOrErr.takeError())
+    return Err;
+  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
     return Err;
 
   addPassAPI = *addPassAPIOrErr;
@@ -95,7 +98,6 @@ llvm::Error TritonPlugin::loadPlugin() {
     return Err;
   dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   enumeratePassesAPI = *enumeratePassesAPIOrErr;
-
   isLoaded = true;
   return llvm::Error::success();
 }
