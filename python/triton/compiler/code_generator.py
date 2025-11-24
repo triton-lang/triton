@@ -583,11 +583,11 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(a, tl.constexpr_type):
                 if a == b:
                     return a
-                a = tl._to_tensor_type(a)
-                b = tl._to_tensor_type(b)
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
             elif isinstance(b, tl.constexpr_type):
-                a = tl._to_tensor_type(a)
-                b = tl._to_tensor_type(b)
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
             _check(a == b, lambda: error_msg(a, b))
             return a
 
