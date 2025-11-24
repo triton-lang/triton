@@ -65,7 +65,8 @@ uint32_t processActivityKernel(
   if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId))
     return correlationId;
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
-  if (kernel->graphId == 0) {
+  if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
+                              // actually it refers to graphExecId
     // Non-graph kernels
     for (auto *data : dataSet) {
       auto scopeId = parentId;
@@ -98,8 +99,8 @@ uint32_t processActivityKernel(
           continue;
         }
         auto res = dataIt->second.at(kernel->graphNodeId);
-        isAPI = res.second;
-        scopeId = res.first;
+        isAPI = res.first;
+        scopeId = res.second;
       }
       if (isAPI)
         scopeId = data->addOp(scopeId, kernel->name);

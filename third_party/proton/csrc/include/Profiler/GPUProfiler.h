@@ -36,12 +36,12 @@ public:
   using ExternIdToGraphNodeScopeIdMap = ThreadSafeMap<
       size_t, /*extern_id*/
       std::map<Data *,
-               std::unordered_map<uint64_t, std::pair<size_t, bool>>>, /*<data,
+               std::unordered_map<uint64_t, std::pair<bool, size_t>>>, /*<data,
                                                          node_id, <is_api,
                                                          scope_id>>*/
       std::unordered_map<
           size_t, std::map<Data *, std::unordered_map<
-                                       uint64_t, std::pair<size_t, bool>>>>>;
+                                       uint64_t, std::pair<bool, size_t>>>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
