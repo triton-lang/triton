@@ -34,7 +34,7 @@ class HeaderParser:
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
         # [name, hash, suffix]
-        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
+        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]*)$")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
         # [d|c]
@@ -88,22 +88,24 @@ class HeaderParser:
         s2i = {"c": 1, "d": 16}
         num_specs = 0
         sizes = []
-        # scan through suffix, first find the index,
-        # then see if it is followed by d or c
+        # scan through suffix, suffix only includes indexes followed by d or c.
         for i in range(len(args)):
-            pos = suffix.find(str(i))
-            if pos == -1:
-                raise LinkerError(f"{suffix} is not a valid kernel suffix")
+            pos = 0
+            idx_matched = suffix.startswith(str(i))
+            if not idx_matched:
+                continue
             pos += len(str(i))
             if self.arg_suffix.match(suffix, pos):
                 num_specs += 1
                 sizes.extend([None] * (i - len(sizes)))
                 sizes.append(s2i[suffix[pos]])
                 pos += 1
-            if i < len(args) - 1:
-                suffix = suffix[pos:]
-            else:
-                sizes.extend([None] * (len(args) - len(sizes)))
+            suffix = suffix[pos:]
+
+        if len(suffix) > 0:
+            raise Exception(f"Has invalid extra suffix: {suffix}")
+        sizes.extend([None] * (len(args) - len(sizes)))
+
         return num_specs, sizes
 
     def _add_kernel(self, name: str, ker: KernelLinkerMeta):

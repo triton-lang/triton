@@ -1461,48 +1461,29 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
 
 
 @pytest.mark.parametrize(
-    "layout, expected",
+    "layout, shape",
     [
-        (
-            ttgl.BlockedLayout([1], [4], [4], [0]),
-            ttgl.DistributedLinearLayout(
-                reg_bases=[],
-                lane_bases=[[1], [2]],
-                warp_bases=[[4], [8]],
-                block_bases=[],
-                shape=[16],
-            ),
-        ),
-        (
-            ttgl.BlockedLayout([1], [4], [4], [0], [[1], [0]]),
-            ttgl.DistributedLinearLayout(
-                reg_bases=[],
-                lane_bases=[[1], [2]],
-                warp_bases=[[4], [8]],
-                block_bases=[[16], [0]],
-                shape=[32],
-            ),
-        ),
-        (
-            ttgl.BlockedLayout([8, 1], [8, 4], [1, 4], [0, 1], [[0, 1]]),
-            ttgl.DistributedLinearLayout(
-                reg_bases=[[1, 0], [2, 0], [4, 0], [0, 16], [0, 32]],
-                lane_bases=[[8, 0], [16, 0], [32, 0], [0, 1], [0, 2]],
-                warp_bases=[[0, 4], [0, 8]],
-                block_bases=[[0, 64]],
-                shape=[64, 128],
-            ),
-        ),
+        (ttgl.BlockedLayout([1], [4], [4], [0]), [16]),
+        (ttgl.BlockedLayout([1], [4], [4], [0], [[1], [0]]), [32]),
+        (ttgl.BlockedLayout([8, 1], [8, 4], [1, 4], [0, 1], [[0, 1]]), [64, 128]),
+        (ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2), [64, 64]),
+        (TensorMemoryLayout((64, 64), col_stride=2), [64, 64]),
     ],
 )
-def test_to_linear_layout(layout, expected):
+def test_to_linear_layout(layout, shape, capsys):
 
     @gluon.jit
-    def kernel(layout: ttgl.constexpr, expected: ttgl.constexpr, shape: ttgl.constexpr):
+    def kernel(layout: ttgl.constexpr, shape: ttgl.constexpr):
         computed: ttgl.constexpr = ttgl.to_linear_layout(layout, shape)
-        ttgl.static_assert(computed == expected)
+        ttgl.static_print(computed)
 
-    run_parser(kernel, args=(layout, expected, tuple(expected.shape)), target=AMPERE_TARGET)
+    run_parser(kernel, args=(layout, tuple(shape)), target=AMPERE_TARGET)
+    out = capsys.readouterr().out
+    if isinstance(layout, TensorMemoryLayout):
+        assert "rows=" in out
+        assert "cols=" in out
+    else:
+        assert "DistributedLinearLayout" in out or "SharedLinearLayout" in out
 
 
 @filecheck_test

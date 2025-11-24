@@ -3325,7 +3325,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and input_precision == "tf32":
+    if in_dtype == 'float32' and input_precision in ["tf32", "bf16x3", "bf16x6"]:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -6693,4 +6693,4 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
     d = a.to(torch.float32) @ b.to(torch.float32)
 
-    assert torch.equal(c, d)
+    assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)

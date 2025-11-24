@@ -1350,13 +1350,8 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
     // pessimistic state.
     if (axisInfo.getRank() == 0)
       axisInfo = AxisInfo::getPessimisticValueState(value);
-    AxisInfo curAxisInfo;
-    if (axisInfoMap->count(value)) {
-      curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
-    } else {
-      curAxisInfo = axisInfo;
-    }
-    (*axisInfoMap)[value] = curAxisInfo;
+    auto &valInfo = (*axisInfoMap)[value];
+    valInfo = AxisInfo::join(axisInfo, valInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
