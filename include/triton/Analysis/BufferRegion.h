@@ -1,16 +1,10 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
-#include <optional>
 #include <set>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 
 namespace mlir::triton {
 
