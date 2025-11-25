@@ -110,29 +110,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
-  // auto propagateToWarpSpecializePartitions = [&](Value capture,
-  //                                                const RegionInfo &info) {
-  //   for (Operation *user : capture.getUsers()) {
-  //     auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user);
-  //     if (!wsOp)
-  //       continue;
-  //     auto captures = wsOp.getExplicitCaptures();
-  //     auto it = llvm::find(captures, capture);
-  //     if (it == captures.end())
-  //       continue;
-  //     size_t idx = std::distance(captures.begin(), it);
-  //     for (Region *region : wsOp.getPartitionRegions()) {
-  //       if (region->empty())
-  //         continue;
-  //       auto blockArgs = region->front().getArguments();
-  //       if (idx >= blockArgs.size())
-  //         continue;
-  //       auto *argLat = getLatticeElement(blockArgs[idx]);
-  //       propagateIfChanged(argLat, argLat->join(info));
-  //     }
-  //   }
-  // };
-  Value result = nullptr;
   RegionInfo regionInfo;
   if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
     for (Region *region : wsOp.getPartitionRegions()) {
@@ -153,7 +130,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    result = localAllocOp.getResult();
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(tmemAllocOp);
@@ -163,7 +139,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    result = tmemAllocOp.getResult();
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     RegionInfo in = operands[0]->getValue();
@@ -179,7 +154,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    result = memdescIndexOp.getResult();
   }
   return success();
 }
