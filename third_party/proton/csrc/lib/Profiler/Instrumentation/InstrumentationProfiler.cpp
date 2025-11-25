@@ -45,6 +45,10 @@ void InstrumentationProfiler::doStop() {
     runtime->destroyStream(deviceStream);
   }
   deviceStreams.clear();
+  // Reset mode options
+  modeOptions.clear();
+  // Note that we don't clear function metadata and names here, as they may be
+  // reused when the profiler is started again.
 }
 
 void InstrumentationProfiler::doSetMode(
