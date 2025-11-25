@@ -545,7 +545,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       threadState.exitScope();
     } // TODO: else handle other NVTX range functions
   } else {
-    if (threadState.isStreamCapturing)
+    // Do not track metric kernel launches
+    if (threadState.isMetricKernelLaunching)
       return;
     const CUpti_CallbackData *callbackData =
         static_cast<const CUpti_CallbackData *>(cbData);
@@ -643,8 +644,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (threadState.isMetricKernelLaunching)
-        return;
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         // XXX: Conservatively stop every GPU kernel for now
         auto scopeId = profiler.correlation.externIdQueue.back();
