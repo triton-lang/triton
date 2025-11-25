@@ -39,12 +39,6 @@ repos:
     hooks:
       - id: clang-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: "v1.15.0"
-    hooks:
-      - id: mypy
-        pass_filenames: false
-
   - repo: https://github.com/facebook/pyrefly-pre-commit
     rev: 0.0.1
     hooks:
