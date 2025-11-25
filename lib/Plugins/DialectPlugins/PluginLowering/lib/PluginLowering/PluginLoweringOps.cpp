@@ -1,5 +1,5 @@
-#include "PluginLowering/PluginLoweringOps.h"
-#include "PluginLowering/PluginLoweringDialect.h"
+#include "LoweringDialectPlugin/LoweringDialectPluginOps.h"
+#include "LoweringDialectPlugin/LoweringDialectPluginDialect.h"
 
 #define GET_OP_CLASSES
-#include "PluginLowering/PluginLoweringOps.cpp.inc"
+#include "LoweringDialectPlugin/LoweringDialectPluginOps.cpp.inc"
