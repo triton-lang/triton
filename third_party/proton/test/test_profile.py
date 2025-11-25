@@ -602,7 +602,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
-        return {"name": "foo_test", "bytes": x.numel() * x.element_size()}
+        x_sum = x.sum()
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "x_sum": x_sum}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
