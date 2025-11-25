@@ -546,7 +546,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     } // TODO: else handle other NVTX range functions
   } else {
     // Do not track metric kernel launches
-    if (threadState.isMetricKernelLaunching)
+    if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
       return;
     const CUpti_CallbackData *callbackData =
         static_cast<const CUpti_CallbackData *>(cbData);
