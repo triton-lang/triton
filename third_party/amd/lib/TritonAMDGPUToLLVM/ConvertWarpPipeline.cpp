@@ -159,17 +159,19 @@ private:
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
-      } else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp, gpu::BarrierOp,
-                     triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
-                     op)) {
+      } else if (isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
+                     triton::amdgpu::AsyncTDMWait>(op)) {
         int currCluster = clusterBlocks.size();
         // Reject if multiple barriers appear without an intervening cluster.
         // This is functionally valid but may cause unpredictable timing. Users
         // should insert a dummy cluster explicitly if a pipeline bubble is
         // required.
+        // Also only allow ops which waits local memory,
+        // e.g., s_barrier is NOT allowed.
         if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
           return failure();
         existingBarrierMap[currCluster] = &op;
+        bars.push_back(false);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
       } else { // Fail conversion if any other op found outside of the cluster.
@@ -199,7 +201,7 @@ private:
       for (int src = 0; src < numClusters; src++) {
         const int next = (src + 2 + offset) % numClusters;
         const int barrierLoc = (src + 1 + offset) % numClusters;
-
+        LDBG("Inspecting src:" << src << " to next:" << next);
         // Check if any existing barrier sits between src and barrierIdx
         auto isSynced = [&]() -> bool {
           for (int idx = (src + 1) % numClusters; idx != src;
@@ -212,12 +214,14 @@ private:
           return false;
         };
         // Skip if dependency is already resolved.
-        if (isSynced())
+        if (isSynced()) {
+          LDBG("already synced");
           continue;
-
+        }
         const bool needFence =
             clusterInfo[src].isIntersected(clusterInfo[next], nullptr);
         // insert fence/barrier in front of this cluster
+        LDBG("need fence?: " << needFence);
         if (needFence) {
           bars[barrierLoc] = true;
           LDBG("cluster " << src << " need fence to " << next
@@ -231,18 +235,10 @@ private:
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
         auto exBarOp = exBar->second;
-        if (bars[i]) {
-          b.setInsertionPointAfter(exBarOp);
-          emitClusterBarrier(b, loc, /*needLocal=*/true);
-          if (!isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
-                  exBarOp))
-            b.eraseOp(exBarOp);
-        } else { // wrap with sched barrier
-          b.setInsertionPoint(exBarOp);
-          ROCDL::SchedBarrier::create(b, loc, 0);
-          b.setInsertionPointAfter(exBarOp);
-          ROCDL::SchedBarrier::create(b, loc, 0);
-        }
+        b.setInsertionPoint(exBarOp);
+        ROCDL::SchedBarrier::create(b, loc, 0);
+        b.setInsertionPointAfter(exBarOp);
+        ROCDL::SchedBarrier::create(b, loc, 0);
       } else {
         b.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
