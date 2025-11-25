@@ -1762,9 +1762,9 @@ struct AtomicCASOpConversion
         }
 
         auto dsCount = rewriter.getI32IntegerAttr(0);
-        amdgpu::MemoryCounterWaitOp::create(
-            rewriter, op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
-            /* ds= */ dsCount);
+        amdgpu::MemoryCounterWaitOp::create(rewriter, op->getLoc(),
+                                            /*load=*/nullptr, /*store=*/nullptr,
+                                            /*ds=*/dsCount);
         b.barrier();
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
