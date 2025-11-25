@@ -13,35 +13,11 @@ class OpBuilder;
 /// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
-// Represents index information for memdesc_index operations in a view chain
-struct IndexInfo {
-  // True if the view chain contains one or more memdesc_index operations.
-  bool hasIndexing = false;
-  // Static indices when all memdesc_index ops use constants. Empty means
-  // the access is dynamic (might touch any index).
-  std::optional<SmallVector<int64_t>> staticIndices;
-
-  bool hasAnyDynamicIndex() const { return hasIndexing && !staticIndices; }
-  bool mayAccessAllIndices() const {
-    return !hasIndexing || hasAnyDynamicIndex();
-  }
-  bool mayIntersect(const IndexInfo &other) const {
-    return mayAccessAllIndices() || other.mayAccessAllIndices() ||
-           staticIndices == other.staticIndices;
-  }
-
-  bool operator==(const IndexInfo &other) const {
-    return hasIndexing == other.hasIndexing &&
-           staticIndices == other.staticIndices;
-  }
-};
-
 // Represents the complete view chain for an access operation
 struct ViewChain {
 public:
-  // Parse view chain from a value, collecting subslice offsets and
-  // memdesc_index information. This builder is loop-aware and provides
-  // fine-grained access information
+  // Parse view chain from a value, collecting subslice offsets. This builder
+  // is loop-aware and provides fine-grained access information
   static ViewChain getFineGrainAccess(Value value,
                                       Allocation::BufferId bufferId,
                                       Interval<size_t> allocationInterval);
@@ -59,7 +35,7 @@ public:
   bool operator==(const ViewChain &other) const {
     return subsliceOffsets == other.subsliceOffsets &&
            allocationAccessTy == other.allocationAccessTy &&
-           indexInfo == other.indexInfo && bufferId == other.bufferId &&
+           bufferId == other.bufferId &&
            allocationInterval == other.allocationInterval;
   }
 
@@ -85,16 +61,6 @@ public:
       os << "invalid";
     os << " interval=[" << allocationInterval.start() << ","
        << allocationInterval.end() << ")";
-    os << " indexInfo=";
-    if (!indexInfo.hasIndexing) {
-      os << "all";
-    } else if (indexInfo.hasAnyDynamicIndex()) {
-      os << "dynamic";
-    } else {
-      os << "[";
-      llvm::interleaveComma(*indexInfo.staticIndices, os);
-      os << "]";
-    }
   }
 
 private:
@@ -104,8 +70,6 @@ private:
   std::optional<SmallVector<int64_t>> subsliceOffsets;
   // Type at the access point (load, store, ..)
   triton::gpu::MemDescType allocationAccessTy;
-  // Information about chained memdesc_index operations
-  IndexInfo indexInfo;
   Allocation::BufferId bufferId = Allocation::InvalidBufferId;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
