@@ -669,7 +669,7 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 }
 
 LogicalResult Pingponger::setReadPrioOverWrite(OpBuilder &builder,
-                                                      Location loc) {
+                                               Location loc) {
   // Helping cases not using async copy.
   // Assuming operations are scheduled by the pipeliner as below
   // global_load -> local_load -> dot -> local_store
@@ -1049,11 +1049,12 @@ void Pingponger::getDotPingponged() {
   lStoreOps.erase(lStoreIt, lStoreOps.end());
 
   // Mixed type gemm with scale case.
-  bool isGemmWithScale = dotOps.size() == 1 && gLoadOps.size() > 2 && lLoadOps.size() > 2;
+  bool isGemmWithScale =
+      dotOps.size() == 1 && gLoadOps.size() > 2 && lLoadOps.size() > 2;
   if (isGemmWithScale && numWarps == 4 && numStages == 2) {
     // NxK = 128x256
     if (dotShape[1] == 128 && aShape[1] == 256 && elemWidth == 16) {
-      if(setReadPrioOverWrite(builder, dotOps[0]->getLoc()).failed()) {
+      if (setReadPrioOverWrite(builder, dotOps[0]->getLoc()).failed()) {
         LDBG("Failed during inserting setprio to local_load/store");
       }
       return;
