@@ -640,7 +640,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->emitMetricRecords(recordPtr, drained.second);
             });
           }
-          pImpl->pendingGraphQueue.push(externId, metricNodeScopes, metricNodeCount);
+          pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
+                                        metricNodeCount);
         }
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
