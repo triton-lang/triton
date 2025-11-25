@@ -334,10 +334,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                                       interval);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
-                curBlockInfo.syncWriteViewChains.insert_or_assign(op,
-                                                                  viewChain);
+                curBlockInfo.syncWriteViewChains[op].push_back(viewChain);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadViewChains.insert_or_assign(op, viewChain);
+                curBlockInfo.syncReadViewChains[op].push_back(viewChain);
               }
             }
           }
@@ -350,8 +349,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
       ViewChain allMemoryViewChain = ViewChain::getWholeAllocAccess(
           Allocation::InvalidBufferId, allIntervals);
-      curBlockInfo.syncWriteViewChains.insert_or_assign(op, allMemoryViewChain);
-      curBlockInfo.syncReadViewChains.insert_or_assign(op, allMemoryViewChain);
+      curBlockInfo.syncWriteViewChains[op] = {allMemoryViewChain};
+      curBlockInfo.syncReadViewChains[op] = {allMemoryViewChain};
     }
     scratchBufferId = allocation->getBufferId(op);
   }
@@ -383,7 +382,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
         scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
 
-    curBlockInfo.syncWriteViewChains.insert_or_assign(op, scratchViewChain);
+    curBlockInfo.syncWriteViewChains[op] = {scratchViewChain};
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
@@ -393,7 +392,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // read/write on shared memory
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
-    curBlockInfo.syncReadViewChains.insert_or_assign(op, scratchViewChain);
+    curBlockInfo.syncReadViewChains[op] = {scratchViewChain};
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
