@@ -1,6 +1,6 @@
 set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
-include_directories(${PROJECT_SOURCE_DIR}/test/lib/DialectPlugins/include)
-include_directories(${PROJECT_BINARY_DIR}/test/lib/DialectPlugins/include)
+include_directories(${PROJECT_SOURCE_DIR}/lib/Plugins/DialectPlugins/PluginLowering/include)
+include_directories(${PROJECT_BINARY_DIR}/lib/Plugins/DialectPlugins/PluginLowering/include)
 
 add_mlir_dialect(PluginLoweringOps pluginlowering)
 
