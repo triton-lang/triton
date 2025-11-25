@@ -71,7 +71,8 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope> scopeStack; // Used for nvtx range tracking or triton op tracking
+    std::vector<Scope>
+        scopeStack; // Used for nvtx range tracking or triton op tracking
     size_t opId{Scope::DummyScopeId};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};

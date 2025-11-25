@@ -72,7 +72,7 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
         if hasattr(value, "data_ptr"):  # tensor
             if value.device.type == "cpu":
                 scalar_metrics[key] = value
-            else: # device tensor
+            else:  # device tensor
                 enter_state(COMPUTE_METADATA_SCOPE_NAME)
                 # implicit casting to double or int64 tensors
                 if value.is_floating_point():

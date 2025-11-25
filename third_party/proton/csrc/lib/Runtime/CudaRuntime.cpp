@@ -1,8 +1,8 @@
 #include "Runtime/CudaRuntime.h"
 
 #include "Driver/GPU/CudaApi.h"
-#include <cstdint>
 #include <algorithm>
+#include <cstdint>
 
 namespace proton {
 

@@ -1,8 +1,8 @@
 #include "Runtime/HipRuntime.h"
 
 #include "Driver/GPU/HipApi.h"
-#include <cstdint>
 #include <algorithm>
+#include <cstdint>
 
 namespace proton {
 

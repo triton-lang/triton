@@ -407,7 +407,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
   roctracer::closePool<true>();
 }
 
-
 RoctracerProfiler::RoctracerProfiler() {
   pImpl = std::make_unique<RoctracerProfilerPimpl>(*this);
 }

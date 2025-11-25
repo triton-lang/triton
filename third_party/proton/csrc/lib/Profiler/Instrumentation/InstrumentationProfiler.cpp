@@ -254,8 +254,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                         event.first->cycle, event.second->cycle, duration,
                         normalizedDuration, kernelId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
-                        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
-                            device)),
+                        static_cast<uint64_t>(
+                            reinterpret_cast<uintptr_t>(device)),
                         static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost, blockTrace.initTime,
                         blockTrace.preFinalTime, blockTrace.postFinalTime));

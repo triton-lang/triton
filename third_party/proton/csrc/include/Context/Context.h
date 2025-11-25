@@ -30,7 +30,8 @@ struct Context {
 /// A context source is an object that can provide a list of contexts.
 class ContextSource {
 public:
-  static constexpr const char *COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata";
+  static constexpr const char *COMPUTE_METADATA_SCOPE_NAME =
+      "__proton_launch_metadata";
 
 public:
   ContextSource() = default;

@@ -388,10 +388,8 @@ public:
   const std::map<std::string, MetricValueType>
   collectTensorMetrics(const std::map<std::string, TensorMetric> &tensorMetrics,
                        void *stream) const;
-  
-  void reserve() {
-    getOrCreateBuffer();
-  }
+
+  void reserve() { getOrCreateBuffer(); }
 
   template <typename Func> void flush(Func callback, bool flushAll = false) {
     std::lock_guard<std::mutex> lock(bufferMutex);

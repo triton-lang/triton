@@ -98,8 +98,7 @@ uint32_t processActivityKernel(
           // No captured context for this data
           continue;
         }
-        if (dataIt->second.find(kernel->graphNodeId) ==
-            dataIt->second.end()) {
+        if (dataIt->second.find(kernel->graphNodeId) == dataIt->second.end()) {
           // No captured context for this node
           continue;
         }
@@ -281,7 +280,8 @@ public:
   PendingGraphQueue() = default;
 
   void push(size_t externId,
-            const std::map<Data *, std::vector<std::pair<bool, size_t>>> &dataToScopeIds,
+            const std::map<Data *, std::vector<std::pair<bool, size_t>>>
+                &dataToScopeIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     pendingGraphs.push_back(PendingGraph{externId, dataToScopeIds, numNodes});
@@ -484,8 +484,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           if (profiler.isOpInProgress()) {
             for (auto *data : dataSet) {
               auto contexts = data->getContexts();
-              // Trick: if the scope name is empty, it means the graph is created
-              // by an API kernel but not Triton op
+              // Trick: if the scope name is empty, it means the graph is
+              // created by an API kernel but not Triton op
               if (threadState.scopeStack.back().name.empty()) {
                 if (!threadState.isMetricKernelLaunching)
                   pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
@@ -599,16 +599,17 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                 auto captureContexts = nodeState.captureContexts.at(data);
                 auto scopeId = data->addOp(externId, GraphState::captureTag);
                 scopeId = data->addOp(scopeId, captureContexts);
-                bool isAPI = 
+                bool isAPI =
                     pImpl->graphStates[graphExecId].apiNodeIds.find(nodeId) !=
                     pImpl->graphStates[graphExecId].apiNodeIds.end();
                 profiler.correlation
-                    .externIdToGraphNodeScopeId[externId][data][nodeId] =
-                    {isAPI, scopeId};
+                    .externIdToGraphNodeScopeId[externId][data][nodeId] = {
+                    isAPI, scopeId};
               }
             }
           }
-          std::map<Data *, std::vector<std::pair<bool, size_t>>> metricNodeScopes;
+          std::map<Data *, std::vector<std::pair<bool, size_t>>>
+              metricNodeScopes;
           for (auto *data : dataSet) {
             auto &nodeToScopeId =
                 profiler.correlation.externIdToGraphNodeScopeId[externId][data];
@@ -626,9 +627,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto metricBufferCapacity = pImpl->metricBuffer->getSize(); // bytes
           auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
-          auto drained =
-              pImpl->pendingGraphQueue.popAllIfReachCapacity(metricNodeCount,
-                                                             metricBufferCapacity);
+          auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
+              metricNodeCount, metricBufferCapacity);
           if (drained.first == 0) { // Not reach capacity yet
             pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                           metricNodeCount);
@@ -704,10 +704,12 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // Flush the tensor metric buffer
   auto dataSet = profiler.getDataSet();
   auto popResult = pendingGraphQueue.popAll();
-  metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
-    auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-    emitMetricRecords(recordPtr, popResult.second);
-  }, /*flushAll=*/true);
+  metricBuffer->flush(
+      [&](uint8_t *data, size_t dataSize) {
+        auto *recordPtr = reinterpret_cast<uint64_t *>(data);
+        emitMetricRecords(recordPtr, popResult.second);
+      },
+      /*flushAll=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
