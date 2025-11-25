@@ -7,7 +7,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/Utility.h"
@@ -55,7 +56,10 @@ namespace {
 // This lowers register consumption and reduces time spend for address
 // computation.
 struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
-  using OpRewritePattern::OpRewritePattern;
+
+  AdvanceBasePointer(MLIRContext *context, DataFlowSolver *solver,
+                     PatternBenefit benefit = 1)
+      : OpRewritePattern<scf::ForOp>(context, benefit), solver(solver) {}
 
   // Check if same value is stored in every element of tensor val
   // Return true if all elelemts are equal, false if not or it was not able for
@@ -115,10 +119,48 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     Operation *incrementOp;
   };
 
+  // Analyses if blockArg + advanceStep can overflow
+  static bool overflowPossible(Value blockArg, Value advanceStep,
+                               int elemBitwidth, DataFlowSolver *solver) {
+    const auto *blockArgRange =
+        solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
+    if (blockArgRange->getValue().isUninitialized()) {
+      LDBG("Rejected: blockArg range is unintialized");
+      return true;
+    }
+
+    const auto *stepRange =
+        solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
+    if (blockArgRange->getValue().isUninitialized()) {
+      LDBG("Rejected: step range is unintialized");
+      return true;
+    }
+
+    auto blockArgRangeValue = blockArgRange->getValue().getValue();
+    auto stepRangeValue = stepRange->getValue().getValue();
+
+    // checking if arithmetic operatin overflows.
+    // Max/min values for now are equalt to 32 bit unsigned int max/min values.
+    auto dtypeByteWidth = elemBitwidth / 8;
+    assert(dtypeByteWidth > 0);
+    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
+    int64_t minOffsetValue = 0;
+    int64_t operationUncappedResultMax =
+        (int64_t)blockArgRangeValue.umax().getLimitedValue() +
+        (int64_t)stepRangeValue.umax().getLimitedValue();
+    int64_t operationUncappedResultMin =
+        (int64_t)blockArgRangeValue.umin().getLimitedValue() +
+        (int64_t)stepRangeValue.umin().getLimitedValue();
+
+    return (operationUncappedResultMin < minOffsetValue ||
+            operationUncappedResultMax > maxOffsetValue);
+  }
+
   // Perform series of checks to decide if given operation could be optimized.
   // If optimization is possible, return filled BufferOpInfo
   static std::optional<BufferOpInfo>
-  analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor) {
+  analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
+                  DataFlowSolver *solver) {
     LDBG("Analyzing: " << *op);
     Value maybeOffsetsBlockArg = op.getOffsets();
     auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
@@ -180,6 +222,28 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       return {};
     }
     Value offsetInitializer = forOp.getInitArgs()[offsetOperandNo];
+
+    auto stepType = cast<RankedTensorType>(advanceStep.getType());
+    assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
+    auto elemBitWidth = cast<PointerType>(op.getPtr().getType())
+                            .getPointeeType()
+                            .getIntOrFloatBitWidth();
+    // Check ensures following transformation is safe:
+    //
+    // full_pointer = basePtr + int64(previousIterationOffset + offsetStep)
+    //                       |
+    //                       V
+    // full_pointer = (basePtr + int64(offsetStep)) +
+    // int64(previousIterationOffset)
+    //
+    // previousIterationOffset + offsetStep should not overflow,
+    // then it is safe to upcast them and add to basePtr separately
+    if (overflowPossible(blockArg, advanceStep, elemBitWidth, solver)) {
+      LDBG("Rejected: increment operation potentially overflows, it is unsafe "
+           "to split offset computation");
+      return {};
+    }
+
     BufferOpInfo data = {op, advanceStep, Value(), offsetInitializer,
                          incrementOp};
     LDBG("Buffer op is suitable for offset pointer optimization");
@@ -270,10 +334,10 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     return newForOp;
   }
 
-  static SmallVector<BufferOpInfo> collectBufferOps(scf::ForOp forOp) {
+  SmallVector<BufferOpInfo> collectBufferOps(scf::ForOp forOp) const {
     SmallVector<BufferOpInfo> list;
-    forOp.walk([&list, forOp](amdttg::BufferOpInterface op) {
-      auto info = analyzeBufferOp(op, forOp);
+    forOp.walk([&list, this, forOp](amdttg::BufferOpInterface op) {
+      auto info = analyzeBufferOp(op, forOp, solver);
       if (info.has_value()) {
         list.push_back(info.value());
       }
@@ -299,6 +363,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     rewriter.eraseOp(forOp);
     return success();
   }
+
+  DataFlowSolver *solver;
 };
 
 } // anonymous namespace
@@ -309,14 +375,25 @@ struct TritonAMDGPUOptimizeBufferOpPtrPass
   using Base::Base;
 
   void runOnOperation() override {
+    FuncOp funcOp = getOperation();
+
+    DenseMap<Value, SetVector<Operation *>> assumptions =
+        AMD::TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    DominanceInfo *dominanceInfo = &getAnalysis<DominanceInfo>();
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
+                                                      dominanceInfo);
+    AMD::initializeFuncOps(funcOp, rangeAnalysis);
+    if (failed(solver->initializeAndRun(funcOp))) {
+      LDBG("Integer range analysis failed to initialize, exiting");
+      return;
+    }
+
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    FuncOp func = getOperation();
-
-    patterns.add<AdvanceBasePointer>(context, /*benefit=*/1);
-
-    if (applyPatternsGreedily(func, std::move(patterns)).failed())
-      signalPassFailure();
+    patterns.add<AdvanceBasePointer>(context, solver.get(), /*benefit=*/1);
+    walkAndApplyPatterns(funcOp, std::move(patterns));
   }
 };
 
