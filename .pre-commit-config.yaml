@@ -45,6 +45,14 @@ repos:
       - id: mypy
         pass_filenames: false
 
+  - repo: https://github.com/facebook/pyrefly-pre-commit
+    rev: 0.0.1
+    hooks:
+      - id: pyrefly-typecheck-specific-version
+        name: Pyrefly (type checking)
+        pass_filenames: false
+        additional_dependencies: ["pyrefly==0.30.0"]
+
   # Expand YAML anchors in files used by github workflows, because github can't
   # do this itself.  This lets us use anchors, which avoids code duplication.
   - repo: local
