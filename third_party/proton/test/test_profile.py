@@ -541,8 +541,8 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
     x_mean = x.mean()
     x_std = x.std()
     with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
-        y = torch.randn((10, 10), device="cuda")
-        z = torch.zeros_like(x)
+        torch.randn((10, 10), device="cuda")
+        torch.zeros_like(x)
 
     proton.finalize()
 
