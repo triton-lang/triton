@@ -405,7 +405,6 @@ void AuxDataMap::getBuffersAndBarriers(
     ModuleOp module, SmallVector<SmallVector<uint32_t>, 2> &bufValues,
     SmallVector<uint32_t> &barrierValues) {
   // Collect shared memory buffers allocated in the module
-
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   triton::BufferRegionAnalysis *analysis =
       solver->load<triton::BufferRegionAnalysis>();
@@ -432,7 +431,6 @@ void AuxDataMap::getBuffersAndBarriers(
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    // bufValues[iMemType] = llvm::to_vector(bufSets[iMemType]);
     if (bufValues[iMemType].empty()) {
       continue;
     }

@@ -83,6 +83,19 @@ bool isUsedAsTensorMemory(Value v) {
          isa_and_nonnull<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
 }
 
+std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
+  if (isUsedAsBarrier(v)) {
+    return triton::BufferRegionAnalysis::RegionType::BARRIER;
+  }
+  if (isUsedAsSharedMemory(v)) {
+    return triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
+  }
+  if (isUsedAsTensorMemory(v)) {
+    return triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 namespace mlir::triton {
@@ -192,7 +205,7 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
         return;
       }
       for (auto &region : regionInfo.regions) {
-        insertRegion(*regionType, {region.baseOffset, region.length});
+        usedBufferRegions[*regionType].insert(region);
       }
     };
     if (BufferRegionAnalysis::isMemoryAccessOperation(op)) {
@@ -225,20 +238,6 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
     return true;
   }
   return false;
-}
-
-std::optional<BufferRegionAnalysis::RegionType>
-BufferRegionAnalysis::getRegionType(Value v) {
-  if (isUsedAsBarrier(v)) {
-    return RegionType::BARRIER;
-  }
-  if (isUsedAsSharedMemory(v)) {
-    return RegionType::SHARED_MEMORY;
-  }
-  if (isUsedAsTensorMemory(v)) {
-    return RegionType::TENSOR_MEMORY;
-  }
-  return std::nullopt;
 }
 
 } // namespace mlir::triton

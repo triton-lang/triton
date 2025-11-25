@@ -159,13 +159,6 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
-  /// Insert a region during analysis
-  void insertRegion(RegionType type, const BufferRegion &region) {
-    usedBufferRegions[type].insert(region);
-  }
-
-  std::optional<RegionType> getRegionType(Value v);
-
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
 };
