@@ -1,11 +1,11 @@
 #include "LoweringDialectPlugin/LoweringDialectPluginDialect.h"
 #include "LoweringDialectPlugin/LoweringDialectPluginOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 
 #include "LoweringDialectPlugin/LoweringDialectPluginPasses.h"
 
@@ -32,7 +32,8 @@ public:
 class LoweringDialectPluginLowerFooOpRewriter
     : public OpRewritePattern<mlir::triton::loweringdialectplugin::FooOp> {
 public:
-  using OpRewritePattern<mlir::triton::loweringdialectplugin::FooOp>::OpRewritePattern;
+  using OpRewritePattern<
+      mlir::triton::loweringdialectplugin::FooOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(mlir::triton::loweringdialectplugin::FooOp op,
                                 PatternRewriter &rewriter) const final {
     llvm::errs() << "FOUND FOO OP!!: ";
@@ -45,7 +46,8 @@ public:
 };
 
 class LoweringDialectPluginSwitchBarFoo
-    : public impl::LoweringDialectPluginSwitchBarFooBase<LoweringDialectPluginSwitchBarFoo> {
+    : public impl::LoweringDialectPluginSwitchBarFooBase<
+          LoweringDialectPluginSwitchBarFoo> {
 public:
   using impl::LoweringDialectPluginSwitchBarFooBase<
       LoweringDialectPluginSwitchBarFoo>::LoweringDialectPluginSwitchBarFooBase;
@@ -59,7 +61,8 @@ public:
 };
 
 class LoweringDialectPluginLowerFooOp
-    : public impl::LoweringDialectPluginLowerFooOpBase<LoweringDialectPluginLowerFooOp> {
+    : public impl::LoweringDialectPluginLowerFooOpBase<
+          LoweringDialectPluginLowerFooOp> {
 public:
   using impl::LoweringDialectPluginLowerFooOpBase<
       LoweringDialectPluginLowerFooOp>::LoweringDialectPluginLowerFooOpBase;

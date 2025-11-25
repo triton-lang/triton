@@ -11,4 +11,3 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
     tt.return %1 : i32
   }
 }  // module
-
