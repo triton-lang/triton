@@ -16,6 +16,24 @@ files = [
 exclude = ["/build/"]
 follow_imports = "silent"
 
+[tool.pyrefly]
+search-path = ["python"]
+project-includes = [
+    "python/triton/knobs.py",
+    "python/triton/runtime/build.py",
+    "python/triton/runtime/driver.py",
+    "python/triton/_utils.py",
+    "python/test/unit/test_knobs.py",
+    "python/test/unit/runtime/test_build.py",
+    "python/test/unit/runtime/test_compilation_listener.py",
+]
+project-excludes = ["**/build/**"]
+
+[tool.pyrefly.errors]
+bad-param-name-override = "ignore"
+implicit-import = "ignore"
+missing-import = "ignore"
+
 [tool.yapf]
 based_on_style = "pep8"
 column_limit = 120
