@@ -195,7 +195,7 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
         insertRegion(*regionType, {region.baseOffset, region.length});
       }
     };
-    if (accessesMemory(op)) {
+    if (BufferRegionAnalysis::isMemoryAccessOperation(op)) {
       // Allocas define their buffers with return value.
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
         insertRegionForValue(op->getResult(0));
@@ -208,7 +208,7 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   });
 }
 
-bool BufferRegionAnalysis::accessesMemory(Operation *op) const {
+bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
           ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
           ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,

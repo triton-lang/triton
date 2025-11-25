@@ -122,6 +122,8 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
+  static bool isMemoryAccessOperation(Operation *op);
+
   // ------------------------------
   // Public API for ConSan
   // ------------------------------
@@ -134,11 +136,6 @@ public:
   }
 
   void calculateUsedBufferRegions(Operation *op);
-
-  // TODO: Find a better place for this, maybe in some Utility.cpp.
-  // Maybe we already have some helper that does something like this?
-  // Check if any of the operands are MemDescType.
-  bool accessesMemory(Operation *op) const;
 
   // ------------------------------
   // Required overrides
