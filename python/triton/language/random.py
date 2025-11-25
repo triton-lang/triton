@@ -2,7 +2,7 @@ from ..runtime.jit import jit
 from . import core as tl
 from . import math
 
-N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
+N_ROUNDS_DEFAULT = tl.constexpr(10)  # Default number of rounds for philox
 
 # -------------------
 # randint

@@ -8,14 +8,7 @@
 
 namespace mlir::triton::AMD {
 class TargetInfo;
-
-// Walks the module and adds a LocalBarrier after any amdgpu.async_wait if there
-// is not already a barrier following it. This mimicks what Member does for
-// common async wait operations and avoids AMD specific modifications to Membar.
-// This yields to the same behaviour compared to when membar adds the barrier.
-void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod);
-
-// Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait=true if they are
+// Annotates LocalLoadOps with ttg.amdg.syncedByAsyncWait=true if they are
 // synced by an AsyncWait.
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
 
@@ -25,21 +18,21 @@ bool isSyncedViaAsyncWait(Operation *localLoadOp);
 // LLVM is unable to deduce dependencies across warps and loop iterations for
 // AsyncCopy and LocalLoad and will emit conservative wait counts. In triton the
 // dependency is models via AsyncWait, e.g.
-//   %token1 = ttg.async_copy_global_to_local/amdgpu.buffer_load_to_local
+//   %token1 = ttg.async_copy_global_to_local/amdg.buffer_load_to_local
 //   %token2 = ttg.async_wait %token1
 //   %1      = ttg.local_load .. token %token2
 // For such cases AsyncWait will emit the correct wait and the conservative
 // waits are redundant and hindering performance/interleaving.
 // To disable the conservative waits two alias scopes are created:
-//   1) "amdgpu.AsyncCopies" will contain all AsyncCopy ops
-//   2) "amdgpu.LocalLoad" will contain all LocalLoads manually synchronized via
+//   1) "amdg.AsyncCopies" will contain all AsyncCopy ops
+//   2) "amdg.LocalLoad" will contain all LocalLoads manually synchronized via
 //      AsyncWait
 // ALl manually synchronized LocalLoads will additionally have "AsyncCopies" as
 // a non alias scope to disable the implicit waits from the LLVM backend
 
 // If localLoadOp has a token from an AsyncWait:
-//  - Attaches "amdgpu.LocalLoad" alias scope to llLoadOp
-//  - Attaches "amdgpu.AsyncCopies" as *non* alias scope to llLoadOp
+//  - Attaches "amdg.LocalLoad" alias scope to llLoadOp
+//  - Attaches "amdg.AsyncCopies" as *non* alias scope to llLoadOp
 void addLocalLoadNoAliasScope(Operation *localLoadOp,
                               LLVM::AliasAnalysisOpInterface llLoadOp);
 // Overload from above without checking the AsyncToken

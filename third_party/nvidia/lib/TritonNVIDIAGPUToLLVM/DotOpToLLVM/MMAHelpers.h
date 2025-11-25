@@ -130,7 +130,7 @@ public:
       bases[kWarp][1] = {0, 0};
       auto warpGroupToOffsetb128 = LinearLayout(
           bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
-      Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+      Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
@@ -192,7 +192,7 @@ private:
     auto kOffset = str_attr("offset");
 
     // Any CTALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CTALayout = triton::gpu::CTALayoutAttr::getDefault(ctx, 2);
+    auto CTALayout = triton::gpu::CTAEncodingAttr::getDefault(ctx, 2);
 
     for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
                                          : SmallVector<bool>({false}))) {

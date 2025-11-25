@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -100,6 +100,7 @@ def builtin(fn: T) -> T:
 
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
+add = builtin(tl_core.add)
 associative_scan = builtin(tl_core.associative_scan)
 assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
@@ -111,9 +112,11 @@ atomic_or = builtin(tl_core.atomic_or)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
+cast = builtin(tl_core.cast)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
+gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
 load = builtin(tl_core.load)
@@ -122,6 +125,7 @@ max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
 maximum = builtin(tl_core.maximum)
 minimum = builtin(tl_core.minimum)
+mul = builtin(tl_core.mul)
 multiple_of = builtin(tl_core.multiple_of)
 num_programs = builtin(tl_core.num_programs)
 permute = builtin(tl_core.permute)
@@ -132,6 +136,7 @@ split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
+sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 where = builtin(tl_core.where)
 
@@ -145,7 +150,7 @@ class distributed_type(block_type):
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
         assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
-        if not isinstance(layout, AutoLayout):
+        if not isinstance(layout, (AutoLayout, CoalescedLayout)):
             assert len(
                 shape
             ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
@@ -438,25 +443,6 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
-def gather(src, index, axis, _semantic=None):
-    """
-    Gather values from a tensor along a specified axis using an index tensor.
-
-    Args:
-        src (tensor): The source tensor to gather values from.
-        index (tensor): The index tensor specifying which values to gather.
-        axis (int): The axis along which to gather values.
-
-    Returns:
-        tensor: The gathered tensor.
-    """
-    src = _unwrap_if_constexpr(src)
-    index = _unwrap_if_constexpr(index)
-    axis = _unwrap_if_constexpr(axis)
-    return _semantic.gather(src, index, axis)
-
-
-@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
@@ -491,6 +477,16 @@ def set_auto_layout(value, layout, _semantic=None):
     """
     layout = _unwrap_if_constexpr(layout)
     return _semantic.set_auto_layout(value, layout)
+
+
+@builtin
+def fp4_to_fp(src, elem_type, axis, _semantic=None):
+    """
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    return _semantic.fp4_to_fp(src, elem_type, axis)
 
 
 @builtin

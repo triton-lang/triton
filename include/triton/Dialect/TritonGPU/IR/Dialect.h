@@ -63,6 +63,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
@@ -209,7 +210,7 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
-CTALayoutAttr getCTALayout(Attribute layout);
+CTAEncodingAttr getCTALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -303,6 +304,8 @@ SetVector<int> getPartitionIds(Operation *op);
 SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
 SetVector<int> getPartitionIds(OpOperand *use);
 bool hasPartition(Operation *op);
+bool hasWarpSpecializeTag(Operation *op);
+std::optional<int> getWarpSpecializeTag(Operation *op);
 
 } // namespace mlir::triton::gpu
 

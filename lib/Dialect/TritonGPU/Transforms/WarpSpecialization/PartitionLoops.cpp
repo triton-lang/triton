@@ -329,7 +329,8 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
           }
         }
 
-        assert(!newOperandIndices.empty());
+        if (newOperandIndices.empty())
+          continue;
 
         SmallVector<Value> newYieldOperands;
         for (size_t i : newOperandIndices) {
@@ -337,7 +338,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
               builder.mapping.lookupOrDefault(yieldOp.getOperand(i)));
         }
 
-        builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+        scf::YieldOp::create(builder, op->getLoc(), newYieldOperands);
       }
     } else {
       assert(hasPartition(op));
@@ -431,24 +432,24 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   SmallVector<Operation *> opsToErase;
   for (auto &op_ : *loop->getBlock()) {
     auto op = &op_;
-    auto wsTag = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
-    if (!wsTag || wsTag.getInt() != partitions.getTag())
+    if (!hasPartition(op))
       continue;
-    if (hasPartition(op) && !isa<scf::ForOp>(op)) {
-      auto partitionIds = getPartitionIds(op);
-      cloneOp(op, builders, partitionIds);
-      opsToErase.push_back(op);
-    } else {
-      assert(loop.getOperation() == op && "Unexpected op");
+    assert(hasWarpSpecializeTag(op));
+    if (*getWarpSpecializeTag(op) != partitions.getTag())
+      continue;
+    if (op == loop) {
       cloneForOp(loop, builders, partitions);
       opsToErase.push_back(loop);
+    } else {
+      cloneOp(op, builders, getPartitionIds(op));
+      opsToErase.push_back(op);
     }
   }
 
   for (auto [b, region, partition] : llvm::zip(
            builders, wgOp.getPartitionRegions(), partitions.getPartitions())) {
     if (!llvm::is_contained(getPartitionIds(loop), b.partitionId)) {
-      b.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), SmallVector<Value>{});
+      nvws::WarpGroupYieldOp::create(b, wgOp.getLoc(), SmallVector<Value>{});
       continue;
     }
     auto newForOp = *region.front().getOps<scf::ForOp>().begin();
@@ -492,7 +493,13 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       auto output = LocalLoadOp::create(topBuilder, ty, tensorResultAllocs[i]);
       LocalDeallocOp::create(topBuilder, tensorResultAllocs[i]);
       res.replaceAllUsesWith(output);
-    } else {
+    } else if (llvm::any_of(res.getUsers(), [&](Operation *user) {
+                 return !hasPartition(user) ||
+                        (isa<scf::ForOp>(user) && hasWarpSpecializeTag(user));
+               })) {
+      // If some users are in the root partition (no partition attribute) or
+      // used by another warp-specialized loop, we need to replace their uses
+      // with the corresponding result from the warp group operation
       assert(newResultIndices[i] && "A valid index is expected.");
       res.replaceAllUsesWith(wgOp.getResult(*newResultIndices[i]));
     }

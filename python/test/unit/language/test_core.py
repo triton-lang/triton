@@ -102,8 +102,10 @@ def patch_kernel(template, to_replace):
         return local_namespace[template.fn.__name__]
     else:
         kernel = triton.JITFunction(template.fn)
+        src = kernel.src
         for key, value in to_replace.items():
-            kernel._unsafe_update_src(kernel.src.replace(key, value))
+            src = src.replace(key, value)
+        kernel._unsafe_update_src(src)
         return kernel
 
 
@@ -1151,7 +1153,7 @@ def test_index1d(expr, dtype_str, num_ctas, device):
     rank_y = expr.count(',') + 1
     shape_x = [32 for _ in range(rank_x)]
     shape_z = [32 for _ in range(rank_y)]
-    shape_z_rank_mismatch = [32 for _ in range(rank_y + 1)]
+    shape_z_rank_mismatch = [32 for _ in range(rank_y - 1)]
     shape_z_dim_mismatch = [64 for _ in range(rank_y)]
 
     # Triton kernel
@@ -1402,7 +1404,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str, check_return_val",
                          [(shape, axis, num_ctas, dtype_x_str, check_return_val)
-                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
+                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64), (128, 128)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64']
@@ -3323,7 +3325,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and input_precision == "tf32":
+    if in_dtype == 'float32' and input_precision in ["tf32", "bf16x3", "bf16x6"]:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -4065,7 +4067,7 @@ def test_const(device, choose_const, constexpr, mode):
             error = "Cannot store to a constant pointer"
         else:
             if mode == "call":
-                error = "Inconsistent return types"
+                error = "Return type mismatch: "
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
@@ -5486,7 +5488,8 @@ def test_poison_return(device):
 
     @triton.jit
     def kernel(Out):
-        tl.store(Out, return_poison(0))
+        zero = 0
+        tl.store(Out, return_poison(zero))
 
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
@@ -5750,6 +5753,27 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
 
 # -----------------------
+# test enable_reflect_ftz
+# -----------------------
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("enable_reflect_ftz", [False, True])
+def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
+
+    @triton.jit
+    def exp2(data):
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.math.exp2(tl.load(ptrs)))
+
+    data = torch.full((128, ), -127.0, device=device, dtype=torch.float32)
+    h = exp2.warmup(data, grid=(1, ), enable_reflect_ftz=enable_reflect_ftz)
+
+    found_ex2_ftz = re.search(r'ex2.approx.ftz.f32', h.asm["ptx"]) is not None
+    assert found_ex2_ftz == enable_reflect_ftz
+
+
+# -----------------------
 # test override_arch
 # -----------------------
 
@@ -5809,7 +5833,7 @@ def test_num_ctas_pre_sm90(device):
         msg = r"num_ctas > 1 requires NVIDIA SM90\+ \(Hopper\)"
     else:
         arch = "gfx942"
-        msg = r"num_ctas > 1 not supported for AMD GPUs"
+        msg = r"num_ctas > 1 not supported"
 
     with pytest.raises(ValueError, match=msg):
         _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)
@@ -6670,4 +6694,4 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
     d = a.to(torch.float32) @ b.to(torch.float32)
 
-    assert torch.equal(c, d)
+    assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)

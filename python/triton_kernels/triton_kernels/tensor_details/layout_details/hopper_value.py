@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from dataclasses import dataclass
 from .base import Layout
 from triton_kernels.target_info import cuda_capability_geq
 
@@ -82,12 +83,17 @@ def _unpack_bits(x, mx_axis: int):
 # -----------------------------------------------------------------------
 
 
+@dataclass
 class HopperMXValueLayout(Layout):
+    mx_axis: int
+    mma_version: int
+    leading_shape: list[int]
     name: str = "HOPPER_VALUE"
 
     def __init__(self, shape, mx_axis, mma_version=3):
         super().__init__(shape)
-        assert mx_axis in range(len(shape))
+        if mx_axis < 0:
+            mx_axis += len(shape)
         self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape
@@ -120,6 +126,14 @@ class HopperMXValueLayout(Layout):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
+        # Pre-pad both matrix dims to multiples of 64
+        *_, M_in, K_in = data.shape
+        SWIZZLE_ALIGN_M = 64
+        SWIZZLE_ALIGN_K = 64
+        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+
         data = self._maybe_mT(data)
         init_shape = data.shape
 

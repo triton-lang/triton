@@ -31,7 +31,7 @@ namespace {
 // by interleaving the execution of two warps on each SIMD. Especially it groups
 // instructions into Dot and Memory clusters so they can efficiently run in
 // parallel. Also this pass inserts `rocdl.s.setprio` operation and
-// `amdgpu.cond_barrier` to run two parallel warps in synchronization.
+// `amdg.cond_barrier` to run two parallel warps in synchronization.
 // This scheduling doesn't help improving the memory latency itself but it
 // relies on software-pipelining to hide the global latency. Likely to improve
 // the performance of compute-bound cases.
@@ -796,11 +796,14 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // s_barrier
   //
   // Check note 2 and 3 for details.
-  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
   updateOpInsertion(dotOps[1]);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  auto dsAttr = builder.getI32IntegerAttr(0);
+  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
+                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
+                /* ds= */ dsAttr),
+            false);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
@@ -831,7 +834,10 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
+                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
+                /* ds= */ dsAttr),
+            false);
 
   return success();
 }
@@ -1179,8 +1185,19 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize <= smallTile && tileSize >= minTile)
+    if (tileSize <= smallTile && tileSize >= minTile) {
       transformOnePPClusters(builder, loc);
+      LDBG("Pingpong scheduling applied for numWarps=4 with tileSize=" +
+           std::to_string(tileSize) + " (in range [" + std::to_string(minTile) +
+           ", " + std::to_string(smallTile) +
+           "]), One Dot-Memory (ping-pong) cluster used.");
+    } else {
+      std::stringstream message;
+      message << "Skipping pingpong for numWarps=4: tileSize=" << tileSize
+              << " is outside the range [" << minTile << ", " << smallTile
+              << "]";
+      LDBG(message.str());
+    }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8 && numStages == 2) {
@@ -1210,8 +1227,15 @@ void Pingponger::getDotPingponged() {
              "cluster transformation");
         return;
       }
-    } else
+    } else {
+      std::stringstream message;
+      message << "Skipping pingpong for numWarps=8, numStages=2: tileSize="
+              << tileSize
+              << " does not match supported tile sizes (medium=" << mediumTile
+              << " or large=" << largeTile << ")";
+      LDBG(message.str());
       return;
+    }
 
     // Let half of the warps start the loop first and the others follow later
     // but in the synchronized way. This can be accomplished by calling

@@ -123,10 +123,10 @@ unsigned getElementBitWidth(RankedTensorType type) {
 }
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 SmallVector<int64_t> &shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(ty);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
@@ -887,9 +887,10 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
+    // Skip propagating through for op/while op results for now.
     // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
+    if (currentValue.getDefiningOp<scf::ForOp>() ||
+        currentValue.getDefiningOp<scf::WhileOp>())
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
@@ -1082,7 +1083,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
 }
 
 inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
+swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
   // DotOperandEncodingAttr with a tile of this shape This works because
@@ -1705,6 +1706,15 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     return values;
   }
   return {};
+}
+
+LogicalResult verifyBarrierType(Operation *op,
+                                mlir::triton::gpu::MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
 }
 
 } // namespace mlir::triton

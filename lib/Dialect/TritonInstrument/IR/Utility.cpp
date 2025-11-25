@@ -18,7 +18,7 @@ namespace {
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int size,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
+  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/1);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{size},
                                   /*threadsPerWarp=*/{32},
@@ -30,7 +30,7 @@ BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int buffers,
                                                   unsigned int barriers,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/2);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{buffers, barriers},
                                   /*threadsPerWarp=*/{1, 32},
@@ -111,6 +111,16 @@ bool hasWGMMA(ModuleOp module) {
     }
   });
   return hasWGMMA;
+}
+
+bool hasTMAStore(ModuleOp module) {
+  bool hasTMAStore = false;
+  module.walk([&](Operation *op) {
+    if (isa<AsyncTMACopyLocalToGlobalOp, TMAStoreWaitOp>(op)) {
+      hasTMAStore = true;
+    }
+  });
+  return hasTMAStore;
 }
 
 bool canAllocBeInstrumented(Operation *op) {
@@ -446,31 +456,30 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
   lock[entryRegion] = {lockVal, lockVal.getType()};
   passToWarpSpecialize(entryPoint, lock[entryRegion], lock);
 
-  // Create write commits tensor for cp-async
-  if (hasCpAsync(module)) {
-    int iMemType = (int)MemType::SHARED_MEM;
-    int numBufs = bufValues[iMemType].size();
+  auto createCommitTensor = [&](CommitKind::Kind commitKind) {
+    int numBufs = bufValues[(int)MemType::SHARED_MEM].size();
     assert(numBufs > 0);
-    // NUM_THREADS instead of THREADS_BITMASK_SIZE as cp_async can't work on the
-    // helper threads of TMA and TC
-    asyncCpCommits[entryRegion] = {
+    // NUM_THREADS instead of THREADS_BITMASK_SIZE as commit-count tracking
+    // operates on base threads.
+    commits[commitKind][entryRegion] = {
         createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
         getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)};
-    passToWarpSpecialize(entryPoint, asyncCpCommits[entryRegion],
-                         asyncCpCommits);
+    passToWarpSpecialize(entryPoint, commits[commitKind][entryRegion],
+                         commits[commitKind]);
+  };
+
+  // Create write commits tensor for cp-async
+  if (hasCpAsync(module)) {
+    createCommitTensor(CommitKind::AsyncCp);
   }
 
   // Create reads commits tensor for wgmma
   if (hasWGMMA(module)) {
-    int iMemType = (int)MemType::SHARED_MEM;
-    int numBufs = bufValues[iMemType].size();
-    assert(numBufs > 0);
-    // NUM_THREADS instead of THREADS_BITMASK_SIZE as wgmma can't work on the
-    // helper threads of TMA and TC
-    wgmmaCommits[entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
-        getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)};
-    passToWarpSpecialize(entryPoint, wgmmaCommits[entryRegion], wgmmaCommits);
+    createCommitTensor(CommitKind::Wgmma);
+  }
+
+  if (hasTMAStore(module)) {
+    createCommitTensor(CommitKind::TmaStore);
   }
 }
 

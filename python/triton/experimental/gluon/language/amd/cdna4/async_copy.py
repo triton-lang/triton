@@ -162,7 +162,7 @@ def load_shared_relaxed(smem, layout, _semantic=None):
     Returns:
         tensor: A Gluon tensor containing the loaded data.
     """
-    SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdgpu.syncedViaAsyncWait"
+    SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdg.syncedViaAsyncWait"
 
     layout = _unwrap_if_constexpr(layout)
     ret = _semantic.shared_load(smem, layout)

@@ -35,6 +35,10 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
+// Emit the cta multicast mask for a given cta id based on the src layout
+Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value blockId,
+                           const LinearLayout &cvt);
+
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
@@ -44,7 +48,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 // signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
 // avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal,
+             Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
              bool forceNoAliasAsyncLoads = false);
 

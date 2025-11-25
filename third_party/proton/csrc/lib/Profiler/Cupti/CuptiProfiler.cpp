@@ -341,6 +341,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
   static constexpr size_t AlignSize = 8;
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
   static constexpr size_t AttributeSize = sizeof(size_t);
+  static constexpr const char *CaptureTag = "<captured_at>";
 
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
