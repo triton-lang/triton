@@ -489,7 +489,11 @@ class JITCallable:
         self.__module__ = fn.__module__
 
     def get_capture_scope(self):
-        return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
+        fn = self.fn
+        if fn.__closure__ is None:
+            return self.__globals__
+        nonlocals = {name: cell.cell_contents for name, cell in zip(fn.__code__.co_freevars, fn.__closure__)}
+        return self.__globals__ | nonlocals
 
     @property
     def cache_key(self) -> str:
