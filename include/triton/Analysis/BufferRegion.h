@@ -138,7 +138,7 @@ public:
   // TODO: Find a better place for this, maybe in some Utility.cpp.
   // Maybe we already have some helper that does something like this?
   // Check if any of the operands are MemDescType.
-  bool usesMemory(Operation *op) const;
+  bool accessesMemory(Operation *op) const;
 
   // ------------------------------
   // Required overrides
@@ -158,6 +158,8 @@ public:
       Operation *op, const RegionSuccessor &successor,
       llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
       unsigned firstIndex) override;
+
+  LogicalResult initialize(Operation *top) override;
 
 private:
   /// Insert a region during analysis

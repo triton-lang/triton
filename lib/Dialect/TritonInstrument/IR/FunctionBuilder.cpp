@@ -284,15 +284,20 @@ Value createColumnMask(ImplicitLocOpBuilder &b, Value column,
 void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
                                            int thread, Value phase, Value pred,
                                            Operation *insertPoint) {
+
+  if (auxData.barriers.empty() || auxData.waiting.empty()) {
+    return;
+  }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
-  Value waitingVal = auxData.waiting[insertPoint].value;
-  auto waitingType = cast<RankedTensorType>(auxData.waiting[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value waitingVal = auxData.waiting.at(insertPoint).value;
+  auto waitingType =
+      cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64, threadVal,   phase,
                              pred,    barriersVal, waitingVal};
@@ -372,16 +377,20 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
 void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
                                              Value mbar, int thread, Value pred,
                                              Operation *insertPoint) {
+  if (auxData.barriers.empty() || auxData.waiting.empty()) {
+    return;
+  }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
 
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
-  Value waitingVal = auxData.waiting[insertPoint].value;
-  auto waitingType = cast<RankedTensorType>(auxData.waiting[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value waitingVal = auxData.waiting.at(insertPoint).value;
+  auto waitingType =
+      cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
 
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64, threadVal, pred, barriersVal, waitingVal};
@@ -443,17 +452,21 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
                                                       int activeMask,
                                                       Value pred,
                                                       Operation *insertPoint) {
+  if (auxData.waiting.empty() || auxData.barrierStates.empty()) {
+    return;
+  }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   int64_t expandedActiveMask = expandActiveMask(activeMask);
   Value expandedActiveMaskVal =
       arith::ConstantIntOp::create(b, expandedActiveMask, 32);
-  Value waitingVal = auxData.waiting[insertPoint].value;
-  auto waitingType = cast<RankedTensorType>(auxData.waiting[insertPoint].type);
-  Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
+  Value waitingVal = auxData.waiting.at(insertPoint).value;
+  auto waitingType =
+      cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
   SmallVector<Value> args = {expandedActiveMaskVal, pred, waitingVal,
                              barrierStatesVal};
   AssertInfo assertInfo{
@@ -521,14 +534,17 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
                                                  Value mbar, int count,
                                                  Operation *insertPoint) {
-  Value countVal = arith::ConstantIntOp::create(b, count, 32);
 
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
+    return;
+  }
+  Value countVal = arith::ConstantIntOp::create(b, count, 32);
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
-  Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64, countVal, barriersVal, barrierStatesVal};
   createCallToCachedFunction(
@@ -574,16 +590,20 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
                                                     Value mbar, int count,
                                                     Value pred,
                                                     Operation *insertPoint) {
+
+  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
+    return;
+  }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value countVal = arith::ConstantIntOp::create(b, count, 32);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
-  Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64, countVal, pred, barriersVal,
                              barrierStatesVal};
@@ -641,16 +661,20 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
                                                    Value mbar, int count,
                                                    Value pred,
                                                    Operation *insertPoint) {
+
+  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
+    return;
+  }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value countVal = arith::ConstantIntOp::create(b, count, 32);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
-  Value barrierStatesVal = auxData.barrierStates[insertPoint].value;
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates[insertPoint].type);
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64, countVal, pred, barriersVal,
                              barrierStatesVal};
@@ -730,16 +754,21 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
                                                    uint64_t threadMask,
                                                    Value pred, MemType memType,
                                                    Operation *insertPoint) {
+
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.writeVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value writeVisibilityVal =
-      auxData.writeVisibility[(int)memType][insertPoint].value;
+      auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
-      auxData.writeVisibility[(int)memType][insertPoint].type);
+      auxData.writeVisibility[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, threadMaskVal, buffersVal,
                              writeVisibilityVal};
@@ -780,16 +809,21 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
                                                   uint64_t threadMask,
                                                   Value pred, MemType memType,
                                                   Operation *insertPoint) {
+
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.readVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value readVisibilityVal =
-      auxData.readVisibility[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
-      auxData.readVisibility[(int)memType][insertPoint].type);
+      auxData.readVisibility[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, threadMaskVal, buffersVal,
                              readVisibilityVal};
@@ -837,15 +871,19 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
                                                    Value buf, Value pred,
                                                    MemType memType,
                                                    Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.writeTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value writeTrackingVal =
-      auxData.writeTracking[(int)memType][insertPoint].value;
+      auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
-      auxData.writeTracking[(int)memType][insertPoint].type);
+      auxData.writeTracking[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, buffersVal, writeTrackingVal};
   createCallToCachedFunction(
@@ -883,15 +921,19 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
                                                     Value buf, Value pred,
                                                     MemType memType,
                                                     Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.readVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value readVisibilityVal =
-      auxData.readVisibility[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
-      auxData.readVisibility[(int)memType][insertPoint].type);
+      auxData.readVisibility[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, buffersVal, readVisibilityVal};
   createCallToCachedFunction(
@@ -929,14 +971,20 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
                                                   Value buf, Value pred,
                                                   MemType memType,
                                                   Operation *insertPoint) {
+
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.readTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
-  Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
+  Value readTrackingVal =
+      auxData.readTracking[(int)memType].at(insertPoint).value;
   auto readTrackingType = cast<RankedTensorType>(
-      auxData.readTracking[(int)memType][insertPoint].type);
+      auxData.readTracking[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, buffersVal, readTrackingVal};
   createCallToCachedFunction(
@@ -974,20 +1022,25 @@ void FunctionBuilder::createTrackVisibleWritesCall(ImplicitLocOpBuilder &b,
                                                    Value mbar, int thread,
                                                    Value pred, MemType memType,
                                                    Operation *insertPoint) {
+  if (auxData.barriers.empty() ||
+      auxData.writeVisibility[(int)memType].empty() ||
+      auxData.writeTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value writeVisibilityVal =
-      auxData.writeVisibility[(int)memType][insertPoint].value;
+      auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
-      auxData.writeVisibility[(int)memType][insertPoint].type);
+      auxData.writeVisibility[(int)memType].at(insertPoint).type);
   Value writeTrackingVal =
-      auxData.writeTracking[(int)memType][insertPoint].value;
+      auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
-      auxData.writeTracking[(int)memType][insertPoint].type);
+      auxData.writeTracking[(int)memType].at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {
       mbarI64,         pred, threadVal, barriersVal, writeVisibilityVal,
@@ -1045,19 +1098,26 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
                                                   Value mbar, int thread,
                                                   Value pred, MemType memType,
                                                   Operation *insertPoint) {
+
+  if (auxData.barriers.empty() ||
+      auxData.readVisibility[(int)memType].empty() ||
+      auxData.readTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value readVisibilityVal =
-      auxData.readVisibility[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
-      auxData.readVisibility[(int)memType][insertPoint].type);
-  Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).type);
+  Value readTrackingVal =
+      auxData.readTracking[(int)memType].at(insertPoint).value;
   auto readTrackingType = cast<RankedTensorType>(
-      auxData.readTracking[(int)memType][insertPoint].type);
+      auxData.readTracking[(int)memType].at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64,           pred,
                              threadVal,         barriersVal,
@@ -1109,20 +1169,26 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createTransferVisibleWritesCall(
     ImplicitLocOpBuilder &b, Value mbar, uint64_t threadMask, Value pred,
     MemType memType, Operation *insertPoint) {
+
+  if (auxData.barriers.empty() ||
+      auxData.writeVisibility[(int)memType].empty() ||
+      auxData.writeTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value writeVisibilityVal =
-      auxData.writeVisibility[(int)memType][insertPoint].value;
+      auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
-      auxData.writeVisibility[(int)memType][insertPoint].type);
+      auxData.writeVisibility[(int)memType].at(insertPoint).type);
   Value writeTrackingVal =
-      auxData.writeTracking[(int)memType][insertPoint].value;
+      auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
-      auxData.writeTracking[(int)memType][insertPoint].type);
+      auxData.writeTracking[(int)memType].at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {
       mbarI64,         pred, threadMaskVal, barriersVal, writeVisibilityVal,
@@ -1185,19 +1251,26 @@ void FunctionBuilder::createTransferVisibleWritesCall(
 void FunctionBuilder::createTransferVisibleReadsCall(
     ImplicitLocOpBuilder &b, Value mbar, uint64_t threadMask, Value pred,
     MemType memType, Operation *insertPoint) {
+
+  if (auxData.barriers.empty() ||
+      auxData.readVisibility[(int)memType].empty() ||
+      auxData.readTracking[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
-  Value barriersVal = auxData.barriers[insertPoint].value;
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
-      cast<RankedTensorType>(auxData.barriers[insertPoint].type);
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value readVisibilityVal =
-      auxData.readVisibility[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
-      auxData.readVisibility[(int)memType][insertPoint].type);
-  Value readTrackingVal = auxData.readTracking[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).type);
+  Value readTrackingVal =
+      auxData.readTracking[(int)memType].at(insertPoint).value;
   auto readTrackingType = cast<RankedTensorType>(
-      auxData.readTracking[(int)memType][insertPoint].type);
+      auxData.readTracking[(int)memType].at(insertPoint).type);
   Value mbarI64 = tti::ExperimentalMemDescToI64Op::create(b, mbar);
   SmallVector<Value> args = {mbarI64,           pred,
                              threadMaskVal,     barriersVal,
@@ -1249,16 +1322,20 @@ void FunctionBuilder::createTransferVisibleReadsCall(
 void FunctionBuilder::createVerifyWriteVisibilityCall(
     ImplicitLocOpBuilder &b, Value buf, int thread, StringRef operandName,
     Value pred, MemType memType, Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.writeVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value writeVisibilityVal =
-      auxData.writeVisibility[(int)memType][insertPoint].value;
+      auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
-      auxData.writeVisibility[(int)memType][insertPoint].type);
+      auxData.writeVisibility[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, threadVal, buffersVal,
                              writeVisibilityVal};
@@ -1313,16 +1390,20 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
 void FunctionBuilder::createVerifyReadVisibilityCall(
     ImplicitLocOpBuilder &b, Value buf, int thread, StringRef operandName,
     Value pred, MemType memType, Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.readVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value buffersVal = auxData.buffers[(int)memType][insertPoint].value;
-  auto buffersType =
-      cast<RankedTensorType>(auxData.buffers[(int)memType][insertPoint].type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
   Value readVisibilityVal =
-      auxData.readVisibility[(int)memType][insertPoint].value;
+      auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
-      auxData.readVisibility[(int)memType][insertPoint].type);
+      auxData.readVisibility[(int)memType].at(insertPoint).type);
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
   SmallVector<Value> args = {bufI64, pred, threadVal, buffersVal,
                              readVisibilityVal};
@@ -1380,9 +1461,13 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
                                                     uint64_t destMask,
                                                     Value pred, MemType memType,
                                                     Operation *insertPoint) {
+
+  if (auxData.writeVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  auto writeVis = auxData.writeVisibility[(int)memType][insertPoint];
+  auto writeVis = auxData.writeVisibility[(int)memType].at(insertPoint);
   auto writeVisibilityType = cast<RankedTensorType>(writeVis.type);
   Value sourceThreadVal = arith::ConstantIntOp::create(b, sourceThread, 32);
   Value destMaskVal = arith::ConstantIntOp::create(b, destMask, 64);
@@ -1450,9 +1535,13 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
                                                    uint64_t destMask,
                                                    Value pred, MemType memType,
                                                    Operation *insertPoint) {
+
+  if (auxData.readVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  auto readVis = auxData.readVisibility[(int)memType][insertPoint];
+  auto readVis = auxData.readVisibility[(int)memType].at(insertPoint);
   auto readVisibilityType = cast<RankedTensorType>(readVis.type);
   Value sourceThreadVal = arith::ConstantIntOp::create(b, sourceThread, 32);
   SmallVector<Value> args = {sourceThreadVal,
@@ -1501,10 +1590,16 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
 }
 
 void FunctionBuilder::createStageAccessForCommitCall(
-    ImplicitLocOpBuilder &b, Value buf, int thread, Value pred,
-    ValueType buffers, ValueType outstandingCommits, Operation *insertPoint) {
+    ImplicitLocOpBuilder &b, Value buf, int thread, Value pred, MemType memType,
+    CommitKind::Kind commitKind, Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.commits[commitKind].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
+  ValueType buffers = auxData.buffers[(int)memType].at(insertPoint);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
@@ -1548,10 +1643,14 @@ void FunctionBuilder::createStageAccessForCommitCall(
 
 void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
                                                int thread, Value pred,
-                                               ValueType outstandingCommits,
+                                               CommitKind::Kind commitKind,
                                                Operation *insertPoint) {
+  if (auxData.commits[commitKind].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
@@ -1599,10 +1698,17 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
 
 void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-    int outstandingNum, Value pred, ValueType outstandingCommits,
-    ValueType writeVisibility, Operation *insertPoint) {
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  if (auxData.commits[commitKind].empty() ||
+      auxData.writeVisibility[(int)memType].empty()) {
+    return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
+  ValueType writeVisibility =
+      auxData.writeVisibility[(int)memType].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   auto writeVisibilityType = cast<RankedTensorType>(writeVisibility.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
@@ -1675,8 +1781,15 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
 
 void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-    int outstandingNum, Value pred, ValueType outstandingCommits,
-    ValueType readVisibility, Operation *insertPoint) {
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  if (auxData.commits[commitKind].empty() ||
+      auxData.readVisibility[(int)memType].empty()) {
+    return;
+  }
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
+  ValueType readVisibility =
+      auxData.readVisibility[(int)memType].at(insertPoint);
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
@@ -1751,8 +1864,14 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
 
 void FunctionBuilder::createCheckOutstandingCommitsCall(
     ImplicitLocOpBuilder &b, Value buf, int thread, StringRef pendingAccessType,
-    Value pred, ValueType buffers, ValueType outstandingCommits,
+    Value pred, MemType memType, CommitKind::Kind commitKind,
     Operation *insertPoint) {
+  if (auxData.buffers[(int)memType].empty() ||
+      auxData.commits[commitKind].empty()) {
+    return;
+  }
+  ValueType buffers = auxData.buffers[(int)memType].at(insertPoint);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   assert(thread < NUM_THREADS &&
          "Commit-count tracking must operate on base threads");
   Value bufI64 = tti::ExperimentalMemDescToI64Op::create(b, buf);
