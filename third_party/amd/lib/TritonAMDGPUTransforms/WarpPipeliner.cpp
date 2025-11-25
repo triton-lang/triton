@@ -126,13 +126,6 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   // One pass over the body; collect clusters split by explicit borders.
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
     Operation *op = &opRef;
-    if (isIgnorable(op)) {
-      // Ignorable ops may appear before or after a stage, but not inside it.
-      // If encountered while building an execute_region, reject warp-pipeline.
-      if (!cluster.empty())
-        return failure();
-      continue;
-    }
     if (isBorder(op)) { // Wrap-up one cluster at a border.
       auto clusterStr =
           op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
@@ -149,7 +142,15 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
       cluster.clear();
       op->erase(); // remove the marker
       continue;
-    } else if (isa<scf::YieldOp>(op)) // End of the loop
+    }
+    if (isIgnorable(op)) {
+      // Ignorable ops may appear before or after a stage, but not inside it.
+      // If encountered while building an execute_region, reject warp-pipeline.
+      if (!cluster.empty())
+        return failure();
+      continue;
+    }
+    if (isa<scf::YieldOp>(op)) // End of the loop
       break;
 
     // Keep collecting ops for a cluster.
