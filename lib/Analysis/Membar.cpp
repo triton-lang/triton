@@ -3,7 +3,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
@@ -13,8 +12,7 @@
 namespace mlir {
 
 // Check if a ViewChain intersects with another other.
-// This happens if  their memdesc_index chaina are the same (or dynamic) and
-// their subslice regions intersect in all dimensions.
+// This happens if their subslice regions intersect in all dimensions.
 // Returns true if it can't prove the ViewChains are disjoint.
 bool ViewChain::intersects(const ViewChain &other) const {
   // Disjoint intervals don't overlap
@@ -27,11 +25,6 @@ bool ViewChain::intersects(const ViewChain &other) const {
                     other.bufferId != Allocation::InvalidBufferId &&
                     bufferId == other.bufferId;
   if (sameBuffer && allocationAccessTy && other.allocationAccessTy) {
-    // If both views access are using static indices and they differ, they
-    // cannot intersect
-    if (!indexInfo.mayIntersect(other.indexInfo))
-      return false;
-
     // If offsets are unknown for either ViewChain, conservatively assume
     // overlap
     if (!subsliceOffsets || !other.subsliceOffsets)
@@ -92,15 +85,13 @@ template <typename OpType> OpType walkLoopIterArgs(Value value) {
 
 } // namespace
 
-// Parse view chain from a value, collecting subslice offsets and memdesc_index
-// information. Loop-carried values are resolved via backward slicing through
-// scf.for iter_args
+// Parse view chain from a value, collecting subslice offsets. Loop-carried
+// values are resolved via backward slicing through scf.for iter_args
 ViewChain ViewChain::getFineGrainAccess(Value value,
                                         Allocation::BufferId bufferId,
                                         Interval<size_t> allocationInterval) {
   assert(bufferId != Allocation::InvalidBufferId &&
          "getFineGrainAccess must be called with a valid bufferId");
-  // Walk backwards to parse the view chain
   Value currentValue = value;
   auto allocationAccessTy = cast<triton::gpu::MemDescType>(value.getType());
 
@@ -112,54 +103,18 @@ ViewChain ViewChain::getFineGrainAccess(Value value,
     currentValue = subsliceOp.getSrc();
   }
 
-  // Collect memdesc_index operations (if any). There can be multiple chained
-  // memdesc_index ops, all appearing before the subslice (if present)
-  SmallVector<Value> indexValues;
-  while (auto indexOp =
-             walkLoopIterArgs<triton::gpu::MemDescIndexOp>(currentValue)) {
-    indexValues.push_back(indexOp.getIndex());
-    currentValue = indexOp.getSrc();
-  }
-
-  // Only set subsliceOffsets if we know there arent subslices before the one
-  // we saw (need to find either a memdesc_index or a local_alloc)
-  // This is because we might have a subslice = (test ? subslice1 : subslice2)
-  // in which case we don't have access to all subslice offsets so we can't
-  // set them in the viewchain
-  if (subsliceOffsets) {
-    bool canSeeAllocation =
-        currentValue.getDefiningOp<triton::gpu::LocalAllocOp>() != nullptr;
-    bool hasMemdescIndex = !indexValues.empty();
-
-    if (!(canSeeAllocation || hasMemdescIndex)) {
-      subsliceOffsets.reset();
-    }
-  }
-
-  // Build IndexInfo from the collected memdesc_index operations
-  IndexInfo indexInfo;
-  if (!indexValues.empty()) {
-    indexInfo.hasIndexing = true;
-    SmallVector<int64_t> staticIndices;
-    // Process indices in reverse order (easier to follow for logging)
-    for (auto it = indexValues.rbegin(); it != indexValues.rend(); ++it) {
-      if (auto constOp = it->getDefiningOp<arith::ConstantIntOp>()) {
-        staticIndices.push_back(constOp.value());
-      } else {
-        // Found a dynamic index, no point in tracking static indices
-        staticIndices.clear();
-        break;
-      }
-    }
-    // Only set staticIndices if we successfully collected all of them
-    if (!staticIndices.empty())
-      indexInfo.staticIndices = staticIndices;
+  // Only set subsliceOffsets if we know there aren't subslices before the one
+  // we saw. We can only trust the offsets of a subslice if the source comes
+  // from a local_alloc or a memdesc_index
+  auto memIdxOp = walkLoopIterArgs<triton::gpu::MemDescIndexOp>(currentValue);
+  auto localAllocOp = currentValue.getDefiningOp<triton::gpu::LocalAllocOp>();
+  if (!(localAllocOp || memIdxOp)) {
+    subsliceOffsets.reset();
   }
 
   ViewChain vc;
   vc.subsliceOffsets = subsliceOffsets;
   vc.allocationAccessTy = allocationAccessTy;
-  vc.indexInfo = indexInfo;
   vc.bufferId = bufferId;
   vc.allocationInterval = allocationInterval;
   return vc;
@@ -425,8 +380,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    // Create a ViewChain representing the full scratch buffer (equivalent to
-    // using the allocated interval directly in the original code)
     ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
         scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
 
