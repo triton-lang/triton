@@ -54,6 +54,10 @@ class state:
 
         return wrapper
 
+class metadata_state(state):
+    def __init__(self) -> None:
+        super().__init__(COMPUTE_METADATA_SCOPE_NAME)
+
 
 def enter_state(name: str) -> None:
     libproton.enter_state(name)

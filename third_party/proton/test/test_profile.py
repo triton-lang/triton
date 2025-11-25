@@ -613,7 +613,9 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
             a = torch.ones((2, 2), device="cuda")
-        with proton.scope("scope_b", metrics={"sum": a.sum()}):
+        with proton.metadata_state():
+            a_sum = a.sum()
+        with proton.scope("scope_b", metrics={"sum": a_sum}):
             b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
@@ -638,4 +640,14 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
 
     with temp_file.open() as f:
         data = json.load(f)
-    # CUDA/HIP graph may also invoke additional kernels to reset outputs
+
+    children = data[0]["children"]
+    # metadata scope + foo_test
+    assert len(children) == 2
+    foo_test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+            break
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["flops"] == 8.0
