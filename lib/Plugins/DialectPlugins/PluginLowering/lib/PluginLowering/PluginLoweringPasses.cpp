@@ -9,7 +9,7 @@
 
 #include "PluginLowering/PluginLoweringPasses.h"
 
-namespace mlir::pluginlowering {
+namespace mlir::triton::pluginlowering {
 #define GEN_PASS_DEF_PLUGINLOWERINGSWITCHBARFOO
 #define GEN_PASS_DEF_PLUGINLOWERINGLOWERFOOOP
 #include "PluginLowering/PluginLoweringPasses.h.inc"
@@ -30,10 +30,10 @@ public:
 };
 
 class PluginLoweringLowerFooOpRewriter
-    : public OpRewritePattern<mlir::pluginlowering::FooOp> {
+    : public OpRewritePattern<mlir::triton::pluginlowering::FooOp> {
 public:
-  using OpRewritePattern<mlir::pluginlowering::FooOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(mlir::pluginlowering::FooOp op,
+  using OpRewritePattern<mlir::triton::pluginlowering::FooOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(mlir::triton::pluginlowering::FooOp op,
                                 PatternRewriter &rewriter) const final {
     llvm::errs() << "FOUND FOO OP!!: ";
     op.dump();
@@ -72,4 +72,4 @@ public:
   }
 };
 } // namespace
-} // namespace mlir::pluginlowering
+} // namespace mlir::triton::pluginlowering
