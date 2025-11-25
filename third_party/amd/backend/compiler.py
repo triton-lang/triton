@@ -36,6 +36,7 @@ class HIPOptions:
     extern_libs: dict = None
     debug: bool = False
     sanitize_overflow: bool = True
+    enable_assertions: bool = False
     arch: str = None
     # We have native support for OCP fp8 variants since CDNA4/RDNA4. For earlier generations,
     # we software emulate the support for them.
@@ -116,6 +117,10 @@ class HIPBackend(BaseBackend):
         return f"hip:{options.arch}"
 
     def parse_options(self, opts) -> Any:
+        if "debug" in opts and opts["debug"]:
+            opts["enable_assertions"] = True
+            opts["sanitize_overflow"] = True
+
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
         if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
