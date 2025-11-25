@@ -504,6 +504,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             if (threadState.isMetricKernelLaunching)
               pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
+            }
           } // else no op in progress, the creation is triggered by graph
             // clone/instantiate
           if (!pImpl->graphStates.contain(graphId))
