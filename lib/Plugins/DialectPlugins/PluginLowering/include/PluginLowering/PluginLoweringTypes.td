@@ -1,23 +1,23 @@
-#ifndef PLUGINLOWERING_TYPES
-#define PLUGINLOWERING_TYPES
+#ifndef LOWERINGDIALECTPLUGIN_TYPES
+#define LOWERINGDIALECTPLUGIN_TYPES
 
 include "mlir/IR/AttrTypeBase.td"
-include "PluginLowering/PluginLoweringDialect.td"
+include "LoweringDialectPlugin/LoweringDialectPluginDialect.td"
 
 //===----------------------------------------------------------------------===//
-// PluginLowering type definitions
+// LoweringDialectPlugin type definitions
 //===----------------------------------------------------------------------===//
 
-class PluginLowering_Type<string name, string typeMnemonic, list<Trait> traits = []>
-    : TypeDef<PluginLowering_Dialect, name, traits> {
+class LoweringDialectPlugin_Type<string name, string typeMnemonic, list<Trait> traits = []>
+    : TypeDef<LoweringDialectPlugin_Dialect, name, traits> {
   let mnemonic = typeMnemonic;
 }
 
-def PluginLowering_CustomType : PluginLowering_Type<"Custom", "custom"> {
-    let summary = "PluginLowering custom type";
-    let description = "Custom type in pluginlowering dialect";
+def LoweringDialectPlugin_CustomType : LoweringDialectPlugin_Type<"Custom", "custom"> {
+    let summary = "LoweringDialectPlugin custom type";
+    let description = "Custom type in loweringdialectplugin dialect";
     let parameters = (ins StringRefParameter<"the custom value">:$value);
     let assemblyFormat = "`<` $value `>`";
 }
 
-#endif // PLUGINLOWERING_TYPES
+#endif // LOWERINGDIALECTPLUGIN_TYPES
