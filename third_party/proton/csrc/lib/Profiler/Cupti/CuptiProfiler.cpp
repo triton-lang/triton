@@ -98,6 +98,11 @@ uint32_t processActivityKernel(
           // No captured context for this data
           continue;
         }
+        if (dataIt->second.find(kernel->graphNodeId) ==
+            dataIt->second.end()) {
+          // No captured context for this node
+          continue;
+        }
         auto res = dataIt->second.at(kernel->graphNodeId);
         isAPI = res.first;
         scopeId = res.second;
