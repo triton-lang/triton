@@ -126,7 +126,8 @@ class CUDAOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'cuda'
-    sanitize_overflow: bool = True
+    sanitize_overflow: bool = False
+    enable_assertions: bool = False
     arch: str = None
     instrumentation_mode: str = ""
 
@@ -172,7 +173,11 @@ class CUDABackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
-            opts["debug"] = True
+            opts["enable_assertions"] = True
+
+        if "debug" in opts and opts["debug"]:
+            opts["enable_assertions"] = True
+            opts["sanitize_overflow"] = True
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
