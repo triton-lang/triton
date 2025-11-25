@@ -131,15 +131,13 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
 
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
-                  proxyBlockInfo.syncWriteViewChains.insert_or_assign(
-                      op, viewChain);
+                  proxyBlockInfo.syncWriteViewChains[op].push_back(viewChain);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
-                curBlockInfo.syncWriteViewChains.insert_or_assign(op,
-                                                                  viewChain);
+                curBlockInfo.syncWriteViewChains[op].push_back(viewChain);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadViewChains.insert_or_assign(op, viewChain);
+                curBlockInfo.syncReadViewChains[op].push_back(viewChain);
               }
             }
           }
@@ -155,7 +153,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (scratchBufferId != Allocation::InvalidBufferId) {
     ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
         scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
-    curBlockInfo.syncReadViewChains.insert_or_assign(op, scratchViewChain);
+    curBlockInfo.syncReadViewChains[op].push_back(scratchViewChain);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {

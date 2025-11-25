@@ -76,7 +76,8 @@ private:
 };
 
 struct BlockInfo {
-  using ViewChainMapT = std::map<Operation *, ViewChain>;
+  using ViewChainListT = SmallVector<ViewChain, 2>;
+  using ViewChainMapT = std::map<Operation *, ViewChainListT>;
   using BufferLayoutMapT = std::map<Allocation::BufferId, Attribute>;
 
   ViewChainMapT syncReadViewChains;
@@ -87,10 +88,18 @@ struct BlockInfo {
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    for (auto &[op, viewChain] : other.syncReadViewChains)
-      syncReadViewChains.insert_or_assign(op, viewChain);
-    for (auto &[op, viewChain] : other.syncWriteViewChains)
-      syncWriteViewChains.insert_or_assign(op, viewChain);
+    // Avoid inserting duplicate ViewChains, otherwise Membar
+    // cannot to reach a fixed point
+    for (auto &[op, chains] : other.syncReadViewChains) {
+      for (const auto &chain : chains)
+        if (!llvm::is_contained(syncReadViewChains[op], chain))
+          syncReadViewChains[op].push_back(chain);
+    }
+    for (auto &[op, chains] : other.syncWriteViewChains) {
+      for (const auto &chain : chains)
+        if (!llvm::is_contained(syncWriteViewChains[op], chain))
+          syncWriteViewChains[op].push_back(chain);
+    }
     for (auto &[bufferId, layout] : other.bufferLayouts)
       bufferLayouts.insert_or_assign(bufferId, layout);
     return *this;
@@ -100,16 +109,20 @@ struct BlockInfo {
     auto &os = llvm::errs();
     os << "Block ViewChains:\n";
     os << "  Read ViewChains:\n";
-    for (auto &[op, viewChain] : syncReadViewChains) {
-      os << "    " << op->getName() << ": ";
-      viewChain.print(os);
-      os << "\n";
+    for (auto &[op, viewChains] : syncReadViewChains) {
+      for (auto &viewChain : viewChains) {
+        os << "    " << op->getName() << ": ";
+        viewChain.print(os);
+        os << "\n";
+      }
     }
     os << "  Write ViewChains:\n";
-    for (auto &[op, viewChain] : syncWriteViewChains) {
-      os << "    " << op->getName() << ": ";
-      viewChain.print(os);
-      os << "\n";
+    for (auto &[op, viewChains] : syncWriteViewChains) {
+      for (auto &viewChain : viewChains) {
+        os << "    " << op->getName() << ": ";
+        viewChain.print(os);
+        os << "\n";
+      }
     }
     os << "  Buffer Layouts:\n";
     for (auto &[bufferId, layout] : bufferLayouts) {
@@ -151,11 +164,15 @@ private:
   bool isIntersected(const ViewChainMapT &lhsViewChains,
                      const ViewChainMapT &rhsViewChains,
                      MembarFilterFn filter) const {
-    for (auto &[lhsOp, lhsViewChain] : lhsViewChains) {
-      for (auto &[rhsOp, rhsViewChain] : rhsViewChains) {
-        if (lhsViewChain.intersects(rhsViewChain)) {
-          if (!filter || !filter(lhsOp, rhsOp))
-            return true;
+    for (auto &[lhsOp, lhsViewChains] : lhsViewChains) {
+      for (auto &lhsViewChain : lhsViewChains) {
+        for (auto &[rhsOp, rhsViewChains] : rhsViewChains) {
+          for (auto &rhsViewChain : rhsViewChains) {
+            if (lhsViewChain.intersects(rhsViewChain)) {
+              if (!filter || !filter(lhsOp, rhsOp))
+                return true;
+            }
+          }
         }
       }
     }
