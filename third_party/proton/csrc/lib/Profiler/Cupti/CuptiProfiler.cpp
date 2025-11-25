@@ -484,18 +484,24 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           if (profiler.isOpInProgress()) {
             for (auto *data : dataSet) {
               auto contexts = data->getContexts();
+              auto state = data->getState();
               // Trick: if the scope name is empty, it means the graph is created
               // by an API kernel but not Triton op
               if (threadState.scopeStack.back().name.empty()) {
-                if (!threadState.isMetricKernelLaunching)
+                // TODO: Unify these states
+                if (!threadState.isMetricKernelLaunching ||
+                    (state.has_value() &&
+                     *state !=
+                         std::string(
+                             ContextSource::COMPUTE_METADATA_SCOPE_NAME))) {
                   pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
-              } else {
-                contexts.push_back(threadState.scopeStack.back());
+                } else {
+                  contexts.push_back(threadState.scopeStack.back());
+                }
+                pImpl->graphStates[graphId]
+                    .nodeIdToState[nodeId]
+                    .captureContexts[data] = contexts;
               }
-              pImpl->graphStates[graphId]
-                  .nodeIdToState[nodeId]
-                  .captureContexts[data] = contexts;
-            }
             if (threadState.isMetricKernelLaunching)
               pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
           } // else no op in progress, the creation is triggered by graph

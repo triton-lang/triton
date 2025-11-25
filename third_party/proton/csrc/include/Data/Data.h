@@ -51,6 +51,10 @@ public:
     return contextSource->getContexts();
   }
 
+  std::optional<Context> getState() const {
+    return contextSource->getState();
+  }
+
 protected:
   /// The actual implementation of the dump operation.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;

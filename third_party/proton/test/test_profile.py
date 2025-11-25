@@ -596,7 +596,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metadata profiling in cudagraphs")
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)

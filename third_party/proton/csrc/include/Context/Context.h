@@ -30,6 +30,9 @@ struct Context {
 /// A context source is an object that can provide a list of contexts.
 class ContextSource {
 public:
+  static constexpr const char *COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata";
+
+public:
   ContextSource() = default;
   virtual ~ContextSource() = default;
 
@@ -42,6 +45,8 @@ public:
   }
 
   void setState(std::optional<Context> state) { ContextSource::state = state; }
+
+  std::optional<Context> getState() { return state; }
 
   virtual size_t getDepth() = 0;
 
