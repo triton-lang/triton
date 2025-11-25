@@ -1324,7 +1324,9 @@ class CodeGenerator(ast.NodeVisitor):
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
-        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        bound_args = fn.signature.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+        args = bound_args.arguments
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
@@ -1381,14 +1383,16 @@ class CodeGenerator(ast.NodeVisitor):
                 fn, ConstexprFunction):
             extra_kwargs = dict()
 
+            sig = getattr(fn, "signature", None)
             if isinstance(fn, ConstexprFunction):
-                sig = inspect.signature(fn.__call__)
-            else:
-                sig = inspect.signature(fn)
-            if '_semantic' in sig.parameters:
                 extra_kwargs["_semantic"] = self.semantic
-            if '_generator' in sig.parameters:
-                extra_kwargs['_generator'] = self
+            else:
+                if sig is None:
+                    sig = inspect.signature(fn)
+                if '_semantic' in sig.parameters:
+                    extra_kwargs["_semantic"] = self.semantic
+                if '_generator' in sig.parameters:
+                    extra_kwargs['_generator'] = self
             try:
                 ret = fn(*args, **extra_kwargs, **kws)
                 # builtin functions return plain tuples for readability
