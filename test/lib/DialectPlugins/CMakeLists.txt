@@ -1,5 +1,0 @@
-add_subdirectory(include)
-add_subdirectory(lib)
-# if(NOT WIN32)
-#   add_subdirectory(pluginlowering-plugin)
-# endif()

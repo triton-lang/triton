@@ -1,0 +1,9 @@
+#ifndef PLUGINLOWERING_PLUGINLOWERINGTYPES_H
+#define PLUGINLOWERING_PLUGINLOWERINGTYPES_H
+
+#include "mlir/IR/BuiltinTypes.h"
+
+#define GET_TYPEDEF_CLASSES
+#include "PluginLowering/PluginLoweringOpsTypes.h.inc"
+
+#endif // PLUGINLOWERING_PLUGINLOWERINGTYPES_H
