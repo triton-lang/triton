@@ -487,7 +487,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               // Trick: if the scope name is empty, it means the graph is created
               // by an API kernel but not Triton op
               if (threadState.scopeStack.back().name.empty()) {
-                pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
+                if (!threadState.isMetricKernelLaunching)
+                  pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
               } else {
                 contexts.push_back(threadState.scopeStack.back());
               }
