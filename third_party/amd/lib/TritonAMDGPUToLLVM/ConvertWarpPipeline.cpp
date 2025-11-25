@@ -144,6 +144,11 @@ private:
     mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpLow);
 
     // 2. Collect existing barrier information.
+    // Scanning the loop body and classifying each consecutive block of
+    // operations into a pipeline cluster (one cluster per execute_region).
+    // While doing this, we also detect any pre-existing barriers located
+    // between clusters.  These barriers may come from prefetch patterns, and
+    // must be preserved, but only at valid cluster boundaries.
     SmallVector<Block *> clusterBlocks;
     SmallVector<Operation *> clusterOps;
     SmallVector<bool> bars;
@@ -196,7 +201,15 @@ private:
       existingBarrierMap.erase(bottomBar);
     }
 
-    // 3. Dependency check from node 'src' to 'next'
+    // 3. Performing pairwise dependency analysis between clusters.  For each
+    // src → next pair (with wrap-around), we check whether their memory
+    // intervals overlap.  If so, a fence/barrier must be inserted at the
+    // boundary cluster (barrierLoc).  The analysis is expressed as a
+    // circular traversal so that pipeline stages form a ring.
+    // • `bars[i] = true` marks that a new cluster barrier must be inserted
+    //   before cluster i.
+    // • Existing barriers override or satisfy required fences, so we do not
+    //   insert duplicates.
     for (int offset = 0; offset < numClusters; offset++) {
       for (int src = 0; src < numClusters; src++) {
         const int next = (src + 2 + offset) % numClusters;
@@ -230,7 +243,17 @@ private:
       }
     }
 
-    // 4. Finally insert cluster barriers.
+    // 4. Materializing final cluster-scope barriers.  For each cluster index:
+    //  • If there is a pre-existing barrier at that location, we wrap it with
+    //    sched_barriers so that backend scheduling cannot move operations
+    //    across it.
+    //  • If no barrier exists but `bars[i]` is true, we insert a new cluster
+    //    barrier (SchedBarrier + Local/SBarrier + SchedBarrier).
+    //    The “local” variant is chosen when cluster-to-cluster memory
+    //    dependence requires local-scope synchronization.
+    //  • Cluster 0 is a special case: if no top-of-loop barrier existed,
+    //    the first cluster barrier must be inserted just before the loop’s
+    //    terminator, forming the wrap-around dependency.
     for (int i = 0; i < numClusters; i++) {
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
