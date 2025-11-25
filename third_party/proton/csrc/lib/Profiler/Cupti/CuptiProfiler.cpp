@@ -410,20 +410,25 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i].second;
-        auto addMetricValue = [&](auto typedValue) {
+        switch (metricTypeIndex) {
+        case variant_index_v<uint64_t, MetricValueType>: {
+          uint64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
           data->addMetrics(scopeId, {{metricName, typedValue}});
-        };
-        switch (metricTypeIndex) {
-        case variant_index_v<uint64_t, MetricValueType>:
-          addMetricValue(uint64_t{});
           break;
-        case variant_index_v<int64_t, MetricValueType>:
-          addMetricValue(int64_t{});
+        }
+        case variant_index_v<int64_t, MetricValueType>: {
+          int64_t typedValue{};
+          std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
+          data->addMetrics(scopeId, {{metricName, typedValue}});
           break;
-        case variant_index_v<double, MetricValueType>:
-          addMetricValue(double{});
+        }
+        case variant_index_v<double, MetricValueType>: {
+          double typedValue{};
+          std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
+          data->addMetrics(scopeId, {{metricName, typedValue}});
           break;
+        }
         default:
           break;
         }
