@@ -27,4 +27,20 @@ def PluginLoweringSwitchBarFoo: Pass<"pluginlowering-switch-bar-foo", "::mlir::M
   }];
 }
 
+def PluginLoweringLowerFooOp: Pass<"pluginlowering-lower-foo-op", "::mlir::ModuleOp"> {
+  let summary = "Lowers a foo op to an arith";
+  let description = [{
+      Lowers a FooOp to Arith:
+    ```
+    func.func @bar() {
+      return
+    }
+    // Gets transformed to:
+    func.func @foo() {
+      return
+    }
+    ```
+  }];
+}
+
 #endif // PLUGINLOWERING_PASS
