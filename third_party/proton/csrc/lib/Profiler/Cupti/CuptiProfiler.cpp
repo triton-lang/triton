@@ -634,15 +634,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
           auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
               metricNodeCount, metricBufferCapacity);
-          if (drained.first == 0) { // Not reach capacity yet
-            pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
-                                          metricNodeCount);
-          } else {
+          if (drained.first != 0) { // Reached capacity
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
               auto *recordPtr = reinterpret_cast<uint64_t *>(data);
               pImpl->emitMetricRecords(recordPtr, drained.second);
             });
           }
+          pImpl->pendingGraphQueue.push(externId, metricNodeScopes, metricNodeCount);
         }
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
