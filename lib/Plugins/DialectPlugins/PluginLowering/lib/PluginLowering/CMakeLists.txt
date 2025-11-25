@@ -1,11 +1,11 @@
-include_directories(${PROJECT_SOURCE_DIR}/lib/Plugins/DialectPlugins/PluginLowering/include)
-include_directories(${PROJECT_BINARY_DIR}/lib/Plugins/DialectPlugins/PluginLowering/include)
+include_directories(${PROJECT_SOURCE_DIR}/lib/Plugins/DialectPlugins/LoweringDialectPlugin/include)
+include_directories(${PROJECT_BINARY_DIR}/lib/Plugins/DialectPlugins/LoweringDialectPlugin/include)
 
-add_mlir_dialect_library(MLIRPluginLowering
-        PluginLoweringTypes.cpp
-        PluginLoweringDialect.cpp
-        PluginLoweringOps.cpp
-        PluginLoweringPasses.cpp
+add_mlir_dialect_library(MLIRLoweringDialectPlugin
+        LoweringDialectPluginTypes.cpp
+        LoweringDialectPluginDialect.cpp
+        LoweringDialectPluginOps.cpp
+        LoweringDialectPluginPasses.cpp
         SHARED
 
         ADDITIONAL_HEADER_DIRS
@@ -14,7 +14,7 @@ add_mlir_dialect_library(MLIRPluginLowering
         DEPENDS
         TritonTableGen
         TritonCanonicalizeIncGen
-        MLIRPluginLoweringPassesIncGen
+        MLIRLoweringDialectPluginPassesIncGen
 
         LINK_LIBS PUBLIC
         MLIRIR
@@ -34,9 +34,9 @@ add_mlir_dialect_library(MLIRPluginLowering
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
 
-target_compile_options(MLIRPluginLowering PRIVATE -fvisibility=default)
+target_compile_options(MLIRLoweringDialectPlugin PRIVATE -fvisibility=default)
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
-    set_target_properties(MLIRPluginLowering PROPERTIES
+    set_target_properties(MLIRLoweringDialectPlugin PROPERTIES
                           LIBRARY_OUTPUT_DIRECTORY
                           "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../plugins")
 endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)

@@ -1,1 +1,1 @@
-add_subdirectory(PluginLowering)
+add_subdirectory(LoweringDialectPlugin)

@@ -1,9 +1,9 @@
-#ifndef PLUGINLOWERING_PASS
-#define PLUGINLOWERING_PASS
+#ifndef LOWERINGDIALECTPLUGIN_PASS
+#define LOWERINGDIALECTPLUGIN_PASS
 
 include "mlir/Pass/PassBase.td"
 
-def PluginLoweringSwitchBarFoo: Pass<"pluginlowering-switch-bar-foo", "::mlir::ModuleOp"> {
+def LoweringDialectPluginSwitchBarFoo: Pass<"loweringdialectplugin-switch-bar-foo", "::mlir::ModuleOp"> {
   let summary = "Switches the name of a FuncOp named `bar` to `foo` and folds.";
   let description = [{
     Switches the name of a FuncOp named `bar` to `foo` and folds.
@@ -19,7 +19,7 @@ def PluginLoweringSwitchBarFoo: Pass<"pluginlowering-switch-bar-foo", "::mlir::M
   }];
 }
 
-def PluginLoweringLowerFooOp: Pass<"pluginlowering-lower-foo-op", "::mlir::ModuleOp"> {
+def LoweringDialectPluginLowerFooOp: Pass<"loweringdialectplugin-lower-foo-op", "::mlir::ModuleOp"> {
   let summary = "Lowers a foo op to an arith";
   let description = [{
       Lowers a FooOp to Arith:
@@ -35,4 +35,4 @@ def PluginLoweringLowerFooOp: Pass<"pluginlowering-lower-foo-op", "::mlir::Modul
   }];
 }
 
-#endif // PLUGINLOWERING_PASS
+#endif // LOWERINGDIALECTPLUGIN_PASS

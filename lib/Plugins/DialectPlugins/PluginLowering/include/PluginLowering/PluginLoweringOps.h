@@ -1,5 +1,5 @@
-#ifndef PLUGINLOWERING_PLUGINLOWERINGOPS_H
-#define PLUGINLOWERING_PLUGINLOWERINGOPS_H
+#ifndef LOWERINGDIALECTPLUGIN_LOWERINGDIALECTPLUGINOPS_H
+#define LOWERINGDIALECTPLUGIN_LOWERINGDIALECTPLUGINOPS_H
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
@@ -8,6 +8,6 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #define GET_OP_CLASSES
-#include "PluginLowering/PluginLoweringOps.h.inc"
+#include "LoweringDialectPlugin/LoweringDialectPluginOps.h.inc"
 
-#endif // PLUGINLOWERING_PLUGINLOWERINGOPS_H
+#endif // LOWERINGDIALECTPLUGIN_LOWERINGDIALECTPLUGINOPS_H
