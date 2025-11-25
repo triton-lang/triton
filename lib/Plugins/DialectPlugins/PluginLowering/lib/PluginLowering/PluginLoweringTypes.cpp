@@ -5,7 +5,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-using namespace mlir::pluginlowering;
+using namespace mlir::triton::pluginlowering;
 
 #define GET_TYPEDEF_CLASSES
 #include "PluginLowering/PluginLoweringOpsTypes.cpp.inc"

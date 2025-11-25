@@ -7,6 +7,7 @@
 #include <memory>
 
 namespace mlir {
+namespace triton {
 namespace pluginlowering {
 #define GEN_PASS_DECL
 #include "PluginLowering/PluginLoweringPasses.h.inc"
@@ -14,6 +15,7 @@ namespace pluginlowering {
 #define GEN_PASS_REGISTRATION
 #include "PluginLowering/PluginLoweringPasses.h.inc"
 } // namespace pluginlowering
+} // namespace triton
 } // namespace mlir
 
 #endif

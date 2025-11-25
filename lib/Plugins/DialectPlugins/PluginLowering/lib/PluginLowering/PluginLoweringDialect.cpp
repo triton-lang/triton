@@ -3,7 +3,7 @@
 #include "PluginLowering/PluginLoweringTypes.h"
 
 using namespace mlir;
-using namespace mlir::pluginlowering;
+using namespace mlir::triton::pluginlowering;
 
 #include "PluginLowering/PluginLoweringOpsDialect.cpp.inc"
 
@@ -32,12 +32,12 @@ void PluginLoweringDialect::initialize() {
 using namespace mlir;
 
 static void addTritonPluginPass(mlir::PassManager *pm) {
-  pm->addPass(mlir::pluginlowering::createPluginLoweringSwitchBarFoo());
+  pm->addPass(mlir::triton::pluginlowering::createPluginLoweringSwitchBarFoo());
 }
 
 static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::pluginlowering::createPluginLoweringSwitchBarFoo();
+    return mlir::triton::pluginlowering::createPluginLoweringSwitchBarFoo();
   });
 }
 
@@ -98,7 +98,7 @@ extern "C" __attribute__((visibility("default"))) DialectPluginLibraryInfo
 tritonGetDialectPluginInfo(const char *name) {
   return {MLIR_PLUGIN_API_VERSION, "PluginLowering", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {
-            registry->insert<mlir::pluginlowering::PluginLoweringDialect>();
-            mlir::pluginlowering::registerPasses();
+            registry->insert<mlir::triton::pluginlowering::PluginLoweringDialect>();
+            mlir::triton::pluginlowering::registerPasses();
           }};
 }

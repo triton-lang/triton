@@ -15,7 +15,7 @@ def PluginLowering_Dialect : Dialect {
         illustrate the basic setup required to develop MLIR-based tools without
         working inside of the LLVM source tree.
     }];
-    let cppNamespace = "::mlir::pluginlowering";
+    let cppNamespace = "::mlir::triton::pluginlowering";
 
     let useDefaultTypePrinterParser = 1;
     let extraClassDeclaration = [{
