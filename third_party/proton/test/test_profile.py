@@ -642,12 +642,30 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + foo_test
-    assert len(children) == 2
-    foo_test_frame = None
+    # metadata scope + kernels + scope_a + scope_b + test0
+    assert len(children) == 7
+    test0_frame = None
     for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    capture_at_frame = test0_frame["children"][0]
+
+    foo_test_frame = None
+    scope_a_frame = None
+    scope_b_frame = None
+    for child in capture_at_frame["children"]:
         if child["frame"]["name"] == "foo_test":
             foo_test_frame = child
-            break
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
     assert foo_test_frame is not None
-    assert foo_test_frame["metrics"]["flops"] == 8.0
+    assert foo_test_frame["metrics"]["bytes"] == 160
+    assert foo_test_frame["metrics"]["flops"] == 40
+    assert scope_a_frame is not None
+    assert scope_a_frame["metrics"]["bytes"] == 160
+    assert scope_b_frame is not None
+    assert scope_b_frame["metrics"]["sum"] == 40.0
