@@ -1785,16 +1785,18 @@ static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEnco
 //    ds_read_b128, which is the largest vector size for shared memory load.
 // Helpers to extract MFMA dims and compute kBase for the encoding.
 // If your AMDMfmaEncodingAttr exposes a different accessor, adjust accordingly.
-static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase) {
+static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, unsigned kPack) {
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
   if (tail && is16BitElem)
-    return 8;
+    return 4;
+  else if (!tail)
+    return kBase * kPack;
   return kBase;
 }
 
-static void fixKWidthOfDotOperand(ModuleOp m) {
+static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
   m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
     auto cEnc = cTy.getEncoding();
@@ -1807,7 +1809,7 @@ static void fixKWidthOfDotOperand(ModuleOp m) {
       return;
 
     unsigned kBase = *kBaseCandidate;
-    unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase);
+    unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase, kPack);
 
     auto aVal = dotOp.getA();
     auto bVal = dotOp.getB();
@@ -1864,15 +1866,6 @@ static void fixKWidthOfDotOperand(ModuleOp m) {
       bCvt->erase();
       newB = newCvtB;
     }
-
-    dotOp.setOperand(0, newA);
-    dotOp.setOperand(1, newB);
-
-    // If DotOp operands are immutable in your build, fallback to recreating the DotOp:
-    // auto newDot = tt::DotOp::create(builder, loc, dotOp.getD().getType(), newA, newB,
-    //                                 dotOp.getC(), dotOp.getInputPrecision(),
-    //                                 dotOp.getMaxNumImpreciseAcc());
-    // rewriter.replaceOp(dotOp, newDot);
   });
 }
 
@@ -1922,7 +1915,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     if (applyPatternsGreedily(m, std::move(mfmaPatterns)).failed())
       signalPassFailure();
 
-    fixKWidthOfDotOperand(m);
+    fixKWidthOfDotOperand(m, kPack);
 
     RewritePatternSet patterns(context);
     patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
