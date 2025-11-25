@@ -39,7 +39,7 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      if (!analysis->usesMemory(op))
+      if (!analysis->accessesMemory(op))
         return;
 
       auto maybeMemDesc = llvm::find_if(op->getOperands(), [](Value operand) {

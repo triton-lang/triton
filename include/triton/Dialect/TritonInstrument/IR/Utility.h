@@ -47,10 +47,25 @@ struct ValueType {
 struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
-    ValueType &operator[](Region *region) { return values[region]; }
-    ValueType &operator[](Operation *op) {
-      return values[getEnclosingParitionOrFunctionRegion(op)];
+    ValueType at(Region *region) {
+      if (values.find(region) == values.end()) {
+        assert(false && "Region not found in AuxDataMap");
+      }
+      return values[region];
     }
+    ValueType at(Operation *op) {
+      return at(getEnclosingParitionOrFunctionRegion(op));
+    }
+    void insert(Region *region, ValueType value) { values[region] = value; }
+    // ValueType &operator[](Region *region) {
+    //   if (values.find(region) == values.end()) {
+    //     assert(false && "Region not found in AuxDataMap");
+    //   }
+    //   return values[region];
+    // }
+    // ValueType &operator[](Operation *op) {
+    //   return values[getEnclosingParitionOrFunctionRegion(op)];
+    // }
     bool empty() const { return values.empty(); }
 
   private:

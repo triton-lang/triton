@@ -1,4 +1,5 @@
 #include "triton/Analysis/BufferRegion.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -86,34 +87,64 @@ bool isUsedAsTensorMemory(Value v) {
 
 namespace mlir::triton {
 
+LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
+  // Mark all warp-specialize partitions as live.
+  LogicalResult status = Base::initialize(top);
+  if (failed(status))
+    return failure();
+
+  top->walk([&](ttg::WarpSpecializeOp wsOp) {
+    for (Region *region : wsOp.getPartitionRegions()) {
+      if (region->empty())
+        continue;
+      Block &entry = region->front();
+      auto *exec =
+          getOrCreate<dataflow::Executable>(getProgramPointBefore(&entry));
+      propagateIfChanged(exec, exec->setToLive());
+    }
+  });
+  return success();
+}
+
 LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
-  auto propagateToWarpSpecializePartitions = [&](Value capture,
-                                                 const RegionInfo &info) {
-    for (Operation *user : capture.getUsers()) {
-      auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user);
-      if (!wsOp)
-        continue;
-      auto captures = wsOp.getExplicitCaptures();
-      auto it = llvm::find(captures, capture);
-      if (it == captures.end())
-        continue;
-      size_t idx = std::distance(captures.begin(), it);
-      for (Region *region : wsOp.getPartitionRegions()) {
-        if (region->empty())
-          continue;
-        auto blockArgs = region->front().getArguments();
-        if (idx >= blockArgs.size())
-          continue;
-        auto *argLat = getLatticeElement(blockArgs[idx]);
-        propagateIfChanged(argLat, argLat->join(info));
-      }
-    }
-  };
+  // auto propagateToWarpSpecializePartitions = [&](Value capture,
+  //                                                const RegionInfo &info) {
+  //   for (Operation *user : capture.getUsers()) {
+  //     auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user);
+  //     if (!wsOp)
+  //       continue;
+  //     auto captures = wsOp.getExplicitCaptures();
+  //     auto it = llvm::find(captures, capture);
+  //     if (it == captures.end())
+  //       continue;
+  //     size_t idx = std::distance(captures.begin(), it);
+  //     for (Region *region : wsOp.getPartitionRegions()) {
+  //       if (region->empty())
+  //         continue;
+  //       auto blockArgs = region->front().getArguments();
+  //       if (idx >= blockArgs.size())
+  //         continue;
+  //       auto *argLat = getLatticeElement(blockArgs[idx]);
+  //       propagateIfChanged(argLat, argLat->join(info));
+  //     }
+  //   }
+  // };
   Value result = nullptr;
   RegionInfo regionInfo;
+  if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
+    for (Region *region : wsOp.getPartitionRegions()) {
+      if (region->empty())
+        continue;
+
+      Block &entry = region->front();
+      auto *exec =
+          getOrCreate<dataflow::Executable>(getProgramPointBefore(&entry));
+      propagateIfChanged(exec, exec->setToLive());
+    }
+  }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(localAllocOp);
     uint32_t size = getAllocSize(localAllocOp);
@@ -150,9 +181,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
     result = memdescIndexOp.getResult();
   }
-  if (result) {
-    propagateToWarpSpecializePartitions(result, regionInfo);
-  }
   return success();
 }
 
@@ -160,33 +188,69 @@ void BufferRegionAnalysis::visitNonControlFlowArguments(
     Operation *op, const RegionSuccessor &successor,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
     unsigned firstIndex) {
-  setAllToEntryStates(argLattices.take_front(firstIndex));
-  setAllToEntryStates(argLattices.drop_front(
-      firstIndex + successor.getSuccessorInputs().size()));
+  auto wsOp = dyn_cast<triton::gpu::WarpSpecializePartitionsOp>(op);
+  if (!wsOp) {
+    setAllToEntryStates(argLattices.take_front(firstIndex));
+    setAllToEntryStates(argLattices.drop_front(
+        firstIndex + successor.getSuccessorInputs().size()));
+    return;
+  }
+
+  // Propagate aliases from the parent operation's operands to the block
+  // arguments.
+  assert(!successor.isParent());
+  ProgramPoint *point = getProgramPointAfter(wsOp);
+
+  for (auto [capture, argLattice] :
+       llvm::zip(wsOp.getParentOp().getExplicitCaptures(), argLattices)) {
+    propagateIfChanged(
+        argLattice,
+        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
+  }
 }
 
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   op->walk([&](Operation *op) {
-    if (usesMemory(op)) {
+    auto insertRegionForValue = [&](Value v) {
+      RegionInfo regionInfo = getLatticeElement(v)->getValue();
+      std::optional<RegionType> regionType = getRegionType(v);
+      if (!regionType) {
+        return;
+      }
+      for (auto &region : regionInfo.regions) {
+        insertRegion(*regionType, {region.baseOffset, region.length});
+      }
+    };
+    if (accessesMemory(op)) {
+      // Allocas define their buffers with return value.
+      if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
+        insertRegionForValue(op->getResult(0));
+      }
+      // All other operations access their operands.
       for (auto operand : op->getOperands()) {
-        RegionInfo regionInfo = getLatticeElement(operand)->getValue();
-        std::optional<RegionType> regionType = getRegionType(operand);
-        if (!regionType) {
-          continue;
-        }
-        // Note the buffer regions that may be accessed by the operation.
-        for (auto &region : regionInfo.regions) {
-          insertRegion(*regionType, {region.baseOffset, region.length});
-        }
+        insertRegionForValue(operand);
       }
     }
   });
 }
 
-bool BufferRegionAnalysis::usesMemory(Operation *op) const {
-  return llvm::any_of(op->getOperands(), [](Value v) {
-    return isa<ttg::MemDescType>(v.getType());
-  });
+bool BufferRegionAnalysis::accessesMemory(Operation *op) const {
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
+          ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
+          ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
+          ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp>(
+          op)) {
+    return true;
+  }
+  // Allocations with operands write to the memory.
+  if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op) &&
+      op->getNumOperands() > 0) {
+    return true;
+  }
+  if (isa<DotOpInterface>(op)) {
+    return true;
+  }
+  return false;
 }
 
 std::optional<BufferRegionAnalysis::RegionType>

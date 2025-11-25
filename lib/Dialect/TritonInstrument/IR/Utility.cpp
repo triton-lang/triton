@@ -120,7 +120,7 @@ bool hasWGMMA(ModuleOp module) {
 bool hasTMAStore(ModuleOp module) {
   bool hasTMAStore = false;
   module.walk([&](Operation *op) {
-    if (isa<AsyncTMACopyLocalToGlobalOp>(op)) {
+    if (isa<AsyncTMACopyLocalToGlobalOp, TMAStoreWaitOp>(op)) {
       hasTMAStore = true;
     }
   });
@@ -389,8 +389,9 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       continue;
     }
 
-    buffers[iMemType][entryRegion] = {
-        createBufferPointersTensor(b, memType, bufValues[iMemType])};
+    buffers[iMemType].insert(
+        entryRegion,
+        {createBufferPointersTensor(b, memType, bufValues[iMemType])});
     // Buffer pointers are rematerialized in the warp specialize region,
     // not passed as an argument.
     createInWarpSpecialize(
@@ -400,22 +401,23 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
         });
     int numBufs = bufValues[iMemType].size();
 
-    writeVisibility[iMemType][entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, 0, 64),
-        getIntTensorType(entryRegion, {numBufs}, 64)};
-    passToWarpSpecialize(entryPoint, writeVisibility[iMemType][entryRegion],
+    writeVisibility[iMemType].insert(
+        entryRegion, {createZeroInitStateTensor(b, numBufs, 0, 64),
+                      getIntTensorType(entryRegion, {numBufs}, 64)});
+    passToWarpSpecialize(entryPoint, writeVisibility[iMemType].at(entryRegion),
                          writeVisibility[iMemType]);
-    readVisibility[iMemType][entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64),
-        getIntTensorType(entryRegion, {numBufs, THREADS_BITMASK_SIZE}, 64)};
-    passToWarpSpecialize(entryPoint, readVisibility[iMemType][entryRegion],
+    readVisibility[iMemType].insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64),
+         getIntTensorType(entryRegion, {numBufs, THREADS_BITMASK_SIZE}, 64)});
+    passToWarpSpecialize(entryPoint, readVisibility[iMemType].at(entryRegion),
                          readVisibility[iMemType]);
   }
 
   if (!barrierValues.empty()) {
     // Barriers allocations are in shared memory
-    barriers[entryRegion] = {
-        createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
+    barriers.insert(entryRegion, {createBufferPointersTensor(
+                                     b, MemType::SHARED_MEM, barrierValues)});
     // Barriers allocations are rematerialized in the warp specialize region,
     // not passed as an argument.
     createInWarpSpecialize(entryPoint, barriers, [&](ImplicitLocOpBuilder &b) {
@@ -424,16 +426,18 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     });
 
     int numBarriers = barrierValues.size();
-    barrierStates[entryRegion] = {
-        createZeroInitStateTensor(b, numBarriers, 0, 32),
-        getIntTensorType(entryRegion, {numBarriers}, 32)};
-    passToWarpSpecialize(entryPoint, barrierStates[entryRegion], barrierStates);
+    barrierStates.insert(entryRegion,
+                         {createZeroInitStateTensor(b, numBarriers, 0, 32),
+                          getIntTensorType(entryRegion, {numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
+                         barrierStates);
 
     // Deadlock detection aux data: waiting (i32[K]) storing waiting flag and
     // phase bits per thread (two bits per thread).
-    waiting[entryRegion] = {createZeroInitStateTensor(b, numBarriers, 0, 32),
-                            getIntTensorType(entryRegion, {numBarriers}, 32)};
-    passToWarpSpecialize(entryPoint, waiting[entryRegion], waiting);
+    waiting.insert(entryRegion,
+                   {createZeroInitStateTensor(b, numBarriers, 0, 32),
+                    getIntTensorType(entryRegion, {numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
@@ -441,15 +445,18 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       int numBufs = bufValues[iMemType].size();
       int numBarriers = barrierValues.size();
       if (numBufs > 0) {
-        writeTracking[iMemType][entryRegion] = {
-            createZeroInitStateTensor(b, numBufs, numBarriers, 8),
-            getIntTensorType(entryRegion, {numBufs, numBarriers}, 8)};
-        passToWarpSpecialize(entryPoint, writeTracking[iMemType][entryRegion],
+        writeTracking[iMemType].insert(
+            entryRegion,
+            {createZeroInitStateTensor(b, numBufs, numBarriers, 8),
+             getIntTensorType(entryRegion, {numBufs, numBarriers}, 8)});
+        passToWarpSpecialize(entryPoint,
+                             writeTracking[iMemType].at(entryRegion),
                              writeTracking[iMemType]);
-        readTracking[iMemType][entryRegion] = {
-            createZeroInitStateTensor(b, numBufs, numBarriers, 64),
-            getIntTensorType(entryRegion, {numBufs, numBarriers}, 64)};
-        passToWarpSpecialize(entryPoint, readTracking[iMemType][entryRegion],
+        readTracking[iMemType].insert(
+            entryRegion,
+            {createZeroInitStateTensor(b, numBufs, numBarriers, 64),
+             getIntTensorType(entryRegion, {numBufs, numBarriers}, 64)});
+        passToWarpSpecialize(entryPoint, readTracking[iMemType].at(entryRegion),
                              readTracking[iMemType]);
       }
     }
@@ -457,18 +464,20 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
-  lock[entryRegion] = {lockVal, lockVal.getType()};
-  passToWarpSpecialize(entryPoint, lock[entryRegion], lock);
+  lock.insert(entryRegion, {lockVal, lockVal.getType()});
+  passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock);
 
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
     int numBufs = bufValues[(int)MemType::SHARED_MEM].size();
-    assert(numBufs > 0);
+    if (numBufs == 0)
+      return;
     // NUM_THREADS instead of THREADS_BITMASK_SIZE as commit-count tracking
     // operates on base threads.
-    commits[commitKind][entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
-        getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)};
-    passToWarpSpecialize(entryPoint, commits[commitKind][entryRegion],
+    commits[commitKind].insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
+         getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)});
+    passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
                          commits[commitKind]);
   };
 
@@ -583,8 +592,9 @@ void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
             region, tensorType.getShape(),
             tensorType.getElementType().getIntOrFloatBitWidth());
       }
-      map[region] = ValueType{
-          region->getArgument(region->getNumArguments() - 1), newType};
+      map.insert(region,
+                 ValueType{region->getArgument(region->getNumArguments() - 1),
+                           newType});
     }
   });
 }
@@ -596,7 +606,7 @@ void AuxDataMap::createInWarpSpecialize(
     for (Region *region : op.getPartitionRegions()) {
       ImplicitLocOpBuilder b(region->getLoc(), region);
       b.setInsertionPointToStart(&region->getBlocks().front());
-      map[region] = createFn(b);
+      map.insert(region, createFn(b));
     }
   });
 }
