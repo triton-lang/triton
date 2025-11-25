@@ -135,7 +135,7 @@ class SymmetricMemoryPool:
 
         self._is_initialized = True
 
-    def initialize_matmul_ogs(
+    def initialize_matmul(
         self,
         n_tokens_global: int,
         d_input: int,

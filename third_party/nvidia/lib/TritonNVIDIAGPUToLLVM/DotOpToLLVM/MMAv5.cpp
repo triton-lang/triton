@@ -371,7 +371,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
   if (twoCTAs) {
     // TODO: we have to sync the two CTAs because we currently don't use remove
