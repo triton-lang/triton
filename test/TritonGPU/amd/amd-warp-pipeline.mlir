@@ -42,8 +42,16 @@ tt.func @three_stage_example(%n: index) {
 //
 // Inside the loop we expect exactly three execute_region clusters:
 // CHECK:   scf.execute_region
+// CHECK:     arith.addi
+// CHECK:     arith.muli
+// CHECK:     scf.yield
 // CHECK:   scf.execute_region
+// CHECK:     arith.addi
+// CHECK:     scf.yield
 // CHECK:   scf.execute_region
+// CHECK:     arith.addi
+// CHECK:     arith.muli
+// CHECK:     scf.yield
 // CHECK: triton.warp_pipeline.pipelined_for
 //
 // And the split markers must be gone:
@@ -76,7 +84,11 @@ tt.func @two_stage_example(%n: index) {
 // CHECK-LABEL: tt.func @two_stage_example(
 // CHECK: scf.for
 // CHECK:   scf.execute_region
+// CHECK:     arith.addi
+// CHECK:     scf.yield
 // CHECK:   scf.execute_region
+// CHECK:     arith.muli
+// CHECK:     scf.yield
 // CHECK: triton.warp_pipeline.pipelined_for
 // CHECK-NOT: rocdl.sched.barrier
 // CHECK: tt.return
@@ -85,14 +97,20 @@ tt.func @two_stage_example(%n: index) {
 
 // CHECK-LABEL: tt.func public @triple_buf_two_stages
 // CHECK: scf.for
-// CHECK: scf.execute_region
-// CHECK: ttg.async_commit_group
-// CHECK: scf.yield
-// CHECK: triton.warp_pipeline.stage
-// CHECK: ttg.async_wait
-// CHECK: scf.execute_region
-// CHECK: scf.yield
-// CHECK: triton.warp_pipeline.stage
+// CHECK:   scf.execute_region
+// CHECK:     local_load
+// CHECK:     local_load
+// CHECK:     async_copy_global_to_local
+// CHECK:     async_commit_group
+// CHECK:     scf.yield
+// CHECK:   triton.warp_pipeline.stage
+// CHECK:   ttg.async_wait
+// CHECK:   scf.execute_region
+// CHECK:     async_copy_global_to_local
+// CHECK:     async_commit_group
+// CHECK:     tt.dot
+// CHECK:     scf.yield
+// CHECK:   triton.warp_pipeline.stage
 // CHECK: triton.warp_pipeline.pipelined_for
 // CHECK-NOT: rocdl.sched.barrier
 // CHECK: tt.return

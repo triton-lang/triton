@@ -116,8 +116,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   // ops cannot be located within a cluster
   // barrier/wait still require border op
   auto isIgnorable = [](Operation *op) {
-    return isa<scf::YieldOp, ttg::AsyncWaitOp, gpu::BarrierOp,
-               tt::amdgpu::AsyncTDMWait>(op);
+    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, tt::amdgpu::AsyncTDMWait>(op);
   };
 
   auto isBorder = [](Operation *op) {
@@ -127,15 +126,14 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   // One pass over the body; collect clusters split by explicit borders.
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
     Operation *op = &opRef;
-    if (isa<scf::YieldOp>(op)) // End of the loop
-      break;
-    else if (isIgnorable(op)) {
+    if (isIgnorable(op)) {
       // Ignorable ops may appear before or after a stage, but not inside it.
       // If encountered while building an execute_region, reject warp-pipeline.
       if (!cluster.empty())
         return failure();
       continue;
-    } else if (isBorder(op)) { // Wrap-up one cluster at a border.
+    }
+    if (isBorder(op)) { // Wrap-up one cluster at a border.
       auto clusterStr =
           op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
       clusterMarkers.push_back(clusterStr);
@@ -151,7 +149,9 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
       cluster.clear();
       op->erase(); // remove the marker
       continue;
-    }
+    } else if (isa<scf::YieldOp>(op)) // End of the loop
+      break;
+
     // Keep collecting ops for a cluster.
     cluster.push_back(op);
   }

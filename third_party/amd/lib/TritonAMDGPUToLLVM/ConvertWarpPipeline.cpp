@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "TargetInfo.h"
+#include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -117,13 +118,11 @@ private:
                                  scf::ForOp forOp,
                                  Allocation *allocation) const {
     // 1. Insert conditional branch first,
-    b.setInsertionPointAfter(forOp);
+    b.setInsertionPoint(forOp);
     // Set barrier before starting the loop. This resolves any outstanding
     // synchronization before beginning the specialized asymmetric
     // synchronization.
     auto preBarrier = gpu::BarrierOp::create(b, loc);
-    preBarrier->moveBefore(forOp);
-    b.setInsertionPointAfter(preBarrier);
 
     // Insert condbarrier::second_half before starting the loop
     // FIXME : correctly calculate numbers per the arch
@@ -231,8 +230,8 @@ private:
           LDBG("already synced");
           continue;
         }
-        const bool needFence =
-            clusterInfo[src].isIntersected(clusterInfo[next], nullptr);
+        const bool needFence = clusterInfo[src].isIntersected(
+            clusterInfo[next], mlir::triton::AMD::membarFilter);
         // insert fence/barrier in front of this cluster
         LDBG("need fence?: " << needFence);
         if (needFence) {

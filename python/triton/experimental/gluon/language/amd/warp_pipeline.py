@@ -41,7 +41,6 @@ class warp_pipeline_stage:
 
     __slots__ = ("label", "_semantic", "str_attr")
 
-    #def __init__(self, label: Optional[str] = None, **_internal):
     def __init__(self, label=None, **_internal):
         self.label = getattr(label, "value", None)
         self._semantic = _internal.get("_semantic", None)
