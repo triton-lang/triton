@@ -445,7 +445,8 @@ private:
     } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
       return metric.index;
     } else {
-      static_assert(false, "Unsupported metric type for getMetricIndex");
+      static_assert(always_false<MetricType>::value,
+                    "Unsupported metric type for getMetricIndex");
     }
   }
 
