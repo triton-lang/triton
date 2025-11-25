@@ -1761,9 +1761,10 @@ struct AtomicCASOpConversion
           return success();
         }
 
-        GCNBuilder BuilderMemfenceLDS;
-        BuilderMemfenceLDS.create("s_waitcnt lgkmcnt(0)")->operator()();
-        BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
+        auto dsCount = rewriter.getI32IntegerAttr(0);
+        amdgpu::MemoryCounterWaitOp::create(rewriter, op->getLoc(),
+                                            /*load=*/nullptr, /*store=*/nullptr,
+                                            /*ds=*/dsCount);
         b.barrier();
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
