@@ -596,6 +596,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metadata profiling in cudagraphs")
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -603,7 +604,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
         x_sum = x.sum()
-        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "x_sum": x_sum}
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
@@ -612,7 +613,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
             a = torch.ones((2, 2), device="cuda")
-        b = torch.ones((2, 2), device="cuda")
+        with proton.scope("scope_b", metrics={"sum": a.sum()}):
+            b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
 
