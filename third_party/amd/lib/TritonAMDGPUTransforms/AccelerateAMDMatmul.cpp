@@ -1794,11 +1794,87 @@ static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase) {
   return kBase;
 }
 
+static bool isTriviallyRelayoutable(Operation *op) {
+  if (op->getNumOperands() != 1 || op->getNumResults() != 1)
+    return false;
+  return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp>(op);
+}
+
+static Value rebuildOrWrapWithNewEncoding(OpBuilder &builder,
+                                          Operation *op,
+                                          Value newOperand,
+                                          Attribute newEncoding) {
+  auto loc = op->getLoc();
+  auto oldResTy = cast<RankedTensorType>(op->getResult(0).getType());
+  auto newResTy = RankedTensorType::get(oldResTy.getShape(),
+                                        oldResTy.getElementType(), // preserve element type
+                                        newEncoding);
+
+  // Recreate ops that accept explicit result types.
+  if (auto fp2fp = dyn_cast<tt::FpToFpOp>(op)) {
+    return tt::FpToFpOp::create(builder, loc, newResTy, newOperand,
+                                fp2fp.getRoundingAttr());
+  }
+  if (auto extf = dyn_cast<mlir::arith::ExtFOp>(op)) {
+    return mlir::arith::ExtFOp::create(builder, loc, newResTy, newOperand);
+  }
+  if (auto truncf = dyn_cast<mlir::arith::TruncFOp>(op)) {
+    return mlir::arith::TruncFOp::create(builder, loc, newResTy, newOperand);
+  }
+  if (auto bitcast = dyn_cast<mlir::arith::BitcastOp>(op)) {
+    return mlir::arith::BitcastOp::create(builder, loc, newResTy, newOperand);
+  }
+
+  // Fallback: wrap with a pass-through convert_layout to adjust encoding.
+  // ConvertLayout must preserve element type; newResTy does.
+  return ttg::ConvertLayoutOp::create(builder, loc, newResTy, newOperand);
+}
+
+static bool collectLinearPathToConvert(Value dotOperand,
+                                       ttg::ConvertLayoutOp &cvtOpOut,
+                                       SmallVectorImpl<Operation*> &pathOut) {
+  Value cur = dotOperand;
+  pathOut.clear();
+
+  while (Operation *def = cur.getDefiningOp()) {
+    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(def)) {
+      cvtOpOut = cvt;
+      return true;
+    }
+    // Must be single-operand, trivially relayoutable and single-use along this path
+    if (!isTriviallyRelayoutable(def))
+      return false;
+    if (!cur.hasOneUse() && !isa<tt::FpToFpOp>(def)) {
+      // If not single-use, we’d need to clone; for now, keep it simple
+      return false;
+    }
+    pathOut.push_back(def);
+    cur = def->getOperand(0);
+  }
+  return false;
+}
+
+static Value propagateNewLayoutForward(OpBuilder &builder,
+                                       ttg::ConvertLayoutOp newCvt,
+                                       llvm::ArrayRef<Operation*> path) {
+  Value cur = newCvt.getResult();
+  Attribute curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
+  // Rebuild ops in reverse order (from convert up to dot operand)
+  for (auto it = path.rbegin(), e = path.rend(); it != e; ++it) {
+    Operation *op = *it;
+    Value newVal = rebuildOrWrapWithNewEncoding(builder, op, cur, curEnc);
+    op->getResult(0).replaceAllUsesWith(newVal);
+    op->erase();
+    cur = newVal;
+    curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
+  }
+  return cur;
+}
+
 static void fixKWidthOfDotOperand(ModuleOp m) {
   m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
-    auto cEnc = cTy.getEncoding();
-    auto mfmaEnc = dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cEnc);
+    auto mfmaEnc = dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cTy.getEncoding());
     if (!mfmaEnc)
       return;
 
@@ -1809,64 +1885,91 @@ static void fixKWidthOfDotOperand(ModuleOp m) {
     unsigned kBase = *kBaseCandidate;
     unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase);
 
-    auto aVal = dotOp.getA();
-    auto bVal = dotOp.getB();
-    auto aRTy = cast<RankedTensorType>(aVal.getType());
-    auto bRTy = cast<RankedTensorType>(bVal.getType());
+    for (int opIdx = 0; opIdx < 2; ++opIdx) {
+      Value operand = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+      auto rTy = cast<RankedTensorType>(operand.getType());
+      auto dotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rTy.getEncoding());
+      if (!dotEnc) continue;
 
-    auto aDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aRTy.getEncoding());
-    auto bDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bRTy.getEncoding());
-    if (!aDotEnc || !bDotEnc)
-      return;
+      unsigned curKWidth = dotEnc.getKWidth();
+      if (curKWidth == desiredKWidth) continue;
 
-    unsigned aKWidth = aDotEnc.getKWidth();
-    unsigned bKWidth = bDotEnc.getKWidth();
+      ttg::ConvertLayoutOp cvt; SmallVector<Operation*, 8> path;
+      if (!collectLinearPathToConvert(operand, cvt, path))
+        continue;
 
-    if (aKWidth == desiredKWidth && bKWidth == desiredKWidth)
-      return;
+      OpBuilder builder(dotOp);
+      auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
+      auto newEnc = ttg::DotOperandEncodingAttr::get(builder.getContext(), opIdx, mfmaEnc, desiredKWidth);
+      auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(), newEnc);
+      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy, cvt.getSrc());
 
-    auto aDef = aVal.getDefiningOp();
-    auto bDef = bVal.getDefiningOp();
+      cvt.getResult().replaceAllUsesWith(newCvt);
+      cvt->erase();
 
-    auto aCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(aDef);
-    auto bCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(bDef);
-
-    bool needA = (aKWidth != desiredKWidth);
-    bool needB = (bKWidth != desiredKWidth);
-    if ((needA && !aCvt) || (needB && !bCvt))
-      return;
-
-    OpBuilder builder(dotOp);
-
-    auto ctx = builder.getContext();
-    auto loc = dotOp.getLoc();
-
-    Value newA = aVal, newB = bVal;
-
-    if (needA) {
-      auto newAEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mfmaEnc,
-                                                      desiredKWidth);
-      auto aSrc = aCvt.getSrc();
-      auto newATy = RankedTensorType::get(aRTy.getShape(), aRTy.getElementType(), newAEnc);
-      auto newCvtA = ttg::ConvertLayoutOp::create(builder, loc, newATy, aSrc);
-      aCvt.getResult().replaceAllUsesWith(newCvtA);
-      aCvt->erase();
-      newA = newCvtA;
+      Value newLeaf = propagateNewLayoutForward(builder, newCvt, path);
+      if (opIdx == 0) dotOp.setOperand(0, newLeaf);
+      else            dotOp.setOperand(1, newLeaf);
     }
 
-    if (needB) {
-      auto newBEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mfmaEnc,
-                                                      desiredKWidth);
-      auto bSrc = bCvt.getSrc();
-      auto newBTy = RankedTensorType::get(bRTy.getShape(), bRTy.getElementType(), newBEnc);
-      auto newCvtB = ttg::ConvertLayoutOp::create(builder, loc, newBTy, bSrc);
-      bCvt.getResult().replaceAllUsesWith(newCvtB);
-      bCvt->erase();
-      newB = newCvtB;
-    }
+    // auto aVal = dotOp.getA();
+    // auto bVal = dotOp.getB();
+    // auto aRTy = cast<RankedTensorType>(aVal.getType());
+    // auto bRTy = cast<RankedTensorType>(bVal.getType());
 
-    dotOp.setOperand(0, newA);
-    dotOp.setOperand(1, newB);
+    // auto aDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aRTy.getEncoding());
+    // auto bDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bRTy.getEncoding());
+    // if (!aDotEnc || !bDotEnc)
+    //   return;
+
+    // unsigned aKWidth = aDotEnc.getKWidth();
+    // unsigned bKWidth = bDotEnc.getKWidth();
+
+    // if (aKWidth == desiredKWidth && bKWidth == desiredKWidth)
+    //   return;
+
+    // auto aDef = aVal.getDefiningOp();
+    // auto bDef = bVal.getDefiningOp();
+
+    // auto aCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(aDef);
+    // auto bCvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(bDef);
+
+    // bool needA = (aKWidth != desiredKWidth);
+    // bool needB = (bKWidth != desiredKWidth);
+    // if ((needA && !aCvt) || (needB && !bCvt))
+    //   return;
+
+    // OpBuilder builder(dotOp);
+
+    // auto ctx = builder.getContext();
+    // auto loc = dotOp.getLoc();
+
+    // Value newA = aVal, newB = bVal;
+
+    // if (needA) {
+    //   auto newAEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mfmaEnc,
+    //                                                   desiredKWidth);
+    //   auto aSrc = aCvt.getSrc();
+    //   auto newATy = RankedTensorType::get(aRTy.getShape(), aRTy.getElementType(), newAEnc);
+    //   auto newCvtA = ttg::ConvertLayoutOp::create(builder, loc, newATy, aSrc);
+    //   aCvt.getResult().replaceAllUsesWith(newCvtA);
+    //   aCvt->erase();
+    //   newA = newCvtA;
+    // }
+
+    // if (needB) {
+    //   auto newBEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mfmaEnc,
+    //                                                   desiredKWidth);
+    //   auto bSrc = bCvt.getSrc();
+    //   auto newBTy = RankedTensorType::get(bRTy.getShape(), bRTy.getElementType(), newBEnc);
+    //   auto newCvtB = ttg::ConvertLayoutOp::create(builder, loc, newBTy, bSrc);
+    //   bCvt.getResult().replaceAllUsesWith(newCvtB);
+    //   bCvt->erase();
+    //   newB = newCvtB;
+    // }
+
+    // dotOp.setOperand(0, newA);
+    // dotOp.setOperand(1, newB);
 
     // If DotOp operands are immutable in your build, fallback to recreating the DotOp:
     // auto newDot = tt::DotOp::create(builder, loc, dotOp.getD().getType(), newA, newB,
