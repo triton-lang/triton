@@ -402,10 +402,15 @@ struct TMEMAref {
       token = op.getToken();
     }
     partitionId = paritionIdStageCluster.first;
+    if (partitionId)
+      stageClusters[*partitionId] = paritionIdStageCluster.second;
     buffer = {};
   }
-  void release(OpBuilder &b, Location loc, StageCluster stageCluster) {
+  void release(OpBuilder &b, Location loc) {
     assert(asyncOp);
+    StageCluster stageCluster;
+    if (partitionId)
+      stageCluster = stageClusters[*partitionId];
     if (kind == PUT) {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
@@ -447,6 +452,7 @@ struct TMEMAref {
   Kind kind;
   std::optional<PartitionId> partitionId;
   std::optional<AsyncOp> asyncOp;
+  DenseMap<PartitionId, StageCluster> stageClusters;
 };
 
 TmemAccessDag::Node *
@@ -458,12 +464,10 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   if (curPartitionId && node->partitionId != curPartitionId) {
     OpBuilder b(node->op);
     Operation *prevOp = nullptr;
-    StageCluster prevStageCluster;
     if (node->parent) {
       // release right after the last op which owns the tmem
       prevOp = node->parent->op;
       b.setInsertionPointAfter(prevOp);
-      prevStageCluster = getStageCluster(prevOp);
     } else {
       // if we are inside if-stmt or for-stmt subdag and need to change
       // ownerhip, release at the top of the block
@@ -471,12 +475,7 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       prevOp = node->parentDag->op;
       b.setInsertionPointToStart(node->op->getBlock());
     }
-    if (!node->partitionId) {
-      // if node->partitionId is not set, it means we are outside ws-region
-      // reset prevPartitionId and prevStageCluster to defaults
-      prevStageCluster = {};
-    }
-    state.release(b, prevOp->getLoc(), prevStageCluster);
+    state.release(b, prevOp->getLoc());
 
     // acquire right before op that acquires ownership of tmem
     auto curOp = node->op;
@@ -489,6 +488,10 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       curOp = node->parentDag->op;
     }
     auto stageCluster = getStageCluster(curOp);
+    // if stage-cluster is empty, use the stage-cluster used from the last op
+    // that acquired ownership of tmem in a partition
+    if (!stageCluster && partitionId)
+      stageCluster = state.stageClusters[*partitionId];
     state.acquire(b, curOp->getLoc(), {partitionId, stageCluster});
   }
 
@@ -519,16 +522,22 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
 
   OpBuilder b(node->op);
   if (auto tmemLoadOp = dyn_cast<TMEMLoadOp>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     tmemLoadOp.getSrcMutable().assign(
         state.getBuffer(b, node->partitionId, node->op));
     tmemLoadOp.getDepMutable().clear();
     tmemLoadOp.getToken().replaceAllUsesWith(state.replToken);
   } else if (auto tmemStoreOp = dyn_cast<TMEMStoreOp>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     tmemStoreOp.getDstMutable().assign(
         state.getBuffer(b, node->partitionId, node->op));
     tmemStoreOp.getDepMutable().clear();
     tmemStoreOp.getToken().replaceAllUsesWith(state.replToken);
   } else if (auto mmaOp = dyn_cast<MMAv5OpInterface>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     if (mmaOp.getAccumulator() == state.origBuffer) {
       mmaOp.getAccDepMutable().clear();
       mmaOp.getToken().replaceAllUsesWith(state.replToken);
@@ -640,10 +649,11 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     // aref is used outside ws-loop, find the last point in the same block as
     // create op to have matching exit
     auto op1 = arefOp->getBlock()->findAncestorOpInBlock(*node->op);
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = {};
     b.setInsertionPointAfter(op1);
   }
-  stageCluster = getStageCluster(node->op);
-  state.release(b, node->op->getLoc(), stageCluster);
+  state.release(b, node->op->getLoc());
 
   if (state.kind == TMEMAref::GET) {
     // When the state ends up in a GET operation, we need to acquire and release
@@ -661,7 +671,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
       }
     }
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
-    state.release(b, node->op->getLoc(), {});
+    state.release(b, node->op->getLoc());
   }
 
   return success();
@@ -751,8 +761,8 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     // patch loop.stage=1
     enterIf->setAttrs(ifOp->getAttrs());
     exitIf->setAttrs(ifOp->getAttrs());
-    enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
-    exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+    assignStage(b, enterIf, getStageCluster(putEnterOp));
+    assignStage(b, exitIf, getStageCluster(putExitOp));
 
     SetVector<int> enterExitIds, middleIds;
     enterExitIds.insert(1);

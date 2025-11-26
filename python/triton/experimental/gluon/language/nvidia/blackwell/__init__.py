@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+import itertools
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
@@ -26,7 +27,9 @@ __all__ = [
     "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
+    "TensorMemoryScalesLayout",
     "tma",
+    "_TensorMemoryLinearLayout",
 ]
 
 
@@ -102,6 +105,25 @@ class TensorMemoryScalesLayout:
 
     def __hash__(self):
         return hash(self.cta_split_num)
+
+
+@dataclass(frozen=True)
+class _TensorMemoryLinearLayout:
+    """
+    Print-only linear layout for TMEM (row/col -> dim0/dim1).
+    """
+    rows: List[List[int]]
+    cols: List[List[int]]
+    shape: List[int]
+
+    def _to_ir(self, builder):
+        raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
+
+    def mangle(self):
+        return f"TMLL_{self.shape}_TMLL"
+
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
 
 
 @constexpr_function

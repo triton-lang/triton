@@ -324,6 +324,29 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
   return true;
 }
 
+static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
+                             SmallVector<Value> &acc, triton::ReduceOp op,
+                             unsigned numLaneToReduce, unsigned interleave) {
+  Operation *reduxOp = op.getSingleCombiner();
+  if (!reduxOp)
+    return false;
+
+  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
+  if (!mfma16Case)
+    return false;
+
+  Value val = acc[0];
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  if (bits > 32)
+    return false;
+
+  StringRef intrinsic = "llvm.amdgcn.permlane16.swap";
+  for (auto i = 0; i < acc.size(); i++) {
+    acc[i] = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
+  }
+  return true;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -332,6 +355,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
       warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+    return true;
+  if ((getISAFamily() == ISAFamily::GFX1250) &&
+      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;

@@ -51,22 +51,6 @@ bool comesFromAsyncWait(Value token) {
 }
 } // namespace
 
-void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod) {
-  auto *ctx = mod->getContext();
-
-  SmallVector<amdgpu::AsyncWaitOp> waits;
-  mod->walk([&waits](amdgpu::AsyncWaitOp waitOp) { waits.push_back(waitOp); });
-
-  IRRewriter builder(mod.getContext());
-  for (auto waitOp : waits) {
-    if (isa<mlir::gpu::BarrierOp, gpu::LocalBarrierOp>(waitOp->getNextNode()))
-      continue;
-
-    builder.setInsertionPointAfter(waitOp);
-    builder.create<triton::gpu::LocalBarrierOp>(waitOp->getLoc());
-  }
-}
-
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   auto *ctx = mod->getContext();
 

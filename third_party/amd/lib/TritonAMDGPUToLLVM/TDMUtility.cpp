@@ -1,5 +1,6 @@
 #include "TDMUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include <optional>
 
 namespace mlir::LLVM::AMD {
@@ -365,7 +366,8 @@ void fillTDMDescriptor(
     unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
-    SmallVector<Value> offset, Value dstPtr, Value pred, Value barrierPtr) {
+    SmallVector<Value> offset, Value dstPtr, Value pred, Value multicastMask,
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
 
@@ -407,6 +409,19 @@ void fillTDMDescriptor(
     globalOffset[i] = b.mul(b.i32_val(blockShapePerWarp), warpCoord[i]);
     offset[i] = b.add(offset[i], globalOffset[i]);
   }
+
+  // We need to adjust the outer strides based on our CTAId and the block layout
+  auto kBlock = str_attr("block");
+  auto cgaOffsets =
+      applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
+  // Apply CTA offsets to the base pointer
+  // Compute the global address offset: sum(ctaOffsets[i] * tensorStride[i])
+  Value cgaBaseOffset = b.i32_val(0);
+  for (size_t i = 0; i < numDims; ++i) {
+    Value dimOffset = b.mul(cgaOffsets[i].second, tensorStride[i]);
+    cgaBaseOffset = b.add(cgaBaseOffset, dimOffset);
+  }
+  srcPtr = b.gep(globalPtrTy, elementType, srcPtr, cgaBaseOffset);
 
   // Calculate the full global address offset based on all dimensions
   Value baseOffset = b.i32_val(0);
@@ -453,6 +468,8 @@ void fillTDMDescriptor(
   group0[3] =
       b.or_(group0[3], b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
 
+  if (multicastMask)
+    group1[0] = b.or_(group1[0], multicastMask);
   // Update groups with adjusted tensor shapes
   group1[1] = b.shl(tensorShape[numDims - 1], b.i32_val(16));
   group1[2] = b.lshr(tensorShape[numDims - 1], b.i32_val(16));
@@ -501,7 +518,9 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
                       int numWarps, unsigned padInterval, unsigned padAmount,
                       ArrayRef<Value> offset, Value dstPtr, Value pred,
-                      Type elementType, Value barrierPtr, bool isLoad) {
+                      Value multicastMask, Type elementType, Value barrierPtr,
+                      bool isLoad, const triton::LinearLayout &cgaLayout,
+                      Value ctaId) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   assert(blockShape.size() <= 5);
@@ -514,10 +533,10 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      SmallVector<int64_t>(blockShape), numWarps, padInterval,
-                      padAmount, group0Vec, group1Vec, std::ref(group2Vec),
-                      std::ref(group3Vec), SmallVector<Value>(offset), dstPtr,
-                      pred, barrierPtr);
+                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      group0Vec, group1Vec, std::ref(group2Vec),
+                      std::ref(group3Vec), to_vector(offset), dstPtr, pred,
+                      multicastMask, barrierPtr, cgaLayout, ctaId);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -535,10 +554,10 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      SmallVector<int64_t>(blockShape), numWarps, padInterval,
-                      padAmount, group0Vec, group1Vec, std::nullopt,
-                      std::nullopt, SmallVector<Value>(offset), dstPtr, pred,
-                      barrierPtr);
+                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      group0Vec, group1Vec, std::nullopt, std::nullopt,
+                      to_vector(offset), dstPtr, pred, multicastMask,
+                      barrierPtr, cgaLayout, ctaId);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);

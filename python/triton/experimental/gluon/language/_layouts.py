@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import itertools
 from typing import List
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
@@ -635,6 +636,15 @@ class SharedLinearLayout(SharedLayout):
 
     def mangle(self) -> str:
         return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
+
+    @property
+    def shape(self):
+        rank = len(self.offset_bases[0])
+        max_stride = [1] * rank
+        for b in itertools.chain(self.offset_bases, self.block_bases):
+            for i, bi in enumerate(b):
+                max_stride[i] = max(max_stride[i], bi)
+        return [2 * s for s in max_stride]
 
     def __hash__(self):
         return hash((
