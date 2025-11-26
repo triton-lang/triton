@@ -5,11 +5,11 @@ include "LoweringDialectPlugin/LoweringDialectPluginTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
-def LoweringDialectPlugin_FooOp : LoweringDialectPlugin_Op<"foo", [Pure,
+def LoweringDialectPlugin_MagicOp : LoweringDialectPlugin_Op<"magic", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "Illustrates how to define an operation.";
     let description = [{
-        The `loweringdialectplugin.foo` operation illustrates how to define a new
+        The `loweringdialectplugin.magic` operation illustrates how to define a new
         operation in a dialect. It uses an operation trait to declare that it
         has no side effects.
 
@@ -19,8 +19,8 @@ def LoweringDialectPlugin_FooOp : LoweringDialectPlugin_Op<"foo", [Pure,
 
         ```mlir
         %0 = arith.constant 2 : i32
-        // Apply the foo operation to %0
-        %1 = loweringdialectplugin.foo %0 : i32
+        // Apply the magic operation to %0
+        %1 = loweringdialectplugin.magic %0 : i32
         ```
     }];
 

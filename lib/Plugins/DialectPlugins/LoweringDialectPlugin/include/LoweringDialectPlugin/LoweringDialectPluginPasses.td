@@ -3,33 +3,40 @@
 
 include "mlir/Pass/PassBase.td"
 
-def LoweringDialectPluginSwitchBarFoo: Pass<"loweringdialectplugin-switch-bar-foo", "::mlir::ModuleOp"> {
-  let summary = "Switches the name of a FuncOp named `bar` to `foo` and folds.";
+def LoweringDialectPluginMagicOpInserter: Pass<"loweringdialectplugin-magic-op-inserter", "::mlir::ModuleOp"> {
+  let summary = "Finds a tt.get_program_id and inserts a LoweringDialectPluginMagicOp in-between it and its users.";
   let description = [{
-    Switches the name of a FuncOp named `bar` to `foo` and folds.
+    Finds a tt.get_program_id and inserts a LoweringDialectPluginMagicOp in-between it and its users:
     ```
-    func.func @bar() {
-      return
+    tt.func @f() -> i32 {
+      %0 = tt.get_program_id x : i32
+      tt.return %0 : i32
     }
+
     // Gets transformed to:
-    func.func @foo() {
-      return
+    tt.func @f() -> i32 {
+      %0 = tt.get_program_id x : i32
+      %1 = loweringdialectplugin.magic %0 : i32
+      tt.return %1 : i32
     }
     ```
   }];
 }
 
-def LoweringDialectPluginLowerFooOp: Pass<"loweringdialectplugin-lower-foo-op", "::mlir::ModuleOp"> {
-  let summary = "Lowers a foo op to an arith";
+def LoweringDialectPluginMagicOp: Pass<"loweringdialectplugin-magic-op", "::mlir::ModuleOp"> {
+  let summary = "Lowers a MagicOp into an mlir::arith::addIOp";
   let description = [{
-      Lowers a FooOp to Arith:
+    Lowers a MagicOp into an mlir::arith::addIOp:
     ```
-    func.func @bar() {
-      return
+    tt.func @bar() -> i32 {
+      %0 = tt.get_program_id x : i32
+      %1 = loweringdialectplugin.magic %0 : i32
+      tt.return %1 : i32
     }
-    // Gets transformed to:
-    func.func @foo() {
-      return
+    tt.func @bar() -> i32 {
+      %0 = tt.get_program_id x : i32
+      %1 = arith.addi %0, %0 : i32
+      tt.return %1 : i32
     }
     ```
   }];
