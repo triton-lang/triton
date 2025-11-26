@@ -55,9 +55,8 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 #linear3 = #ttg.linear<{register = [[1, 0], [0, 1], [0, 2], [0, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
 
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [0, 1]}>
-#linear4 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 0], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
-#linear5 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
-#linear6 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear4 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear5 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
 
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
@@ -79,14 +78,14 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %l3 = amdg.in_thread_transpose %arg3 : tensor<2x512xf16, #blocked1> -> tensor<2x512xf16, #linear3>
     %m3 = ttg.local_alloc %l3 : (tensor<2x512xf16, #linear3>) -> !ttg.memdesc<2x512xf16, #shared, #smem, mutable>
 
-    %l4 = amdg.in_thread_transpose %arg4 : tensor<1x256xf16, #blocked2> -> tensor<1x256xf16, #linear4>
-    %m4 = ttg.local_alloc %l4 : (tensor<1x256xf16, #linear4>) -> !ttg.memdesc<1x256xf16, #shared, #smem, mutable>
+    %l4 = amdg.in_thread_transpose %arg4 : tensor<1x256xf16, #blocked2> -> tensor<1x256xf16, #linear1>
+    %m4 = ttg.local_alloc %l4 : (tensor<1x256xf16, #linear1>) -> !ttg.memdesc<1x256xf16, #shared, #smem, mutable>
 
-    %l5 = amdg.in_thread_transpose %arg5 : tensor<2x256xf16, #blocked2> -> tensor<2x256xf16, #linear5>
-    %m5 = ttg.local_alloc %l5 : (tensor<2x256xf16, #linear5>) -> !ttg.memdesc<2x256xf16, #shared, #smem, mutable>
+    %l5 = amdg.in_thread_transpose %arg5 : tensor<2x256xf16, #blocked2> -> tensor<2x256xf16, #linear4>
+    %m5 = ttg.local_alloc %l5 : (tensor<2x256xf16, #linear4>) -> !ttg.memdesc<2x256xf16, #shared, #smem, mutable>
 
-    %l6 = amdg.in_thread_transpose %arg6 : tensor<2x512xf16, #blocked2> -> tensor<2x512xf16, #linear6>
-    %m6 = ttg.local_alloc %l6 : (tensor<2x512xf16, #linear6>) -> !ttg.memdesc<2x512xf16, #shared, #smem, mutable>
+    %l6 = amdg.in_thread_transpose %arg6 : tensor<2x512xf16, #blocked2> -> tensor<2x512xf16, #linear5>
+    %m6 = ttg.local_alloc %l6 : (tensor<2x512xf16, #linear5>) -> !ttg.memdesc<2x512xf16, #shared, #smem, mutable>
     tt.return
   }
 }
