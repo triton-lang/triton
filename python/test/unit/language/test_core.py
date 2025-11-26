@@ -5819,7 +5819,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
         assert amdgcn_gfx.group(1) == arch
 
 
-def test_num_ctas_pre_sm90(device):
+def test_num_ctas_pre_sm90(device, fresh_knobs):
     if not is_cuda() and not is_hip():
         pytest.skip("Only supported on CUDA and HIP")
 
@@ -5835,8 +5835,9 @@ def test_num_ctas_pre_sm90(device):
         arch = "gfx942"
         msg = r"num_ctas > 1 not supported"
 
+    fresh_knobs.runtime.override_arch = str(arch)
     with pytest.raises(ValueError, match=msg):
-        _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)
+        _kernel.warmup(src, grid=(1, ), num_ctas=2)
 
 
 # -----------------------
