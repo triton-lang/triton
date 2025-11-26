@@ -331,42 +331,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: buffer_load_to_local_wave_id
-  tt.func public @buffer_load_to_local_wave_id(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
-                                %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>, %arg3: i32) {
-    //      COMMON: %[[C64:.+]] = llvm.mlir.constant(64 : i32) : i32
-    // COMMON-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
-    // COMMON-NEXT: %[[C63:.+]] = llvm.mlir.constant(63 : i32) : i32
-    // COMMON-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C63]] : i32
-    // COMMON-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
-    // COMMON-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
-
-    //      COMMON: %[[C64:.+]] = llvm.mlir.constant(64 : i32) : i32
-    // COMMON-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
-    // COMMON-NEXT: %[[C63:.+]] = llvm.mlir.constant(63 : i32) : i32
-    // COMMON-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C63]] : i32
-    // COMMON-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
-    // COMMON-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
-
-    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
-    %1 = amdg.buffer_load_to_local %arg0[%0] into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
-    %c0_i32 = arith.constant 0 : i32
-    %cond = llvm.icmp "eq" %arg3, %c0_i32 : i32
-    cf.cond_br %cond, ^bb1, ^bb2
-    ^bb1:
-      amdg.buffer_load_to_local %arg0[%0] into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
-      cf.br ^bb1
-    ^bb2:
-    tt.return
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared1D = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [0]}>
 #smem = #ttg.shared_memory

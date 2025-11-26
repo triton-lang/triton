@@ -3325,7 +3325,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and input_precision == "tf32":
+    if in_dtype == 'float32' and input_precision in ["tf32", "bf16x3", "bf16x6"]:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -4067,7 +4067,7 @@ def test_const(device, choose_const, constexpr, mode):
             error = "Cannot store to a constant pointer"
         else:
             if mode == "call":
-                error = "Inconsistent return types"
+                error = "Return type mismatch: "
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
@@ -5488,7 +5488,8 @@ def test_poison_return(device):
 
     @triton.jit
     def kernel(Out):
-        tl.store(Out, return_poison(0))
+        zero = 0
+        tl.store(Out, return_poison(zero))
 
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))

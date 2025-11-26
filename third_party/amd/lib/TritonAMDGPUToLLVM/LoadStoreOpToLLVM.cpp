@@ -482,7 +482,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   LogicalResult lowerDirectToLDSLoad(
       RewriterBase &rewriter, Location loc, RankedTensorType srcTy,
       MemDescType dstTy, SmallVector<Value> loadVals, Value llDst,
-      Type resElemTy, unsigned vec, triton::AMD::ISAFamily isaFamily,
+      Type resElemTy, unsigned vec, int numCTAs,
+      triton::AMD::ISAFamily isaFamily,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType,
                                        Value)>
@@ -514,7 +515,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         {str_attr("offset")});
 
     Value ctaMulticastMask;
-    if (isaFamily == ISAFamily::GFX1250) {
+    if (numCTAs > 1 && isaFamily == ISAFamily::GFX1250) {
       ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
           rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), srcLayout);
     }
@@ -909,9 +910,10 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
     auto res = lowerDirectToLDSLoad(
         rewriter, loc, ptrType, flatDstTy, loadVals, llDst, resElemTy, vec,
-        targetInfo.getISAFamily(), emitBufferLoadLds);
+        numCTAs, targetInfo.getISAFamily(), emitBufferLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1047,9 +1049,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
     auto res = lowerDirectToLDSLoad(
         rewriter, loc, srcTy, flatDstTy, loadVals, llDst, resElemTy, vec,
-        targetInfo.getISAFamily(), emitGlobalLoadLds);
+        numCTAs, targetInfo.getISAFamily(), emitGlobalLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1123,20 +1126,26 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
+    triton::LinearLayout sharedLayout;
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
       assert(paddedEnc.getIntervals().size() == 1 &&
              paddedEnc.getPaddings().size() == 1);
+      sharedLayout = paddedEnc.getLinearComponent();
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
-
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
-    if (numCTAs > 1)
-      return rewriter.notifyMatchFailure(op, "NYI: Support multicast.");
+    Value multicastMask;
+    if (numCTAs > 1) {
+      multicastMask = LLVM::AMD::emitCtaMulticastMask(
+          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
+          sharedLayout);
+    }
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
@@ -1165,10 +1174,17 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
-    mlir::LLVM::AMD::emitTDMOperation(rewriter, loc, getTypeConverter(), desc,
-                                      blockShape, numWarps, padInterval,
-                                      padAmount, offset, dstPtr, op.getPred(),
-                                      elementType, barrierPtr, /*isLoad=*/true);
+    auto kBlock = rewriter.getStringAttr("block");
+    auto cgaLayout = sharedLayout.sublayout(
+        {kBlock}, to_vector(sharedLayout.getOutDimNames()));
+    auto ctaId =
+        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+
+    auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+    mlir::LLVM::AMD::emitTDMOperation(
+        rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
+        padInterval, padAmount, offset, dstPtr, op.getPred(), multicastMask,
+        elementType, barrierPtr, /*isLoad=*/true, cgaLayout, ctaId);
 
     rewriter.eraseOp(op);
     return success();
@@ -1196,6 +1212,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
@@ -1214,11 +1231,21 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
+    // Verifier ensures smem is not usind a PaddedSharedEncodingAttr
+    auto sharedLayout = triton::gpu::toLinearLayout(smemTy);
+    auto kBlock = rewriter.getStringAttr("block");
+    auto cgaLayout = sharedLayout.sublayout(
+        {kBlock}, to_vector(sharedLayout.getOutDimNames()));
+    auto ctaId =
+        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+
+    auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMOperation(
-        rewriter, loc, getTypeConverter(), desc, blockShape, numWarps,
+        rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         /*padInterval=*/0, /*padAmount=*/0, offset, dstPtr, b.true_val(),
-        elementType, /*barrierPtr=*/nullptr,
-        /*isLoad=*/false);
+        /*multicastMask=*/{}, elementType,
+        /*barrierPtr=*/nullptr,
+        /*isLoad=*/false, cgaLayout, ctaId);
 
     rewriter.eraseOp(op);
     return success();
@@ -1996,9 +2023,7 @@ struct AsyncWaitOpConversion
     case ISAFamily::GFX1250: {
       // Clamp asyncCnt to 6bits(hw imit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
-      LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                      "llvm.amdgcn.s.wait.asynccnt", {},
-                                      {b.i16_val(asyncCnt)});
+      ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
       break;
     }
     default:
@@ -2025,9 +2050,7 @@ struct AsyncTDMWaitConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                    "llvm.amdgcn.s.wait.tensorcnt", {},
-                                    {b.i16_val(op.getNum())});
+    ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getNum());
     rewriter.eraseOp(op);
     return success();
   }
