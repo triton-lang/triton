@@ -140,13 +140,14 @@ struct BlockInfo {
 
   /// Returns true if intervals in two BlockInfo objects are intersected.
   std::optional<CTA_UFDS> isIntersected(const BlockInfo &other,
-                                        MembarFilterFn filter) const {
-    auto raw =
-        isIntersected(syncWriteIntervals, other.syncReadIntervals, filter);
-    auto war =
-        isIntersected(syncReadIntervals, other.syncWriteIntervals, filter);
-    auto waw =
-        isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
+                                        MembarFilterFn filter,
+                                        Allocation *allocation) const {
+    auto raw = isIntersected(syncWriteIntervals, other.syncReadIntervals,
+                             filter, allocation);
+    auto war = isIntersected(syncReadIntervals, other.syncWriteIntervals,
+                             filter, allocation);
+    auto waw = isIntersected(syncWriteIntervals, other.syncWriteIntervals,
+                             filter, allocation);
     auto maybeJoin =
         [](const std::optional<CTA_UFDS> &lhs,
            const std::optional<CTA_UFDS> &rhs) -> std::optional<CTA_UFDS> {
@@ -189,11 +190,13 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  static bool haveSameAlloc(Operation *lhs, Operation *rhs);
+  static bool haveSameAlloc(Operation *lhs, Operation *rhs,
+                            Allocation *allocation);
 
   std::optional<CTA_UFDS> isIntersected(const IntervalMapT &lhsIntervalSet,
                                         const IntervalMapT &rhsIntervalSet,
-                                        MembarFilterFn filter) const {
+                                        MembarFilterFn filter,
+                                        Allocation *allocation) const {
     // They intersect whenever the intervals intersect. If they do, collect the
     // union of CTA sets for any op pair that is not filtered out and does not
     // share the exact same explicit shared value.
@@ -210,12 +213,12 @@ private:
             llvm::all_of(lhsOps, [&, rhsOpsPtr = &rhsOps](const auto &lhsOp) {
               return llvm::all_of(*rhsOpsPtr, [&](const auto &rhsOp) {
                 return (filter && filter(lhsOp, rhsOp)) ||
-                       (joined.isDistributed() && haveSameAlloc(lhsOp, rhsOp));
+                       (joined.isDistributed() &&
+                        haveSameAlloc(lhsOp, rhsOp, allocation));
               });
             });
         if (skipBarrier)
           continue;
-
         if (!ret.has_value()) {
           ret = joined;
         } else {

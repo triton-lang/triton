@@ -3,62 +3,45 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include <deque>
 
 namespace mlir {
 
-static SmallPtrSet<Operation *, 2> parentAllocs(Operation *op) {
-  SmallPtrSet<Operation *, 2> owners;
+namespace {
+
+llvm::SmallDenseSet<Allocation::BufferId, 2>
+getSharedBufferIds(Operation *op, Allocation *allocation) {
   auto opEffects = dyn_cast<MemoryEffectOpInterface>(op);
   if (!opEffects)
-    return owners;
+    return {};
 
+  llvm::SmallDenseSet<Allocation::BufferId, 2> bufferIds;
   SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
   opEffects.getEffects(effects);
   for (auto &effect : effects) {
     if (effect.getResource() != triton::gpu::SharedMemory::get())
       continue;
-
     Value value = effect.getValue();
-    // Hacky way to skip barriers...
-    if (cast<triton::gpu::MemDescType>(value.getType()).getNumElements() == 1)
+    auto memDescTy = cast<triton::gpu::MemDescType>(value.getType());
+    // Hacky way to skip barriers
+    if (memDescTy.getNumElements() == 1)
       continue;
-
-    // Get a slice of all the operations that touch this shared memory
-    // (subslice/index/memdesc views) all the way up to the local_alloc.
-    BackwardSliceOptions options;
-    options.omitUsesFromAbove = false;
-    options.inclusive = true;
-    auto isSharedMemDesc = [](Type ty) {
-      auto memDescTy = dyn_cast<triton::gpu::MemDescType>(ty);
-      if (!memDescTy)
-        return false;
-      return isa<triton::gpu::SharedMemorySpaceAttr>(
-          memDescTy.getMemorySpace());
-    };
-    options.filter = [&](Operation *depOp) -> bool {
-      return llvm::any_of(depOp->getOperandTypes(), isSharedMemDesc) ||
-             // Add ops that have Memdesc in the result types to pick
-             // local_alloc ops as well
-             llvm::any_of(depOp->getResultTypes(), isSharedMemDesc);
-    };
-    llvm::SetVector<Operation *> slice;
-    LogicalResult result = getBackwardSlice(value, &slice, options);
-    assert(succeeded(result) && "backward slice must succeed");
-
-    for (Operation *depOp : slice) {
-      if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(depOp))
-        owners.insert(alloc.getOperation());
+    for (auto bufferId : allocation->getBufferIds(value)) {
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      bufferIds.insert(bufferId);
     }
   }
-  return owners;
+  return bufferIds;
 }
+
+} // namespace
 
 static std::pair<BlockInfo::CTA_UFDS, BlockInfo::CTA_UFDS>
 getCTAEquivalenceSets(Operation *op) {
@@ -68,46 +51,23 @@ getCTAEquivalenceSets(Operation *op) {
   }
   auto *ctx = op->getContext();
   auto kBlock = StringAttr::get(ctx, "block");
-  if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
-    auto dstTy = cast<RankedTensorType>(cvt.getType());
-    auto cvtLayout = minimalCvtLayout(srcTy, dstTy);
-    if (llvm::is_contained(cvtLayout.getInDimNames(), kBlock)) {
-      auto readsUFDS = BlockInfo::CTA_UFDS(numCTAs);
-      auto blockLayout =
-          cvtLayout.sublayout({kBlock}, to_vector(cvtLayout.getOutDimNames()));
-      for (int i = 0; i < numCTAs; i++) {
-        auto res = blockLayout.apply({{kBlock, i}});
-        assert(res.size() == 4);
-        assert(res.back().first == kBlock);
-        readsUFDS.unite(i, res.back().second);
-      }
-      // The writes are just each writing to their own shmem
-      auto writesUFDS = BlockInfo::CTA_UFDS(numCTAs);
-      return {readsUFDS, writesUFDS};
+  if (isa<triton::gpu::ConvertLayoutOp, triton::ReduceOp>(op)) {
+    auto srcTy = cast<RankedTensorType>(op->getOperand(0).getType());
+    auto dstTy = cast<RankedTensorType>(op->getResult(0).getType());
+    auto srcCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
+    auto dstCTALayout = triton::gpu::getCTALayout(dstTy.getEncoding());
+    auto ctaLl = dstCTALayout.getLinearLayout().invertAndCompose(
+        srcCTALayout.getLinearLayout());
+    auto readsUFDS = BlockInfo::CTA_UFDS(numCTAs);
+    for (int i = 0; i < numCTAs; i++) {
+      auto res = ctaLl.apply({{kBlock, i}});
+      assert(res.size() == 1);
+      assert(res.front().first == kBlock);
+      readsUFDS.unite(i, res.front().second);
     }
-  } else if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    auto srcTy = cast<RankedTensorType>(reduce.getInputTypes()[0]);
-    auto inCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
-    auto axis = reduce.getAxis();
-    auto ll = inCTALayout.getLinearLayout();
-    auto outdims = to_vector(ll.getOutDimNames());
-    if (ll.getOutDimSize(outdims[axis]) != 1) {
-      auto outCTALayout = triton::gpu::getCTALayout(
-          cast<RankedTensorType>(reduce.getType(0)).getEncoding());
-      // Maps the reads necessary in the reduction
-      auto ctaLl = outCTALayout.getLinearLayout().invertAndCompose(ll);
-      auto readsUFDS = BlockInfo::CTA_UFDS(numCTAs);
-      for (int i = 0; i < numCTAs; i++) {
-        auto res = ctaLl.apply({{kBlock, i}});
-        assert(res.size() == 1);
-        assert(res.front().first == kBlock);
-        readsUFDS.unite(i, res.front().second);
-      }
-      // The writes are just each writing to their own shmem
-      auto writesUFDS = BlockInfo::CTA_UFDS(numCTAs);
-      return {readsUFDS, writesUFDS};
-    }
+    // The writes are just each writing to their own shmem
+    auto writesUFDS = BlockInfo::CTA_UFDS(numCTAs);
+    return {readsUFDS, writesUFDS};
   } else if (auto tma =
                  dyn_cast<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
                      op)) {
@@ -143,15 +103,12 @@ getCTAEquivalenceSets(Operation *op) {
   return {BlockInfo::CTA_UFDS(numCTAs), BlockInfo::CTA_UFDS(numCTAs)};
 }
 
-bool BlockInfo::haveSameAlloc(Operation *lhs, Operation *rhs) {
-  auto lhsAllocs = parentAllocs(lhs);
-  auto rhsAllocs = parentAllocs(rhs);
-  // They can be empty when the buffer is internal, e.g. a convert_layout.
-  if (lhsAllocs.empty() || rhsAllocs.empty())
-    return false;
-
+bool BlockInfo::haveSameAlloc(Operation *lhs, Operation *rhs,
+                              Allocation *allocation) {
+  auto lhsBuffers = getSharedBufferIds(lhs, allocation);
+  auto rhsBuffers = getSharedBufferIds(rhs, allocation);
   return llvm::any_of(
-      lhsAllocs, [&](Operation *alloc) { return rhsAllocs.contains(alloc); });
+      lhsBuffers, [&](auto bufferId) { return rhsBuffers.contains(bufferId); });
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
@@ -405,7 +362,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
     curBlockInfo.syncWriteIntervals[{interval, writeCTAs}].insert(op);
-    auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
+    auto insertCTABarrier =
+        blockInfo->isIntersected(curBlockInfo, filter, allocation);
     if (insertCTABarrier.has_value()) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder, *insertCTABarrier);
@@ -416,7 +374,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       blockInfo->sync(false);
     }
     curBlockInfo.syncReadIntervals[{interval, readCTAs}].insert(op);
-  } else if (auto ctas = blockInfo->isIntersected(curBlockInfo, filter)) {
+  } else if (auto ctas =
+                 blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder, *ctas);
     blockInfo->sync(ctas->isDistributed());

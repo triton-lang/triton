@@ -99,10 +99,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 // -----
 
 // Distributed convert alias (needs cluster barrier)
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[1, 0]]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_alias_same_offset
   tt.func @convert_alias_same_offset() -> (tensor<2x2xf16, #blocked2>, tensor<2x2xf16, #blocked2>) {
     %c0 = arith.constant 0.000000e+00 : f16
