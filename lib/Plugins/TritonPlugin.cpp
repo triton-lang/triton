@@ -6,9 +6,6 @@
 #include "triton/Tools/PluginUtils.h"
 #include <unordered_map>
 
-#define TRITON_PLUGIN_API                                                      \
-  extern "C" __attribute__((visibility("default"))) TritonPluginResult
-
 namespace mlir {
 namespace triton {
 namespace plugin {
