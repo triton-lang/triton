@@ -6,7 +6,8 @@
 
 namespace proton {
 
-std::map<size_t, MetricBuffer::MetricDescriptor> MetricBuffer::metricDescriptors;
+std::map<size_t, MetricBuffer::MetricDescriptor>
+    MetricBuffer::metricDescriptors;
 std::map<std::string, size_t> MetricBuffer::metricNameToId;
 std::shared_mutex MetricBuffer::metricDescriptorMutex;
 
@@ -29,8 +30,9 @@ void MetricBuffer::receive(
   queueMetrics(scalarMetrics, scalarMetricKernel, stream);
 }
 
-MetricBuffer::MetricDescriptor MetricBuffer::getOrCreateMetricDescriptor(
-    const std::string &name, size_t typeIndex) {
+MetricBuffer::MetricDescriptor
+MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
+                                          size_t typeIndex) {
   {
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto nameIt = metricNameToId.find(name);
@@ -47,7 +49,8 @@ MetricBuffer::MetricDescriptor MetricBuffer::getOrCreateMetricDescriptor(
   }
 
   std::unique_lock<std::shared_mutex> lock(metricDescriptorMutex);
-  // Check again in case another thread inserted while we were upgrading the lock
+  // Check again in case another thread inserted while we were upgrading the
+  // lock
   auto nameIt = metricNameToId.find(name);
   if (nameIt != metricNameToId.end()) {
     auto &descriptor = metricDescriptors.at(nameIt->second);
