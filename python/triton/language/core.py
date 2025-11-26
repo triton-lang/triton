@@ -188,7 +188,11 @@ class constexpr_type(base_type):
         return hash(self.value)
 
     def mangle(self) -> str:
-        return repr(self)
+        if hasattr(self.value, "mangle"):
+            val = self.value.mangle()
+        else:
+            val = repr(self.value)
+        return f"c{val}"
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         return
