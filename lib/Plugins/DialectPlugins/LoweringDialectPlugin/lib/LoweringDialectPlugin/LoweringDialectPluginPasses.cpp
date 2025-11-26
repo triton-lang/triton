@@ -10,12 +10,12 @@
 #include "LoweringDialectPlugin/LoweringDialectPluginPasses.h"
 
 namespace mlir::triton::loweringdialectplugin {
-#define GEN_PASS_DEF_LOWERINGDIALECTPLUGINSWITCHBARFOO
-#define GEN_PASS_DEF_LOWERINGDIALECTPLUGINLOWERFOOOP
+#define GEN_PASS_DEF_LOWERINGDIALECTPLUGINMAGICOPINSERTER
+#define GEN_PASS_DEF_LOWERINGDIALECTPLUGINMAGICOP
 #include "LoweringDialectPlugin/LoweringDialectPluginPasses.h.inc"
 
 namespace {
-class LoweringDialectPluginSwitchBarFooRewriter
+class LoweringDialectPluginMagicOpInserterRewriter
     : public OpRewritePattern<func::FuncOp> {
 public:
   using OpRewritePattern<func::FuncOp>::OpRewritePattern;
@@ -29,12 +29,12 @@ public:
   }
 };
 
-class LoweringDialectPluginLowerFooOpRewriter
-    : public OpRewritePattern<mlir::triton::loweringdialectplugin::FooOp> {
+class LoweringDialectPluginMagicOpRewriter
+    : public OpRewritePattern<mlir::triton::loweringdialectplugin::MagicOp> {
 public:
   using OpRewritePattern<
-      mlir::triton::loweringdialectplugin::FooOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(mlir::triton::loweringdialectplugin::FooOp op,
+      mlir::triton::loweringdialectplugin::MagicOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(mlir::triton::loweringdialectplugin::MagicOp op,
                                 PatternRewriter &rewriter) const final {
     llvm::errs() << "FOUND FOO OP!!: ";
     op.dump();
@@ -45,30 +45,30 @@ public:
   }
 };
 
-class LoweringDialectPluginSwitchBarFoo
-    : public impl::LoweringDialectPluginSwitchBarFooBase<
-          LoweringDialectPluginSwitchBarFoo> {
+class LoweringDialectPluginMagicOpInserter
+    : public impl::LoweringDialectPluginMagicOpInserterBase<
+          LoweringDialectPluginMagicOpInserter> {
 public:
-  using impl::LoweringDialectPluginSwitchBarFooBase<
-      LoweringDialectPluginSwitchBarFoo>::LoweringDialectPluginSwitchBarFooBase;
+  using impl::LoweringDialectPluginMagicOpInserterBase<
+      LoweringDialectPluginMagicOpInserter>::LoweringDialectPluginMagicOpInserterBase;
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    patterns.add<LoweringDialectPluginSwitchBarFooRewriter>(&getContext());
+    patterns.add<LoweringDialectPluginMagicOpInserterRewriter>(&getContext());
     FrozenRewritePatternSet patternSet(std::move(patterns));
     if (failed(applyPatternsGreedily(getOperation(), patternSet)))
       signalPassFailure();
   }
 };
 
-class LoweringDialectPluginLowerFooOp
-    : public impl::LoweringDialectPluginLowerFooOpBase<
-          LoweringDialectPluginLowerFooOp> {
+class LoweringDialectPluginMagicOp
+    : public impl::LoweringDialectPluginMagicOpBase<
+          LoweringDialectPluginMagicOp> {
 public:
-  using impl::LoweringDialectPluginLowerFooOpBase<
-      LoweringDialectPluginLowerFooOp>::LoweringDialectPluginLowerFooOpBase;
+  using impl::LoweringDialectPluginMagicOpBase<
+      LoweringDialectPluginMagicOp>::LoweringDialectPluginMagicOpBase;
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    patterns.add<LoweringDialectPluginLowerFooOpRewriter>(&getContext());
+    patterns.add<LoweringDialectPluginMagicOpRewriter>(&getContext());
     FrozenRewritePatternSet patternSet(std::move(patterns));
     if (failed(applyPatternsGreedily(getOperation(), patternSet)))
       signalPassFailure();
