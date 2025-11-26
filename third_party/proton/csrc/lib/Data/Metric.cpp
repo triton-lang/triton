@@ -30,6 +30,7 @@ void MetricBuffer::receive(
 
 MetricBuffer::MetricDescriptor
 MetricBuffer::newMetricDescriptor(const std::string &name, size_t typeIndex) {
+  // TODO: Avoid duplicate metric names
   auto newMetricId = metricId.fetch_add(1);
   MetricDescriptor descriptor{newMetricId, typeIndex, name};
   metricDescriptors.insert(newMetricId, descriptor);

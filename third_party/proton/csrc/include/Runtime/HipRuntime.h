@@ -38,4 +38,4 @@ public:
 
 } // namespace proton
 
-#endif // PROTON_RUNTIME_HIP_RUNTIME_H
+#endif // PROTON_RUNTIME_HIP_RUNTIME_H_

@@ -268,6 +268,8 @@ struct GraphState {
   size_t numInstances{1};
 };
 
+// FIXME: it should be a per-stream queue in case we capture graphs from
+// different streams or different devices
 class PendingGraphQueue {
 public:
   struct PendingGraph {
@@ -493,7 +495,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               // Trick: if the scope name is empty, it means the graph is
               // created by an API kernel but not Triton op
               if (threadState.scopeStack.back().name.empty()) {
-                if (!threadState.isMetricKernelLaunching)
+                if (!threadState
+                         .isMetricKernelLaunching) // Ignore metric kernels
                   pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);
               } else {
                 contexts.push_back(threadState.scopeStack.back());
@@ -552,7 +555,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       threadState.exitScope();
     } // TODO: else handle other NVTX range functions
   } else {
-    // Do not track metric kernel launches
+    // Do not track metric kernel launches for triton ops.
+    // In this case, metric kernels are launched after a triton op is entered.
+    // We should track metric kernel launches for scopes.
+    // In this case, the metric kernel's stack has the same name as the scope's
+    // stack.
     if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
       return;
     const CUpti_CallbackData *callbackData =
@@ -630,7 +637,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             }
           }
-          auto metricBufferCapacity = pImpl->metricBuffer->getSize(); // bytes
+          auto metricBufferCapacity =
+              pImpl->metricBuffer->getCapacity(); // bytes
           auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
           auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(

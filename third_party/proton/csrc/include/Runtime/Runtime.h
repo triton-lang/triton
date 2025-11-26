@@ -60,4 +60,4 @@ protected:
 
 } // namespace proton
 
-#endif // PROTON_RUNTIME_RUNTIME_H
+#endif // PROTON_RUNTIME_RUNTIME_H_

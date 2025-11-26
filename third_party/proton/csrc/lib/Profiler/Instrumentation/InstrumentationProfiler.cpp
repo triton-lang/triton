@@ -279,7 +279,8 @@ void InstrumentationProfiler::doAddMetrics(
   for (auto *data : getDataSet()) {
     data->addMetrics(scopeId, scalarMetrics);
   }
-  // TODO(Keren): handle tensor metrics
+  // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
+  // parent Profiler
 }
 
 } // namespace proton

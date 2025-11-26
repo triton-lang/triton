@@ -1,7 +1,6 @@
 #ifndef PROTON_PROFILER_CUPTI_PROFILER_H_
 #define PROTON_PROFILER_CUPTI_PROFILER_H_
 
-#include "Data/Metric.h"
 #include "Profiler/GPUProfiler.h"
 
 namespace proton {
