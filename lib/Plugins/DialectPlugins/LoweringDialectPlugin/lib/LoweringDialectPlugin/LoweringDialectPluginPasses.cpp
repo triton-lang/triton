@@ -21,6 +21,10 @@ public:
   using OpRewritePattern<func::FuncOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(func::FuncOp op,
                                 PatternRewriter &rewriter) const final {
+    // Note: This is what I want this pass to do, no luck so far:
+    // auto magicOp = mlir::triton::loweringdialectplugin::MagicOp::create(
+    //     builder, op.getLoc(), op.getOpResult(0));
+    // op.replaceAllUsesWith(magicOp);
     if (op.getSymName() == "bar") {
       rewriter.modifyOpInPlace(op, [&op]() { op.setSymName("foo"); });
       return success();
@@ -36,8 +40,6 @@ public:
       mlir::triton::loweringdialectplugin::MagicOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(mlir::triton::loweringdialectplugin::MagicOp op,
                                 PatternRewriter &rewriter) const final {
-    llvm::errs() << "FOUND FOO OP!!: ";
-    op.dump();
     auto a = op.getInput();
     auto newOp = arith::AddIOp::create(rewriter, op.getLoc(), a, a);
     op->replaceAllUsesWith(newOp);
