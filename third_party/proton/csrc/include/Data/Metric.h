@@ -2,12 +2,12 @@
 #define PROTON_DATA_METRIC_H_
 
 #include "Runtime/Runtime.h"
-#include "Utility/Map.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 #include <set>
 #include <stdexcept>
 #include <variant>
@@ -425,11 +425,13 @@ public:
   size_t getCapacity() const { return capacity; }
 
   MetricDescriptor &getMetricDescriptor(size_t id) {
-    if (!MetricBuffer::metricDescriptors.contain(id)) {
+    std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
+    auto it = metricDescriptors.find(id);
+    if (it == metricDescriptors.end()) {
       throw std::runtime_error("[PROTON] MetricBuffer: unknown metric id: " +
                                std::to_string(id));
     }
-    return metricDescriptors.at(id);
+    return it->second;
   }
 
 private:
@@ -468,17 +470,19 @@ private:
   void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
     for (const auto &[name, metric] : metrics) {
       size_t index = getMetricIndex(metric);
-      auto descriptor = newMetricDescriptor(name, index);
+      auto descriptor = getOrCreateMetricDescriptor(name, index);
       queue(descriptor.id, metric, kernel, stream);
     }
   }
 
-  MetricDescriptor newMetricDescriptor(const std::string &name,
-                                       size_t typeIndex);
+  MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
+                                               size_t typeIndex);
 
 protected:
   static std::atomic<size_t> metricId;
-  static ThreadSafeMap<size_t, MetricDescriptor> metricDescriptors;
+  static std::map<size_t, MetricDescriptor> metricDescriptors;
+  static std::map<std::string, size_t> metricNameToId;
+  static std::shared_mutex metricDescriptorMutex;
 
   size_t capacity; // byte
   Runtime *runtime{};

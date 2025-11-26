@@ -6,8 +6,9 @@
 
 namespace proton {
 
-ThreadSafeMap<size_t, MetricBuffer::MetricDescriptor>
-    MetricBuffer::metricDescriptors;
+std::map<size_t, MetricBuffer::MetricDescriptor> MetricBuffer::metricDescriptors;
+std::map<std::string, size_t> MetricBuffer::metricNameToId;
+std::shared_mutex MetricBuffer::metricDescriptorMutex;
 
 std::atomic<size_t> MetricBuffer::metricId{0};
 
@@ -28,12 +29,41 @@ void MetricBuffer::receive(
   queueMetrics(scalarMetrics, scalarMetricKernel, stream);
 }
 
-MetricBuffer::MetricDescriptor
-MetricBuffer::newMetricDescriptor(const std::string &name, size_t typeIndex) {
-  // TODO: Avoid duplicate metric names
+MetricBuffer::MetricDescriptor MetricBuffer::getOrCreateMetricDescriptor(
+    const std::string &name, size_t typeIndex) {
+  {
+    std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
+    auto nameIt = metricNameToId.find(name);
+    if (nameIt != metricNameToId.end()) {
+      auto &descriptor = metricDescriptors.at(nameIt->second);
+      if (descriptor.typeIndex != typeIndex) {
+        throw std::runtime_error(
+            "[PROTON] MetricBuffer: type mismatch for metric " + name +
+            ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
+            ", new=" + getTypeNameForIndex(typeIndex));
+      }
+      return descriptor;
+    }
+  }
+
+  std::unique_lock<std::shared_mutex> lock(metricDescriptorMutex);
+  // Check again in case another thread inserted while we were upgrading the lock
+  auto nameIt = metricNameToId.find(name);
+  if (nameIt != metricNameToId.end()) {
+    auto &descriptor = metricDescriptors.at(nameIt->second);
+    if (descriptor.typeIndex != typeIndex) {
+      throw std::runtime_error(
+          "[PROTON] MetricBuffer: type mismatch for metric " + name +
+          ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
+          ", new=" + getTypeNameForIndex(typeIndex));
+    }
+    return descriptor;
+  }
+
   auto newMetricId = metricId.fetch_add(1);
   MetricDescriptor descriptor{newMetricId, typeIndex, name};
-  metricDescriptors.insert(newMetricId, descriptor);
+  metricDescriptors.emplace(newMetricId, descriptor);
+  metricNameToId.emplace(name, newMetricId);
   return descriptor;
 }
 
@@ -107,7 +137,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
 
 void MetricBuffer::synchronize(DeviceBuffer &buffer) {
   runtime->synchronizeDevice();
-  runtime->copyDeviceToHostAsync(buffer.hostPtr, buffer.devicePtr, size,
+  runtime->copyDeviceToHostAsync(buffer.hostPtr, buffer.devicePtr, capacity,
                                  buffer.priorityStream);
   runtime->copyDeviceToHostAsync(&buffer.hostOffset, buffer.deviceOffsetPtr,
                                  sizeof(uint64_t), buffer.priorityStream);
@@ -122,9 +152,9 @@ MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
   if (deviceBuffers.find(device) == deviceBuffers.end()) {
     deviceBuffers[device] = DeviceBuffer{};
     auto &buffer = deviceBuffers.at(device);
-    runtime->allocateDeviceBuffer(&buffer.devicePtr, size);
+    runtime->allocateDeviceBuffer(&buffer.devicePtr, capacity);
     runtime->allocateDeviceBuffer(&buffer.deviceOffsetPtr, sizeof(uint64_t));
-    runtime->allocateHostBuffer(&buffer.hostPtr, size);
+    runtime->allocateHostBuffer(&buffer.hostPtr, capacity);
     buffer.priorityStream = runtime->getPriorityStream();
     buffer.hostOffset = 0;
     runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
