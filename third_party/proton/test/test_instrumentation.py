@@ -13,7 +13,6 @@ import triton.profiler as proton
 import triton.profiler.language as pl
 from triton._internal_testing import (
     is_cuda,
-    is_hip,
     is_hip_cdna2,
     is_hip_cdna4,
     supports_tma,
@@ -696,7 +695,8 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert ts_diff >= target[0]["dur"]
 
 
-@pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
+# After deprecating roctracer, this test might not be flaky anymore?
+# @pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
 def test_overhead(tmp_path: pathlib.Path):
     temp_file_cycles = tmp_path / "test_overhead.hatchet"
     temp_file_time = tmp_path / "test_overhead_time.hatchet"

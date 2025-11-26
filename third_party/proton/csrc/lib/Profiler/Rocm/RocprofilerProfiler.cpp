@@ -141,9 +141,19 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
 
 void ensureRocprofilerConfigured() {
   std::call_once(configureOnce, []() {
+    // Check if already configured (e.g., via ROCP_TOOL_LIBRARIES env var)
+    auto &state = getRuntimeState();
+    if (state.configured) {
+      return;
+    }
+
     int status = 0;
     rocprofiler::isInitialized<true>(&status);
     if (status > 0) {
+      // rocprofiler is initialized - check if by us (via ROCP_TOOL_LIBRARIES)
+      if (state.configured) {
+        return;
+      }
       throw std::runtime_error(
           "[PROTON] ROCProfiler-SDK is already configured by another tool");
     }
@@ -214,8 +224,17 @@ struct RocprofilerProfiler::RocprofilerProfilerPimpl
                     std::unordered_map<uint64_t, std::string>>;
 
   std::string getKernelName(uint64_t kernelId) {
-    if (kernelNames.contain(kernelId))
-      return kernelNames[kernelId];
+    if (kernelNames.contain(kernelId)) {
+      std::string name = kernelNames[kernelId];
+      // Strip ".kd" suffix (AMD kernel descriptor) for consistency
+      const std::string suffix = ".kd";
+      if (name.size() > suffix.size() &&
+          name.compare(name.size() - suffix.size(), suffix.size(), suffix) ==
+              0) {
+        name = name.substr(0, name.size() - suffix.size());
+      }
+      return name;
+    }
     return UnknownKernelName;
   }
 
@@ -588,7 +607,9 @@ void proton_tool_fini(void *toolData) {
 
 } // namespace
 
-extern "C" rocprofiler_tool_configure_result_t *
+// Must be exported for rocprofiler-register to find via ROCP_TOOL_LIBRARIES
+extern "C" __attribute__((visibility("default")))
+rocprofiler_tool_configure_result_t *
 rocprofiler_configure(uint32_t version, const char *runtimeVersion,
                       uint32_t priority, rocprofiler_client_id_t *id) {
   auto &state = getRuntimeState();
