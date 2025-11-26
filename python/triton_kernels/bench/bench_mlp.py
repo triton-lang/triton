@@ -57,11 +57,11 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     wg, wg_flex, wg_scale = quantize_weight(wg, "bf16")
     w1, w1_flex, w1_scale = quantize_weight(w1, w_dtype, **opt1)
     w2, w2_flex, w2_scale = quantize_weight(w2, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), weight_scale=wg_scale)
+    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
                           (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), weight_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), weight_scale=w2_scale)
+    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
+    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
 
     # -- benchmark --
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
@@ -143,19 +143,19 @@ if __name__ == "__main__":
         if args.tp > 1:
             raise NotImplementedError("TP>1 is not supported yet in distributed mode.")
         dtypes = quantized_dtypes if args.quantized else dense_dtypes
-        if args.name == "dense":
-            assert args.ep == 1, "EP must be 1 for dense"
-            roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, dtypes[0], dtypes[1], TP=args.tp, EP=args.ep,
-                         name="dense")
-        else:
-            roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dtypes[0], dtypes[1], TP=args.tp, EP=args.ep,
-                         name="gpt-oss-x2")
+        # if args.name == "dense":
+        #     assert args.ep == 1, "EP must be 1 for dense"
+        #     roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, dtypes[0], dtypes[1], TP=args.tp, EP=args.ep,
+        #                  name="dense")
+        # else:
+        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dtypes[0], dtypes[1], TP=args.tp, EP=args.ep,
+                     name="gpt-oss-x2")
         triton_dist.cleanup()
     else:
-        roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, quantized_dtypes[0], quantized_dtypes[1], TP=1, EP=1,
-                     name="dense")
-        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dense_dtypes[0], dense_dtypes[1], TP=1, EP=1,
-                     name="gpt-oss-x2")
+        # roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, quantized_dtypes[0], quantized_dtypes[1], TP=1, EP=1,
+        #              name="dense")
+        # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dense_dtypes[0], dense_dtypes[1], TP=1, EP=1,
+        #              name="gpt-oss-x2")
         roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, quantized_dtypes[0], quantized_dtypes[1], TP=1, EP=1,
                      name="gpt-oss-x2")
         roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, quantized_dtypes[0], quantized_dtypes[1], TP=2, EP=1,
