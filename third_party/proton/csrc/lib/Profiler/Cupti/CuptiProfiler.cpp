@@ -348,8 +348,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
 
-  ThreadSafeMap<size_t, std::string> metricIdToName;
-  ThreadSafeMap<std::string, size_t> metricNameToId;
   ThreadSafeMap<uint32_t, GraphState> graphStates;
   PendingGraphQueue pendingGraphQueue;
 
