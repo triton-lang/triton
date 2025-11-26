@@ -374,8 +374,8 @@ struct TensorMetric {
 /// Here's the layout of the buffer and it's meta data that are maintained on
 /// the host:
 ///
-///  host ->                             -------- kernel0 --------   
-///                                     /                         \ 
+///  host ->                             -------- kernel0 --------
+///                                     /                         \
 /// [device0] -> metric buffer -> {metric_id, value, metric_id, value, ...}
 ///                   |                            /|\
 ///                   |                             |
