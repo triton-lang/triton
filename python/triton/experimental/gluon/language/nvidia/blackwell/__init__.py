@@ -144,7 +144,7 @@ def get_tmem_reg_layout(
         layout (TensorMemoryLayout): Tensor memory layout descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-        cga_layout (Sequence[Sequence[int]]): CTA layout bases describing CTA distribution.
+        cga_layout (Sequence[Sequence[int]]): CGA layout bases describing CTA distribution.
     """
 
     def _unwrap(x):

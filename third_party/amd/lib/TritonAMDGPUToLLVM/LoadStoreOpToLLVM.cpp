@@ -844,7 +844,7 @@ struct BufferLoadToLocalOpConversion
       // dimensions.
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
-          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCGALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
       swizzledLaneOffsets = emitSwizzledLaneOffsets(
@@ -990,7 +990,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (requiresSrcPtrSwizzling) {
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
-          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCGALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
       swizzledLaneOffsets = emitSwizzledLaneOffsets(
