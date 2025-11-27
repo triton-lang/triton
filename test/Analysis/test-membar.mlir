@@ -1037,18 +1037,18 @@ tt.func @layout_changed_reinterpret_subslice() {
   %cst_alloc = arith.constant dense<0.000000e+00> : tensor<32x16xf16>
   %cst_store = arith.constant dense<0.000000e+00> : tensor<16x16xf16>
   %alloc = ttg.local_alloc %cst_alloc : (tensor<32x16xf16>) -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
-  %subslice1 = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  %subslice1 = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_load
-  %0 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16>
-  %subslice2 = ttg.memdesc_subslice %alloc [16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
-  %reinterpreted = ttg.memdesc_reinterpret %subslice2 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #sharedT, #smem, mutable>
+  %0 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+  %subslice2 = ttg.memdesc_subslice %alloc [16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %reinterpreted = ttg.memdesc_reinterpret %subslice2 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> !ttg.memdesc<16x16xf16, #sharedT, #smem, mutable>
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_store
   ttg.local_store %cst_store, %reinterpreted : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #sharedT, #smem, mutable>
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_load
-  %1 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16>
+  %1 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
   tt.return
 }
 
@@ -1116,23 +1116,23 @@ tt.func @loop_subslice_iterarg() {
   %c2 = arith.constant 2 : index
   %c0_i32 = arith.constant 0 : i32
   %alloc = ttg.local_alloc %cst : (tensor<32x16xf16>) -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
-  %subA = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
-  %subB = ttg.memdesc_subslice %alloc[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
-  %result = scf.for %iv = %c0 to %c2 step %c1 iter_args(%cur = %subA) -> (!ttg.memdesc<16x16xf16, #shared, #smem, mutable>) {
+  %subA = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %subB = ttg.memdesc_subslice %alloc[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %result = scf.for %iv = %c0 to %c2 step %c1 iter_args(%cur = %subA) -> (!ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>) {
     // CHECK: ttg.local_barrier
     // CHECK-NEXT: ttg.local_load
-    %val = ttg.local_load %cur : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16>
+    %val = ttg.local_load %cur : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
     %iv_i32 = arith.index_cast %iv : index to i32
     %isZero = arith.cmpi eq, %iv_i32, %c0_i32 : i32
-    %next = scf.if %isZero -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable> {
-      scf.yield %subB : !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    %next = scf.if %isZero -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> {
+      scf.yield %subB : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
     } else {
-      scf.yield %subA : !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+      scf.yield %subA : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
     }
     // CHECK: ttg.local_barrier
     // CHECK-NEXT: ttg.local_store
-    ttg.local_store %val, %next : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
-    scf.yield %next : !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    ttg.local_store %val, %next : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+    scf.yield %next : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
   }
   tt.return
 }
@@ -1153,20 +1153,20 @@ tt.func @two_subslices_with_if() {
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_load
   %loaded = ttg.local_load %alloc : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16>
-  %subsliceA = ttg.memdesc_subslice %alloc[8, 8] : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable>
-  %subsliceA1 = scf.if %c1 -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable> {
-    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable>
+  %subsliceA = ttg.memdesc_subslice %alloc[8, 8] : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
+  %subsliceA1 = scf.if %c1 -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16> {
+    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
   } else {
-    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable>
+    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
   }
   %cst_store_4x4 = arith.constant dense<2.000000e+00> : tensor<4x4xf16>
-  %subsliceA2 = ttg.memdesc_subslice %subsliceA1[0, 0] : !ttg.memdesc<8x8xf16, #shared, #smem, mutable> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable>
+  %subsliceA2 = ttg.memdesc_subslice %subsliceA1[0, 0] : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 16x16>
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_store
-  ttg.local_store %cst_store_4x4, %subsliceA2 : tensor<4x4xf16> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable>
+  ttg.local_store %cst_store_4x4, %subsliceA2 : tensor<4x4xf16> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 16x16>
   // CHECK: ttg.local_barrier
   // CHECK-NEXT: ttg.local_store
-  ttg.local_store %cst_store, %subsliceA : tensor<8x8xf16> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable>
+  ttg.local_store %cst_store, %subsliceA : tensor<8x8xf16> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
   tt.return
 }
 

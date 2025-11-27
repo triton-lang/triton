@@ -4,9 +4,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/DenseSet.h"
 #include <deque>
 
 namespace mlir {
@@ -54,37 +52,6 @@ bool ViewChain::intersects(const ViewChain &other) const {
   return true;
 }
 
-namespace {
-
-// Analyse loop-carried values by tracing scf.for iter_args back to their yield
-// operands, then return the defining operation of the specified type, or
-// nullptr if not found
-template <typename OpType> OpType walkLoopIterArgs(Value value) {
-  llvm::DenseSet<Value> visited;
-  Value current = value;
-
-  while (auto blockArg = dyn_cast<BlockArgument>(current)) {
-    if (!visited.insert(current).second)
-      break;
-
-    auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
-    if (!forOp)
-      break;
-
-    unsigned idx = blockArg.getArgNumber();
-    unsigned numInductionVars = forOp.getNumInductionVars();
-    if (idx < numInductionVars)
-      break;
-
-    unsigned iterIdx = idx - numInductionVars;
-    current = forOp.getYieldedValues()[iterIdx];
-  }
-
-  return current.getDefiningOp<OpType>();
-}
-
-} // namespace
-
 // Parse view chain from a value, collecting subslice offsets. Loop-carried
 // values are resolved via backward slicing through scf.for iter_args
 ViewChain ViewChain::getFineGrainAccess(Value value,
@@ -92,29 +59,20 @@ ViewChain ViewChain::getFineGrainAccess(Value value,
                                         Interval<size_t> allocationInterval) {
   assert(bufferId != Allocation::InvalidBufferId &&
          "getFineGrainAccess must be called with a valid bufferId");
-  Value currentValue = value;
-  auto allocationAccessTy = cast<triton::gpu::MemDescType>(value.getType());
+  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
 
   // Get the memdesc_subslice information if present
   std::optional<SmallVector<int64_t>> subsliceOffsets;
-  if (auto subsliceOp =
-          walkLoopIterArgs<triton::gpu::MemDescSubsliceOp>(currentValue)) {
-    subsliceOffsets = SmallVector<int64_t>(subsliceOp.getOffsets());
-    currentValue = subsliceOp.getSrc();
-  }
-
-  // Only set subsliceOffsets if we know there aren't subslices before the one
-  // we saw. We can only trust the offsets of a subslice if the source comes
-  // from a local_alloc or a memdesc_index
-  auto memIdxOp = walkLoopIterArgs<triton::gpu::MemDescIndexOp>(currentValue);
-  auto localAllocOp = currentValue.getDefiningOp<triton::gpu::LocalAllocOp>();
-  if (!(localAllocOp || memIdxOp)) {
-    subsliceOffsets.reset();
+  if (auto op = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
+    // Only set subsliceOffsets if we know there aren't subslices before the one
+    if (accessTy.getAllocShape() == op.getSrc().getType().getShape()) {
+      subsliceOffsets = SmallVector<int64_t>(op.getOffsets());
+    }
   }
 
   ViewChain vc;
   vc.subsliceOffsets = subsliceOffsets;
-  vc.allocationAccessTy = allocationAccessTy;
+  vc.allocationAccessTy = accessTy;
   vc.bufferId = bufferId;
   vc.allocationInterval = allocationInterval;
   return vc;
