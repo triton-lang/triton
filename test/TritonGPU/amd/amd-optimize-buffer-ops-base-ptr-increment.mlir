@@ -218,7 +218,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: convert_with_dynamic_base_negative
+// COMMON-LABEL: dynamic_base_negative
 // COMMON:   [[X_BASE:%.*]] = tt.addptr
 // COMMON:   amdgpu.buffer_load [[X_BASE]]
 // COMMON-NOT: tt.addptr
@@ -227,7 +227,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @convert_with_dynamic_base_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @dynamic_base_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<64> : tensor<16x64xi32, #blocked>
     %c0 = arith.constant 0 : i32
     %c128 = arith.constant 128 : i32
@@ -248,14 +248,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: convert_with_non_uniform_step_negative
+// COMMON-LABEL: non_uniform_step_negative
 // COMMON-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @convert_with_non_uniform_step_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %step : tensor<16x64xi32, #blocked>) attributes {noinline = false} {
+  tt.func public @non_uniform_step_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %step : tensor<16x64xi32, #blocked>) attributes {noinline = false} {
     %c0 = arith.constant 0 : i32
     %c128 = arith.constant 128 : i32
     %c1 = arith.constant 1 : i32
@@ -264,6 +264,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
       %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
+      scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COMMON-LABEL: offsets_possible_overflow_negative
+// COMMON-NOT: tt.addptr
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @offsets_possible_overflow_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %step_scalar : i32) attributes {noinline = false} {
+    %c0 = arith.constant 0 : i32
+    %c128 = arith.constant 128 : i32
+    %c1 = arith.constant 1 : i32
+
+    %Xoffset_init = arith.constant dense<123> : tensor<16x64xi32, #blocked>
+    %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+    %step = tt.splat %step_scalar: i32 -> tensor<16x64xi32, #blocked>
+    %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
+      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
+      scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COMMON-LABEL: two_addi_negative
+// COMMON-NOT: tt.addptr
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @two_addi_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+    %c0 = arith.constant 0 : i32
+    %c128 = arith.constant 128 : i32
+    %c1 = arith.constant 1 : i32
+
+    %Xoffset_init = arith.constant dense<123> : tensor<16x64xi32, #blocked>
+    %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+    %step = arith.constant dense<64> : tensor<16x64xi32, #blocked>
+    %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
+      %Xoffset_decoy = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
+      %x = amdgpu.buffer_load %X[%Xoffset_decoy] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>

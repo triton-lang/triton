@@ -70,13 +70,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto defOp = val.getDefiningOp();
     if (!defOp)
       return false;
-    if (auto constantOp = dyn_cast<mlir::arith::ConstantOp>(defOp)) {
-      auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr());
-      if (!denseAttr)
-        return false;
-      if (!denseAttr.isSplat())
-        return false;
+    APInt constant;
+    if (matchPattern(val, m_ConstantInt(&constant))) {
       return true;
     } else if (auto splat = dyn_cast<triton::SplatOp>(defOp)) {
       return isScalarizableValue(splat.getSrc());
@@ -87,18 +82,17 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   // Generate a scalar value that is stored in provided RankedTensor val
   static mlir::Value scalarizeValue(PatternRewriter &rewriter,
                                     mlir::Value val) {
-    if (isa<mlir::IntegerType>(val.getType()))
+    if (isa<IntegerType>(val.getType()))
       return val;
     auto defOp = val.getDefiningOp();
     assert(defOp);
-    if (auto constantOp = dyn_cast<mlir::arith::ConstantOp>(defOp)) {
-      auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr());
-      assert(denseAttr);
-      auto splatVal = denseAttr.getSplatValue<llvm::APInt>();
-      rewriter.setInsertionPoint(constantOp);
-      return rewriter.create<mlir::arith::ConstantIntOp>(
-          constantOp.getLoc(), denseAttr.getElementType(), splatVal);
+    APInt constant;
+    if (matchPattern(val, m_ConstantInt(&constant))) {
+      rewriter.setInsertionPoint(defOp);
+      auto intType =
+          IntegerType::get(rewriter.getContext(), constant.getBitWidth());
+      return rewriter.create<arith::ConstantIntOp>(defOp->getLoc(), intType,
+                                                   constant);
     } else if (auto splat = dyn_cast<triton::SplatOp>(defOp)) {
       return scalarizeValue(rewriter, splat.getSrc());
     }
@@ -119,7 +113,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     Operation *incrementOp;
   };
 
-  // Analyses if blockArg + advanceStep can overflow
+  // Analysis that decides if blockArg + advanceStep can overflow
   static bool overflowPossible(Value blockArg, Value advanceStep,
                                int elemBitwidth, DataFlowSolver *solver) {
     const auto *blockArgRange =
@@ -157,14 +151,23 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   }
 
   // Perform series of checks to decide if given operation could be optimized.
-  // If optimization is possible, return filled BufferOpInfo
+  // If optimization is possible, return filled BufferOpInfo.
   static std::optional<BufferOpInfo>
   analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
                   DataFlowSolver *solver) {
     LDBG("Analyzing: " << *op);
     Value maybeOffsetsBlockArg = op.getOffsets();
     auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
-    if (maybeOffsetDefOp && isa<arith::AddIOp>(maybeOffsetDefOp)) {
+    // There are two supported patterns.
+    // Difference is in order of BufferOp and offset increment:
+    // 1. Increment offsets and perform BufferOp with new offsets
+    // 2. Perform BufferOp with offsets from loop argument,
+    //    increment offsets later
+    //
+    // If it is case 2, maybeOffsetsBlockArg points to actual block argument
+    // that holds offset tensor. If it is case 1, maybeOffsetsBlockArg points to
+    // AddIOp and requires correction.
+    if (isa_and_nonnull<arith::AddIOp>(maybeOffsetDefOp)) {
       for (auto &use : maybeOffsetDefOp->getUses()) {
         auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
         if (!yieldOp || yieldOp->getParentOp() != targetFor) {
@@ -178,11 +181,11 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
         break;
       }
     }
-    if (!isa<BlockArgument>(maybeOffsetsBlockArg)) {
+    auto blockArg = dyn_cast<BlockArgument>(maybeOffsetsBlockArg);
+    if (!blockArg) {
       LDBG("Rejected: expect buffer op offset to be a loop argument");
       return {};
     }
-    auto blockArg = dyn_cast<BlockArgument>(maybeOffsetsBlockArg);
     auto loopBlock = blockArg.getOwner();
     auto forOp = dyn_cast<scf::ForOp>(loopBlock->getParentOp());
     if (!forOp || forOp != targetFor) {
@@ -199,8 +202,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     int offsetOperandNo = blockArg.getArgNumber() - forOp.getNumInductionVars();
     auto offsetYieldOperand = yield.getOperand(offsetOperandNo);
     auto incrementOp = offsetYieldOperand.getDefiningOp();
-    if (!incrementOp || !isa<arith::AddIOp>(incrementOp)) {
-      LDBG("Rejected: expect arith::addi used for pointer advanceent");
+    if (!isa_and_nonnull<arith::AddIOp>(incrementOp)) {
+      LDBG("Rejected: expect arith::addi used for pointer advancement");
       return {};
     }
     Value advanceStep;
