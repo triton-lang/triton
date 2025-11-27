@@ -17,7 +17,6 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_hopper,
 )
-from triton.runtime.errors import OutOfResources
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -273,12 +272,12 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
-    acc = ttgl.convert_layout(acc, block_layout_c)
 
     out_offs_m = ttgl.arange(0, M)[:, None]
     out_offs_n = ttgl.arange(0, N)[None, :]
     out_ptrs = out + out_offs_m * N + out_offs_n
-    out_ptrs = ttgl.set_auto_layout(out_ptrs, block_layout_c)
+    # We use tmem_reg_layout to avoid a convert_layout that would require a ton of smem
+    out_ptrs = ttgl.set_auto_layout(out_ptrs, tmem_reg_layout)
     ttgl.store(out_ptrs, acc)
 
 
@@ -330,7 +329,7 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
-@pytest.mark.parametrize("two_ctas", [False, True])
+@pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
                            shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
@@ -386,10 +385,6 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     instr_shape[1] *= shape_n
 
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
-    # Hacky way to check that we don't use too much TMEM
-    if M * N // 128 // num_ctas > 512 * 32 // torch.finfo(acc_dtype).bits:
-        extra_cols = M * N // 128 // num_ctas // (512 * 32 // torch.finfo(acc_dtype).bits)
-        N //= extra_cols
 
     if two_ctas and (N > 512 // max(M // 128, 1)):
         pytest.skip("FIXME: Fails with Illegal Instruction error. Not sure why")
@@ -509,34 +504,31 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
             return x.view(dtype)
 
     # Sample bf16 as tf32 does not use the full range
-    a = cast(torch.randn((M, K), device="cuda", dtype=torch.float32), torch_dtype)
-    b = cast(torch.randn((K, N), device="cuda", dtype=torch.float32), torch_dtype)
-    out = torch.zeros((M, N), device="cuda", dtype=out_dtype)
+    device = triton.runtime.driver.active.get_current_device()
+    a = cast(torch.randn((M, K), device=device, dtype=torch.float32), torch_dtype)
+    b = cast(torch.randn((K, N), device=device, dtype=torch.float32), torch_dtype)
+    out = torch.zeros((M, N), device=device, dtype=out_dtype)
 
-    try:
-        compiled = mma_kernel[(1, )](
-            a,
-            b,
-            out,
-            M,
-            N,
-            K,
-            block_layout_a,
-            block_layout_b,
-            block_layout_c,
-            acc_layout,
-            shared_layout_a,
-            shared_layout_b,
-            gl_acc_dtype,
-            False,
-            use_tcgen05,
-            mma_barrier_layout,
-            num_warps=warps[0] * warps[1],
-            num_ctas=num_ctas,
-        )
-    except OutOfResources:
-        # FIXME: Compute a priori
-        pytest.skip("Not enough shared memory")
+    compiled = mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout_a,
+        block_layout_b,
+        block_layout_c,
+        acc_layout,
+        shared_layout_a,
+        shared_layout_b,
+        gl_acc_dtype,
+        False,
+        use_tcgen05,
+        mma_barrier_layout,
+        num_warps=warps[0] * warps[1],
+        num_ctas=num_ctas,
+    )
 
     assert two_ctas == ("two_ctas" in compiled.asm["ttgir"])
 
