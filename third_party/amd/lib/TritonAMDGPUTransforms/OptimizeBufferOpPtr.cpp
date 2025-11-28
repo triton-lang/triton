@@ -91,8 +91,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       rewriter.setInsertionPoint(defOp);
       auto intType =
           IntegerType::get(rewriter.getContext(), constant.getBitWidth());
-      return rewriter.create<arith::ConstantIntOp>(defOp->getLoc(), intType,
-                                                   constant);
+      return arith::ConstantIntOp::create(rewriter, defOp->getLoc(), intType,
+                                          constant);
     } else if (auto splat = dyn_cast<triton::SplatOp>(defOp)) {
       return scalarizeValue(rewriter, splat.getSrc());
     }
@@ -276,9 +276,9 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       newLoopArgs.push_back(info.op.getPtr());
     }
     rewriter.setInsertionPoint(forOp);
-    auto newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-        forOp.getStep(), newLoopArgs);
+    auto newForOp =
+        scf::ForOp::create(rewriter, forOp.getLoc(), forOp.getLowerBound(),
+                           forOp.getUpperBound(), forOp.getStep(), newLoopArgs);
     // Clone old loop body without terminator
     IRMapping mapping;
     auto oldBlock = forOp.getBody();
@@ -306,7 +306,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       auto loc = info.incrementOp->getLoc();
       auto ptrType = basePtr.getType();
       auto nextIterBasePtr =
-          rewriter.create<triton::AddPtrOp>(loc, ptrType, basePtr, step);
+          triton::AddPtrOp::create(rewriter, loc, ptrType, basePtr, step);
       nextIterBasePtrs.push_back(nextIterBasePtr);
     }
     // Create yield operation
@@ -318,8 +318,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     newYieldOperands.append(nextIterBasePtrs);
 
     rewriter.setInsertionPoint(newBlock, newBlock->end());
-    rewriter.create<scf::YieldOp>(oldBlock->getTerminator()->getLoc(),
-                                  newYieldOperands);
+    scf::YieldOp::create(rewriter, oldBlock->getTerminator()->getLoc(),
+                         newYieldOperands);
     // Replace dynamic buffer op offsets with invariant value
     // Replace base ptr with incrementing value
     for (auto [info, basePtr, nextBasePtr] :
