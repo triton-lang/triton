@@ -2564,6 +2564,7 @@ struct PartitionScheduling
     size_t idx = 0;
     for (auto op : ops) {
       analyze(idx, op);
+      cloneMultiPartitionDataOps(op);
       idx++;
     }
   }
@@ -2643,9 +2644,101 @@ private:
 
     serialize(idx, op, graph.get());
     deduplicateViewOps(op, duplicatedOps);
-    // FIXME: dedup removes ops, so following visualization can crash
-    // if (options.dump_dot)
-    //   visualize(key, "dedup-views", "dedup views", graph.get(), vis_info);
+  }
+
+  void cloneMultiPartitionDataOps(Operation *region) {
+    // build data flow graph to find all data ops
+    DenseSet<Operation *> dataOps;
+    {
+      auto graph = buildGraph(region);
+      auto initValues = initialDataValues(graph.get());
+      propagateDataValues(initValues);
+      graph->walk([&](Node *node) {
+        if (node->isOp() && node->isData()) {
+          dataOps.insert(node->getOp());
+        }
+      });
+    }
+
+    // for each partition, find all data ops that are in that partition,
+    // and in another partition
+    for (auto partition : getPartitionIds(region)) {
+      SetVector<int> partitionSet;
+      partitionSet.insert(partition);
+
+      SmallVector<Operation *> ops;
+      region->walk([&](Operation *op) {
+        auto partitions = getPartitionIds(op);
+        if (partitions.contains(partition) && partitions.size() > 1 &&
+            dataOps.contains(op)) {
+          ops.push_back(op);
+        }
+      });
+
+      SmallVector<Operation *> oldOps;
+      SetVector<Operation *> newOps;
+      DenseMap<Operation *, Operation *> mapping;
+      for (auto op : ops) {
+        auto newOp = OpBuilder(op).clone(*op);
+        setPartition(newOp, partitionSet);
+        oldOps.push_back(op);
+        newOps.insert(newOp);
+        mapping[newOp] = op;
+        mapping[op] = newOp;
+      }
+
+      // rewrite operands
+      // if op that produces operand of new op is has a duplicated op,
+      // rewrite the operand to use that op
+      for (auto newOp : newOps) {
+        for (auto &operand : newOp->getOpOperands()) {
+          auto value = operand.get();
+          if (isa<OpResult>(value)) {
+            auto result = cast<OpResult>(value);
+            auto producerOp = result.getOwner();
+            if (mapping.contains(producerOp)) {
+              auto newProducerOp = mapping[producerOp];
+              auto newValue =
+                  newProducerOp->getResult(result.getResultNumber());
+              auto idx = operand.getOperandNumber();
+              newOp->setOperand(idx, newValue);
+            }
+          }
+        }
+      }
+
+      // rewrite results
+      for (auto newOp : newOps) {
+        auto oldOp = mapping[newOp];
+        for (auto &use : oldOp->getUses()) {
+          auto user = use.getOwner();
+          assert(user);
+          auto userPartitions = getPartitionIds(user);
+          // skip if use is not in same partition as new op
+          if (userPartitions != partitionSet)
+            continue;
+          // update the use to use the new op
+          auto result = cast<OpResult>(use.get());
+          auto idx = result.getResultNumber();
+          use.set(newOp->getResult(idx));
+        }
+      }
+
+      // remove dead code
+      bool done = false;
+      while (!done) {
+        done = true;
+        auto op = oldOps.begin();
+        for (; op != oldOps.end(); op++) {
+          if ((*op)->getUses().empty()) {
+            (*op)->erase();
+            oldOps.erase(op);
+            done = false;
+            break;
+          }
+        }
+      }
+    }
   }
 };
 
