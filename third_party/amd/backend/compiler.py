@@ -471,8 +471,13 @@ class HIPBackend(BaseBackend):
                                   dump_file_id)
         llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                             dump_file_id)
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False, dump_file_id)
+        if knobs.amd.swap_mir:
+            amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'),
+                                               amd.TARGET_TRIPLE, options.arch, features, flags,
+                                               options.enable_fp_fusion, False)
+        else:
+            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
+                                           options.enable_fp_fusion, False)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
