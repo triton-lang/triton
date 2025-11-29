@@ -41,7 +41,7 @@ def verify_mir_content(mir_content, kernel_name):
         f"Scheduling DAG for {kernel_name} should not contain entries from post-RA scheduler"
 
 
-def test_mir_dump(tmp_path, monkeypatch):
+def test_mir_dump_pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
     monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
 
@@ -105,3 +105,50 @@ def test_mir_dump(tmp_path, monkeypatch):
     # Verify mul_kernel MIR content
     mul_mir_content = mul_mir_path.read_text()
     verify_mir_content(mul_mir_content, "mul_kernel")
+
+
+def test_mir_swap_pipeline(tmp_path, monkeypatch):
+    # First, dump a MIR file to use for swapping
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def copy_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        # Simple copy operation
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    # Run kernel once to generate MIR file
+    size = 128
+    x = torch.randn(size, device='cuda')
+    output1 = torch.empty_like(x)
+
+    grid = lambda meta: (triton.cdiv(size, meta['BLOCK_SIZE']), )
+    copy_kernel[grid](x, output1, size, BLOCK_SIZE=128)
+
+    # Verify first execution
+    torch.testing.assert_close(output1, x)
+
+    # Find the generated MIR file
+    mir_files = list(tmp_path.glob("copy_kernel_*.txt"))
+    assert len(mir_files) == 1, "Exactly one MIR file should have been dumped"
+
+    original_mir_path = mir_files[0]
+    mir_content = original_mir_path.read_text()
+    verify_mir_content(mir_content, "copy_kernel")
+
+    # Now test MIR swapping
+    monkeypatch.setenv("TRITON_SWAP_MIR", str(tmp_path))
+    # Remove TRITON_DUMP_MIR to test pure swap functionality
+    monkeypatch.delenv("TRITON_DUMP_MIR", raising=False)
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    # Run kernel with MIR swap
+    output2 = torch.empty_like(x)
+    copy_kernel[grid](x, output2, size, BLOCK_SIZE=128)
+
+    torch.testing.assert_close(output2, x)

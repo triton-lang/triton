@@ -4,6 +4,7 @@ from triton import knobs
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
+import os
 import hashlib
 import tempfile
 import re
@@ -399,7 +400,9 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        amd.set_all_fn_arg_inreg(fns[0])
+        # TODO(tyb0807): put this back once the value is serializable to/from MIR YAML
+        if not (os.environ.get('TRITON_SWAP_MIR') or os.environ.get("TRITON_DUMP_MIR")):
+            amd.set_all_fn_arg_inreg(fns[0])
 
         if knobs.compilation.enable_asan:
             default_libdir = Path(__file__).parent / 'lib'
@@ -456,8 +459,13 @@ class HIPBackend(BaseBackend):
                                   dump_file_id)
         llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                             dump_file_id)
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False)
+        swap_mir_path = os.environ.get('TRITON_SWAP_MIR')
+        if swap_mir_path:
+            amdgcn = llvm.translate_mir_to_asm(swap_mir_path + '/' + dump_file_id + '.txt', amd.TARGET_TRIPLE,
+                                               options.arch, features, flags, options.enable_fp_fusion, False)
+        else:
+            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
+                                           options.enable_fp_fusion, False)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
