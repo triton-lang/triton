@@ -105,3 +105,159 @@ def test_mir_dump(tmp_path, monkeypatch):
     # Verify mul_kernel MIR content
     mul_mir_content = mul_mir_path.read_text()
     verify_mir_content(mul_mir_content, "mul_kernel")
+
+
+def test_mir_swap_pipeline(tmp_path, monkeypatch):
+    """Test MIR swap functionality using a previously dumped MIR file"""
+
+    # First, dump a MIR file to use for swapping
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+    swap_dir = tmp_path / "swap"
+    swap_dir.mkdir()
+
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(dump_dir))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def original_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        # Simple copy operation
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    # Run kernel once to generate MIR file
+    size = 128
+    x = torch.randn(size, device='cuda')
+    output1 = torch.empty_like(x)
+
+    grid = lambda meta: (triton.cdiv(size, meta['BLOCK_SIZE']), )
+    original_kernel[grid](x, output1, size, BLOCK_SIZE=128)
+
+    # Verify first execution
+    torch.testing.assert_close(output1, x)
+
+    # Find the generated MIR file
+    mir_files = list(dump_dir.glob("original_kernel_*.txt"))
+    assert len(mir_files) == 1, "Exactly one MIR file should have been dumped"
+
+    original_mir_path = mir_files[0]
+    mir_content = original_mir_path.read_text()
+    verify_mir_content(mir_content, "original_kernel")
+
+    # Copy MIR file to swap directory with the same name
+    swap_mir_path = swap_dir / original_mir_path.name
+    swap_mir_path.write_text(mir_content)
+
+    # Now test MIR swapping
+    monkeypatch.setenv("TRITON_SWAP_MIR", str(swap_dir))
+    # Remove TRITON_DUMP_MIR to test pure swap functionality
+    monkeypatch.delenv("TRITON_DUMP_MIR", raising=False)
+
+    # Create a new kernel with same signature but different behavior to verify swap works
+    @triton.jit
+    def swap_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        # Different operation: multiply by 2
+        result = x * 2.0
+        tl.store(output_ptr + offsets, result, mask=mask)
+
+    # Run kernel with MIR swap - should use the swapped MIR instead of compiling swap_kernel
+    output2 = torch.empty_like(x)
+    swap_kernel[grid](x, output2, size, BLOCK_SIZE=128)
+
+    # The behavior should be from the original_kernel (copy), not swap_kernel (multiply by 2)
+    # This proves that MIR swap is working and bypassing the normal compilation pipeline
+    torch.testing.assert_close(output2, x)
+
+    # Verify that the result is NOT from the swap_kernel logic (which would be x * 2)
+    expected_if_not_swapped = x * 2.0
+    with pytest.raises(AssertionError):
+        torch.testing.assert_close(output2, expected_if_not_swapped)
+
+
+def test_mir_swap_with_nonexistent_file(tmp_path, monkeypatch):
+    """Test MIR swap behavior when swap file doesn't exist"""
+
+    # Set up swap directory but don't put any MIR files in it
+    swap_dir = tmp_path / "empty_swap"
+    swap_dir.mkdir()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR", str(swap_dir))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def test_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    size = 128
+    x = torch.randn(size, device='cuda')
+    output = torch.empty_like(x)
+
+    grid = lambda meta: (triton.cdiv(size, meta['BLOCK_SIZE']), )
+
+    # This should either fail gracefully or fall back to normal compilation
+    # The exact behavior depends on implementation but it shouldn't crash
+    try:
+        test_kernel[grid](x, output, size, BLOCK_SIZE=128)
+        # If it succeeds, verify the kernel still works correctly
+        torch.testing.assert_close(output, x)
+    except (FileNotFoundError, RuntimeError) as e:
+        # Expected behavior when MIR swap file doesn't exist
+        assert "No such file or directory" in str(e) or "MIR" in str(e)
+
+
+def test_mir_swap_disabled_when_dump_enabled(tmp_path, monkeypatch):
+    """Test that MIR swap is disabled when TRITON_DUMP_MIR is also set"""
+
+    dump_dir = tmp_path / "dump"
+    swap_dir = tmp_path / "swap"
+    dump_dir.mkdir()
+    swap_dir.mkdir()
+
+    # Create a dummy MIR file in swap directory
+    dummy_mir = swap_dir / "test_kernel_dummy.txt"
+    dummy_mir.write_text("---\nname: dummy\nbody: dummy\n")
+
+    # Set both TRITON_DUMP_MIR and TRITON_SWAP_MIR
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(dump_dir))
+    monkeypatch.setenv("TRITON_SWAP_MIR", str(swap_dir))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def test_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        # Multiply by 3 to distinguish from swap behavior
+        result = x * 3.0
+        tl.store(output_ptr + offsets, result, mask=mask)
+
+    size = 128
+    x = torch.randn(size, device='cuda')
+    output = torch.empty_like(x)
+
+    grid = lambda meta: (triton.cdiv(size, meta['BLOCK_SIZE']), )
+    test_kernel[grid](x, output, size, BLOCK_SIZE=128)
+
+    # Should execute normal kernel logic (multiply by 3), not swap
+    expected = x * 3.0
+    torch.testing.assert_close(output, expected)
+
+    # Should have dumped a new MIR file
+    mir_files = list(dump_dir.glob("test_kernel_*.txt"))
+    assert len(mir_files) >= 1, "MIR file should have been dumped"
