@@ -278,7 +278,7 @@ def matmul(a, b, bias,
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
-    # unpack scales
+    # unpack b scale
     b_scale = precision_config.b_mx_scale
     b_has_mx = b_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(b.dtype) == 8
@@ -294,6 +294,7 @@ def matmul(a, b, bias,
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
         b_scale.dtype = torch.uint8
+    # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
@@ -474,7 +475,7 @@ def matmul(a, b, bias,
     else:
         b_scale_tensor_or_tma = b_scale
     # create tma descriptor for x_scale
-    a_scale_has_tma = opt_flags.is_persistent and a_scale is not None
+    a_scale_has_tma = opt_flags.is_persistent and a_has_mx
     if a_scale_has_tma:
         # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
         if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):

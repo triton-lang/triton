@@ -1,4 +1,3 @@
-from sys import maxsize
 import torch
 import triton
 from triton_kernels import target_info
@@ -67,12 +66,8 @@ def compute_block_m(
     else:
         if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            if (
-                lhs_dtype == torch.bfloat16
-                and rhs_dtype == FP4
-                and tokens_per_expt >= 16
-                and torch.cuda.get_device_capability()[0] >= 10
-            ):
+            if (lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and tokens_per_expt >= 16
+                    and torch.cuda.get_device_capability()[0] >= 10):
                 block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
             else:
                 block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))

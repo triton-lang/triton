@@ -62,7 +62,7 @@ class BlackwellActMXScaleLayout(Layout):
     # Swizzling for activation tensor [M, K], M can be ragged dimension and equals to sum of expert bs
     name: str = "BLACKWELL_SCALE"
 
-    def __init__(self, shape, ex_hist: list[int] | None = None) -> None:
+    def __init__(self, shape) -> None:
         super().__init__(shape)
         assert len(shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {shape}"
         (
@@ -88,7 +88,10 @@ class BlackwellActMXScaleLayout(Layout):
         return padded_data
 
     def unswizzle_data(self, data):
-        pass
+        data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
+        data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
+        data = data.reshape(*self.leading_shape, self.M_pad, self.K_pad)
+        return data[..., :self.M, :self.K]
 
     def swizzle_block_shape(self, block_shape):
         assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
