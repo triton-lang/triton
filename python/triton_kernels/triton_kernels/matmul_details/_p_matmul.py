@@ -283,7 +283,7 @@ def _p_matmul(
             # --- load x_scale ---
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:
-                if XMxScalePtrs is not None: # not using TAM for x scale load
+                if XMxScalePtrs is not None: # not using TMA for x scale load
                     off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
                     if EVEN_K:
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
@@ -320,7 +320,7 @@ def _p_matmul(
                     w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
 
-            # # --- update accumulator ---
+            # --- update accumulator ---
             if is_w_microscaled:
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)

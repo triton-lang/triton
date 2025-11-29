@@ -43,5 +43,5 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
 
 def make_default_matmul_mxfp8_act_scale_layout():
     if cuda_capability_geq(10):
-        return BlackwellActMXScaleLayout
-    return StridedLayout
+        return BlackwellActMXScaleLayout, dict()
+    return StridedLayout, dict()
