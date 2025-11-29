@@ -402,20 +402,20 @@ std::string translateMIRToASM(const std::string &mirPath,
                               const std::string &proc,
                               const std::string &features,
                               const std::vector<std::string> &flags,
-                              bool enable_fp_fusion,
-                              bool isObject) {
+                              bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
   auto options = llvm::cl::getRegisteredOptions();
 
   // We need to start before machine-scheduler and disable it instead of simply
   // start after it because machine-scheduler is used as anchor point to insert
-  // some passes. Starting after machine-scheduler would also not insert these passes
-  // to the pipeline.
+  // some passes. Starting after machine-scheduler would also not insert these
+  // passes to the pipeline.
   auto startBeforeOpt = options.find("start-before");
   std::string originalStartBefore;
   if (startBeforeOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
     originalStartBefore = optPtr->getValue();
     optPtr->setValue("machine-scheduler");
   }
@@ -431,9 +431,11 @@ std::string translateMIRToASM(const std::string &mirPath,
   auto enablePostMISchedOpt = options.find("enable-post-misched");
   bool originalEnablePostMisched;
   if (enablePostMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
+    auto *optPtr =
+        static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
     originalEnablePostMisched = optPtr->getValue();
-    enablePostMISchedOpt->second->addOccurrence(1, "enable-post-misched", "false");
+    enablePostMISchedOpt->second->addOccurrence(1, "enable-post-misched",
+                                                "false");
   }
 
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
@@ -460,9 +462,8 @@ std::string translateMIRToASM(const std::string &mirPath,
       llvm::MemoryBuffer::getFile(mirPath);
 
   if (!buffer) {
-    llvm::report_fatal_error(
-        llvm::Twine("failed to open MIR file: ") + mirPath + " " +
-        buffer.getError().message());
+    llvm::report_fatal_error(llvm::Twine("failed to open MIR file: ") +
+                             mirPath + " " + buffer.getError().message());
   }
 
   std::unique_ptr<llvm::MIRParser> mirParser =
@@ -479,7 +480,8 @@ std::string translateMIRToASM(const std::string &mirPath,
 
   // Setup target machine
   module->setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(module.get(), proc, enable_fp_fusion, features);
+  auto machine =
+      createTargetMachine(module.get(), proc, enable_fp_fusion, features);
   module->setDataLayout(machine->createDataLayout());
 
   // Create PassManager
@@ -499,7 +501,8 @@ std::string translateMIRToASM(const std::string &mirPath,
         new llvm::MachineModuleInfoWrapperPass(machine.get());
 
     // This will run the remaining machine passes and emit assembly/object
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType, /*NoVerify*/false, MMIWP);
+    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType,
+                                 /*NoVerify*/ false, MMIWP);
 
     // Now parse machine functions
     if (mirParser->parseMachineFunctions(*module, MMIWP->getMMI())) {
@@ -511,7 +514,8 @@ std::string translateMIRToASM(const std::string &mirPath,
 
   // Restore options
   if (startBeforeOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
     optPtr->setValue(originalStartBefore);
   }
 
@@ -521,7 +525,8 @@ std::string translateMIRToASM(const std::string &mirPath,
   }
 
   if (enablePostMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
+    auto *optPtr =
+        static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
     optPtr->setValue(originalEnablePostMisched);
   }
 
@@ -872,22 +877,22 @@ void init_triton_llvm(py::module &&m) {
       ret::take_ownership);
 
   m.def(
-    "translate_mir_to_asm",
-    [](std::string mirPath, std::string triple, std::string proc,
-       std::string features, std::vector<std::string> flags,
-       bool enable_fp_fusion, bool isObject) -> py::object {
-      std::string result;
-      {
-        py::gil_scoped_release allow_threads;
-        result = translateMIRToASM(mirPath, triple, proc, features, flags,
-                                   enable_fp_fusion, isObject);
-      }
-      if (isObject)
-        return py::bytes(result);
-      else
-        return py::str(result);
-    },
-    ret::take_ownership);
+      "translate_mir_to_asm",
+      [](std::string mirPath, std::string triple, std::string proc,
+         std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion, bool isObject) -> py::object {
+        std::string result;
+        {
+          py::gil_scoped_release allow_threads;
+          result = translateMIRToASM(mirPath, triple, proc, features, flags,
+                                     enable_fp_fusion, isObject);
+        }
+        if (isObject)
+          return py::bytes(result);
+        else
+          return py::str(result);
+      },
+      ret::take_ownership);
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;

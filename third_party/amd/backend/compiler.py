@@ -470,11 +470,11 @@ class HIPBackend(BaseBackend):
                             dump_file_id)
         swap_mir_path = os.environ.get('TRITON_SWAP_MIR')
         if swap_mir_path:
-            amdgcn = llvm.translate_mir_to_asm(swap_mir_path + '/' + dump_file_id + '.txt', amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                           False)
+            amdgcn = llvm.translate_mir_to_asm(swap_mir_path + '/' + dump_file_id + '.txt', amd.TARGET_TRIPLE,
+                                               options.arch, features, flags, options.enable_fp_fusion, False)
         else:
-            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                           False)
+            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
+                                           options.enable_fp_fusion, False)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
