@@ -379,23 +379,33 @@ LogicalResult TCGen5MMAOp::verify() {
            << retType.getElementTypeBitWidth() << " but got "
            << retEnc.getColStride();
 
+  auto aSplit = getCTASplitNum(aEnc);
+  auto bSplit = getCTASplitNum(bEnc);
+  if (aSplit[1] != 1) {
+    return emitOpError("LHS CTASplit along K should be 1, but got ")
+           << aSplit[1];
+  }
+  if (bSplit[0] != 1) {
+    return emitOpError("RHS CTASplit along K should be 1, but got ")
+           << bSplit[0];
+  }
+
   if (getTwoCtas()) {
-    // Once we have a `block` dimension in TMEM, we can look at this via the
-    // associated LL
-    auto checkSplitNum = [&](ArrayRef<unsigned> splitNum, std::string_view name,
-                             ArrayRef<unsigned> expected) -> LogicalResult {
-      if (splitNum != expected) {
-        return emitOpError("The op is two CTAs but the split num of the ")
-               << name << " is not " << expected << ". Got " << splitNum;
-      }
-      return success();
-    };
-    if (failed(checkSplitNum(getCTASplitNum(aEnc), "LHS", {2, 1})))
-      return failure();
-    if (failed(checkSplitNum(getCTASplitNum(bEnc), "RHS", {1, 2})))
-      return failure();
-    if (failed(checkSplitNum(getCTASplitNum(retEnc), "returned value", {2, 1})))
-      return failure();
+    auto retSplit = getCTASplitNum(retEnc);
+
+    unsigned retM = retSplit[0];
+    unsigned retN = retSplit[1];
+    if (aSplit[0] != retM) {
+      return emitOpError("twoCTA mode expects the LHS split along M to match "
+                         "the result split along M. Expected ")
+             << retM << " but got " << aSplit[0];
+    }
+    if (bSplit[1] != 2 * retN) {
+      return emitOpError(
+                 "twoCTA mode expects the RHS split along N to be twice the "
+                 "result split along N. Expected ")
+             << 2 * retN << " but got " << bSplit[1];
+    }
 
     if (!retEnc.getTwoCTAs())
       return emitOpError(

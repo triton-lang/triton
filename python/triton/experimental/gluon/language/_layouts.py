@@ -72,9 +72,9 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
         rank = len(self.size_per_thread)
-        object.__setattr__(self, "cga_layout", self.cga_layout)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
         assert len(self.order) == rank
@@ -284,8 +284,7 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
-
-        object.__setattr__(self, "cga_layout", self.cga_layout)
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(
@@ -456,8 +455,7 @@ class SwizzledSharedLayout(SharedLayout):
         super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
         super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-
-        object.__setattr__(self, "cga_layout", self.cga_layout)
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
     def _to_ir(self, builder):
         return builder.get_swizzled_shared_layout(
