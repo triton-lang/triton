@@ -1,10 +1,9 @@
-from ..state import enter_state, exit_state
+from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
+from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
 from triton._C.libproton import proton as libproton
 from contextvars import ContextVar
-
-COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 op_name = ContextVar("op_name", default=None)
 id = ContextVar("id", default=None)
@@ -42,8 +41,11 @@ class LaunchHook(Hook):
         fn_metrics = {k: lazy_metadata[k] for k in LaunchHook.metrics if k in lazy_metadata}
         op_name.set(lazy_metadata["name"])
         id.set(libproton.record_scope())
+        if fn_metrics:
+            set_metric_kernels()
+        scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
         libproton.enter_op(id.get(), lazy_metadata["name"])
-        libproton.add_metrics(id.get(), fn_metrics)
+        libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
 
     def exit(self, metadata: LazyDict) -> None:
         libproton.exit_op(id.get(), op_name.get())

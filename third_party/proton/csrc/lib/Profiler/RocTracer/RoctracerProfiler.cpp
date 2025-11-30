@@ -4,6 +4,7 @@
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
+#include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
 
 #include "hip/amd_detail/hip_runtime_prof.h"
@@ -189,7 +190,10 @@ std::tuple<bool, bool> matchKernelCbId(uint32_t cbId) {
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
-      : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
+      : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
+    runtime = &HipRuntime::instance();
+    metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+  }
   virtual ~RoctracerProfilerPimpl() = default;
 
   void doStart() override;
