@@ -374,8 +374,10 @@ LogicalResult InThreadTransposeOp::verify() {
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
   auto dstLinearLayout = triton::gpu::toLinearLayout(dstTy);
   if (dstLinearLayout != expectedLinearLayout) {
-    return emitOpError("Expect output layout to be transposed per thread: " +
-                       expectedLinearLayout.toString());
+    return emitOpError(
+        "Expect output layout to be transposed per thread: " +
+        expectedLinearLayout.toString() +
+        "\nGot following dst layout: " + dstLinearLayout.toString());
   }
   return success();
 }
@@ -390,10 +392,17 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   std::swap(newRegOrder[rank - 2], newRegOrder[rank - 1]);
 
   // Make in-register transposed tile
+  SmallVector<unsigned> sizePerThread{srcEncoding.getSizePerThread()};
+  // Trim sizePerThread to tensor shape,
+  // to ensure deduced layout does not refer to elements outside of tensor
+  for (int i = 0; i < rank; ++i) {
+    sizePerThread[i] =
+        std::min(sizePerThread[i], static_cast<unsigned>(shape[i]));
+  }
   auto ctx = srcEncoding.getContext();
   auto regDimName = StringAttr::get(ctx, "register");
-  auto inThreadTransposedTile = identityStandardND(
-      regDimName, srcEncoding.getSizePerThread(), newRegOrder);
+  auto inThreadTransposedTile =
+      identityStandardND(regDimName, sizePerThread, newRegOrder);
   // make sure basis in same order as in srcLayout
   SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
   inThreadTransposedTile = inThreadTransposedTile.transposeOuts(outDimNames);
@@ -401,9 +410,13 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   // Copy original bases, and replace register tile with transposed one
   LinearLayout::BasesT bases = srcLL.getBases();
   auto &regBase = *bases.find(regDimName);
-  int regsTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
-  for (int i = 0; i < regsTransposed; ++i)
-    regBase.second[i] = inThreadTransposedTile.getBasis(regDimName, i);
+  int regBasesTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
+  for (int baseIdx = 0; baseIdx < regBasesTransposed; ++baseIdx)
+    regBase.second[baseIdx] =
+        inThreadTransposedTile.getBasis(regDimName, baseIdx);
+  int regBasesInTile = llvm::Log2_32(product(srcEncoding.getSizePerThread()));
+  for (int baseIdx = regBasesTransposed; baseIdx < regBasesInTile; ++baseIdx)
+    llvm::for_each(regBase.second[baseIdx], [](int32_t &val) { val = 0; });
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
