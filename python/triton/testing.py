@@ -6,6 +6,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
+from typing_extensions import TypedDict
 from . import language as tl
 from . import runtime
 
@@ -55,6 +56,23 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.mean(times)
     elif return_mode == "median":
         return statistics.median(times)
+
+
+@functools.cache
+def _cache_clear_duration() -> float:
+    # estimates the duration in milliseconds of clearing the cache
+    iters = 100
+    di = runtime.driver.active.get_device_interface()
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
+    start_event = di.Event(enable_timing=True)
+    end_event = di.Event(enable_timing=True)
+    di.synchronize()
+    start_event.record()
+    for _ in range(iters):
+        runtime.driver.active.clear_cache(cache)
+    end_event.record()
+    di.synchronize()
+    return start_event.elapsed_time(end_event) / iters
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -124,7 +142,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", bailout_in_estimation=None, bailout_in_benchmarking=None):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -141,6 +159,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param bailout_in_estimation: Given # of estimation iterations, the current estimation iteration, and the current estimated timings, decides if we should bailout.
+    :type bailout_in_estimation: Callable[[int, int, List[float]], bool], optional
+    :param bailout_in_benchmarking: Given # of benchmarking iterations, the current benchmark iteration, and the current benchmark timings, decides if we should bailout.
+    :type bailout_in_benchmarking: Callable[[int, int, List[float]], bool], optional
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -151,16 +173,39 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
-    # Estimate the runtime of the function
-    start_event = di.Event(enable_timing=True)
-    end_event = di.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        runtime.driver.active.clear_cache(cache)
-        fn()
-    end_event.record()
-    di.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    estimation_iters = 5
+    if bailout_in_estimation:
+        # Estimate the runtime of the function with pruning
+        start_event = [di.Event(enable_timing=True) for _ in range(estimation_iters)]
+        end_event = [di.Event(enable_timing=True) for _ in range(estimation_iters)]
+
+        for s, e in zip(start_event, end_event):
+            runtime.driver.active.clear_cache(cache)
+            s.record()
+            fn()
+            e.record()
+
+        timings = []
+        for idx, (s, e) in enumerate(zip(start_event, end_event)):
+            e.synchronize()
+            timings.append(s.elapsed_time(e))
+            if bailout_in_estimation(estimation_iters, idx, timings):
+                # bailout strategy says that we should terminate early
+                return _summarize_statistics(timings, quantiles, return_mode)
+        # bailout strategy did not terminate early, we need to add back in the cost of cache clear
+        # to match the calculation in the non-bailout branch
+        estimate_ms = (sum(timings) / estimation_iters) + _cache_clear_duration()
+    else:
+        # Estimate the runtime of the function
+        start_event = di.Event(enable_timing=True)
+        end_event = di.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(estimation_iters):
+            runtime.driver.active.clear_cache(cache)
+            fn()
+        end_event.record()
+        di.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / estimation_iters
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
@@ -184,9 +229,24 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         start_event[i].record()
         fn()
         end_event[i].record()
-    # Record clocks
-    di.synchronize()
-    times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
+    if bailout_in_benchmarking:
+        times = []
+        start = 0
+        # breaks up benchmarking into ~4 blocks
+        for idx, end in enumerate(range(n_repeat // 4, n_repeat, n_repeat // 4)):
+            end_event[end].synchronize()
+            times.extend([s.elapsed_time(e) for s, e in zip(start_event[start:end], end_event[start:end])])
+            start = end
+            if bailout_in_benchmarking(n_repeat, end, times):
+                # bailout strategy decided to terminate early
+                return _summarize_statistics(times, quantiles, return_mode)
+        # bailout strategy never terminated early
+        end_event[-1].synchronize()
+        times.extend([s.elapsed_time(e) for s, e in zip(start_event[start:], end_event[start:])])
+    else:
+        # Record clocks
+        di.synchronize()
+        times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
 
