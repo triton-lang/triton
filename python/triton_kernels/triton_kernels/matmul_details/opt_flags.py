@@ -210,6 +210,9 @@ def make_default_opt_flags_nvidia(
                 block_m = max(16, min(triton.next_power_of_2(8 * slice_size), 128))
             else:
                 block_m = max(16, min(triton.next_power_of_2(2 * slice_size), 64))
+            if block_m == 64 and precision_config.c_mx_scale is not None and rhs_dtype == FP4 and torch.cuda.get_device_capability()[0] >= 10:
+                # when having both fused_activation and mxfp8 downcast in epilogue, block_m=64 causing shared memory overflow
+                block_m = 128
         else:
             block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
     # block n
