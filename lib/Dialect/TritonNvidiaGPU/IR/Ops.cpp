@@ -26,6 +26,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -855,6 +856,46 @@ LogicalResult TensormapCreateOp::verify() {
     return emitError("Rank mismatch for element stride. Got ")
            << getElementStride().size() << " but expected " << rank;
   }
+  return success();
+}
+
+// -- TensormapUpdateOp --
+LogicalResult TensormapUpdateOp::verify() {
+  auto hasAddress = (getGlobalAddress() != nullptr);
+  auto hasDim = !getGlobalDim().empty();
+  auto hasStride = !getGlobalStride().empty();
+  if (!hasAddress && !hasDim && !hasStride) {
+    return emitError("Must update at least one descriptor field");
+  }
+  if (hasStride && !hasDim) {
+    return emitError("Cannot update global stride without dim specified");
+  }
+  if (hasDim && hasStride) {
+    if (getGlobalStride().size() + 1 != getGlobalDim().size()) {
+      return emitError("Rank mismatch for global stride. Got ")
+        << getGlobalStride().size() << " but expected "
+        << getGlobalDim().size() - 1;
+    }
+  }
+
+  // Verify that the descriptor being updated is not shared across CTAs.
+  // Descriptors passed as kernel parameters (from TensorDescriptor.from_tensor())
+  // are stored in constant memory and shared across all CTAs, so updating them
+  // would cause race conditions. Descriptors created in-kernel with
+  // make_tensor_descriptor() are per-CTA and safe to update.
+  auto descPtr = getDescPtr();
+  auto getDescPtrOp = descPtr.getDefiningOp<GetDescriptorPtrOp>();
+  if (getDescPtrOp) {
+    auto desc = getDescPtrOp.getDesc();
+
+    // Use the existing utility to check if this is a host-side descriptor
+    if (triton::isHostSideDescriptor(desc)) {
+      return emitError("Descriptor must be created within the kernel using "
+                       "make_tensor_descriptor. Updating descriptors passed as "
+                       "kernel parameters would cause race conditions across CTAs.");
+    }
+  }
+
   return success();
 }
 

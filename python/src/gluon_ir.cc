@@ -871,6 +871,48 @@ void init_gluon_ir(py::module &&m) {
              return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
                                                       strides, paddingOption);
            })
+      .def("create_update_tensor_descriptor",
+           [](GluonOpBuilder &self, Value &desc,
+              std::optional<Value> base,
+              std::vector<Value> shape,
+              std::vector<Value> strides) -> void {
+             auto &builder = self.getBuilder();
+
+             auto ptrType = tt::PointerType::get(
+                 builder.getIntegerType(8), /*addressSpace=*/1);
+             Value descPtr = self.create<ttng::GetDescriptorPtrOp>(ptrType, desc);
+
+             std::vector<Value> byteStrides;
+             if (!strides.empty()) {
+               auto descType = mlir::cast<tt::TensorDescType>(desc.getType());
+               auto elemType = descType.getBlockType().getElementType();
+               auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
+               Value elemSizeVal = self.create<arith::ConstantIntOp>(
+                   builder.getI64Type(), elemSize);
+
+               for (Value stride : strides) {
+                 byteStrides.push_back(self.create<arith::MulIOp>(stride, elemSizeVal));
+               }
+               strides = byteStrides;
+             }
+
+             std::vector<Value> reversedShape(shape.rbegin(), shape.rend());
+             std::vector<Value> reversedStrides;
+             if (!strides.empty()) {
+               for (int k = strides.size() - 2; k >= 0; --k) {
+                 reversedStrides.push_back(strides[k]);
+               }
+             }
+
+             Value baseVal = base.has_value() ? base.value() : Value();
+             self.create<ttng::TensormapUpdateOp>(descPtr, baseVal, reversedShape, reversedStrides);
+
+             self.create<ttng::TensormapFenceproxyAcquireOp>(descPtr);
+           },
+           py::arg("desc"),
+           py::arg("base") = std::nullopt,
+           py::arg("shape") = std::vector<Value>{},
+           py::arg("strides") = std::vector<Value>{})
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value result, Value pred, Value barrier) {
