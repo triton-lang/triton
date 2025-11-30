@@ -23,9 +23,23 @@ def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
     prev._setitem(path[-1], val)
 
 
-def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
+def is_iterable(x):
     from .language import core
-    is_iterable: Callable[[Any], bool] = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+    return isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+
+
+def apply_with_path(value: Any, fn: Callable[[ObjPath, Any], None], _path=None) -> None:
+    if _path is None:
+        _path = ()
+
+    if is_iterable(value):
+        for idx, item in enumerate(value):
+            apply_with_path(item, fn, _path=(*_path, idx))
+    else:
+        fn(_path, value)
+
+
+def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
     # We need to use dict so that ordering is maintained, while set doesn't guarantee order
     ret: dict[ObjPath, None] = {}
 

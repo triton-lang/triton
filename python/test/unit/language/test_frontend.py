@@ -254,11 +254,11 @@ def add_rhs_constexpr(agg):
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
@@ -286,10 +286,10 @@ def pass_tuple_aggregate(agg):
 @triton.jit
 def test_aggregate_with_tuple():
     # CHECK-LABEL: test_aggregate_with_tuple
-    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
     agg = AggregateWithTuple.create(tl.arange(0, 4))
     pass_tuple_aggregate(agg)
-    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
 
 
 @triton.constexpr_function
@@ -479,13 +479,13 @@ class AggregateWithConstexprFunction:
 @triton.jit
 def test_aggregate_constexpr_function():
     agg = AggregateWithConstexprFunction(4)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    # CHECK: call @{{.*}}anchor{{.*}}c4
     anchor(agg.val)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.val_squared)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.square_val())
 
 
@@ -503,7 +503,7 @@ def function_taking_list(arg):
 @triton.jit
 def test_constexpr_function_taking_list():
     a: tl.constexpr = function_taking_list(make_list(4, 8, 16))
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_8_
+    # CHECK: call @{{.*}}anchor{{.*}}c8
     anchor(a)
 
 
@@ -511,19 +511,19 @@ def test_constexpr_function_taking_list():
 @triton.jit
 def test_constexpr_min_max():
     a: tl.constexpr = min(1, 2)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_1_
+    # CHECK: call @{{.*}}anchor{{.*}}c1
     anchor(a)
 
     b: tl.constexpr = min(1, 2, -3)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_-3_
+    # CHECK: call @{{.*}}anchor{{.*}}c-3
     anchor(b)
 
     c: tl.constexpr = max(3, 4)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    # CHECK: call @{{.*}}anchor{{.*}}c4
     anchor(c)
 
     d: tl.constexpr = max(3, 4, 5)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_5_
+    # CHECK: call @{{.*}}anchor{{.*}}c5
     anchor(d)
 
 
