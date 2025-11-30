@@ -159,7 +159,11 @@ def prune_invalid_configs(configs, named_args, **kwargs):
 
     # Filter out configs where BLOCK_M > N_CTX
     # Filter out configs where BLOCK_M < BLOCK_N when causal is True
-    return [conf for conf in configs if conf.kwargs.get("BLOCK_M", 0) <= N_CTX and (conf.kwargs.get("BLOCK_M", 0) >= conf.kwargs.get("BLOCK_N", 0) or STAGE == 1)]
+    return [
+        conf for conf in configs if conf.kwargs.get("BLOCK_M", 0) <= N_CTX and (
+            conf.kwargs.get("BLOCK_M", 0) >= conf.kwargs.get("BLOCK_N", 0) or STAGE == 1)
+    ]
+
 
 @triton.jit
 def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
