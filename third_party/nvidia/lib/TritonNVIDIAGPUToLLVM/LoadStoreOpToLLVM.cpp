@@ -32,7 +32,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getCTALayout;
+using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
@@ -1275,10 +1275,10 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
         LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
                                 blockShape[dim], kMsg, outDimNames[dim]);
   }
-  auto ctaLayout = getCTALayout(ty.getEncoding());
+  auto cgaLayout = getCGALayout(ty.getEncoding());
   for (int i = 0; i < rank; ++i) {
-    auto dim = ctaLayout.getCTAOrder()[i];
-    msgToOffset *= LinearLayout::identity1D(ctaLayout.getCTASplitNum()[dim],
+    auto dim = cgaLayout.getCTAOrder()[i];
+    msgToOffset *= LinearLayout::identity1D(cgaLayout.getCTASplitNum()[dim],
                                             kBlock, outDimNames[dim]);
   }
   return msgToOffset;

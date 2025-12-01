@@ -16,7 +16,7 @@ namespace mlir::triton::gpu {
 BlockedEncodingAttr buildCoalescedEncoding(
     MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     Operation *op, int numWarps, int threadsPerWarp,
-    triton::gpu::CTAEncodingAttr CTALayout, SmallVector<int64_t> shapePerCTA) {
+    triton::gpu::CGAEncodingAttr cgaLayout, SmallVector<int64_t> shapePerCTA) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -90,6 +90,6 @@ BlockedEncodingAttr buildCoalescedEncoding(
   sizePerThread[order[0]] = perThread;
   return BlockedEncodingAttr::get(context, refTensorType.getShape(),
                                   sizePerThread, order, numWarps,
-                                  threadsPerWarp, CTALayout);
+                                  threadsPerWarp, cgaLayout);
 }
 } // namespace mlir::triton::gpu
