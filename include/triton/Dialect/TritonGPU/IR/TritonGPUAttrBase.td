@@ -1,6 +1,6 @@
 //===----------------------------------------------------------------------===//
 // Base definitions shared by TritonGPU attribute TableGen files.
-// Splitting these out lets us emit certain attributes (e.g. CTAEncodingAttr)
+// Splitting these out lets us emit certain attributes (e.g. CGAEncodingAttr)
 // before interface headers without creating circular dependencies.
 //===----------------------------------------------------------------------===//
 

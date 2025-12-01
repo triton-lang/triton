@@ -159,35 +159,6 @@ struct ArithConstantArrayOpConversion
   }
 };
 
-struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
-  using OpAdaptor = typename CatOp::Adaptor;
-  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    unsigned elems = getTotalElemsPerThread(resultTy);
-    auto typeConverter = getTypeConverter();
-    Type elemTy = typeConverter->convertType(resultTy.getElementType());
-    SmallVector<Type> types(elems, elemTy);
-    // unpack input values
-    auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
-    // concatenate (and potentially reorder) values
-    SmallVector<Value> retVals;
-    for (Value v : lhsVals)
-      retVals.push_back(v);
-    for (Value v : rhsVals)
-      retVals.push_back(v);
-    // pack and replace
-    Value ret = packLLElements(loc, typeConverter, retVals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
 struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
   using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
@@ -590,7 +561,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
-  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(

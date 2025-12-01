@@ -117,7 +117,7 @@ struct CoalesceAsyncCopyWrites
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           blockedEnc.getOrder(), numWarps, threadsPerWarp,
-          blockedEnc.getCTALayout());
+          blockedEnc.getCGALayout());
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
@@ -176,7 +176,7 @@ struct CoalesceAsyncCopyWrites
           triton::standardOutDimNames(ctx, rank));
 
       newRegLayout = triton::gpu::combineCtaCgaWithShape(
-          newRegLayout, blockedEnc.getCTALayout(), srcTy.getShape());
+          newRegLayout, blockedEnc.getCGALayout(), srcTy.getShape());
 
       auto newRegToShared = newRegLayout.invertAndCompose(sharedLayout);
       if (newRegToShared.getNumConsecutiveInOut() < loadContig) {
