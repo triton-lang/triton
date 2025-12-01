@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
@@ -105,6 +106,10 @@ public:
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
+
+  // Set target specific function attributes
+  virtual void setLLVMFunctionAttributes(triton::FuncOp funcOp,
+                                         LLVM::LLVMFuncOp llvmFuncOp) const {}
 
   virtual ~TargetInfoBase() {}
 };

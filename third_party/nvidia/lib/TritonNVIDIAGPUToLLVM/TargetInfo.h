@@ -74,6 +74,9 @@ public:
 
   bool isCuda() const override { return true; }
 
+  void setLLVMFunctionAttributes(triton::FuncOp funcOp,
+                                 LLVM::LLVMFuncOp llvmFuncOp) const override;
+
 private:
   int computeCapability;
   int ptxVersion;

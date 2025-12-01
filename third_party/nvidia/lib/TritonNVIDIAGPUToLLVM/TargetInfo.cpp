@@ -610,4 +610,45 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;
 }
 
+void TargetInfo::setLLVMFunctionAttributes(triton::FuncOp funcOp,
+                                           LLVM::LLVMFuncOp llvmFuncOp) const {
+  auto ctx = funcOp->getContext();
+  OpBuilder builder(ctx);
+
+  // Determine the actual number of required warps.
+  int numWarps = triton::gpu::lookupNumWarps(funcOp);
+  if (auto totalNumWarps = funcOp.getParentOp()->getAttrOfType<IntegerAttr>(
+          "ttg.total-num-warps"))
+    numWarps = totalNumWarps.getInt();
+
+  int numCTAs = 1;
+  if (auto module = funcOp->getParentOfType<ModuleOp>()) {
+    if (auto moduleAttr =
+            module->getAttrOfType<IntegerAttr>(triton::gpu::AttrNumCTAsName))
+      numCTAs = moduleAttr.getInt();
+  }
+
+  // Set an attribute to indicate this function is a kernel entry.
+  if (triton::isKernel(funcOp))
+    llvmFuncOp->setAttr(NVVM::NVVMDialect::getKernelFuncAttrName(),
+                        builder.getIntegerAttr(type::u1Ty(ctx), 1));
+
+  // Set `nvvm.maxnreg` if it was specified on the module.
+  if (Attribute maxnregAttr =
+          funcOp.getParentOp()->getAttr(triton::gpu::AttrMaxRegistersName))
+    llvmFuncOp->setAttr(NVVM::NVVMDialect::getMaxnregAttrName(), maxnregAttr);
+
+  // Do we want to do this for nCTAs == 1 whenever sm >= 90?
+  if (numCTAs > 1) {
+    // Request a specific number of CTAs per cluster in the generated PTX.
+    llvmFuncOp->setAttr(NVVM::NVVMDialect::getClusterDimAttrName(),
+                        builder.getDenseI32ArrayAttr(numCTAs));
+  }
+
+  // Set an attribute for reqntidx, it could be used in latter LLVM codegen
+  // for `nvvm.annotation` metadata.
+  llvmFuncOp->setAttr(NVVM::NVVMDialect::getReqntidAttrName(),
+                      builder.getDenseI32ArrayAttr(32 * numWarps));
+}
+
 } // namespace mlir::triton::NVIDIA
