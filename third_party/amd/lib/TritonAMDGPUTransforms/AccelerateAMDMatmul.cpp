@@ -1790,8 +1790,8 @@ getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
 //    ds_read_b128, which is the largest vector size for shared memory load.
 // Helpers to extract MFMA dims and compute kBase for the encoding.
 // If your AMDMfmaEncodingAttr exposes a different accessor, adjust accordingly.
-static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase,
-                                    unsigned kPack) {
+static std::optional<unsigned>
+chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, unsigned kPack) {
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
@@ -1816,7 +1816,8 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
       return;
 
     unsigned kBase = *kBaseCandidate;
-    std::optional<unsigned> candidateKWidth = chooseDesiredKWidth(dotOp, kBase, kPack);
+    std::optional<unsigned> candidateKWidth =
+        chooseDesiredKWidth(dotOp, kBase, kPack);
     if (!candidateKWidth.has_value())
       return;
     unsigned desiredKWidth = candidateKWidth.value();
