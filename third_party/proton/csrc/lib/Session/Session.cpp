@@ -5,7 +5,7 @@
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
-#include "Profiler/Rocm/RocprofilerProfiler.h"
+#include "Profiler/Rocm/RocprofProfiler.h"
 #include "Utility/String.h"
 
 #include <iostream>
@@ -25,7 +25,7 @@ Profiler *makeProfiler(const std::string &name) {
                    "release."
                 << std::endl;
     }
-    return &RocprofilerProfiler::instance();
+    return &RocprofProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
   }

@@ -1,9 +1,9 @@
-#include "Profiler/Rocm/RocprofilerProfiler.h"
+#include "Profiler/Rocm/RocprofProfiler.h"
 
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Driver/GPU/HipApi.h"
-#include "Driver/GPU/RocprofilerApi.h"
+#include "Driver/GPU/RocprofApi.h"
 #include "Profiler/GPUProfiler.h"
 #include "Utility/Env.h"
 #include "Utility/Map.h"
@@ -31,13 +31,12 @@
 namespace proton {
 
 template <>
-thread_local GPUProfiler<RocprofilerProfiler>::ThreadState
-    GPUProfiler<RocprofilerProfiler>::threadState(
-        RocprofilerProfiler::instance());
+thread_local GPUProfiler<RocprofProfiler>::ThreadState
+    GPUProfiler<RocprofProfiler>::threadState(RocprofProfiler::instance());
 
 template <>
 thread_local std::deque<size_t>
-    GPUProfiler<RocprofilerProfiler>::Correlation::externIdQueue{};
+    GPUProfiler<RocprofProfiler>::Correlation::externIdQueue{};
 
 namespace {
 
@@ -172,11 +171,11 @@ void ensureRocprofilerConfigured() {
 
 } // namespace
 
-struct RocprofilerProfiler::RocprofilerProfilerPimpl
-    : public GPUProfiler<RocprofilerProfiler>::GPUProfilerPimplInterface {
-  RocprofilerProfilerPimpl(RocprofilerProfiler &profiler)
-      : GPUProfiler<RocprofilerProfiler>::GPUProfilerPimplInterface(profiler) {}
-  virtual ~RocprofilerProfilerPimpl() = default;
+struct RocprofProfiler::RocprofProfilerPimpl
+    : public GPUProfiler<RocprofProfiler>::GPUProfilerPimplInterface {
+  RocprofProfilerPimpl(RocprofProfiler &profiler)
+      : GPUProfiler<RocprofProfiler>::GPUProfilerPimplInterface(profiler) {}
+  virtual ~RocprofProfilerPimpl() = default;
 
   void doStart() override {
     ensureRocprofilerConfigured();
@@ -265,13 +264,13 @@ struct RocprofilerProfiler::RocprofilerProfilerPimpl
 
 private:
   static void processKernelRecord(
-      RocprofilerProfiler &profiler, RocprofilerProfilerPimpl &impl,
+      RocprofProfiler &profiler, RocprofProfilerPimpl &impl,
       const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record);
 };
 
 namespace {} // namespace
 
-void RocprofilerProfiler::RocprofilerProfilerPimpl::hipRuntimeCallback(
+void RocprofProfiler::RocprofProfilerPimpl::hipRuntimeCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API)
@@ -280,8 +279,8 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::hipRuntimeCallback(
   auto operation =
       static_cast<rocprofiler_tracing_operation_t>(record.operation);
   bool isKernelOp = isKernelLaunchOperation(operation);
-  auto &profiler = RocprofilerProfiler::instance();
-  auto *impl = static_cast<RocprofilerProfiler::RocprofilerProfilerPimpl *>(
+  auto &profiler = RocprofProfiler::instance();
+  auto *impl = static_cast<RocprofProfiler::RocprofProfilerPimpl *>(
       profiler.pImpl.get());
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_api_data_t *>(
       record.payload);
@@ -387,7 +386,7 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::hipRuntimeCallback(
   }
 }
 
-void RocprofilerProfiler::RocprofilerProfilerPimpl::markerCallback(
+void RocprofProfiler::RocprofProfilerPimpl::markerCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
@@ -404,7 +403,7 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::markerCallback(
   }
 }
 
-void RocprofilerProfiler::RocprofilerProfilerPimpl::codeObjectCallback(
+void RocprofProfiler::RocprofProfilerPimpl::codeObjectCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT ||
@@ -416,13 +415,13 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::codeObjectCallback(
   auto *payload = static_cast<
       rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t *>(
       record.payload);
-  auto &profiler = RocprofilerProfiler::instance();
-  auto *impl = static_cast<RocprofilerProfiler::RocprofilerProfilerPimpl *>(
+  auto &profiler = RocprofProfiler::instance();
+  auto *impl = static_cast<RocprofProfiler::RocprofProfilerPimpl *>(
       profiler.pImpl.get());
   impl->setKernelName(payload->kernel_id, payload->kernel_name);
 }
 
-void RocprofilerProfiler::RocprofilerProfilerPimpl::kernelBufferCallback(
+void RocprofProfiler::RocprofProfilerPimpl::kernelBufferCallback(
     rocprofiler_context_id_t context, rocprofiler_buffer_id_t buffer,
     rocprofiler_record_header_t **headers, size_t numHeaders, void *userData,
     uint64_t dropCount) {
@@ -430,8 +429,8 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::kernelBufferCallback(
     std::cerr << "[PROTON] ROCProfiler-SDK dropped " << dropCount
               << " kernel dispatch records" << std::endl;
   }
-  auto &profiler = RocprofilerProfiler::instance();
-  auto *impl = static_cast<RocprofilerProfiler::RocprofilerProfilerPimpl *>(
+  auto &profiler = RocprofProfiler::instance();
+  auto *impl = static_cast<RocprofProfiler::RocprofProfilerPimpl *>(
       profiler.pImpl.get());
   uint64_t maxCorrelationId = 0;
   for (size_t i = 0; i < numHeaders; ++i) {
@@ -445,16 +444,16 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::kernelBufferCallback(
             header->payload);
     maxCorrelationId =
         std::max(maxCorrelationId, record->correlation_id.internal);
-    RocprofilerProfiler::RocprofilerProfilerPimpl::processKernelRecord(
-        profiler, *impl, record);
+    RocprofProfiler::RocprofProfilerPimpl::processKernelRecord(profiler, *impl,
+                                                               record);
   }
   if (maxCorrelationId > 0) {
     profiler.correlation.complete(maxCorrelationId);
   }
 }
 
-void RocprofilerProfiler::RocprofilerProfilerPimpl::processKernelRecord(
-    RocprofilerProfiler &profiler, RocprofilerProfilerPimpl &impl,
+void RocprofProfiler::RocprofProfilerPimpl::processKernelRecord(
+    RocprofProfiler &profiler, RocprofProfilerPimpl &impl,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record) {
   auto metric = convertDispatchToMetric(record);
   if (!metric)
@@ -510,19 +509,19 @@ void RocprofilerProfiler::RocprofilerProfilerPimpl::processKernelRecord(
   }
 }
 
-RocprofilerProfiler::RocprofilerProfiler() {
-  pImpl = std::make_unique<RocprofilerProfilerPimpl>(*this);
+RocprofProfiler::RocprofProfiler() {
+  pImpl = std::make_unique<RocprofProfilerPimpl>(*this);
   ensureRocprofilerConfigured();
 }
 
-RocprofilerProfiler::~RocprofilerProfiler() = default;
+RocprofProfiler::~RocprofProfiler() = default;
 
-void RocprofilerProfiler::doSetMode(
+void RocprofProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions.empty() ? std::string() : modeAndOptions[0];
   if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RocprofilerProfiler: unsupported mode: " + mode);
+    throw std::invalid_argument("[PROTON] RocprofProfiler: unsupported mode: " +
+                                mode);
   }
 }
 
@@ -547,28 +546,25 @@ int proton_tool_init(rocprofiler_client_finalize_t finiFunc, void *toolData) {
 
   rocprofiler::configureCallbackTracingService<true>(
       state->context, ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API, nullptr, 0,
-      &RocprofilerProfiler::RocprofilerProfilerPimpl::hipRuntimeCallback,
-      nullptr);
+      &RocprofProfiler::RocprofProfilerPimpl::hipRuntimeCallback, nullptr);
 
   if (enableMarkers) {
     rocprofiler::configureCallbackTracingService<true>(
         state->context, ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API, nullptr,
-        0, &RocprofilerProfiler::RocprofilerProfilerPimpl::markerCallback,
-        nullptr);
+        0, &RocprofProfiler::RocprofProfilerPimpl::markerCallback, nullptr);
   }
 
   const rocprofiler_tracing_operation_t codeObjectOps[] = {
       ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER};
   rocprofiler::configureCallbackTracingService<true>(
       state->context, ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT, codeObjectOps,
-      1, &RocprofilerProfiler::RocprofilerProfilerPimpl::codeObjectCallback,
-      nullptr);
+      1, &RocprofProfiler::RocprofProfilerPimpl::codeObjectCallback, nullptr);
 
   size_t watermark = BufferSize - (BufferSize / 8);
   rocprofiler::createBuffer<true>(
       state->context, BufferSize, watermark, ROCPROFILER_BUFFER_POLICY_LOSSLESS,
-      &RocprofilerProfiler::RocprofilerProfilerPimpl::kernelBufferCallback,
-      nullptr, &state->kernelBuffer);
+      &RocprofProfiler::RocprofProfilerPimpl::kernelBufferCallback, nullptr,
+      &state->kernelBuffer);
 
   rocprofiler::configureBufferTracingService<true>(
       state->context, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0,

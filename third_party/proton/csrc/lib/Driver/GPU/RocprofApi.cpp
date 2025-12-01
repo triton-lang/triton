@@ -1,4 +1,4 @@
-#include "Driver/GPU/RocprofilerApi.h"
+#include "Driver/GPU/RocprofApi.h"
 
 namespace proton {
 namespace rocprofiler {

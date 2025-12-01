@@ -68,7 +68,7 @@ def test_profile_mode(tmp_path: pathlib.Path):
         try:
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         except Exception as e:
-            assert "RocprofilerProfiler: unsupported mode: pcsampling" in str(e)
+            assert "RocprofProfiler: unsupported mode: pcsampling" in str(e)
         finally:
             proton.finalize()
     else:

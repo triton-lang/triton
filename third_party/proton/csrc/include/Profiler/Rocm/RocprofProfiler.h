@@ -5,12 +5,12 @@
 
 namespace proton {
 
-class RocprofilerProfiler : public GPUProfiler<RocprofilerProfiler> {
+class RocprofProfiler : public GPUProfiler<RocprofProfiler> {
 public:
-  RocprofilerProfiler();
-  virtual ~RocprofilerProfiler();
+  RocprofProfiler();
+  virtual ~RocprofProfiler();
 
-  struct RocprofilerProfilerPimpl;
+  struct RocprofProfilerPimpl;
 
 private:
   virtual void
