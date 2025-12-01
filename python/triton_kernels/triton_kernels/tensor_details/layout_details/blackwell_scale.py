@@ -255,6 +255,7 @@ class BlackwellActMXScaleLayout(Layout):
         return padded_data
 
     def unswizzle_data(self, data):
+        # Kernel to reserve unswizzled data
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
         data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
         data = data.reshape(*self.leading_shape, self.M_pad, self.K_pad)
