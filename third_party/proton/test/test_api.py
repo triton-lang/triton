@@ -1,5 +1,5 @@
 """
-Test module for proton's API functionality.
+Test module for proton's Python API.
 No GPU kernel should be declared in this test.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """

@@ -29,9 +29,9 @@ public:
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
     Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-    auto barrierCTALayout = ttg::CTAEncodingAttr::getDefault(ctx, 1);
+    auto barrierCGALayout = ttg::CGAEncodingAttr::getDefault(ctx, 1);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-        ctx, 1, 1, 1, {0}, barrierCTALayout);
+        ctx, 1, 1, 1, {0}, barrierCGALayout);
     ttg::MemDescType barrierMemDescType =
         ttg::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
@@ -65,8 +65,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
     auto oldType = cast<ttg::MemDescType>(operand.get().getType());
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
-    ttg::CTAEncodingAttr CTALayout = ttg::getCTALayout(oldType.getEncoding());
-    auto CTASplitNum = CTALayout.getCTASplitNum();
+    ttg::CGAEncodingAttr CGALayout = ttg::getCGALayout(oldType.getEncoding());
+    auto CTASplitNum = CGALayout.getCTASplitNum();
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
     Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(

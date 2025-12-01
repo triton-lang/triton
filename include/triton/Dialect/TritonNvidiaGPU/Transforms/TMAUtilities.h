@@ -20,7 +20,7 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
                                        Attribute encoding,
                                        SmallVector<Value> indices);
 
-gpu::CTAEncodingAttr updateCTALayoutForShape(gpu::CTAEncodingAttr ctaLayout,
+gpu::CGAEncodingAttr updateCGALayoutForShape(gpu::CGAEncodingAttr cgaLayout,
                                              ArrayRef<int64_t> shape);
 
 gpu::SharedEncodingTrait
