@@ -1,4 +1,5 @@
 from __future__ import annotations  # remove after python 3.11
+import builtins
 import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
@@ -114,42 +115,47 @@ class TritonSemantic(Generic[TensorTy]):
                             "this is unlikely to result in a useful answer. Cast them to the same signedness.")
         return self.integer_promote_impl(a_ty, b_ty)
 
-    def to_tensor(self, x, check_type: bool = True):
+    def to_tensor(self, x, check_type=True):
+        if isinstance(x, self.tensor):
+            return x
+        x = x.value if isinstance(x, tl.constexpr) else x
+        if isinstance(x, (int, float, bool)):
+            dtype = self.to_tensor_type(x)
+            return self.scalar_constant(x, dtype=dtype)
+        elif check_type:
+            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+        return x
+
+    def to_tensor_type(self, x):
+        if isinstance(x, tl.dtype):
+            return x
+        elif isinstance(x, tl.constexpr_type):
+            x = x.value
+
         if isinstance(x, bool):
-            return self.tensor(self.builder.get_int1(x), tl.int1)
-        # Note: compile-time const integers are represented by unsigned values
+            return tl.int1
         elif isinstance(x, int):
             if -2**31 <= x < 2**31:
-                dtype = tl.int32
+                return tl.int32
             elif 2**31 <= x < 2**32:
-                dtype = tl.uint32
+                return tl.uint32
             elif -2**63 <= x < 2**63:
-                dtype = tl.int64
+                return tl.int64
             elif 2**63 <= x < 2**64:
-                dtype = tl.uint64
-            else:
-                raise ValueError(f'Nonrepresentable integer {x}.')
-            return self.scalar_constant(x, dtype=dtype)
+                return tl.uint64
+            raise ValueError(f'Nonrepresentable integer {x}.')
         elif isinstance(x, float):
             min_float32 = 2**-126
             max_float32 = (2 - 2**-23) * 2**127
-            abs_x = __builtins__['abs'](x)
+            abs_x = builtins.abs(x)
             if abs_x == float("inf") or\
                abs_x == 0.0 or \
                x != x or \
                min_float32 <= abs_x <= max_float32:
-                dtype = tl.float32
+                return tl.float32
             else:
-                dtype = tl.float64
-            return self.scalar_constant(x, dtype=dtype)
-
-        elif isinstance(x, tl.constexpr):
-            return self.to_tensor(x.value)
-        elif isinstance(x, self.tensor):
-            return x
-        if check_type:
-            raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
-        return x
+                return tl.float64
+        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
 
 # ===----------------------------------------------------------------------===//
 #                               Binary Operators
@@ -640,12 +646,6 @@ class TritonSemantic(Generic[TensorTy]):
 
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
         return self.tensor(self.builder.create_expand_dims(input.handle, axis), ret_ty)
-
-    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool) -> TensorTy:
-        assert can_reorder, "current implementation of `cat` always may reorder elements"
-        assert len(lhs.shape) == 1
-        ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
-        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
@@ -1256,9 +1256,13 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
-            val = self.broadcast_impl_shape(val, ptr.type.get_block_shapes())
-            if mask is not None:
-                mask = self.broadcast_impl_shape(mask, ptr.type.get_block_shapes())
+            ptr_shape = ptr.shape
+            if mask is None:
+                ptr, val = self.broadcast_tensors(ptr, val)
+            else:
+                ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
+            if ptr_shape != ptr.shape:
+                raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
 
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
@@ -1762,7 +1766,7 @@ class TritonSemantic(Generic[TensorTy]):
         head, *tail = inputs
         for i in range(len(tail)):
             head, tail[i] = self.broadcast_impl_value(head, tail[i])
-        for i in range(len(tail)):
+        for i in range(len(tail) - 1):
             head, tail[i] = self.broadcast_impl_value(head, tail[i])
         return (head, *tail)
 

@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout
+from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -18,8 +18,7 @@ def _is_int_list(value):
     return isinstance(value, Sequence) and all(isinstance(i, int) for i in value)
 
 
-def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant, ctas_per_cga, cta_split_num,
-                             cta_order):
+def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant, cga_layout=None):
     _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
     _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
            lambda: f"unknown instr_variant: {instr_variant}")
@@ -31,15 +30,14 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
     rank = len(shape)
     _check(rank == 2, lambda: "expected a 2D tensor")
 
-    ctas_per_cga = list(ctas_per_cga)
-    cta_split_num = list(cta_split_num)
-    cta_order = list(cta_order)
+    if cga_layout is None:
+        cga_layout = []
     splitn = instr_variant == "32x32b_splitn"
     atom_variant = "32x32b" if splitn else instr_variant
 
-    _check(len(ctas_per_cga) == rank, lambda: "ctas_per_cga rank mismatch")
-    _check(len(cta_split_num) == rank, lambda: "cta_split_num rank mismatch")
-    _check(len(cta_order) == rank, lambda: "cta_order rank mismatch")
+    if cga_layout:
+        for basis in cga_layout:
+            _check(len(basis) == rank, lambda: "cga_layout basis rank mismatch")
 
     layout_obj = compute_tmem_reg_layout(
         element_ty,
@@ -47,9 +45,7 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
         layout,
         num_warps,
         atom_variant,
-        ctas_per_cga,
-        cta_split_num,
-        cta_order,
+        cga_layout,
     )
     _check(layout_obj is not None,
            lambda: f"TMEM layout '{atom_variant}' unsupported for shape {shape} and num_warps {num_warps}")
@@ -65,9 +61,12 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
             layout_obj.lane_bases[-1] = [0, 0]
         elif layout_obj.reg_bases[-1] != [0, N // 2]:
             bitwidth = element_ty.primitive_bitwidth
+            num_reg = 2**len(layout_obj.reg_bases)
             _check(
-                len(layout_obj.reg_bases) * bitwidth > 32,
-                lambda: "splitn requires register bases of more than 2 32 bit registers")
+                num_reg > 32 // bitwidth, lambda: "To be able to `tmem.load` into `tl.split` you need to have more "
+                f"than {32 // bitwidth} {bitwidth}-bit registers, as you need to use "
+                "the instruction 32x32b.x1 twice. You can always load into "
+                "instr_variant=\"32x32b\" and then convert_layout to this layout otherwise.")
 
             reg_bases = layout_obj.reg_bases
             for bases_str in ("lane_bases", "warp_bases"):
@@ -140,10 +139,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(input.type, ttgl.distributed_type),
                lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         layout = input.type.layout
-        _check(isinstance(layout, (SliceLayout, AutoLayout)),
+        _check(isinstance(layout, (SliceLayout, AutoLayout, CoalescedLayout)),
                lambda: f"expected expand_dims input to have a SliceLayout, but got: {layout}")
         _check(
-            isinstance(layout, AutoLayout) or layout.dim == axis,
+            isinstance(layout, (AutoLayout, CoalescedLayout)) or layout.dim == axis,
             lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
         handle = self.builder.create_expand_dims(input.handle, axis)
@@ -302,15 +301,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                                                       distr_ty.element_ty.primitive_bitwidth)
 
     def to_linear_layout(self, layout, shape):
-        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
-               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
+        from triton.experimental.gluon.language.nvidia.blackwell import (
+            TensorMemoryLayout,
+            TensorMemoryScalesLayout,
+        )
+        _check(
+            isinstance(layout, (DistributedLayout, SharedLayout, TensorMemoryLayout, TensorMemoryScalesLayout)), lambda:
+            f"Expected a DistributedLayout, SharedLayout, or TensorMemoryLayout or TensorMemoryScalesLayout, got {type(layout)}"
+        )
 
-        if not isinstance(shape, list):
-            shape = list(shape)
-
-        layout = ttgl._unwrap_if_constexpr(layout)
-
-        if isinstance(layout, (AutoLayout, DistributedLinearLayout)):
+        if isinstance(layout, (AutoLayout, DistributedLinearLayout, SharedLinearLayout)):
             return ttgl.constexpr(layout)
 
         return ttgl.constexpr(self.builder.to_linear_layout(layout._to_ir(self.builder), shape))
@@ -491,6 +491,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
+    def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
+        result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
+        shape = list(src.type.shape)
+        shape[axis] *= 2
+        return self._wrap_handle_infer_layout(result, elem_type, shape)
+
     def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
                         generator):
         for _, args in functions_and_args:
@@ -515,10 +521,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_results = generator.call_JitFunction(default_partition, default_args, kwargs={})
-        mlir_results = []
-        if default_results is not None:
-            mlir_results = flatten_values_to_ir(default_results)
+        default_result = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        mlir_results = flatten_values_to_ir([default_result])
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
 
@@ -547,9 +551,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
-        if default_results is None:
-            return
-        return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+        return next(unflatten_ir_values(mlir_results, [default_result.type]))
+
+    def num_ctas(self):
+        return ttgl.constexpr(self.builder.options.num_ctas)
 
     def num_warps(self, generator):
         if generator.caller_context is not None:

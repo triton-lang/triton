@@ -158,11 +158,11 @@ static bool isCoalesced(RankedTensorType loadType,
   // [0, 1]], ...}>, so we don't use largest vectorization here as well. This
   // should be updated once vectorization in load op lowering is fixed..
   //
-  // auto ctaLayout = ttg::getCTALayout(loadType.getEncoding());
+  // auto cgaLayout = ttg::getCGALayout(loadType.getEncoding());
   // // Dummy shared layout that emulates global memory so we can use
   // // largestVectorisation utility.
   // auto sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
-  //     ctx, 1, 1, 1, blockedEnc.getOrder(), ctaLayout);
+  //     ctx, 1, 1, 1, blockedEnc.getOrder(), cgaLayout);
   // auto sharedLL = triton::gpu::toLinearLayout(shape, sharedEncoding);
   // auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
 
@@ -390,7 +390,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 } // namespace SingleDotSchedule
 
 // Builds a schedule for loops containing chained dots. This schedule aims to
-// better interleave mfams with alu ops which can be co-executed on GFX9. It
+// better interleave mma with alu ops which can be co-executed on GFX9. It
 // works for loops which have 2 dots where the result of the first is
 // transformed and used by the second dot. The dot ops will be scheduled with a
 // distance of one and the ops in between will be spit into 2 parts. The first

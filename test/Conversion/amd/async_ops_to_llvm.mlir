@@ -104,26 +104,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // The waitcnt stores all counters in one i32 bits 15:14 and 3:0 store the vmcnt we have to wait on
     // CHECK: rocdl.s.waitcnt -49168
-    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.waitcnt 49279
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 0 : i32}
+    amdg.async_wait {num_inst = 0 : i32}
     // CHECK: rocdl.s.waitcnt -49167
-    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.waitcnt 49279
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 1 : i32}
+    amdg.async_wait {num_inst = 1 : i32}
     // CHECK: rocdl.s.waitcnt -2
-    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.waitcnt 49279
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 62 : i32}
+    amdg.async_wait {num_inst = 62 : i32}
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.waitcnt 49279
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 63 : i32}
+    amdg.async_wait {num_inst = 63 : i32}
     // Check that we clamp values > 63
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.waitcnt 49279
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 64 : i32}
+    amdg.async_wait {num_inst = 64 : i32}
     tt.return
   }
 }
@@ -300,6 +300,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, 4, 0, 17
     %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared1D = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_copy_contiguity_hint
+  tt.func @async_copy_contiguity_hint(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
+    // Check we load 4 bytes at a time
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, 4
+    %0 = ttg.async_copy_global_to_local %v, %smem {contiguity = 2 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
     tt.return
   }
 }

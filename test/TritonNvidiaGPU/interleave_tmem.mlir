@@ -5,6 +5,7 @@
 #linear128 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [0, 64]], block = []}>
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
@@ -98,7 +99,7 @@ tt.func @interleave_load_store_ws() {
 }
 
 // CHECK-LABEL: @arrive_barrier
-tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>) {
   %true = arith.constant true
   %cst = arith.constant dense<0.0> : tensor<128x128xf32, #linear128>
 
@@ -110,7 +111,7 @@ tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
   %0 = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #linear128>
   ttng.tmem_store %cst, %noalias_alloc, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: arrive_barrier
-  ttng.arrive_barrier %arg0, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  ttng.arrive_barrier %arg0, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   "user"(%0) : (tensor<128x128xf32, #linear128>) -> ()
   tt.return
 }

@@ -2,7 +2,6 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -16,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <queue>
@@ -308,8 +308,7 @@ Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   return mask;
 }
 
-void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
-                                 DenseSet<ttg::MaskOp> &peeledMaskOps) {
+void mlir::triton::resolveMaskOp(ModuleOp moduleOp) {
   IRRewriter rewriter(moduleOp);
 
   // Canonicalize the IR to simplify the arithmetic ops defining the mask
@@ -319,29 +318,6 @@ void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
   arithDialect->getCanonicalizationPatterns(patterns);
   if (mlir::applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
     return llvm::report_fatal_error("Failed to canonicalize the IR");
-
-  // Prune all the statically dead mask ops in the epilogue. This is a
-  // hack, ideally we should do it for all the mask ops, but it is incorrect if
-  // we have speculatively executed async cp operations that will store to shmem
-  // even if the mask is false.
-  for (auto maskOp : peeledMaskOps) {
-    rewriter.setInsertionPoint(maskOp);
-    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-      Operation *op = &maskOp.getBody()->front();
-      if (isConstantIntValue(maskOp.getPred(), 0)) {
-        if (op->getNumResults() > 0) {
-          SmallVector<Value> results;
-          for (auto result : op->getResults()) {
-            auto poisonOp = mlir::ub::PoisonOp::create(rewriter, op->getLoc(),
-                                                       result.getType());
-            results.push_back(poisonOp);
-          }
-          op->replaceAllUsesWith(results);
-        }
-        op->erase();
-      }
-    }
-  }
 
   SmallVector<ttg::MaskOp> maskOps;
   moduleOp->walk([&](ttg::MaskOp maskOp) { maskOps.push_back(maskOp); });
@@ -467,11 +443,15 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
       rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
-  auto barrierCTALayout =
-      ttg::CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
-                              /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+  auto kBlock = StringAttr::get(ctx, "block");
+  LinearLayout::BasesT bases;
+  bases[kBlock] =
+      std::vector<std::vector<int32_t>>(llvm::Log2_32(numCTAs), {0});
+  auto dims = standardOutDimNames(ctx, 1);
+  auto barrierCGALayout =
+      ttg::CGAEncodingAttr::get(ctx, LinearLayout(bases, dims));
   auto barrierEncoding =
-      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
+      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(
       {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
@@ -595,11 +575,11 @@ mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
-  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto cgaLayout = ttg::getCGALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                              ctaLayout);
+                                              cgaLayout);
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
@@ -629,7 +609,7 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   }
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto cgaLayout = ttg::getCGALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
     // TMA encoding is set on the descriptor type
@@ -659,7 +639,7 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
 
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                              ctaLayout);
+                                              cgaLayout);
 }
 
 int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,

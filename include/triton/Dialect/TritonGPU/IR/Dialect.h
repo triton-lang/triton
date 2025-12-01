@@ -63,6 +63,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
@@ -209,7 +210,7 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
-CTALayoutAttr getCTALayout(Attribute layout);
+CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -248,8 +249,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 // dimension.
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
-
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
@@ -299,9 +298,13 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op);
-std::optional<int> getNumOutputPartitionIds(Operation *op);
-std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx);
+SetVector<int> getPartitionIds(Operation *op);
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
+SetVector<int> getPartitionIds(OpOperand *use);
+bool hasPartition(Operation *op);
+bool hasWarpSpecializeTag(Operation *op);
+std::optional<int> getWarpSpecializeTag(Operation *op);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

@@ -115,6 +115,7 @@ class CUDAOptions:
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
+    enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
@@ -204,9 +205,6 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -316,8 +314,6 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
 
         pm.run(mod, 'make_ttgir')
-        # num_ctas == 16 is non-portable. Does work for H100 and B200 tho
-        metadata["cluster_dims"] = (opt.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -327,6 +323,7 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         passes.gluon.add_inliner(pm)
+        passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.gluon.add_canonicalizer(pm)
@@ -336,8 +333,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
-        # num_ctas == 16 is non-portable. Does work for H100 and B200 tho
-        metadata["cluster_dims"] = (options.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -355,6 +350,7 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
+        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
         if knobs.compilation.instrumentation_mode == "consan":
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
@@ -411,7 +407,8 @@ class CUDABackend(BaseBackend):
         triple = 'nvptx64-nvidia-cuda'
         nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
-        nvidia.set_nvvm_reflect_ftz(llvm_mod)
+        if options.enable_reflect_ftz:
+            nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
         if options.extern_libs and nvidia.has_extern_deps(llvm_mod):
             paths = [path for (name, path) in options.extern_libs]

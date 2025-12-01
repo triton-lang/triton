@@ -209,16 +209,14 @@ public:
                                   axisinfo::CallbackType callback = nullptr)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
-    for (auto root : getRoots()) {
-      walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-          // Pre-order edge walk callback
-          [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-          // Post-order node walk callback
-          [&](FunctionOpInterface funcOp) {
-            funcs.push_back(funcOp);
-            funcMap.try_emplace(funcOp, AxisInfoMapT{});
-          });
-    }
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        // Pre-order edge walk callback
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+        // Post-order node walk callback
+        [&](FunctionOpInterface funcOp) {
+          funcs.push_back(funcOp);
+          funcMap.try_emplace(funcOp, AxisInfoMapT{});
+        });
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {

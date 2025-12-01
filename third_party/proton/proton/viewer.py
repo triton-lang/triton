@@ -9,7 +9,8 @@ try:
 except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME, LaunchHook
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler import specs
 
 
@@ -272,6 +273,20 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None):
     return gf, metrics
 
 
+def apply_diff_profile(gf, derived_metrics, diff_file, metrics, include, exclude, threshold):
+    # Compute the diff against a secondary profile while keeping derived metrics consistent.
+    gf2, _ = parse(metrics, diff_file, include, exclude, threshold)
+
+    derived_inc_metrics = [metric for metric in derived_metrics if metric.endswith("(inc)")]
+    derived_exc_metrics = [metric for metric in derived_metrics if not metric.endswith("(inc)")]
+
+    gf.inc_metrics = derived_inc_metrics
+    gf.exc_metrics = derived_exc_metrics
+    gf2.inc_metrics = derived_inc_metrics
+    gf2.exc_metrics = derived_exc_metrics
+    return gf.sub(gf2)
+
+
 def show_metrics(file_name):
     with open(file_name, "r") as f:
         _, inclusive_metrics, exclusive_metrics, _ = get_raw_metrics(f)
@@ -404,8 +419,7 @@ proton-viewer -e ".*test.*" path/to/file.json
     elif metrics:
         gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold)
         if diff:
-            gf2, _ = parse(metrics, diff, include, exclude, threshold)
-            gf = gf.sub(gf2)
+            gf = apply_diff_profile(gf, derived_metrics, diff, metrics, include, exclude, threshold)
         print_tree(gf, derived_metrics, depth, format, print_sorted)
 
 

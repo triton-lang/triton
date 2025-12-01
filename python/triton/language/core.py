@@ -1782,7 +1782,7 @@ def permute(input, *dims, _semantic=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, _semantic=None):
+def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     """
     Concatenate the given blocks
 
@@ -1790,12 +1790,30 @@ def cat(input, other, can_reorder=False, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param reorder: Compiler hint. If true, the compiler is
-        allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops).
-        Current implementation of `cat` supports only can_reorder=True.
+    :param can_reorder: Deprecated option. Elements are never reordered.
+    :type can_reorder: bool
+    :param dim: The dimension to concatenate along.
+    :type dim: int
     """
-    return _semantic.cat(input, other, can_reorder)
+    rank = len(input.shape)
+    assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
+               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+
+    order = list(builtins.range(rank))
+    order[dim], order[-1] = order[-1], order[dim]
+    inv_order = [order.index(i) for i in builtins.range(rank)]
+
+    a = permute(input, order, _semantic=_semantic)
+    b = permute(other, order, _semantic=_semantic)
+
+    leading = a.shape[:-1]
+    a = reshape(a, (math.prod(leading), a.shape[-1]), _semantic=_semantic)
+    b = reshape(b, (math.prod(leading), b.shape[-1]), _semantic=_semantic)
+
+    c = join(a, b, _semantic=_semantic)
+    c = reshape(c, leading + [a.shape[-1] + b.shape[-1]], _semantic=_semantic)
+    return permute(c, inv_order, _semantic=_semantic)
 
 
 @builtin
@@ -2096,6 +2114,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_k_pack: bool, optional
     """
     out_dtype = _unwrap_if_constexpr(out_dtype)
+    acc = _unwrap_if_constexpr(acc)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2799,6 +2818,8 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
 
@@ -3430,3 +3451,58 @@ def binary_op_type_legalization(lhs, rhs, semantic):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+_NOTHING = object()
+
+
+def is_negative_zero(x):
+    return x == 0.0 and math.copysign(1.0, x) < 0
+
+
+@builtin
+def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.max(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead")
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    max_val = args[0]
+    for arg in args[1:]:
+        max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if max_val.type.is_block():
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead")
+    return max_val
+
+
+@builtin
+def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
+    args = _unwrap_if_constexpr(args)
+    is_constexpr = all(not isinstance(x, base_value) for x in args)
+    if is_constexpr:
+        assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
+        assert not any(math.isnan(x) for x in args)
+        assert not any(is_negative_zero(x) for x in args)
+        return constexpr(builtins.min(_unwrap_if_constexpr(args)))
+
+    if propagate_nan is _NOTHING:
+        propagate_nan = PropagateNan.NONE
+    else:
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead")
+
+    assert len(args) >= 2, "min requires at least 2 values"
+    min_val = args[0]
+    for arg in args[1:]:
+        min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
+    if min_val.type.is_block():
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead")
+    return min_val

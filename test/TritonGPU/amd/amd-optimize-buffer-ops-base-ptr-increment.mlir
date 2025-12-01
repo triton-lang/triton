@@ -4,8 +4,8 @@
 // COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON-DAG: [[Y_OFFSET_CST:%.*]] = arith.constant dense<321>
 // COMMON: scf.for {{.*}} iter_args({{.*}}, {{.*}}, [[X_BASE:%.*]] = {{.*}}, [[Y_BASE:%.*]] = {{.*}})
-// COMMON:   amdgpu.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}} :
-// COMMON:   amdgpu.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} cacheModifier = cg :
+// COMMON:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}} :
+// COMMON:   amdg.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} cacheModifier = cg :
 // COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
 // COMMON:   [[NEXT_Y_BASE:%.*]] = tt.addptr [[Y_BASE]]
 // COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]], [[NEXT_Y_BASE]]
@@ -37,8 +37,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %tmp = arith.muli %stride, %c64_i32 : i32
     %step = tt.splat %tmp : i32 -> tensor<64x32xi32, #blocked>
     %for:2 = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>) {
-      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
-      %y = amdgpu.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>
@@ -56,7 +56,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON-LABEL: buffer_load_to_local
 // COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}}
-// COMMON:   amdgpu.buffer_load_to_local [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// COMMON:   amdg.buffer_load_to_local [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
 // COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
 // COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
@@ -75,7 +75,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
 
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
-      %x = amdgpu.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %x = amdg.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
 
       %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -90,7 +90,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
 // COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
-// COMMON:   amdgpu.buffer_load [[NEXT_X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// COMMON:   amdg.buffer_load [[NEXT_X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
 // COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -106,7 +106,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
       %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
-      %x = amdgpu.buffer_load %X[%Xoffset_next] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset_next] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
     }
@@ -120,7 +120,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON: scf.for
 // COMMON:   scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:     amdgpu.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// COMMON:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
 // COMMON:     [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
 // COMMON:     scf.yield {{.*}}, [[NEXT_X_BASE]]
 
@@ -138,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     scf.for %idx_outer = %c0 to %c32 step %c1 iter_args() -> () {
       %for_inner = scf.for %idx_innter = %c0 to %c32 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
-        %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+        %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
         ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
         %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
         scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -155,7 +155,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
 // COMMON:   scf.for
-// COMMON:     amdgpu.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// COMMON:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
 // COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
 // COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
@@ -173,7 +173,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %for_outer = scf.for %idx_outer = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
       scf.for %idx_inner = %c0 to %c128 step %c1 iter_args() -> () {
-        %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+        %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
         ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
         scf.yield
       }
@@ -189,7 +189,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON-LABEL: convert_with_base_ptr_optimization
 // COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
 // COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:   amdgpu.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// COMMON:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
 // COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
 // COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
@@ -220,7 +220,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // COMMON-LABEL: dynamic_base_negative
 // COMMON:   [[X_BASE:%.*]] = tt.addptr
-// COMMON:   amdgpu.buffer_load [[X_BASE]]
+// COMMON:   amdg.buffer_load [[X_BASE]]
 // COMMON-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -237,7 +237,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
       %x_base = tt.addptr %X, %idx : !tt.ptr<f16>, i32
-      %x = amdgpu.buffer_load %x_base[%Xoffset] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %x_base[%Xoffset] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -263,7 +263,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %Xoffset_init = arith.constant dense<123> : tensor<16x64xi32, #blocked>
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
-      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -290,7 +290,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
     %step = tt.splat %step_scalar: i32 -> tensor<16x64xi32, #blocked>
     %for = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) : i32 {
-      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -318,7 +318,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %step = arith.constant dense<64> : tensor<16x64xi32, #blocked>
     %for:2 = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init, %Xoffset_dummy = %Xoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<16x64xi32, #blocked>) : i32 {
       %Xoffset_decoy = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
-      %x = amdgpu.buffer_load %X[%Xoffset_decoy] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset_decoy] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %step : tensor<16x64xi32, #blocked>
       scf.yield %Xoffset_next, %Xoffset_decoy : tensor<16x64xi32, #blocked>, tensor<16x64xi32, #blocked>
@@ -334,9 +334,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK-DAG: [[X_OFFSET:%.*]] = arith.constant dense<123> : tensor<16x64xi32, #blocked>
 // CHECK-DAG: [[Z_OFFSET:%.*]] = arith.constant dense<789> : tensor<32x32xi32, #blocked>
 // CHECK: scf.for {{.*}} iter_args{{.*}}[[Y_OFFSET:%.*]]{{.*}}
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -365,9 +365,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %z_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable, 32x32>
 
     %for:3 = scf.for %iter = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init, %Zoffset = %Zoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>, tensor<32x32xi32, #blocked>) {
-      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
-      %y = amdgpu.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
-      %z = amdgpu.buffer_load %Z[%Zoffset] cacheModifier = cg : tensor<32x32xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
+      %z = amdg.buffer_load %Z[%Zoffset] cacheModifier = cg : tensor<32x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>
@@ -388,9 +388,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // COMMON-LABEL: mixed_rejected_optimized_rejected
 // CHECK-DAG: [[Y_OFFSET:%.*]] = arith.constant dense<123> : tensor<16x64xi32, #blocked>
 // CHECK: scf.for {{.*}} iter_args{{.*}}[[X_OFFSET:%.*]]{{.*}}[[Z_OFFSET:%.*]]{{.*}}
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdgpu.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -419,9 +419,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %z_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable, 32x32>
 
     %for:3 = scf.for %iter = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init, %Zoffset = %Zoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>, tensor<32x32xi32, #blocked>) {
-      %x = amdgpu.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
-      %y = amdgpu.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
-      %z = amdgpu.buffer_load %Z[%Zoffset] cacheModifier = cg : tensor<32x32xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset] : tensor<16x64xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : tensor<64x32xf16, #blocked>
+      %z = amdg.buffer_load %Z[%Zoffset] cacheModifier = cg : tensor<32x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>
@@ -456,7 +456,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %for = scf.for %idx = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
       ttg.local_store %Xoffset, %offset_buffer : tensor<16x64xi32, #blocked> -> !ttg.memdesc<16x64xi32, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %offset_step : tensor<16x64xi32, #blocked>
-      %x = amdgpu.buffer_load %X[%Xoffset_next] : tensor<16x64xf16, #blocked>
+      %x = amdg.buffer_load %X[%Xoffset_next] : tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %Xoffset_next, %offset_buffer : tensor<16x64xi32, #blocked> -> !ttg.memdesc<16x64xi32, #shared, #smem, mutable, 16x64>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
@@ -491,12 +491,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
       %for2 = scf.for %idx2 = %iter_first to %iter_last step %iter_step iter_args(%Xoffset2 = %Xoffset_next1) -> (tensor<16x64xi32, #blocked>) {
         %Xoffset_next2 = arith.addi %Xoffset2, %offset_step : tensor<16x64xi32, #blocked>
-        %x2 = amdgpu.buffer_load %X[%Xoffset_next2] : tensor<16x64xf16, #blocked>
+        %x2 = amdg.buffer_load %X[%Xoffset_next2] : tensor<16x64xf16, #blocked>
         ttg.local_store %x2, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
         scf.yield %Xoffset_next2 : tensor<16x64xi32, #blocked>
       }
 
-      %x1 = amdgpu.buffer_load %X[%Xoffset_next1] : tensor<16x64xf16, #blocked>
+      %x1 = amdg.buffer_load %X[%Xoffset_next1] : tensor<16x64xf16, #blocked>
       ttg.local_store %x1, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       scf.yield %Xoffset_next1 : tensor<16x64xi32, #blocked>
     }
@@ -525,7 +525,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
 
     %for = scf.for %idx = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
-      %x = amdgpu.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %x = amdg.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
 
       %Xoffset_tmp = arith.addi %Xoffset, %cst1 : tensor<16x64xi32, #blocked>
       %Xoffset_next = arith.addi %Xoffset_tmp, %cst2 : tensor<16x64xi32, #blocked>
@@ -555,9 +555,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
 
     %for = scf.for %idx = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
-      %x1 = amdgpu.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %x1 = amdg.buffer_load_to_local %X[%Xoffset] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
-      %x2 = amdgpu.buffer_load_to_local %X[%Xoffset_next] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %x2 = amdg.buffer_load_to_local %X[%Xoffset_next] into %x_dummy_buffer : <f16>[tensor<16x64xi32, #blocked>] -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
     }
     tt.return

@@ -650,7 +650,7 @@ struct ExpOpConversionApprox
     Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
     Type resultTy = operands[0][0].getType();
-    StringRef name = "llvm.nvvm.ex2.approx.f";
+    StringRef name = "llvm.nvvm.ex2.approx.f32";
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
     return {callOp.getResult(0)};
@@ -671,7 +671,11 @@ struct ClampFOpConversion
         computeCapability(computeCapability) {}
 
   bool isClipPattern(ClampFOp op) const {
-    bool xorsignAbsAvailable = (computeCapability >= 90);
+    // min.xorsign.abs requires hopper or newer
+    if (computeCapability < 90) {
+      return false;
+    }
+
     // Pattern matching the sequence of clamp(x, -limit, limit) to generate
     // more efficient PTX code. NOTE: This pattern matching is not general
     // enough, but it is sufficient. We detect only two cases here:
@@ -684,38 +688,40 @@ struct ClampFOpConversion
     //   %cst_6 = arith.constant dense<-6.0000e+00>
     //   %cst_7 = arith.constant dense<6.0000e+00>
     //   %160 = tt.clamp %158, %cst_6, %cst_7
-    bool patternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
-        if (auto attr = mlir::dyn_cast<DenseIntOrFPElementsAttr>(
-                constOp.getValueAttr())) {
-          if (attr.isSplat()) {
-            return attr.getSplatValue<APFloat>().convertToDouble();
-          }
+      DenseIntOrFPElementsAttr denseAttr;
+      if (matchPattern(v, m_Constant(&denseAttr))) {
+        if (denseAttr.isSplat()) {
+          return denseAttr.getSplatValue<APFloat>().convertToDouble();
         }
+        return std::nullopt;
+      }
+      FloatAttr floatAttr;
+      if (matchPattern(v, m_Constant(&floatAttr))) {
+        return floatAttr.getValue().convertToDouble();
       }
       return std::nullopt;
     };
 
-    if (xorsignAbsAvailable) {
-      if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
-        if (subOp.getOperand(1) == op.getOperand(2)) {
-          auto initializer = getSplatInitializer(subOp.getOperand(0));
-          if (initializer.has_value() && initializer.value() == 0.0) {
-            patternFound = true;
-          }
-        }
-      } else {
-        auto initializer1 = getSplatInitializer(op.getOperand(1));
-        auto initializer2 = getSplatInitializer(op.getOperand(2));
-        if (initializer1.has_value() && initializer2.has_value() &&
-            initializer1.value() == -initializer2.value()) {
-          patternFound = true;
+    // clampf %x (sub 0.0 %max) %max
+    if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
+      if (subOp.getOperand(1) == op.getOperand(2)) {
+        auto initializer = getSplatInitializer(subOp.getOperand(0));
+        if (initializer.has_value() && initializer.value() == 0.0) {
+          return true;
         }
       }
     }
-    return patternFound;
+
+    // clampf %x, %min, %max (where min = -max = constant)
+    auto initializer1 = getSplatInitializer(op.getOperand(1));
+    auto initializer2 = getSplatInitializer(op.getOperand(2));
+    if (initializer1.has_value() && initializer2.has_value() &&
+        initializer1.value() == -initializer2.value()) {
+      return true;
+    }
+    return false;
   }
 
   SmallVector<Value> emitOptimization(ClampFOp op,

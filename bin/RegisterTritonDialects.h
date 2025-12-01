@@ -45,6 +45,9 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
+#include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+
 namespace mlir {
 namespace test {
 void registerTestAliasPass();
@@ -94,7 +97,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerAllocateAMDGPUSharedMemory();
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
-  mlir::triton::registerOptimizeAMDLDSUsage();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);
@@ -136,6 +138,21 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
+
+  // Plugin passes
+  if (std::string filename =
+          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      !filename.empty()) {
+
+    TritonPlugin TP(filename);
+    std::vector<const char *> passNames;
+    if (auto result = TP.getPassHandles(passNames); !result)
+      llvm::report_fatal_error(result.takeError());
+
+    for (const char *passName : passNames)
+      if (auto result = TP.registerPass(passName); !result)
+        llvm::report_fatal_error(result.takeError());
+  }
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

@@ -342,16 +342,6 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
-    // cvt(cat) -> cat
-    if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (isExpensiveCat(cat, op.getType().getEncoding()))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
-                                         cat.getOperands());
-      return success();
-    }
-
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
@@ -577,9 +567,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  auto *ctx = srcEnc.getContext();
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
-    auto *ctx = srcEnc.getContext();
     if (getNumCTAs(mmaEncoding) == 1) {
       int innerDimDst =
           mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
@@ -589,15 +579,11 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CTALayout = CTALayoutAttr::get(
-            ctx,
-            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+        auto CGALayout = CGAEncodingAttr::getDefault(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CTALayout);
+            mmaEncoding.getFp4Padded(), CGALayout);
         auto srcLL = toLinearLayout(srcShape, srcEnc);
         auto dstLL = toLinearLayout(dstShape, candidateEncoding);
         if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
@@ -606,11 +592,21 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         }
       }
     }
+  } else if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    LinearLayout ll = padded.getLinearComponent();
+    LinearLayout dst = reshapeLayout(ctx, ll, dstShape);
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+    auto intervals = padded.getIntervals();
+    auto paddings = padded.getPaddings();
+    for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
+      intervalPads.emplace_back(interval, padding);
+    }
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, dst);
+    return success();
   }
 
   // Generic LL case
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
-  auto *ctx = srcEnc.getContext();
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
   dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
@@ -923,8 +919,9 @@ void WarpSpecializeOp::getSuccessorRegions(
     return;
   }
   // And the default region branches transparently back to the parent.
-  assert(src.getRegionOrNull() == &getDefaultRegion());
-  successors.push_back(RegionSuccessor(getResults()));
+  assert(src.getTerminatorPredecessorOrNull()->getParentRegion() ==
+         &getDefaultRegion());
+  successors.push_back(RegionSuccessor(getOperation(), getResults()));
 }
 
 LogicalResult WarpSpecializeOp::verify() {

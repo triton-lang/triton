@@ -9,7 +9,7 @@
 namespace mlir::triton::AMD {
 namespace {
 constexpr const char *syncedViaAsyncWaitAttrName =
-    "ttg.amdgpu.syncedViaAsyncWait";
+    "ttg.amdg.syncedViaAsyncWait";
 // Traverses the def-chain including control flow of the token and returns true
 // if all defining operations are an AsyncWait
 bool comesFromAsyncWait(Value token) {
@@ -51,22 +51,6 @@ bool comesFromAsyncWait(Value token) {
 }
 } // namespace
 
-void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod) {
-  auto *ctx = mod->getContext();
-
-  SmallVector<amdgpu::AsyncWaitOp> waits;
-  mod->walk([&waits](amdgpu::AsyncWaitOp waitOp) { waits.push_back(waitOp); });
-
-  IRRewriter builder(mod.getContext());
-  for (auto waitOp : waits) {
-    if (isa<mlir::gpu::BarrierOp, gpu::LocalBarrierOp>(waitOp->getNextNode()))
-      continue;
-
-    builder.setInsertionPointAfter(waitOp);
-    builder.create<triton::gpu::LocalBarrierOp>(waitOp->getLoc());
-  }
-}
-
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   auto *ctx = mod->getContext();
 
@@ -101,7 +85,7 @@ namespace {
 LLVM::AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
   Builder b(ctx);
   return b.getAttr<LLVM::AliasScopeDomainAttr>(
-      b.getStringAttr("amdgpu.AsyncOps"),
+      b.getStringAttr("amdg.AsyncOps"),
       b.getStringAttr(
           "Domain to hold alias scopes to specify aliasing information between "
           "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
@@ -109,7 +93,7 @@ LLVM::AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
 
 LLVM::AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
   Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.AsyncCopies");
+  auto name = b.getStringAttr("amdg.AsyncCopies");
   auto desc = b.getStringAttr(
       "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
   return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
@@ -117,7 +101,7 @@ LLVM::AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
 
 LLVM::AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
   Builder b(ctx);
-  auto name = b.getStringAttr("amdgpu.LocalLoads");
+  auto name = b.getStringAttr("amdg.LocalLoads");
   auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
   return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
 }
