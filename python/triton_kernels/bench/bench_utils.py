@@ -12,7 +12,7 @@ from triton_kernels.tensor_details import layout
 import torch
 
 
-def quantize_weight(w, dtype, **opt):
+def _quantize_weight(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), None
@@ -67,9 +67,9 @@ def _make_mx4_quantization_opts(batch: int, w_dtype: str) -> dict:
 
 def prepare_mlp_numerics(batch: int, w_dtype: str, wg, w1, w2) -> MlpNumerics:
     quantization_opts = _make_mx4_quantization_opts(batch, w_dtype)
-    wg, wg_flex, wg_scale = quantize_weight(wg, "bf16")
-    w1, w1_flex, w1_scale = quantize_weight(w1, w_dtype, **deepcopy(quantization_opts))
-    w2, w2_flex, w2_scale = quantize_weight(w2, w_dtype, **deepcopy(quantization_opts))
+    wg, wg_flex, wg_scale = _quantize_weight(wg, "bf16")
+    w1, w1_flex, w1_scale = _quantize_weight(w1, w_dtype, **deepcopy(quantization_opts))
+    w2, w2_flex, w2_scale = _quantize_weight(w2, w_dtype, **deepcopy(quantization_opts))
     activation = _make_default_mlp_activation()
     return MlpNumerics(
         wg=wg,
