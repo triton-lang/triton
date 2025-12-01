@@ -11,11 +11,11 @@
 
 using namespace proton;
 
-// For simplicity, the Python interface restricts metrics to integers and 
-// floating-point values. Allowing types such as uint64_t vs. int64_t would force 
-// users to handle subtle type differences for the same metric name, which would 
-// be confusing and error-prone.
-using PythonMetricValueType = std::variant<int64_t, double>;
+// For simplicity, the Python interface restricts metrics to int64_t, double,
+// and std::string without uint64_t. Allowing types such as uint64_t vs. int64_t
+// would force users to handle subtle type differences for the same metric name,
+// which would be confusing and error-prone.
+using PythonMetricValueType = std::variant<int64_t, double, std::string>;
 
 namespace {
 
