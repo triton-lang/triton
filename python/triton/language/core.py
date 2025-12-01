@@ -1280,7 +1280,10 @@ class tuple(base_value):
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     def __getattr__(self, name):
-        return self.values[self.type.fields.index(name)]
+        fields = self.type.fields
+        if fields is None or name not in fields:
+            raise AttributeError(f"'tuple' object has no attribute {name}")
+        return self.values[fields.index(name)]
 
     # TODO: remove
     def _setitem(self, idx, value):
