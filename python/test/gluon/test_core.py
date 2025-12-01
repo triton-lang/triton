@@ -250,7 +250,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     if USE_TCGEN05:
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
-        mbarrier.init(mma_barrier, count=(2 if two_ctas else 1))
+        mbarrier.init(mma_barrier, count=1)
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
@@ -276,8 +276,6 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     out_offs_m = ttgl.arange(0, M)[:, None]
     out_offs_n = ttgl.arange(0, N)[None, :]
     out_ptrs = out + out_offs_m * N + out_offs_n
-    # We use tmem_reg_layout to avoid a convert_layout that would require a ton of smem
-    out_ptrs = ttgl.set_auto_layout(out_ptrs, tmem_reg_layout)
     ttgl.store(out_ptrs, acc)
 
 
