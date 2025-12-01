@@ -5,7 +5,7 @@ add_triton_library(TritonGPUIR
   Types.cpp
 
   DEPENDS
-  TritonGPUCTAAttrIncGen
+  TritonGPUCGAAttrIncGen
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
   TritonGPUTypeInterfacesIncGen
