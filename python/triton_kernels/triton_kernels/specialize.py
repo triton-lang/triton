@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import inspect
 import re
 import textwrap
@@ -62,13 +63,12 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     f._unsafe_update_src(src)
     return f
 
-
 @dataclass(frozen=True)
 class FnSpecs:
     name: str
-    fn: "triton.runtime.jit.JITFunction"
-    fn_arg_names: tuple[str]
-    fn_arg_do_not_specialize: tuple[str] = tuple()
+    fn: Optional["triton.runtime.jit.JITFunction"]
+    fn_arg_names: tuple[str, ...] = tuple()
+    fn_arg_do_not_specialize: tuple[str, ...] = tuple()
     reduction_n: int = 1
 
     @staticmethod

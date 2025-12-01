@@ -6,6 +6,7 @@ import torch
 import triton
 from enum import Enum, auto
 import math
+from typing import Callable
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -26,15 +27,15 @@ from .tensor_details.ragged_tensor import ragged_metadata_fields
 @dataclass(frozen=True)
 class FusedActivation:
     specs: FnSpecs = FnSpecs.default()
-    fn_args: tuple[object] = tuple()
+    fn_args: tuple[object, ...] = tuple()
 
 
 @dataclass(frozen=True)
 class Epilogue:
     specs: FnSpecs = FnSpecs.default()
-    fn_arg_values_matmul: tuple[object] = tuple()
-    fn_arg_values_finalize: tuple[object] = tuple()
-    effective_itemsize: float = None
+    fn_arg_values_matmul: tuple[object, ...] = tuple()
+    fn_arg_values_finalize: tuple[object, ...] = tuple()
+    effective_itemsize: float | None = None
 
 class FnName(Enum):
     QUANTIZE_MXFP8 = auto()
@@ -86,16 +87,16 @@ class FlexCtx:
 
 @dataclass
 class PrecisionConfig:
-    max_num_imprecise_acc: int = None
+    max_num_imprecise_acc: int | None = None
     allow_tf32: bool = True
     flex_ctx: FlexCtx = FlexCtx()
-    acc_scale: int = 1.0
+    acc_scale: float = 1.0
     flexpoint_saturate_inf: bool = False
-    report_quantization_err_fn: callable = None
-    a_mx_scale: Tensor | None = None
-    b_mx_scale: Tensor| None = None
-    c_mx_scale: Tensor | None = None
-    out_dtype: torch.dtype = None
+    report_quantization_err_fn: Callable | None = None
+    a_mx_scale: torch.Tensor | Tensor | None = None
+    b_mx_scale: torch.Tensor | Tensor | None = None
+    c_mx_scale: torch.Tensor | Tensor | None = None
+    out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
 
