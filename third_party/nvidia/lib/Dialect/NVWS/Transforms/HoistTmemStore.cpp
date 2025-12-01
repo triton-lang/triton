@@ -87,8 +87,8 @@ public:
         if (auto storeSrcDef = storeSrc.getDefiningOp()) {
           DominanceInfo dom(storeSrcDef);
           if (dom.dominates(storeSrcDef, alloc)) {
-            auto newAlloc = rewriter.create<ttng::TMEMAllocOp>(
-                alloc.getLoc(), alloc.getResultTypes()[0],
+            auto newAlloc = ttng::TMEMAllocOp::create(
+                rewriter, alloc.getLoc(), alloc.getResultTypes()[0],
                 rewriter.getType<AsyncTokenType>(), storeSrc);
 
             if (auto allocTok = alloc.getToken()) {
