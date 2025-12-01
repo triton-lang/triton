@@ -1732,26 +1732,31 @@ public:
   }
 };
 
-static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned kDim) {
+static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim,
+                                                        unsigned kDim) {
   std::optional<unsigned> kBase = std::nullopt;
   switch (mDim) {
-    case 32: kBase = kDim / 2; break;
-    case 16: kBase = kDim / 4; break;
-    case 4:  kBase = kDim / 16; break;
+  case 32:
+    kBase = kDim / 2;
+    break;
+  case 16:
+    kBase = kDim / 4;
+    break;
+  case 4:
+    kBase = kDim / 16;
+    break;
   }
   return kBase;
 }
 
-static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
+static FailureOr<unsigned>
+getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
   auto shape = dotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
   unsigned mDim = shape[0];
   unsigned nDim = shape[1];
   unsigned kDim = shape[2];
   std::optional<unsigned> kBase = deriveMfmaIntrinsicKBase(mDim, kDim);
   if (!kBase.has_value()) {
-    // mlir::emitWarning(operand.getLoc()) 
-    //   << "Unable to compute kBase due to invalid MFMA intrinsic: "
-    //   << "mDim: " << mDim << ", kDim: " << kDim;
     return failure();
   }
   return kBase.value();
@@ -1785,7 +1790,8 @@ static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEnco
 //    ds_read_b128, which is the largest vector size for shared memory load.
 // Helpers to extract MFMA dims and compute kBase for the encoding.
 // If your AMDMfmaEncodingAttr exposes a different accessor, adjust accordingly.
-static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, unsigned kPack) {
+static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase,
+                                    unsigned kPack) {
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
@@ -1793,7 +1799,8 @@ static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, u
     return 4;
   else if (!tail)
     return kBase * kPack;
-  return kBase;
+  else
+    return std::nullopt;
 }
 
 static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
@@ -1809,15 +1816,20 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
       return;
 
     unsigned kBase = *kBaseCandidate;
-    unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase, kPack);
+    std::optional<unsigned> candidateKWidth = chooseDesiredKWidth(dotOp, kBase, kPack);
+    if (!candidateKWidth.has_value())
+      return;
+    unsigned desiredKWidth = candidateKWidth.value();
 
     auto aVal = dotOp.getA();
     auto bVal = dotOp.getB();
     auto aRTy = cast<RankedTensorType>(aVal.getType());
     auto bRTy = cast<RankedTensorType>(bVal.getType());
 
-    auto aDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aRTy.getEncoding());
-    auto bDotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bRTy.getEncoding());
+    auto aDotEnc =
+        dyn_cast_or_null<ttg::DotOperandEncodingAttr>(aRTy.getEncoding());
+    auto bDotEnc =
+        dyn_cast_or_null<ttg::DotOperandEncodingAttr>(bRTy.getEncoding());
     if (!aDotEnc || !bDotEnc)
       return;
 
@@ -1849,7 +1861,8 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
       auto newAEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mfmaEnc,
                                                       desiredKWidth);
       auto aSrc = aCvt.getSrc();
-      auto newATy = RankedTensorType::get(aRTy.getShape(), aRTy.getElementType(), newAEnc);
+      auto newATy = RankedTensorType::get(aRTy.getShape(),
+                                          aRTy.getElementType(), newAEnc);
       auto newCvtA = ttg::ConvertLayoutOp::create(builder, loc, newATy, aSrc);
       aCvt.getResult().replaceAllUsesWith(newCvtA);
       aCvt->erase();
@@ -1860,7 +1873,8 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack) {
       auto newBEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mfmaEnc,
                                                       desiredKWidth);
       auto bSrc = bCvt.getSrc();
-      auto newBTy = RankedTensorType::get(bRTy.getShape(), bRTy.getElementType(), newBEnc);
+      auto newBTy = RankedTensorType::get(bRTy.getShape(),
+                                          bRTy.getElementType(), newBEnc);
       auto newCvtB = ttg::ConvertLayoutOp::create(builder, loc, newBTy, bSrc);
       bCvt.getResult().replaceAllUsesWith(newCvtB);
       bCvt->erase();
