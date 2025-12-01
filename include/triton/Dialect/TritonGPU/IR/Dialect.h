@@ -210,7 +210,7 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
-CTAEncodingAttr getCTALayout(Attribute layout);
+CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 

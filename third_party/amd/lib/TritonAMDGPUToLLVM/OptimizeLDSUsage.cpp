@@ -127,7 +127,7 @@ class OptimizeAMDLDSUsage
       threadsPerWarp[rank - 2] = warpSize / threadsPerWarp[rank - 1];
     }
 
-    auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
+    auto layoutCTA = triton::gpu::getCGALayout(srcEnc);
     auto order = triton::gpu::getOrder(srcType);
     SmallVector<unsigned> dummyWarpsPerCTA(rank, 1);
 
