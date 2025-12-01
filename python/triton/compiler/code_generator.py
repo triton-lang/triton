@@ -1556,37 +1556,32 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is None:
             return
-        with warnings.catch_warnings():
-            # The ast library added visit_Constant and deprecated some other
-            # methods but we can't move to that without breaking Python 3.6 and 3.7.
-            warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
-            warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            last_node = self.cur_node
+        last_node = self.cur_node
+        last_loc = self.builder.get_loc()
+        self.cur_node = node
+        if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+            if self.name_loc_as_prefix is not None:
+                self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
+            else:
+                self.builder.set_loc(here_loc)
             last_loc = self.builder.get_loc()
-            self.cur_node = node
-            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
-                if self.name_loc_as_prefix is not None:
-                    self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
-                else:
-                    self.builder.set_loc(here_loc)
-                last_loc = self.builder.get_loc()
-            try:
-                ret = super().visit(node)
-            except CompilationError:
+        try:
+            ret = super().visit(node)
+        except CompilationError:
+            raise
+        except Exception as e:
+            if knobs.compilation.front_end_debugging:
                 raise
-            except Exception as e:
-                if knobs.compilation.front_end_debugging:
-                    raise
-                # Wrap the error in a CompilationError which contains the source
-                # of the @jit function.
-                raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
+            # Wrap the error in a CompilationError which contains the source
+            # of the @jit function.
+            raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
 
-            # Reset the location to the last one before the visit
-            if last_loc:
-                self.cur_node = last_node
-                self.builder.set_loc(last_loc)
-            return ret
+        # Reset the location to the last one before the visit
+        if last_loc:
+            self.cur_node = last_node
+            self.builder.set_loc(last_loc)
+        return ret
 
     def generic_visit(self, node):
         raise self._unsupported(node, "unsupported AST node type: {}".format(type(node).__name__))
