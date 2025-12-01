@@ -2505,3 +2505,567 @@ def test_scatter_3d_native(N, M, P, axis):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+# =============================================================================
+# Subslice Tests (2D slicing along individual dimensions)
+# =============================================================================
+
+
+@gluon.jit
+def gather_subslice_2d_kernel(
+    matrix_ptr,
+    indices_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    SLICE_M_OFFSET: ttgl.constexpr,
+    SLICE_N_OFFSET: ttgl.constexpr,
+    SLICE_M: ttgl.constexpr,
+    SLICE_N: ttgl.constexpr,
+    layout_full: ttgl.constexpr,
+    layout_slice: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Gather from a 2D subsliced shared memory descriptor."""
+    # Load full matrix into shared memory
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_full))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_full))[None, :]
+    in_offs = offs_m * N + offs_n
+    in_data = ttgl.load(matrix_ptr + in_offs)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=shared_layout)
+    smem.store(in_data)
+
+    # Create 2D subslice
+    smem_slice = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0).slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+    # Load indices for gathering within the slice
+    slice_offs_m = ttgl.arange(0, SLICE_M, layout=ttgl.SliceLayout(1, layout_slice))[:, None]
+    slice_offs_n = ttgl.arange(0, SLICE_N, layout=ttgl.SliceLayout(0, layout_slice))[None, :]
+    idx_offs = slice_offs_m * SLICE_N + slice_offs_n
+    indices = ttgl.load(indices_ptr + idx_offs)
+
+    # Gather along axis 0: result[i, j] = smem_slice[indices[i, j], j]
+    gathered = smem_slice.gather(indices, axis=0)
+
+    # Store result
+    ttgl.store(output_ptr + idx_offs, gathered)
+
+
+@pytest.mark.parametrize("M,N,slice_m_offset,slice_n_offset,slice_m,slice_n", [
+    # Offset must be a multiple of tile (slice) size for each dimension
+    (64, 64, 48, 16, 16, 16),  # offset 48 % 16 == 0, offset 16 % 16 == 0
+    (64, 64, 32, 48, 32, 16),  # offset 32 % 32 == 0, offset 48 % 16 == 0
+    (64, 64, 48, 32, 16, 32),  # offset 48 % 16 == 0, offset 32 % 32 == 0
+])
+def test_gather_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    """Test gathering from a 2D subsliced shared memory descriptor."""
+    device = torch.device("cuda")
+
+    # Create input matrix
+    matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
+
+    # Create indices for gather (within the slice dimensions)
+    # Each position gathers from a shifted row
+    indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
+    indices = (indices + torch.arange(slice_m, dtype=torch.int32, device=device)[:, None]) % slice_m
+
+    output = torch.zeros((slice_m, slice_n), dtype=torch.float32, device=device)
+
+    # Expected: gather from the subslice
+    subslice = matrix[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n]
+    expected = torch.gather(subslice, 0, indices.long())
+
+    # Layouts
+    layout_full = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    layout_slice = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    # Use non-swizzled layout for subslicing
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    gather_subslice_2d_kernel[(1, )](
+        matrix,
+        indices,
+        output,
+        M=M,
+        N=N,
+        SLICE_M_OFFSET=slice_m_offset,
+        SLICE_N_OFFSET=slice_n_offset,
+        SLICE_M=slice_m,
+        SLICE_N=slice_n,
+        layout_full=layout_full,
+        layout_slice=layout_slice,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def scatter_subslice_2d_kernel(
+    indices_ptr,
+    values_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    SLICE_M_OFFSET: ttgl.constexpr,
+    SLICE_N_OFFSET: ttgl.constexpr,
+    SLICE_M: ttgl.constexpr,
+    SLICE_N: ttgl.constexpr,
+    layout_full: ttgl.constexpr,
+    layout_slice: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Scatter to a 2D subsliced shared memory descriptor."""
+    # Initialize shared memory with -1
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_full))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_full))[None, :]
+    full_offs = offs_m * N + offs_n
+    init_data = ttgl.full([M, N], -1.0, dtype=ttgl.float32, layout=layout_full)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=shared_layout)
+    smem.store(init_data)
+
+    # Create 2D subslice
+    smem_slice = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0).slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+    # Load indices and values for scattering within the slice
+    slice_offs_m = ttgl.arange(0, SLICE_M, layout=ttgl.SliceLayout(1, layout_slice))[:, None]
+    slice_offs_n = ttgl.arange(0, SLICE_N, layout=ttgl.SliceLayout(0, layout_slice))[None, :]
+    idx_offs = slice_offs_m * SLICE_N + slice_offs_n
+    indices = ttgl.load(indices_ptr + idx_offs)
+    values = ttgl.load(values_ptr + idx_offs)
+
+    # Scatter along axis 0: smem_slice[indices[i, j], j] = values[i, j]
+    smem_slice.scatter(values, indices, axis=0)
+
+    # Load back full matrix
+    result = smem.load(layout=layout_full)
+    ttgl.store(output_ptr + full_offs, result)
+
+
+@pytest.mark.parametrize("M,N,slice_m_offset,slice_n_offset,slice_m,slice_n", [
+    # Offset must be a multiple of tile (slice) size for each dimension
+    (64, 64, 48, 16, 16, 16),  # offset 48 % 16 == 0, offset 16 % 16 == 0
+    (64, 64, 32, 48, 32, 16),  # offset 32 % 32 == 0, offset 48 % 16 == 0
+])
+def test_scatter_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    """Test scattering to a 2D subsliced shared memory descriptor."""
+    device = torch.device("cuda")
+
+    # Create indices (reverse pattern for scatter)
+    indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
+    indices = (slice_m - 1 - indices - torch.arange(slice_m, dtype=torch.int32, device=device)[:, None]) % slice_m
+
+    # Create values to scatter
+    values = torch.arange(slice_m * slice_n, dtype=torch.float32, device=device).reshape(slice_m, slice_n) + 100.0
+
+    output = torch.zeros((M, N), dtype=torch.float32, device=device)
+
+    # Expected: -1 everywhere, then scatter into the subslice region
+    expected = torch.full((M, N), -1.0, dtype=torch.float32, device=device)
+    subslice_expected = torch.zeros((slice_m, slice_n), dtype=torch.float32, device=device)
+    subslice_expected.scatter_(0, indices.long(), values)
+    expected[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n] = subslice_expected
+
+    # Layouts
+    layout_full = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    layout_slice = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    scatter_subslice_2d_kernel[(1, )](
+        indices,
+        values,
+        output,
+        M=M,
+        N=N,
+        SLICE_M_OFFSET=slice_m_offset,
+        SLICE_N_OFFSET=slice_n_offset,
+        SLICE_M=slice_m,
+        SLICE_N=slice_n,
+        layout_full=layout_full,
+        layout_slice=layout_slice,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+# =============================================================================
+# Padded Layout Tests
+# =============================================================================
+
+
+@gluon.jit
+def gather_padded_kernel(
+    matrix_ptr,
+    indices_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    padded_layout: ttgl.constexpr,
+):
+    """Gather from shared memory with a padded layout."""
+    # Load matrix into padded shared memory
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_2d))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_2d))[None, :]
+    in_offs = offs_m * N + offs_n
+    in_data = ttgl.load(matrix_ptr + in_offs)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=padded_layout)
+    smem.store(in_data)
+
+    # Load indices
+    indices = ttgl.load(indices_ptr + in_offs)
+
+    # Gather along axis 0
+    gathered = smem.gather(indices, axis=0)
+
+    ttgl.store(output_ptr + in_offs, gathered)
+
+
+@pytest.mark.parametrize("M,N", [(64, 64)])
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]], [[16, 4], [64, 8]]])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+def test_gather_padded(M, N, interval_pairs, order):
+    """Test gathering from shared memory with a padded layout."""
+    device = torch.device("cuda")
+
+    # Create input matrix
+    matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
+
+    # Create indices for gather along axis 0
+    indices = torch.arange(N, dtype=torch.int32, device=device)[None, :].expand(M, N)
+    indices = (indices + torch.arange(M, dtype=torch.int32, device=device)[:, None]) % M
+
+    output = torch.zeros((M, N), dtype=torch.float32, device=device)
+
+    # Expected: gather along axis 0
+    expected = torch.gather(matrix, 0, indices.long())
+
+    # Layouts
+    layout_2d = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    padded_layout = ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, [M, N], order)
+
+    gather_padded_kernel[(1, )](
+        matrix,
+        indices,
+        output,
+        M=M,
+        N=N,
+        layout_2d=layout_2d,
+        padded_layout=padded_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def scatter_padded_kernel(
+    indices_ptr,
+    values_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    padded_layout: ttgl.constexpr,
+):
+    """Scatter to shared memory with a padded layout."""
+    # Initialize padded shared memory with zeros
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_2d))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_2d))[None, :]
+    full_offs = offs_m * N + offs_n
+    zeros = ttgl.zeros([M, N], ttgl.float32, layout=layout_2d)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=padded_layout)
+    smem.store(zeros)
+
+    # Load indices and values
+    indices = ttgl.load(indices_ptr + full_offs)
+    values = ttgl.load(values_ptr + full_offs)
+
+    # Scatter along axis 0
+    smem.scatter(values, indices, axis=0)
+
+    # Load back
+    result = smem.load(layout=layout_2d)
+    ttgl.store(output_ptr + full_offs, result)
+
+
+@pytest.mark.parametrize("M,N", [(64, 64)])
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]]])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+def test_scatter_padded(M, N, interval_pairs, order):
+    """Test scattering to shared memory with a padded layout."""
+    device = torch.device("cuda")
+
+    # Create indices (reverse pattern)
+    indices = torch.arange(N, dtype=torch.int32, device=device)[None, :].expand(M, N)
+    indices = (M - 1 - indices - torch.arange(M, dtype=torch.int32, device=device)[:, None]) % M
+
+    # Create values
+    values = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N) + 100.0
+
+    output = torch.zeros((M, N), dtype=torch.float32, device=device)
+
+    # Expected: scatter along axis 0
+    expected = torch.zeros((M, N), dtype=torch.float32, device=device)
+    expected.scatter_(0, indices.long(), values)
+
+    # Layouts
+    layout_2d = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    padded_layout = ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, [M, N], order)
+
+    scatter_padded_kernel[(1, )](
+        indices,
+        values,
+        output,
+        M=M,
+        N=N,
+        layout_2d=layout_2d,
+        padded_layout=padded_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+# =============================================================================
+# Padded Layout with Subslice Tests
+# =============================================================================
+
+
+@gluon.jit
+def gather_padded_subslice_kernel(
+    matrix_ptr,
+    indices_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    SLICE_M_OFFSET: ttgl.constexpr,
+    SLICE_N_OFFSET: ttgl.constexpr,
+    SLICE_M: ttgl.constexpr,
+    SLICE_N: ttgl.constexpr,
+    layout_full: ttgl.constexpr,
+    layout_slice: ttgl.constexpr,
+    padded_layout: ttgl.constexpr,
+):
+    """Gather from a subsliced padded shared memory descriptor."""
+    # Load full matrix into padded shared memory
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_full))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_full))[None, :]
+    in_offs = offs_m * N + offs_n
+    in_data = ttgl.load(matrix_ptr + in_offs)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=padded_layout)
+    smem.store(in_data)
+
+    # Create 2D subslice
+    smem_slice = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0).slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+    # Load indices for gathering within the slice
+    slice_offs_m = ttgl.arange(0, SLICE_M, layout=ttgl.SliceLayout(1, layout_slice))[:, None]
+    slice_offs_n = ttgl.arange(0, SLICE_N, layout=ttgl.SliceLayout(0, layout_slice))[None, :]
+    idx_offs = slice_offs_m * SLICE_N + slice_offs_n
+    indices = ttgl.load(indices_ptr + idx_offs)
+
+    # Gather along axis 0
+    gathered = smem_slice.gather(indices, axis=0)
+
+    ttgl.store(output_ptr + idx_offs, gathered)
+
+
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]]])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("slice_m_offset,slice_n_offset,slice_m,slice_n", [
+    (48, 16, 16, 16),
+    (32, 48, 32, 16),
+    (48, 32, 16, 32),
+])
+def test_gather_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    """Test gathering from a subsliced padded shared memory descriptor."""
+    M, N = 64, 64
+    device = torch.device("cuda")
+
+    # Create input matrix
+    matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
+
+    # Create indices for gather within the slice
+    indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
+    indices = (indices + torch.arange(slice_m, dtype=torch.int32, device=device)[:, None]) % slice_m
+
+    output = torch.zeros((slice_m, slice_n), dtype=torch.float32, device=device)
+
+    # Expected: gather from the subslice
+    subslice = matrix[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n]
+    expected = torch.gather(subslice, 0, indices.long())
+
+    # Layouts
+    layout_full = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    layout_slice = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    padded_layout = ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, [M, N], order)
+
+    gather_padded_subslice_kernel[(1, )](
+        matrix,
+        indices,
+        output,
+        M=M,
+        N=N,
+        SLICE_M_OFFSET=slice_m_offset,
+        SLICE_N_OFFSET=slice_n_offset,
+        SLICE_M=slice_m,
+        SLICE_N=slice_n,
+        layout_full=layout_full,
+        layout_slice=layout_slice,
+        padded_layout=padded_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def scatter_padded_subslice_kernel(
+    indices_ptr,
+    values_ptr,
+    output_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    SLICE_M_OFFSET: ttgl.constexpr,
+    SLICE_N_OFFSET: ttgl.constexpr,
+    SLICE_M: ttgl.constexpr,
+    SLICE_N: ttgl.constexpr,
+    layout_full: ttgl.constexpr,
+    layout_slice: ttgl.constexpr,
+    padded_layout: ttgl.constexpr,
+):
+    """Scatter to a subsliced padded shared memory descriptor."""
+    # Initialize padded shared memory with -1
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout_full))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout_full))[None, :]
+    full_offs = offs_m * N + offs_n
+    init_data = ttgl.full([M, N], -1.0, dtype=ttgl.float32, layout=layout_full)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [M, N], layout=padded_layout)
+    smem.store(init_data)
+
+    # Create 2D subslice
+    smem_slice = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0).slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+    # Load indices and values for scattering within the slice
+    slice_offs_m = ttgl.arange(0, SLICE_M, layout=ttgl.SliceLayout(1, layout_slice))[:, None]
+    slice_offs_n = ttgl.arange(0, SLICE_N, layout=ttgl.SliceLayout(0, layout_slice))[None, :]
+    idx_offs = slice_offs_m * SLICE_N + slice_offs_n
+    indices = ttgl.load(indices_ptr + idx_offs)
+    values = ttgl.load(values_ptr + idx_offs)
+
+    # Scatter along axis 0
+    smem_slice.scatter(values, indices, axis=0)
+
+    # Load back full matrix
+    result = smem.load(layout=layout_full)
+    ttgl.store(output_ptr + full_offs, result)
+
+
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]]])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("slice_m_offset,slice_n_offset,slice_m,slice_n", [
+    (48, 16, 16, 16),
+    (32, 48, 32, 16),
+])
+def test_scatter_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    """Test scattering to a subsliced padded shared memory descriptor."""
+    M, N = 64, 64
+    device = torch.device("cuda")
+
+    # Create indices (reverse pattern)
+    indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
+    indices = (slice_m - 1 - indices - torch.arange(slice_m, dtype=torch.int32, device=device)[:, None]) % slice_m
+
+    # Create values
+    values = torch.arange(slice_m * slice_n, dtype=torch.float32, device=device).reshape(slice_m, slice_n) + 100.0
+
+    output = torch.zeros((M, N), dtype=torch.float32, device=device)
+
+    # Expected: -1 everywhere, then scatter into the subslice region
+    expected = torch.full((M, N), -1.0, dtype=torch.float32, device=device)
+    subslice_expected = torch.zeros((slice_m, slice_n), dtype=torch.float32, device=device)
+    subslice_expected.scatter_(0, indices.long(), values)
+    expected[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n] = subslice_expected
+
+    # Layouts
+    layout_full = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    layout_slice = ttgl.BlockedLayout(
+        size_per_thread=[1, 1],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[1, 1],
+        order=[1, 0],
+    )
+    padded_layout = ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, [M, N], order)
+
+    scatter_padded_subslice_kernel[(1, )](
+        indices,
+        values,
+        output,
+        M=M,
+        N=N,
+        SLICE_M_OFFSET=slice_m_offset,
+        SLICE_N_OFFSET=slice_n_offset,
+        SLICE_M=slice_m,
+        SLICE_N=slice_n,
+        layout_full=layout_full,
+        layout_slice=layout_slice,
+        padded_layout=padded_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)

@@ -816,18 +816,6 @@ LogicalResult LocalGatherOp::verify() {
     return emitError("indices and result must have the same layout");
   }
 
-  // Ban padded shared layouts (not yet supported)
-  if (isa<PaddedSharedEncodingAttr>(srcEnc)) {
-    return emitError("LocalGatherOp does not support padded shared layouts");
-  }
-
-  // Ban memdesc subslices (not yet supported)
-  // Check if memdesc originates from a subslice by comparing alloc shape with
-  // shape
-  if (srcTy.getAllocShape() != srcTy.getShape()) {
-    return emitError("LocalGatherOp does not support memdesc subslices");
-  }
-
   return success();
 }
 
@@ -874,18 +862,6 @@ LogicalResult LocalScatterOp::verify() {
   // Verify element types match
   if (dstTy.getElementType() != valuesTy.getElementType()) {
     return emitError("values element type must match destination element type");
-  }
-
-  // Ban padded shared layouts (not yet supported)
-  if (isa<PaddedSharedEncodingAttr>(dstEnc)) {
-    return emitError("LocalScatterOp does not support padded shared layouts");
-  }
-
-  // Ban memdesc subslices (not yet supported)
-  // Check if memdesc originates from a subslice by comparing alloc shape with
-  // shape
-  if (dstTy.getAllocShape() != dstTy.getShape()) {
-    return emitError("LocalScatterOp does not support memdesc subslices");
   }
 
   return success();

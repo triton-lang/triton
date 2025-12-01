@@ -256,8 +256,16 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout and invert it
-    auto sharedLayout = toLinearLayout(memDescTy);
+    // Get the shared memory layout (linear component for padded layouts)
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    LinearLayout sharedLayout;
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
     LinearLayout invSharedLayout = sharedLayout.invert();
 
     // Get layout dimension names for all dims
@@ -267,6 +275,10 @@ public:
     }
 
     auto kOffset = str_attr("offset");
+
+    // Get the subslice affine offset (non-zero for memdesc subslices)
+    Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
     // Unpack the runtime index values
     SmallVector<Value> idxValues =
@@ -309,10 +321,35 @@ public:
       }
       assert(offset && "expected offset output from inverted shared layout");
 
-      // Load from shared memory at the computed offset
-      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
-                        smemObj.getBase(), offset);
-      results[i] = b.load(llvmElemTy, ptr);
+      // For subslices, the physical offset is computed as:
+      //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
+      //
+      // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
+      // enforces:
+      // 1. Subslice offsets must be multiples of the tile size
+      // 2. Subslice offsets must map to power-of-2 physical offsets
+      //
+      // These constraints ensure the bit ranges of L⁻¹(coords) and
+      // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
+      offset = b.xor_(offset, affineOffset);
+
+      // Add padding offset for padded layouts (non-linear component)
+      if (paddedEnc) {
+        // Convert offset to bytes for padding calculation
+        Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
+        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
+                                      offsetBytes, /*offsetInBytes=*/true);
+        // GEP in bytes: base + offset*elemSize + padOffset
+        Value totalOffset = b.add(offsetBytes, padOffset);
+        Value ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
+                          totalOffset);
+        results[i] = b.load(llvmElemTy, ptr);
+      } else {
+        // Load from shared memory at the computed offset
+        Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                          smemObj.getBase(), offset);
+        results[i] = b.load(llvmElemTy, ptr);
+      }
     }
 
     Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
@@ -350,8 +387,16 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout and invert it
-    auto sharedLayout = toLinearLayout(memDescTy);
+    // Get the shared memory layout (linear component for padded layouts)
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    LinearLayout sharedLayout;
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
     LinearLayout invSharedLayout = sharedLayout.invert();
 
     // Get layout dimension names for all dims
@@ -361,6 +406,10 @@ public:
     }
 
     auto kOffset = str_attr("offset");
+
+    // Get the subslice affine offset (non-zero for memdesc subslices)
+    Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
     // Unpack the runtime values and index values
     SmallVector<Value> values =
@@ -404,10 +453,35 @@ public:
       }
       assert(offset && "expected offset output from inverted shared layout");
 
-      // Store to shared memory at the computed offset
-      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
-                        smemObj.getBase(), offset);
-      b.store(values[i], ptr);
+      // For subslices, the physical offset is computed as:
+      //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
+      //
+      // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
+      // enforces:
+      // 1. Subslice offsets must be multiples of the tile size
+      // 2. Subslice offsets must map to power-of-2 physical offsets
+      //
+      // These constraints ensure the bit ranges of L⁻¹(coords) and
+      // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
+      offset = b.xor_(offset, affineOffset);
+
+      // Add padding offset for padded layouts (non-linear component)
+      if (paddedEnc) {
+        // Convert offset to bytes for padding calculation
+        Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
+        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
+                                      offsetBytes, /*offsetInBytes=*/true);
+        // GEP in bytes: base + offset*elemSize + padOffset
+        Value totalOffset = b.add(offsetBytes, padOffset);
+        Value ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
+                          totalOffset);
+        b.store(values[i], ptr);
+      } else {
+        // Store to shared memory at the computed offset
+        Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                          smemObj.getBase(), offset);
+        b.store(values[i], ptr);
+      }
     }
 
     rewriter.eraseOp(op);
