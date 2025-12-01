@@ -130,7 +130,7 @@ public:
       bases[kWarp][1] = {0, 0};
       auto warpGroupToOffsetb128 = LinearLayout(
           bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
-      Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+      Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
@@ -191,8 +191,8 @@ private:
     auto ctx = dims[0].getContext();
     auto kOffset = str_attr("offset");
 
-    // Any CTALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CTALayout = triton::gpu::CTAEncodingAttr::getDefault(ctx, 2);
+    // Any CGALayout, it's not really used within getCoreMatrixLinearLayout
+    auto CGALayout = triton::gpu::CGAEncodingAttr::getDefault(ctx, 2);
 
     for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
                                          : SmallVector<bool>({false}))) {
@@ -201,7 +201,7 @@ private:
           // FIXME: getCoreMatrixLinearLayout does not accept bitwidth < 8
           auto shmemEnc = triton::gpu::NVMMASharedEncodingAttr::get(
               ctx, swizzling, transposed, std::max(8, bitwidth), fp4Padded,
-              CTALayout);
+              CGALayout);
           auto shmemTile =
               getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
           // Rename out dims to match the original layout (in case the dims were

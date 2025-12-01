@@ -152,9 +152,6 @@ class TypeWithBuiltinInitializer:
     def __init__(self, _semantic=None):
         self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    def modify(self, value, _semantic=None):
-        self.value = value
-
 
 @filecheck_test
 @triton.jit
@@ -164,48 +161,6 @@ def test_aggregate_initializers():
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     anchor(value)
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
-    value.modify(tl.arange(4, 8))
-    anchor(value)
-
-
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_for_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_for_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    for i in range(0, 2):
-        # CHECK: [[RET:%.*]] = scf.for
-        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]]
-
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]])
-
-
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_while_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_while_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    i = 0
-    # CHECK: [[C0:%.*]] = arith.constant 0 :
-    while i < 1:
-        # CHECK: [[RET:%.*]]:2 = scf.while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
-        # CHECK: do
-        i = 1
-        # CHECK: [[C1:%.*]] = arith.constant 1 :
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]], [[C1]]
-
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]]#0)
 
 
 @triton.jit
@@ -609,3 +564,55 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.interpreter
+def test_constexpr_return():
+
+    @triton.jit
+    def get_constexpr_value():
+        return tl.constexpr(42)
+
+    @triton.jit
+    def test():
+        x: tl.constexpr = get_constexpr_value()
+        tl.static_assert(x == 42)
+
+    run_parser(test)
+
+
+@pytest.mark.interpreter
+def test_return_promotion():
+
+    @triton.jit
+    def signbit(x):
+        if x < 0:
+            return 1
+        else:
+            return 0
+
+    @triton.jit
+    def tuple_return(x):
+        if x < 0:
+            return 1, x
+        else:
+            return 0, x
+
+    @triton.jit
+    def kernel():
+        # constexpr if -> constexpr returned
+        a: tl.constexpr = signbit(-1)
+        tl.static_assert(a == 1)
+
+        # dynamic if -> promote to tensor
+        tmp = -1
+        tl.static_assert(signbit(tmp).type == tl.int32)
+
+        # constexpr if -> single return
+        b: tl.constexpr = tuple_return(-1)
+        tl.static_assert(b[0] == 1 and b[1] == -1)
+
+        c = tuple_return(tmp)
+        tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)

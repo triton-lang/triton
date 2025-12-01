@@ -92,7 +92,8 @@ class HopperMXValueLayout(Layout):
 
     def __init__(self, shape, mx_axis, mma_version=3):
         super().__init__(shape)
-        assert mx_axis in range(len(shape))
+        if mx_axis < 0:
+            mx_axis += len(shape)
         self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape

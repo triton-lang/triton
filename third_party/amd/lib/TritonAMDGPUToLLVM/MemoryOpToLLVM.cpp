@@ -481,8 +481,8 @@ public:
     //   amdgpu::MemoryCounterWaitOp will lower s_waitcnt
     // - s_barrier syncronizes the execution for the CTA
     auto dsAttr = rewriter.getI32IntegerAttr(0);
-    rewriter.create<amdgpu::MemoryCounterWaitOp>(
-        op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
+    amdgpu::MemoryCounterWaitOp::create(
+        rewriter, op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
         /* ds= */ dsAttr);
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 

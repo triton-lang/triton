@@ -42,7 +42,7 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
-def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
+def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
   let summary = "async wait";
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
@@ -594,6 +594,11 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
 
     A `local_barrier` operation does not provide syncronization guarantees on global memory.
   }];
+  let assemblyFormat = "attr-dict";
+}
+
+def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
+  let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
 }
 

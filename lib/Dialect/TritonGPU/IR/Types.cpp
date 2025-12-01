@@ -143,14 +143,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << ll.getOutDimSize(dims[0]) << "x"
                          << ll.getOutDimSize(dims[1]);
     }
-    // Note the following holds for both M=64 and M=128 with 2CTA
-    auto nCol = ll.getInDimSize(StringAttr::get(ctx, "col"));
-    if (nCol / (enc.getCTASplitM() * enc.getCTASplitN()) >
-        512 * 32 / bitwidth) {
-      return emitError() << "nCol / (CTASplitM * CTASplitN) must be less than "
-                            "or equal to 512 * 32 / bitwidth but got "
-                         << nCol / (enc.getCTASplitM() * enc.getCTASplitN());
-    }
   } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
       return emitError()

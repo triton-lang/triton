@@ -305,10 +305,9 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       }
     }
   }
-  auto newLoadOp =
-      rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
-          pred);
+  auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
+      rewriter, op.getLoc(), op.getDesc(), indices, barrierAlloc,
+      op.getResult(), pred);
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
