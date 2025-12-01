@@ -63,6 +63,7 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     f._unsafe_update_src(src)
     return f
 
+
 @dataclass(frozen=True)
 class FnSpecs:
     name: str

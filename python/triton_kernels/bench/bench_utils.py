@@ -33,9 +33,9 @@ def _quantize_weight(w, dtype, **opt):
 
 @dataclass
 class MlpNumerics:
-    wg: torch.Tensor | Tensor | None 
-    w1: torch.Tensor | Tensor | None 
-    w2: torch.Tensor | Tensor | None 
+    wg: torch.Tensor | Tensor | None
+    w1: torch.Tensor | Tensor | None
+    w2: torch.Tensor | Tensor | None
     pcg: PrecisionConfig
     pc1: PrecisionConfig
     pc2: PrecisionConfig
@@ -54,9 +54,7 @@ def _make_mx4_quantization_opts(batch: int, w_dtype: str) -> dict:
         return {}
     num_warps = 4 if batch <= 512 else 8
     value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-    scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-        mx_axis=1, num_warps=num_warps
-    )
+    scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
     return {
         "value_layout": value_layout,
         "value_layout_opts": value_layout_opts,
