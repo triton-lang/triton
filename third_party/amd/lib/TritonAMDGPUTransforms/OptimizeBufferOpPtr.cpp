@@ -114,8 +114,15 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   };
 
   // Analysis that decides if blockArg + advanceStep can overflow
-  static bool overflowPossible(Value blockArg, Value advanceStep,
-                               int elemBitwidth, DataFlowSolver *solver) {
+  static bool overflowPossible(amdttg::BufferOpInterface bufferOp,
+                               Value blockArg, Value advanceStep,
+                               DataFlowSolver *solver) {
+    auto stepType = cast<RankedTensorType>(advanceStep.getType());
+    assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
+
+    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
+    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+
     const auto *blockArgRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
     if (blockArgRange->getValue().isUninitialized()) {
@@ -150,107 +157,170 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
             operationUncappedResultMax > maxOffsetValue);
   }
 
+  static BlockArgument getLoopBlockArgument(Value val, scf::ForOp loop) {
+    auto blockArg = dyn_cast<BlockArgument>(val);
+    if (!blockArg || blockArg.getOwner()->getParentOp() != loop)
+      return nullptr;
+    return blockArg;
+  }
+
+  static BlockArgument getLoopArgInAdd(arith::AddIOp addOp, scf::ForOp forOp) {
+    for (auto operand : addOp->getOperands())
+      if (auto loopArg = getLoopBlockArgument(operand, forOp))
+        return loopArg;
+    return nullptr;
+  }
+
+  // Assume that offset step is not a loop argument.
+  // This optimization supports only cases when step could be analyzed without
+  // traversing control flow.
+  static Value getStepOperandInAdd(arith::AddIOp addOp, scf::ForOp forOp) {
+    for (auto operand : addOp->getOperands())
+      if (!getLoopBlockArgument(operand, forOp))
+        return operand;
+    return nullptr;
+  }
+
+  static bool isAddFirst(amdttg::BufferOpInterface bufferOp) {
+    return isa_and_nonnull<arith::AddIOp>(
+        bufferOp.getOffsets().getDefiningOp());
+  }
+
+  static BlockArgument findOffsetLoopArgumentCandidate(Value offsetValue,
+                                                       scf::ForOp targetFor) {
+    BlockArgument offsetLoopArgument;
+    if (auto offsetAdd =
+            dyn_cast_or_null<arith::AddIOp>(offsetValue.getDefiningOp())) {
+      offsetLoopArgument = getLoopArgInAdd(offsetAdd, targetFor);
+    } else {
+      offsetLoopArgument = getLoopBlockArgument(offsetValue, targetFor);
+    }
+    return offsetLoopArgument;
+  }
+
+  static Value findIncrementedOffsetCandidate(BlockArgument offsetLoopArgument,
+                                              scf::ForOp targetFor) {
+    int yieldArgNumber =
+        offsetLoopArgument.getArgNumber() - targetFor.getNumInductionVars();
+    auto yield = cast<scf::YieldOp>(targetFor.getBody()->getTerminator());
+    return yield.getOperand(yieldArgNumber);
+  }
+
+  static arith::AddIOp findOffsetAddCandidate(Value incrementedOffset) {
+    auto addOp = dyn_cast<arith::AddIOp>(incrementedOffset.getDefiningOp());
+    return addOp;
+  }
+
+  // Checks that bufferOp uses given OffsetAddOp as an offset
+  // and offsetAddOp takes one of it's operands from a given BlockArgument.
+  static bool incrementChainConsistent(amdttg::BufferOpInterface bufferOp,
+                                       BlockArgument offset,
+                                       arith::AddIOp offsetAddOp) {
+    auto targetFor = cast<scf::ForOp>(offset.getOwner()->getParentOp());
+    auto maybeOffsetLoopArgument = getLoopArgInAdd(offsetAddOp, targetFor);
+    if (offset != maybeOffsetLoopArgument) {
+      return false;
+    }
+    if (isAddFirst(bufferOp) &&
+        bufferOp.getOffsets().getDefiningOp() != offsetAddOp) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool isInvariantForLoop(Value val, scf::ForOp loop) {
+    return val.getParentBlock()->getParentOp()->isProperAncestor(loop);
+  }
+
   // Perform series of checks to decide if given operation could be optimized.
   // If optimization is possible, return filled BufferOpInfo.
   static std::optional<BufferOpInfo>
   analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
                   DataFlowSolver *solver) {
-    LDBG("Analyzing: " << *op);
-    Value maybeOffsetsBlockArg = op.getOffsets();
-    auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
-    // There are two supported patterns.
-    // Difference is in order of BufferOp and offset increment:
-    // 1. Increment offsets and perform BufferOp with new offsets
-    // 2. Perform BufferOp with offsets from loop argument,
-    //    increment offsets later
-    //
-    // If it is case 2, maybeOffsetsBlockArg points to actual block argument
-    // that holds offset tensor. If it is case 1, maybeOffsetsBlockArg points to
-    // AddIOp and requires correction.
-    if (isa_and_nonnull<arith::AddIOp>(maybeOffsetDefOp)) {
-      for (auto &use : maybeOffsetDefOp->getUses()) {
-        auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
-        if (!yieldOp || yieldOp->getParentOp() != targetFor) {
-          continue;
-        }
-        auto loopBody = targetFor.getBody();
+    auto offsetValue = op.getOffsets();
 
-        int blockOpNo =
-            use.getOperandNumber() + targetFor.getNumInductionVars();
-        maybeOffsetsBlockArg = loopBody->getArgument(blockOpNo);
-        break;
-      }
-    }
-    auto blockArg = dyn_cast<BlockArgument>(maybeOffsetsBlockArg);
-    if (!blockArg) {
-      LDBG("Rejected: expect buffer op offset to be a loop argument");
+    // Try to match components of two following patterns:
+    //
+    // Case 1(add first):
+    //   for (%offsetLoopArgument):
+    //     %incrementedOffset = arith.addi %offsetLoopArgument, %advanceStep
+    //     bufferOp %base[%incrementedOffset]
+    //     yield %incrementedOffset
+    //
+    // Case 2(buffer op first)
+    //   for (%offsetLoopArgument):
+    //     bufferOp %base[%offsetLoopArgument]
+    //     %incrementedOffset = arith.addi %offsetLoopArgument, %advanceStep
+    //     yield %incrementedOffset
+    //
+    // These patterns are similar. but buffer operation uses different values:
+    // loop argument or loop argument after increment.
+    //
+    // Offset incrementing data flow graph is same for both of them:
+    //
+    //           advanceStep
+    //                      \
+    // offsetLoopArgument -addi-> incrementedOffset -yield->
+    auto offsetLoopArgument =
+        findOffsetLoopArgumentCandidate(offsetValue, targetFor);
+    if (!offsetLoopArgument) {
+      LDBG("Rejected: Could not find a candidate for loop_arg in "
+           "loop_arg->addi->yield chain");
       return {};
     }
-    auto loopBlock = blockArg.getOwner();
-    auto forOp = dyn_cast<scf::ForOp>(loopBlock->getParentOp());
-    if (!forOp || forOp != targetFor) {
-      LDBG("Rejected: expect buffer op offset to be a target loop argument");
+
+    auto incrementedOffset =
+        findIncrementedOffsetCandidate(offsetLoopArgument, targetFor);
+    if (!incrementedOffset) {
+      LDBG("Rejected: Could not find a candidate for yield operand");
       return {};
     }
-    auto basePtr = op.getPtr();
-    auto defOpBlock = basePtr.getParentBlock();
-    if (!defOpBlock->getParentOp()->isProperAncestor(targetFor)) {
-      LDBG("Rejected: expect buffer op base Ptr to be invariant to the loop");
+
+    auto addOp = findOffsetAddCandidate(incrementedOffset);
+    if (!addOp) {
+      LDBG("Rejected: Could not find addi in loop_arg->addi->yield chain");
       return {};
     }
-    auto yield = dyn_cast<scf::YieldOp>(loopBlock->getTerminator());
-    int offsetOperandNo = blockArg.getArgNumber() - forOp.getNumInductionVars();
-    auto offsetYieldOperand = yield.getOperand(offsetOperandNo);
-    auto incrementOp = offsetYieldOperand.getDefiningOp();
-    if (!isa_and_nonnull<arith::AddIOp>(incrementOp)) {
-      LDBG("Rejected: expect arith::addi used for pointer advancement");
-      return {};
-    }
-    Value advanceStep;
-    if (incrementOp->getOperand(0) == blockArg &&
-        incrementOp->getOperand(1) != blockArg) {
-      advanceStep = incrementOp->getOperand(1);
-    }
-    if (incrementOp->getOperand(1) == blockArg &&
-        incrementOp->getOperand(0) != blockArg) {
-      advanceStep = incrementOp->getOperand(0);
-    }
+
+    Value advanceStep = getStepOperandInAdd(addOp, targetFor);
     if (!advanceStep) {
-      LDBG("Rejected: expect arith::addi to advance same block argument as "
-           "used in buffer op");
+      LDBG("Rejected: Could not find an offset step");
       return {};
     }
-    if (!isScalarizableValue(advanceStep)) {
-      LDBG("Rejected: ptr increment step is not supported");
-      return {};
-    }
-    Value offsetInitializer = forOp.getInitArgs()[offsetOperandNo];
 
-    auto stepType = cast<RankedTensorType>(advanceStep.getType());
-    assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
-    auto elemBitWidth = cast<PointerType>(op.getPtr().getType())
-                            .getPointeeType()
-                            .getIntOrFloatBitWidth();
-    // Check ensures following transformation is safe:
-    //
-    // full_pointer = basePtr + int64(previousIterationOffset + offsetStep)
-    //                       |
-    //                       V
-    // full_pointer = (basePtr + int64(offsetStep)) +
-    // int64(previousIterationOffset)
-    //
-    // previousIterationOffset + offsetStep should not overflow,
-    // then it is safe to upcast them and add to basePtr separately
-    if (overflowPossible(blockArg, advanceStep, elemBitWidth, solver)) {
+    // End of pattern component search.
+    // Following core verifies that found pattern is optimizable and consistent.
+
+    if (!incrementChainConsistent(op, offsetLoopArgument, addOp)) {
+      LDBG("Rejected: Found offset increment chain is not consistent");
+      return {};
+    }
+
+    if (!isInvariantForLoop(op.getPtr(), targetFor)) {
+      LDBG("Rejected: Buffer op base Ptr is not an invariant in the loop");
+      return {};
+    }
+
+    if (!isScalarizableValue(advanceStep)) {
+      LDBG("Rejected: ptr increment step is not uniform or not supported by "
+           "scalarizer yet");
+      return {};
+    }
+
+    if (overflowPossible(op, offsetLoopArgument, advanceStep, solver)) {
       LDBG("Rejected: increment operation potentially overflows, it is unsafe "
            "to split offset computation");
       return {};
     }
 
-    BufferOpInfo data = {op, advanceStep, Value(), offsetInitializer,
-                         incrementOp};
     LDBG("Buffer op is suitable for offset pointer optimization");
-    return data;
+
+    int offsetInitNo =
+        offsetLoopArgument.getArgNumber() - targetFor.getNumInductionVars();
+    auto offsetInitializer = targetFor.getInitArgs()[offsetInitNo];
+    BufferOpInfo info{op, advanceStep, nullptr, offsetInitializer, addOp};
+
+    return info;
   }
 
   // Create scalar values which will increment buffer op base ptr
@@ -261,10 +331,6 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       auto scalarStep = scalarizeValue(rewriter, BufferOpInfo.offsetIncrement);
       BufferOpInfo.baseIncrement = scalarStep;
     }
-  }
-
-  static bool isAddFirst(BufferOpInfo &info) {
-    return info.op.getOffsets().getDefiningOp() == info.incrementOp;
   }
 
   static scf::ForOp
@@ -294,7 +360,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto basePtrs = newBlock->getArguments().take_back(infoList.size());
     llvm::SmallVector<Value> nextIterBasePtrs;
     for (auto [info, basePtr] : llvm::zip(infoList, basePtrs)) {
-      if (isAddFirst(info)) {
+      if (isAddFirst(info.op)) {
         rewriter.setInsertionPoint(newBlock, newBlock->begin());
       } else {
         rewriter.setInsertionPoint(newBlock, newBlock->end());
@@ -331,7 +397,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       // 1. buffer op uses pointer after increment
       // 2. buffer op uses pointers from loop arguments,
       //    incremented pointer is used on next iteration
-      Value advancingBasePtr = isAddFirst(info) ? nextBasePtr : basePtr;
+      Value advancingBasePtr = isAddFirst(info.op) ? nextBasePtr : basePtr;
       newBufferOp.getPtrMutable().assign(advancingBasePtr);
     }
     return newForOp;
