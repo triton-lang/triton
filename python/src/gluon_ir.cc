@@ -32,8 +32,8 @@ namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
 namespace ttag = mlir::triton::amdgpu;
 
-static ttg::CTAEncodingAttr
-buildCtaLayoutAttr(MLIRContext *ctx,
+static ttg::CGAEncodingAttr
+buildCgaLayoutAttr(MLIRContext *ctx,
                    const std::vector<std::vector<int32_t>> &layout,
                    unsigned rank) {
   auto kBlock = StringAttr::get(ctx, "block");
@@ -41,11 +41,11 @@ buildCtaLayoutAttr(MLIRContext *ctx,
   bases[kBlock] = layout;
   auto outDims = tt::standardOutDimNames(ctx, rank);
   tt::LinearLayout ll(std::move(bases), outDims);
-  return ttg::CTAEncodingAttr::get(ctx, std::move(ll));
+  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
 static std::vector<std::vector<int32_t>>
-getCgaLayoutBases(ttg::CTAEncodingAttr layout) {
+getCgaLayoutBases(ttg::CGAEncodingAttr layout) {
   std::vector<std::vector<int32_t>> result;
   auto ctx = layout.getContext();
   auto block = StringAttr::get(ctx, "block");
@@ -196,7 +196,7 @@ std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
 py::object layoutToGluon(Attribute layout) {
   static GluonLayouts layouts;
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    auto cgaBases = getCgaLayoutBases(blocked.getCTALayout());
+    auto cgaBases = getCgaLayoutBases(blocked.getCGALayout());
     return layouts.BlockedLayout(toStdVector(blocked.getSizePerThread()),
                                  toStdVector(blocked.getThreadsPerWarp()),
                                  toStdVector(blocked.getWarpsPerCTA()),
@@ -219,21 +219,21 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.DotOperandLayout(
         dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
-    auto cgaBases = getCgaLayoutBases(mma.getCTALayout());
+    auto cgaBases = getCgaLayoutBases(mma.getCGALayout());
     return layouts.NVMMADistributedLayout(
         std::vector<unsigned>{mma.getVersionMajor(), mma.getVersionMinor()},
         toStdVector(mma.getWarpsPerCTA()), toStdVector(mma.getInstrShape()),
         cgaBases);
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
-    auto ctaLayout = nvmma.getCTALayout();
-    auto cgaBases = getCgaLayoutBases(ctaLayout);
+    auto cgaLayout = nvmma.getCGALayout();
+    auto cgaBases = getCgaLayoutBases(cgaLayout);
     return layouts.NVMMASharedLayout(nvmma.getSwizzlingByteWidth(),
                                      nvmma.getElementBitWidth(),
-                                     ctaLayout.getRank(), nvmma.getTransposed(),
+                                     cgaLayout.getRank(), nvmma.getTransposed(),
                                      nvmma.getFp4Padded(), cgaBases);
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
-    auto cgaBases = getCgaLayoutBases(swizzled.getCTALayout());
+    auto cgaBases = getCgaLayoutBases(swizzled.getCGALayout());
     return layouts.SwizzledSharedLayout(
         swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
         toStdVector(swizzled.getOrder()), cgaBases);
@@ -250,14 +250,14 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto autoEnc = dyn_cast<gluon::CoalescedEncodingAttr>(layout)) {
     return layouts.CoalescedLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
-    auto cgaBases = getCgaLayoutBases(amdMfma.getCTALayout());
+    auto cgaBases = getCgaLayoutBases(amdMfma.getCGALayout());
     return layouts.AMDMFMALayout(
         amdMfma.getVersion(), toStdVector(amdMfma.getInstrShape()),
         amdMfma.getIsTransposed(), toStdVector(amdMfma.getWarpsPerCTA()),
         amdMfma.getElementBitWidth(), toStdVector(amdMfma.getTilesPerWarp()),
         cgaBases);
   } else if (auto amdWmma = dyn_cast<ttg::AMDWmmaEncodingAttr>(layout)) {
-    auto cgaBases = getCgaLayoutBases(amdWmma.getCTALayout());
+    auto cgaBases = getCgaLayoutBases(amdWmma.getCGALayout());
     return layouts.AMDWMMALayout(
         amdWmma.getVersion(), amdWmma.getIsTransposed(),
         toStdVector(amdWmma.getWarpsPerCTA()),
@@ -339,10 +339,10 @@ void init_gluon_ir(py::module &&m) {
               std::vector<std::vector<int32_t>> &cgaBases) -> Attribute {
              auto ctx = self.getContext();
              unsigned rank = order.size();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::BlockedEncodingAttr>(
                  ctx, sizePerThread, threadsPerWarp, warpsPerCta, order,
-                 ctaLayout);
+                 cgaLayout);
            })
       .def("get_slice_layout",
            [](GluonOpBuilder &self, unsigned dim,
@@ -431,9 +431,9 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &instrShape) -> Attribute {
              auto ctx = self.getContext();
              unsigned rank = warpsPerCta.size();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::NvidiaMmaEncodingAttr>(
-                 ctx, version[0], version[1], warpsPerCta, ctaLayout,
+                 ctx, version[0], version[1], warpsPerCta, cgaLayout,
                  instrShape);
            })
       .def("get_amd_mfma_layout",
@@ -445,9 +445,9 @@ void init_gluon_ir(py::module &&m) {
               unsigned elementBitWidth) -> Attribute {
              auto ctx = self.getContext();
              unsigned rank = warpsPerCta.size();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return ttg::AMDMfmaEncodingAttr::get(
-                 ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
+                 ctx, version, warpsPerCta, instrShape, transposed, cgaLayout,
                  tilesPerWarp, elementBitWidth);
            })
       .def("get_amd_wmma_layout",
@@ -458,10 +458,10 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &instrShape) -> Attribute {
              auto ctx = self.getContext();
              unsigned rank = warpsPerCta.size();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
                                                   warpsPerCta, tilesPerWarp,
-                                                  ctaLayout, instrShape);
+                                                  cgaLayout, instrShape);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
@@ -498,10 +498,10 @@ void init_gluon_ir(py::module &&m) {
               std::vector<std::vector<int32_t>> &cgaBases,
               unsigned rank) -> Attribute {
              auto ctx = self.getContext();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
-                 ctaLayout);
+                 cgaLayout);
            })
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
@@ -518,9 +518,9 @@ void init_gluon_ir(py::module &&m) {
               std::vector<std::vector<int32_t>> &cgaBases) -> Attribute {
              auto ctx = self.getContext();
              unsigned rank = order.size();
-             auto ctaLayout = buildCtaLayoutAttr(ctx, cgaBases, rank);
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::SwizzledSharedEncodingAttr>(
-                 ctx, vec, perPhase, maxPhase, order, ctaLayout);
+                 ctx, vec, perPhase, maxPhase, order, cgaLayout);
            })
       .def("get_tensor_memory_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &block,
@@ -579,11 +579,6 @@ void init_gluon_ir(py::module &&m) {
                return self.create<triton::HistogramOp>(resultTy, operand,
                                                        *mask);
              }
-           })
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
            })
       .def("create_fp4_to_fp",
            [](GluonOpBuilder &self, Value src, Type elemType,
@@ -940,7 +935,7 @@ void init_gluon_ir(py::module &&m) {
             shape, elementType, layoutAttr,
             ttng::TensorMemorySpaceAttr::get(ctx),
             /*mutableMemory=*/true, allocShape);
-        auto ctaLayoutAttr = buildCtaLayoutAttr(ctx, cgaBases, rank);
+        auto ctaLayoutAttr = buildCgaLayoutAttr(ctx, cgaBases, rank);
 
         auto maybeAtom =
             llvm::StringSwitch<std::optional<ttng::TMemAccessAtom>>(atomName)
@@ -979,7 +974,7 @@ void init_gluon_ir(py::module &&m) {
         MLIRContext ctx(MLIRContext::Threading::DISABLED);
         ctx.appendDialectRegistry(registry);
         ctx.loadAllAvailableDialects();
-        auto attr = ttg::CTAEncodingAttr::fromSplitParams(
+        auto attr = ttg::CGAEncodingAttr::fromSplitParams(
             &ctx, ctasPerCga, ctaSplitNum, ctaOrder);
         return getCgaLayoutBases(attr);
       });
