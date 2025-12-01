@@ -23,10 +23,11 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
     const std::map<std::string, PythonMetricValueType> &metrics) {
   std::map<std::string, MetricValueType> converted;
   for (const auto &[name, value] : metrics) {
-    converted.emplace(
-        name, std::visit(
-                  [](auto &&v) -> MetricValueType { return MetricValueType(v); },
-                  value));
+    converted.emplace(name, std::visit(
+                                [](auto &&v) -> MetricValueType {
+                                  return MetricValueType(v);
+                                },
+                                value));
   }
   return converted;
 }
