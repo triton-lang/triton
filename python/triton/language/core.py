@@ -1782,7 +1782,7 @@ def permute(input, *dims, _semantic=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, _semantic=None):
+def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     """
     Concatenate the given blocks
 
@@ -1790,12 +1790,30 @@ def cat(input, other, can_reorder=False, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param reorder: Compiler hint. If true, the compiler is
-        allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops).
-        Current implementation of `cat` supports only can_reorder=True.
+    :param can_reorder: Deprecated option. Elements are never reordered.
+    :type can_reorder: bool
+    :param dim: The dimension to concatenate along.
+    :type dim: int
     """
-    return _semantic.cat(input, other, can_reorder)
+    rank = len(input.shape)
+    assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
+               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+
+    order = list(builtins.range(rank))
+    order[dim], order[-1] = order[-1], order[dim]
+    inv_order = [order.index(i) for i in builtins.range(rank)]
+
+    a = permute(input, order, _semantic=_semantic)
+    b = permute(other, order, _semantic=_semantic)
+
+    leading = a.shape[:-1]
+    a = reshape(a, (math.prod(leading), a.shape[-1]), _semantic=_semantic)
+    b = reshape(b, (math.prod(leading), b.shape[-1]), _semantic=_semantic)
+
+    c = join(a, b, _semantic=_semantic)
+    c = reshape(c, leading + [a.shape[-1] + b.shape[-1]], _semantic=_semantic)
+    return permute(c, inv_order, _semantic=_semantic)
 
 
 @builtin
@@ -3455,14 +3473,14 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     max_val = args[0]
     for arg in args[1:]:
         max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if max_val.type.is_block():
-        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead")
     return max_val
 
 
@@ -3479,12 +3497,12 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     min_val = args[0]
     for arg in args[1:]:
         min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if min_val.type.is_block():
-        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead")
     return min_val

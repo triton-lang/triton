@@ -110,14 +110,14 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
-  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
   auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      ctx, dotOperandEnc, operandType.getShape(), order, cgaLayout, bitWidth,
       /*needTrans=*/false);
 
   auto sharedVec = tempAttr.getVec();
@@ -125,7 +125,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto maxPhase = tempAttr.getMaxPhase();
 
   auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
-      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+      ctx, sharedVec, perPhase, maxPhase, order, cgaLayout);
 
   return newSharedEnc;
 }
@@ -728,7 +728,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto ctx = blockedEnc.getContext();
   auto numWarps = product(blockedEnc.getWarpsPerCTA());
   auto threadsPerWarp = product(blockedEnc.getThreadsPerWarp());
-  auto numCTAs = product(blockedEnc.getCTALayout().getCTAsPerCGA());
+  auto numCTAs = product(blockedEnc.getCGALayout().getCTAsPerCGA());
   return ttg::BlockedEncodingAttr::get(ctx, shape, newSizePerThread, order,
                                        numWarps, threadsPerWarp, numCTAs);
 }
