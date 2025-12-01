@@ -13,16 +13,16 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
     Common trait for all TTGIR layouts.
   }];
   let methods = [
-    InterfaceMethod<"Get the CTA layout backing this encoding.",
-                    "CTAEncodingAttr", "getCTALayout">,
+    InterfaceMethod<"Get the CGA layout backing this encoding.",
+                    "CGAEncodingAttr", "getCGALayout">,
     InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank",
                     (ins), [{}], [{
-      return $_attr.getCTALayout().getRank();
+      return $_attr.getCGALayout().getRank();
     }]>
   ];
 }
 def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCTALayout"]>;
+  LayoutEncodingTrait, ["getCGALayout"]>;
 
 def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -131,17 +131,17 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTAEncodingAttr":$CTALayout
+    "CGAEncodingAttr":$CGALayout
   );
 
   let builders = [
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "unsigned":$typeWidthInBit), [{
         bool needTrans = false; // default value
-        return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
+        return get(context, dotOpEnc, shape, order, CGALayout, typeWidthInBit, needTrans);
     }]>,
 
     // TODO(jlebar): This should not be an overload of
@@ -150,21 +150,21 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
         // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           return mfmaEnc.composeSharedLayoutForOperand(
-              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              CGALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
               typeWidthInBit, needTrans);
         }
 
         // ---- begin WMMA ----
         if (auto wmmaEnc = mlir::dyn_cast<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           return wmmaEnc.composeSharedLayoutForOperand(
-              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              CGALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
               typeWidthInBit, needTrans);
         }
 
@@ -172,11 +172,11 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         auto mmaEnc = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
 
         if(!mmaEnc)
-          return get(context, 1, 1, 1, order, CTALayout);
+          return get(context, 1, 1, 1, order, CGALayout);
 
         // ---- begin Ampere & Hopper ----
         if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
-          return get(context, dotOpEnc.getOpIdx(), dotOpEnc.getKWidth(), shape, order, CTALayout, typeWidthInBit, needTrans);
+          return get(context, dotOpEnc.getOpIdx(), dotOpEnc.getKWidth(), shape, order, CGALayout, typeWidthInBit, needTrans);
         }
 
         // ---- not implemented ----
@@ -189,10 +189,10 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$kWidth,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "unsigned":$bitwidth,
                      "bool":$needTrans), [{
-        int K =  getShapePerCTA(CTALayout.getCTASplitNum(), shape)[order[0]];
+        int K =  getShapePerCTA(CGALayout.getCTASplitNum(), shape)[order[0]];
         // Elems necessary to cover all the banks divided by the inner dimension
         // This packs a few rows together for small K
         int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
@@ -211,26 +211,26 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         int maxPhase = std::max(std::min<int>(mmaStride, 1024 / (vec * bitwidth)), 1);
         // Account for the row packing from perPhase: mmaStride / perPhase
         maxPhase = std::max(maxPhase / perPhase, 1);
-        return get(context, vec, perPhase, maxPhase, order, CTALayout);
+        return get(context, vec, perPhase, maxPhase, order, CGALayout);
     }]>,
 
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy), [{
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      return get(context, dotOpEnc, shape, order, CTALayout, bitwidth);
+      return get(context, dotOpEnc, shape, order, CGALayout, bitwidth);
     }]>,
 
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool":$needTrans), [{
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      return get(context, dotOpEnc, shape, order, CTALayout, bitwidth, needTrans);
+      return get(context, dotOpEnc, shape, order, CGALayout, bitwidth, needTrans);
     }]>,
   ];
 
@@ -331,7 +331,7 @@ For identity mappings a short form based on order and shape is used to increase 
       // Builder to create an identity mapping as the linear component
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
-                       "CTAEncodingAttr":$ctaLayout)>,
+                       "CGAEncodingAttr":$cgaLayout)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
@@ -413,16 +413,16 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "bool":$transposed,
     "unsigned":$elementBitWidth,
     "bool":$fp4Padded,
-    "CTAEncodingAttr":$CTALayout
+    "CGAEncodingAttr":$CGALayout
   );
 
   let builders = [
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
-        auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
+        auto shapePerCTA = getShapePerCTA(CGALayout.getCTASplitNum(), shape);
         int32_t swizzlingByteWidth = 0;
         unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
         int packingFactor = fp4Padded ? 2 : 1;
@@ -447,7 +447,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
           swizzlingByteWidth = 0;
         }
         bool transposed = order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
@@ -551,7 +551,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTAEncodingAttr":$CTALayout
+    "CGAEncodingAttr":$CGALayout
   );
 
   let hasCustomAssemblyFormat = 1;
@@ -803,9 +803,9 @@ for
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
-    // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
-    // single CTA (i.e. the trivial map onto dim0..dimn-1)
-    "CTAEncodingAttr":$CTALayout
+    // CGALayout is optional in the textual IR.  If omitted, we infer it to be a
+    // CGA with a single CTA (i.e. the trivial map onto dim0..dimn-1)
+    "CGAEncodingAttr":$CGALayout
   );
   let genVerifyDecl = 1;
 
@@ -815,11 +815,11 @@ for
                      "ArrayRef<unsigned>":$order,
                      "unsigned":$numWarps,
                      "unsigned":$numThreadsPerWarp,
-                     "CTAEncodingAttr":$CTALayout), [{
+                     "CGAEncodingAttr":$CGALayout), [{
       unsigned rank = sizePerThread.size();
       SmallVector<unsigned, 4> threadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
-      SmallVector<int64_t> shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
+      SmallVector<int64_t> shapePerCTA = getShapePerCTA(CGALayout.getCTASplitNum(), shape);
 
       unsigned remainingLanes = numThreadsPerWarp;
       unsigned remainingThreads = numWarps * numThreadsPerWarp;
@@ -844,7 +844,7 @@ for
       threadsPerWarp[order[rank - 1]] = numThreadsPerWarp / prevLanes;
       warpsPerCTA[order[rank - 1]] = numWarps / prevWarps;
 
-      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order, CTALayout);
+      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order, CGALayout);
     }]>,
 
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
@@ -870,8 +870,8 @@ for
 
       CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
 
-      CTAEncodingAttr CTALayout = CTAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
-      return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CTALayout);
+      CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+      return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);
     }]>
   ];
 
@@ -1024,7 +1024,7 @@ w2 w2 w3 w3
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$instrShape,
     "bool":$isTransposed,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "unsigned":$elementBitWidth
   );
@@ -1034,7 +1034,7 @@ w2 w2 w3 w3
                      "ArrayRef<unsigned>":$warpsPerCTA,
                      "ArrayRef<unsigned>":$instrShape,
                      "bool":$isTransposed,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      CArg<"ArrayRef<unsigned>", "{}">:$tpw,
                      CArg<"unsigned", "0">:$elementBitWidth), [{
       SmallVector<unsigned> tilesPerWarp(tpw);
@@ -1042,7 +1042,7 @@ w2 w2 w3 w3
         tilesPerWarp = SmallVector<unsigned>(warpsPerCTA.size(), 1);
       if (elementBitWidth == 0)
         elementBitWidth = 32;
-      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementBitWidth);
+      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CGALayout, tilesPerWarp, elementBitWidth);
     }]>
   ];
 
@@ -1057,7 +1057,7 @@ w2 w2 w3 w3
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
-        CTAEncodingAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
         unsigned elemBitWidth, bool needTrans) const;
   }];
@@ -1194,7 +1194,7 @@ w2 w2 w3 w3
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
@@ -1205,10 +1205,10 @@ w2 w2 w3 w3
     AttrBuilder<(ins "unsigned":$version,
                      "bool":$isTransposed,
                      "ArrayRef<unsigned>":$warpsPerCTA,
-                     "CTAEncodingAttr":$CTALayout,
+                     "CGAEncodingAttr":$CGALayout,
                      "ArrayRef<unsigned>":$instrShape), [{
       SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CTALayout, instrShape);
+      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CGALayout, instrShape);
     }]>
   ];
 
@@ -1226,7 +1226,7 @@ w2 w2 w3 w3
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
-        CTAEncodingAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned kWidth,
         unsigned elemBitWidth, bool needTrans) const;
   }];
@@ -1321,7 +1321,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 

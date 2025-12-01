@@ -784,7 +784,7 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global">
 // AsyncTDMWait
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
+def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
   let summary = "Wait until there are less than or equal to the given number of outstanding TDM operations";
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
   let description = [{
@@ -793,7 +793,6 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
     necessary to ensure that data is available in the LDS before it is used.
   }];
   let results = (outs TTG_AsyncToken:$retToken);
-
   let assemblyFormat = "$asyncToken attr-dict";
 }
 
@@ -801,7 +800,7 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
 // AsyncWait
 //===----------------------------------------------------------------------===//
 
-def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
+def AsyncWaitOp : TT_AMDGPU_Op<"async_wait", [MemWaitOpTrait]> {
   let summary = "Wait until there are less than or equal to the given number of outstanding async intrinsics";
   let description = [{
     Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups

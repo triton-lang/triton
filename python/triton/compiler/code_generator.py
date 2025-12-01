@@ -2,6 +2,7 @@ import ast
 import builtins
 import contextlib
 import copy
+import functools
 import inspect
 import re
 import warnings
@@ -72,6 +73,11 @@ def _check_fn_args(node, fn, args):
                 )
 
 
+def _check(cond, msg_fn, category=TypeError):
+    if not cond:
+        raise category(msg_fn())
+
+
 def _apply_to_tuple_values(value, fn):
     if is_namedtuple(type(value)):
         fields = value._fields
@@ -104,17 +110,6 @@ def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 
-def _clone_triton_value(val):
-    handles = []
-    val._flatten_ir(handles)
-    clone, _ = val.type._unflatten_ir(handles, 0)
-    return clone
-
-
-def _clone_scope(scope):
-    return {name: _clone_triton_value(val) if _is_triton_value(val) else val for name, val in scope.items()}
-
-
 class enter_sub_region:
 
     def __init__(self, generator):
@@ -122,8 +117,8 @@ class enter_sub_region:
 
     def __enter__(self):
         # record lscope & local_defs in the parent scope
-        self.liveins = _clone_scope(self.generator.lscope)
-        self.prev_defs = _clone_scope(self.generator.local_defs)
+        self.liveins = dict(self.generator.lscope)
+        self.prev_defs = dict(self.generator.local_defs)
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
         self.insert_point = self.generator.builder.get_insertion_point()
@@ -317,6 +312,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
+
+        self.return_vals: List[base_value | None] = []
+        self.return_ips: List[Tuple[ir.InsertPoint, ir.Loc]] = []
 
         self.gscope = {}
         for k, v in gscope.items():
@@ -544,33 +542,87 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
-        handles = []
-
-        def decay(value):
-            if isinstance(value, language.tuple):
-                return _apply_to_tuple_values(value, decay)
-            elif isinstance(value, (language.constexpr, int, float)):
-                return self.semantic.to_tensor(value)
-            return value
-
-        ret_value = decay(ret_value)
-
         if ret_value is None:
-            ret_ty = language.void
-        else:
-            assert isinstance(ret_value, language.core.base_value)
-            ret_value._flatten_ir(handles)
-            ret_ty = ret_value.type
-        self.builder.ret(handles)
-        if self.ret_type is None:
-            self.ret_type = ret_ty
-        elif self.ret_type != ret_ty:
-            raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
+            ret_value = language.constexpr(None)
+        self.return_vals.append(ret_value)
+        self.return_ips.append(self._get_insertion_point_and_loc())
 
         # A return op must always terminate the basic block, so we create a dead
         # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
+
+    def decide_return_type(self):
+        assert len(self.return_vals) == len(self.return_ips)
+        if not self.return_vals:
+            return language.constexpr_type(None)
+
+        tl = language.core
+
+        def error_msg(a, b):
+            err = f"Return type mismatch: {a} and {b}. "
+            err += f"Note all return types were: {return_types}"
+            return err
+
+        def common_type(a, b):
+            if isinstance(a, tl.tuple_type):
+                _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
+                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
+            if isinstance(a, tl.constexpr_type):
+                if a == b:
+                    return a
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
+            elif isinstance(b, tl.constexpr_type):
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
+            _check(a == b, lambda: error_msg(a, b))
+            return a
+
+        return_types = [x.type for x in self.return_vals]
+        return functools.reduce(common_type, return_types)
+
+    def cast_to(self, value, ty):
+        if value.type == ty:
+            return value
+
+        tl = language.core
+        if isinstance(value, tl.tuple):
+            assert isinstance(ty, tl.tuple_type)
+            return tl.tuple(
+                [self.cast_to(v, t) for v, t in zip(value.values, ty.types)],
+                ty,
+            )
+        if isinstance(value, tl.constexpr):
+            if isinstance(ty, tl.constexpr_type):
+                _check(value.type == ty, lambda: f"Return type mismatch {value.type} and {ty}")
+                return value
+            return self.semantic.scalar_constant(value.value, ty)
+        _check(value.type == ty, lambda: f"Return type mismatch {value.type} and {ty}")
+        return value
+
+    def handle_returns(self):
+        return_type = self.decide_return_type()
+        ip, loc = self._get_insertion_point_and_loc()
+
+        assert len(self.return_vals) == len(self.return_ips)
+        for ret, ret_ip in zip(self.return_vals, self.return_ips):
+            self._set_insertion_point_and_loc(*ret_ip)
+            assert not self.builder.get_insertion_block().has_terminator()
+            ret = self.cast_to(ret, return_type)
+            ret_handles = flatten_values_to_ir([ret])
+            self.builder.ret(ret_handles)
+
+        self._set_insertion_point_and_loc(ip, loc)
+        self.ret_type = return_type
+        assert not self.builder.get_insertion_block().has_terminator()
+        if isinstance(self.ret_type, language.tuple_type):
+            self.prototype.ret_types = list(self.ret_type.types)
+        else:
+            self.prototype.ret_types = [self.ret_type]
+        self.fn.reset_type(self.prototype.serialize(self.builder))
+        self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -612,18 +664,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
 
         # finalize function
-        assert not self.builder.get_insertion_block().has_terminator()
-        if self.ret_type is None or self.ret_type == language.void:
-            self.ret_type = language.void
-            self.builder.ret([])
-        else:
-            if isinstance(self.ret_type, language.tuple_type):
-                self.prototype.ret_types = self.ret_type.types
-            else:
-                self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
-        self.fn.finalize()
+        self.handle_returns()
 
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
@@ -1326,8 +1367,6 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
-        if callee_ret_type == language.void:
-            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
@@ -1517,37 +1556,32 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is None:
             return
-        with warnings.catch_warnings():
-            # The ast library added visit_Constant and deprecated some other
-            # methods but we can't move to that without breaking Python 3.6 and 3.7.
-            warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
-            warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            last_node = self.cur_node
+        last_node = self.cur_node
+        last_loc = self.builder.get_loc()
+        self.cur_node = node
+        if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+            if self.name_loc_as_prefix is not None:
+                self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
+            else:
+                self.builder.set_loc(here_loc)
             last_loc = self.builder.get_loc()
-            self.cur_node = node
-            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
-                if self.name_loc_as_prefix is not None:
-                    self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
-                else:
-                    self.builder.set_loc(here_loc)
-                last_loc = self.builder.get_loc()
-            try:
-                ret = super().visit(node)
-            except CompilationError:
+        try:
+            ret = super().visit(node)
+        except CompilationError:
+            raise
+        except Exception as e:
+            if knobs.compilation.front_end_debugging:
                 raise
-            except Exception as e:
-                if knobs.compilation.front_end_debugging:
-                    raise
-                # Wrap the error in a CompilationError which contains the source
-                # of the @jit function.
-                raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
+            # Wrap the error in a CompilationError which contains the source
+            # of the @jit function.
+            raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
 
-            # Reset the location to the last one before the visit
-            if last_loc:
-                self.cur_node = last_node
-                self.builder.set_loc(last_loc)
-            return ret
+        # Reset the location to the last one before the visit
+        if last_loc:
+            self.cur_node = last_node
+            self.builder.set_loc(last_loc)
+        return ret
 
     def generic_visit(self, node):
         raise self._unsupported(node, "unsupported AST node type: {}".format(type(node).__name__))

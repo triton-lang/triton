@@ -53,100 +53,80 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(
-    tile_id,
-    num_tiles,
-    unpadded_m,
-    grid_n,
-    M,
-    K,
-    ExptData,
-    ExptHist,
-    ExptOffs,
-    ExptTileOffs,
-    EXPT_IS_INNER: tl.constexpr,
-    X_IS_PADDED: tl.constexpr,
-    W_IS_PADDED: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    PACKED_BLOCK_K_W: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
-    XCD_SWIZZLE: tl.constexpr,
-    SWIZZLE_MX_VALUE: tl.constexpr,
-):
-    # unpack and swizzle program ids
-    pid_emnk = tile_id
+def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr,
+                 SPLIT_K: tl.constexpr):
+    pid_zmnk = block_id
     if XCD_SWIZZLE != 1:
-        pid_emnk = xcd_swizzle(pid_emnk, num_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
+        pid_zmnk = xcd_swizzle(pid_zmnk, num_blocks, XCD_SWIZZLE)
+    pid_z = pid_zmnk // (grid_m * grid_n * SPLIT_K)
+    pid_mnk = pid_zmnk % (grid_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
         pid_k = pid_mnk % SPLIT_K
         pid_mn = pid_mnk // SPLIT_K
     else:
         pid_k: tl.constexpr = 0
         pid_mn = pid_mnk
-    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
+    return pid_z, pid_m, pid_n, pid_k
 
-    # unpack expert data
-    if EXPT_IS_INNER:
-        # pid_e indicates expert ID: experts are laid sequentially along the K dimension
+
+@triton.jit
+def compute_offsets(
+    pid_z,
+    pid_m,
+    pid_k,
+    XBlockSchedule,
+    XSliceOffs,
+    X_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
+    WBlockSchedule,
+    WSliceOffs,
+    W_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
+    RAGGED_DIMENSION: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K_X: tl.constexpr,
+    PACKED_BLOCK_K_W: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+):
+    if RAGGED_DIMENSION == "K":
+        # pid_z indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
-        tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
+        tl.static_assert(X_SLICE_SIZE_DIVISIBILITY is not None or \
+                         W_SLICE_SIZE_DIVISIBILITY is not None,
+                         "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
-        tl.static_assert(M is not None)
-        expt_id, pid_z, pid_z_out, start_m, block_id, eM = 0, 0, pid_e, 0, pid_m, M
-        k_tiles = tl.cdiv(tl.load(ExptHist + pid_e), BLOCK_K)
-        padded_start_off_raw = tl.load(ExptTileOffs + pid_e)
-        padded_start_off = padded_start_off_raw * BLOCK_K
-        unpadded_start_off = tl.load(ExptOffs + pid_e)
-        off_k_x = padded_start_off if X_IS_PADDED else unpadded_start_off
-        # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
-        if W_IS_PADDED:
-            off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
-            K_W = tl.load(ExptTileOffs + pid_e + 1) * PACKED_BLOCK_K_W
+        off_x_k = tl.load(XSliceOffs + pid_z)
+        off_w_k = tl.load(WSliceOffs + pid_z)
+        if PACKED_BLOCK_K_W >= BLOCK_K_X:
+            off_w_k = off_w_k * (PACKED_BLOCK_K_W // BLOCK_K_X)
         else:
-            off_k_w = unpadded_start_off
-            K_W = tl.load(ExptOffs + pid_e + 1)
+            off_w_k = off_w_k // (BLOCK_K_X // PACKED_BLOCK_K_W)
+        off_x_m = BLOCK_M * pid_m
+        off_w_z, off_x_z, off_x_slice = 0, 0, 0
+        off_y_z = pid_z
+    elif RAGGED_DIMENSION == "M":
+        off_x_k = pid_k * BLOCK_K_X
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        block_schedule = tl.load(XBlockSchedule + pid_m)
+        off_w_z = block_schedule & 0x0000FFFF
+        block_id = block_schedule >> 16
+        off_x_slice = tl.load(XSliceOffs + off_w_z)
+        off_x_z, off_y_z = 0, 0
+        off_x_m = BLOCK_M * block_id
     else:
-        off_k_x = pid_k * BLOCK_K
-        off_k_w = pid_k * PACKED_BLOCK_K_W
-        if PACKED_BLOCK_K_W >= BLOCK_K:
-            K_W = K * (PACKED_BLOCK_K_W // BLOCK_K)
-        else:
-            K_W = K // (BLOCK_K // PACKED_BLOCK_K_W)
-        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-            K_W = tl.cdiv(K_W, 128) * 128
-        k_tiles = tl.cdiv(K - off_k_x, BLOCK_K * SPLIT_K)
-        if ExptData is None:
-            tl.static_assert(M is not None)
-            expt_id, pid_z, pid_z_out, start_m, block_id, eM = pid_e, pid_e, pid_e, 0, pid_m, M
-        else:
-            tl.static_assert(M is None)
-            expt_data = tl.load(ExptData + pid_m)
-            expt_id = expt_data & 0x0000FFFF
-            block_id = expt_data >> 16
-            eM = tl.load(ExptHist + expt_id)
-            start_m = tl.load(ExptOffs + expt_id)
-            pid_z, pid_z_out = 0, 0
-
-    off_m = BLOCK_M * block_id
-
+        tl.static_assert(RAGGED_DIMENSION is None)
+        off_x_k = pid_k * BLOCK_K_X
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        off_w_z, off_x_z, off_y_z, off_x_slice = pid_z, pid_z, pid_z, 0
+        off_x_m = BLOCK_M * pid_m
     return (
-        expt_id,
-        pid_z,
-        pid_z_out,
-        start_m,
-        eM,
-        off_m,
-        pid_n,
-        k_tiles,
-        pid_k,
-        off_k_x,
-        off_k_w,
-        K_W,
+        off_w_z,
+        off_x_z,
+        off_y_z,
+        off_x_slice,
+        off_x_m,
+        off_x_k,
+        off_w_k,
     )
 
 
@@ -192,40 +172,36 @@ def matmul_launch_metadata(grid, kernel, args):
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
     Y, X, W = args["YPtr"], args["XPtr"], args["WPtr"]
-    tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
-    hist = args["ExptHist"]
+    expected_slice_sizes = args.get("X_EXPECTED_SLICE_SIZE")
+    slice_sizes = args["XSliceSizes"]
     batch_size = args.get("batch_size", 1)
-    expt_is_inner = args["EXPT_IS_INNER"]
-    if hist is not None:
+    if slice_sizes is not None:
         # If annotation is given, use that to generate name for profiling.
-        if tokens_per_expt is not None:
-            n_rows = f"{tokens_per_expt}*"
+        if expected_slice_sizes is not None:
+            n_rows = f"{expected_slice_sizes}*"
         elif launch_metadata_allow_sync():
-            n_rows = int(hist.float().mean())
+            n_rows = int(slice_sizes.float().mean())
         else:
             n_rows = "unknown"
-
         if launch_metadata_allow_sync():
-            n_tokens = float(hist.sum())
-            n_w_bytes = (W.numel() * W.element_size() // hist.numel()) * (hist > 0).sum()
-        elif tokens_per_expt is not None:
-            n_tokens = tokens_per_expt * args["N_EXPTS_TOT"]
+            n_tokens = float(slice_sizes.sum())
+            n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
+        elif expected_slice_sizes is not None:
+            n_tokens = expected_slice_sizes * args["N_SLICES"]
             # This may not be totally correct (e.g., we might not be using all experts)
             # but it's better than nothing.
             n_w_bytes = W.numel() * W.element_size()
         else:
             n_tokens = None
             n_w_bytes = 0
-
         # If annotation is given, use that to generate name for profiling.
-        tokens_per_expt = args.get("TOKENS_PER_EXPT_FOR_ANNOTATION")
-        n_rows = f"{tokens_per_expt}*" if tokens_per_expt is not None else n_rows
+        n_rows = f"{expected_slice_sizes}*" if expected_slice_sizes is not None else n_rows
     else:
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
-    if expt_is_inner:
+    if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else int(n_tokens)
-    repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(hist)}({s}) = {n_rows}"
+    repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
     if batch_size > 1:
@@ -235,20 +211,21 @@ def matmul_launch_metadata(grid, kernel, args):
     if ep_subtile is not None and ep_subtile > 1:
         ret["name"] += f" ep/{ep_subtile}"
 
-    if hist is not None and n_tokens is None:
+    if slice_sizes is not None and n_tokens is None:
         return ret  # Don't fill metadata because we can't compute them properly.
 
     fM = M if M is not None else n_tokens
-    ret[f"flops{nbits}"] = 2.0 * fM * N * K * (1 if expt_is_inner else batch_size)
+    Z = 1 if args["RAGGED_DIMENSION"] == "K" else batch_size
+    ret[f"flops{nbits}"] = 2.0 * fM * N * K * Z
 
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
-    if hist is not None:
+    if slice_sizes is not None:
         assert n_tokens is not None
         n_read_rows = n_tokens
 
-        if expt_is_inner:
+        if args["RAGGED_DIMENSION"] == "K":
             n_x_bytes = n_read_rows * X.shape[-2] * X.element_size()
             # Here, we're computing dW = X.T@dY, so "W" is actually dY and "Y" is actually dW.
             n_y_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
