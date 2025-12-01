@@ -146,24 +146,3 @@ Interfaces: `InferTypeOpInterface`
 | :----: | ----------- |
 | `output` | LLVM structure type |
 
-
-### `nvg.warp_id` (triton::nvgpu::WarpIdOp)
-
-Syntax:
-
-```
-operation ::= `nvg.warp_id` attr-dict
-```
-
-Traits: `AlwaysSpeculatableImplTrait`
-
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | 32-bit signless integer |
-

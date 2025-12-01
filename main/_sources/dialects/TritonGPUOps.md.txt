@@ -638,6 +638,27 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | 1-bit signless integer |
 
 
+### `ttg.warp_id` (triton::gpu::WarpIdOp)
+
+Syntax:
+
+```
+operation ::= `ttg.warp_id` attr-dict
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer |
+
+
 ### `ttg.warp_return` (triton::gpu::WarpReturnOp)
 
 _Implicit terminator from partition regions_
