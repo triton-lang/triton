@@ -267,9 +267,9 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
+    if (isa<LinearEncodingAttr, BlockedEncodingAttr, SliceEncodingAttr>(
             srcLayout) &&
-        isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
+        isa<BlockedEncodingAttr, BlockedEncodingAttr, SliceEncodingAttr>(
             dstLayout)) {
       if (shouldUseDistSmem(srcLayout, dstLayout))
         return lowerDistToDistWithDistSmem(op, adaptor, rewriter, targetInfo);

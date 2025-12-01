@@ -2456,6 +2456,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
     return mma.getRepOrderForOperand(getOpIdx());
   } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
     return to_vector(blocked.getOrder());
+  } else if (auto linear = mlir::dyn_cast<LinearEncodingAttr>(getParent())) {
+    return to_vector(linear.getRepOrder());
   }
   llvm::report_fatal_error(
       "getRepOrder not implemented for DotOperandEncodingAttr");
@@ -2522,6 +2524,13 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+    if (kWidth == 0)
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "MFMA parent";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<LinearEncodingAttr>(parent)) {
     if (kWidth == 0)
       return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
                             "MFMA parent";

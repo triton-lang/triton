@@ -39,6 +39,22 @@ ISAFamily deduceISAFamily(llvm::StringRef arch) {
   return ISAFamily::Unknown;
 }
 
+int getMfmaVersion(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::CDNA1:
+    return 1;
+  case ISAFamily::CDNA2:
+    return 2;
+  case ISAFamily::CDNA3:
+    return 3;
+  case ISAFamily::CDNA4:
+    return 4;
+  default:
+    break;
+  }
+  return 0;
+}
+
 bool supportsVDot(llvm::StringRef arch) {
   switch (deduceISAFamily(arch)) {
   case AMD::ISAFamily::CDNA1:

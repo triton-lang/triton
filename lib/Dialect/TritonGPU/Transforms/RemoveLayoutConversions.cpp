@@ -353,7 +353,7 @@ void LayoutPropagation::resolveConflicts() {
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
-          (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
+          (!isLoadOrStore && isa<LinearEncodingAttr>(e))) {
         encoding = e;
         break;
       }
@@ -1294,7 +1294,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
       auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opType.getEncoding());
       if (!dotEnc)
         return;
-      if (isa<MmaEncodingTrait>(dotEnc.getParent()))
+      if (isa<LinearEncodingAttr>(dotEnc.getParent()))
         dotLikeOps.push_back(op);
     });
     if (dotLikeOps.empty())

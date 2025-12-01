@@ -151,8 +151,8 @@ public:
       return mlir::failure();
 
     auto encoding = cvtOp.getSrc().getType().getEncoding();
-    if (!isa<triton::gpu::MmaEncodingTrait>(encoding))
-      return mlir::failure();
+    // if (!isa<triton::gpu::MmaEncodingTrait>(encoding))
+    //   return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
       return mlir::failure();

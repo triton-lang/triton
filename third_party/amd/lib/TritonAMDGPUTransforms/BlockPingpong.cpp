@@ -1064,9 +1064,9 @@ void Pingponger::getDotPingponged() {
   auto encoding = cast<RankedTensorType>(aType).getEncoding();
   auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
   kWidth = srcEncoding.getKWidth();
-  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
+  auto mfmaEncoding = cast<ttg::LinearEncodingAttr>(srcEncoding.getParent());
   SmallVector<int64_t> intShape;
-  auto mnkDim = mfmaEncoding.getInstrShape();
+  auto mnkDim = findMfmaMNFromLL(mfmaEncoding); // mfmaEncoding.getInstrShape();
   intShape.push_back(mnkDim[0]);
   intShape.push_back(mnkDim[1]);
 

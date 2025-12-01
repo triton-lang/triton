@@ -30,9 +30,14 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
           scaledDotOp.getResult().getType().getEncoding()))
     return failure();
 
+  if (isa_and_nonnull<LinearEncodingAttr>(
+          scaledDotOp.getResult().getType().getEncoding()))
+    return failure();
+
   // TODO: add support for m/n packed formats.
   if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
     return failure();
+
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                     scaledDotOp.getBElemType(), rewriter);

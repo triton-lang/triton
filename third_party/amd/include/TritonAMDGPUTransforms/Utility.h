@@ -1,6 +1,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 
+#include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
@@ -25,5 +26,18 @@ composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc,
                     triton::gpu::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
+
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(triton::DotOp dot,
+                                               int mfmaVersion, int nonKDim,
+                                               bool withScale = false);
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(triton::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim);
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(triton::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim,
+                                               bool useFp16);
+FailureOr<MfmaIntrinsic>
+chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
+                      Type aElemType, Type bElemType, int inputKSize,
+                      int enforcedNonKDim, bool withScale, bool allowXF32);
 
 #endif

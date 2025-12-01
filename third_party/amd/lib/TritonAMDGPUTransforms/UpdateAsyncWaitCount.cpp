@@ -1,7 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
-#include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"

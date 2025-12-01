@@ -1,8 +1,24 @@
-#include "Utility.h"
+#include "TritonAMDGPUTransforms/Utility.h"
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+// TODO: Not all of these are used. Remove redundant ones.
+#include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/WmmaGroup.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/Support/LogicalResult.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
+#include "triton/Dialect/TritonGPU/Transforms/LayoutPropagationUtility.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <limits>
 
@@ -314,4 +330,125 @@ composePaddedLayout(const tt::AMD::TargetInfo &targetInfo,
                                                 useAsyncCopy);
   }
   return {};
+}
+
+// Chooses a proper MFMA instruction that can used to compute the given dot op.
+// If enforcedNonKDim is not zero, it will be used to overwrite the default
+// logic to choose a MFMA with matching M/N dim.
+FailureOr<MfmaIntrinsic>
+chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
+                      Type aElemType, Type bElemType, int inputKSize,
+                      int enforcedNonKDim, bool withScale, bool allowXF32) {
+  // number of matrix elements along k dim per one MFMA instruction
+  unsigned kDim = 0;
+
+  auto resShape = cType.getShape();
+  auto rank = resShape.size();
+  auto M = resShape[rank - 2];
+  auto N = resShape[rank - 1];
+
+  unsigned mDim = 0;
+  unsigned nDim = 0;
+  if (enforcedNonKDim != 0) {
+    mDim = nDim = enforcedNonKDim;
+  } else {
+    int minSize = std::min(M, N);
+    if (minSize >= 32) {
+      // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as
+      // there's no 32x32 intrinsic.
+      mDim = nDim = 32;
+      if (aElemType.isF64() || bElemType.isF64()) {
+        mDim = nDim = 16;
+      }
+    } else if (minSize >= 16) {
+      mDim = nDim = 16;
+    } else if (minSize >= 4) {
+      if (M >= 64) {
+        mDim = 64;
+        nDim = 4;
+      } else if (N >= 64) {
+        mDim = 4;
+        nDim = 64;
+      }
+    }
+  }
+
+  FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
+      MfmaIntrinsic::selectFor(loc, mfmaVersion, mDim, nDim, inputKSize,
+                               aElemType, bElemType, withScale, allowXF32);
+
+  // Fallback to FMA if the M/N dim is not supported by MFMA.
+  if (failed(maybeMfmaIntrinsic)) {
+    mlir::emitRemark(loc) << "Unable to select MFMA intrinsic for the request: "
+                          << "version=" << mfmaVersion << ", result-shape=("
+                          << M << "x" << N << "), selected-tiles=(" << mDim
+                          << "x" << nDim << "), inputKSize=" << inputKSize
+                          << ", aElemType=" << aElemType
+                          << ", bElemType=" << bElemType
+                          << ", withScale=" << (withScale ? "true" : "false")
+                          << ", allowXF32=" << (allowXF32 ? "true" : "false")
+                          << (enforcedNonKDim != 0
+                                  ? (llvm::Twine(", enforcedNonKDim=") +
+                                     llvm::Twine(enforcedNonKDim))
+                                        .str()
+                                  : "");
+    return failure();
+  }
+
+  kDim = maybeMfmaIntrinsic->kDim;
+  assert(kDim != 0);
+  assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
+  // If inputKSize % kDim != 0 (including the case where inputKSize < kDim),
+  // this layout will introduce data duplication.
+  if (inputKSize % kDim != 0) {
+    mlir::emitRemark(loc)
+        << "Unable to select MFMA intrinsic '" << maybeMfmaIntrinsic->name
+        << "' as MFMA intrinsic k-dimension size kDim=" << kDim
+        << ", which is not a multiple of tile k-dimension size inputKSize="
+        << inputKSize
+        << ". Using this intrinsic would introduce data duplication.";
+    return failure();
+  }
+  return maybeMfmaIntrinsic;
+}
+
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
+                                               int nonKDim, bool withScale) {
+  RankedTensorType aType = dot.getA().getType();
+  bool allowXF32 =
+      dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
+  return chooseMfmaInstruction(
+      dot.getLoc(), mfmaVersion, dot.getC().getType(), aType.getElementType(),
+      dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
+      withScale, allowXF32);
+}
+
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim) {
+  using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
+
+  auto ctx = dot.getContext();
+  int64_t inputKDim = dot.getA().getType().getShape().back();
+  if (dot.getAElemType() == ScaleDotElemType::E2M1 && dot.getLhsKPack()) {
+    // Since two fp4 are packed into int8, to get the correct K dim size, we
+    // need to multiply it by 2.
+    inputKDim *= 2;
+  }
+  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getAElemType());
+  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
+  return chooseMfmaInstruction(dot.getLoc(), mfmaVersion, dot.getC().getType(),
+                               aElemType, bElemType, inputKDim, nonKDim,
+                               /*withScale=*/true, /*allowXF32=*/false);
+}
+
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim,
+                                               bool useFp16) {
+  // For scaled dot, we handle it with fp16 or bf16 emulation for now.
+  Builder b(dot.getContext());
+  Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
+  return chooseMfmaInstruction(dot.getLoc(), mfmaVersion, dot.getC().getType(),
+                               elemType, elemType,
+                               dot.getA().getType().getShape().back(), nonKDim,
+                               /*withScale=*/false, /*allowXF32=*/false);
 }

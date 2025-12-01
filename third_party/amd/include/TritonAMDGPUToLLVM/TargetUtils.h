@@ -29,6 +29,8 @@ bool isCDNA(ISAFamily isaFamily);
 
 bool isRDNA(ISAFamily isaFamily);
 
+int getMfmaVersion(ISAFamily isaFamily);
+
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
 // https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939

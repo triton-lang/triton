@@ -1,5 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "Utility.h"
+#include "TritonAMDGPUTransforms/Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"

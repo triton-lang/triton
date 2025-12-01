@@ -4,6 +4,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -198,8 +199,12 @@ struct ConvertTritonAMDGPUToLLVM
                                                patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
+
+    auto isaFamily = mlir::triton::AMD::deduceISAFamily(this->arch);
+    auto mfmaVersion = mlir::triton::AMD::getMfmaVersion(isaFamily);
+
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                     AMDBenefit);
+                                     mfmaVersion, AMDBenefit);
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
