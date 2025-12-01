@@ -23,17 +23,10 @@ namespace {
 
 // We use the following nomenclature in this file.
 //
-//  - ctaLayout: A layout for one block, i.e. input dims [register, lane, warp]
+//  - ctaLayout: A layout for one CTA (one block), i.e. input dims
+//    [register, lane, warp]
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
-//
-// Note that this is inconsistent with the type name CTALayoutAttr.  That type
-// is equivalent to our cgaLayout.
-//
-// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
-// then we'd have to rename ctaLayout to "warpLayout".  I think that's more
-// confusing than being inconsistent about "cgaLayout", especially when we have
-// to consider the size of the warpLayout (surely that's not the "warpSize").
 
 #define S(v) StringAttr::get(ctx, (v))
 
@@ -63,7 +56,7 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
   if (rank == 1) {
     return combineCtaCgaWithShape(
         LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
+        shared.getCGALayout(), shape);
   }
 
   auto outDimNames = standardOutDimNames(ctx, rank);
@@ -98,7 +91,7 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
                                           outDimNames[dim]);
   }
 
-  return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
 
 LinearLayout
@@ -112,7 +105,7 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   if (rank == 1) {
     return combineCtaCgaWithShape(
         LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
+        shared.getCGALayout(), shape);
   }
 
   auto outDimNames = standardOutDimNames(ctx, rank);
@@ -151,32 +144,10 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
 
-  return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
 
 } // namespace
-
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
-  MLIRContext *ctx = layout.getContext();
-  StringAttr kBlock = S("block");
-
-  int rank = layout.getCTAOrder().size();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  for (int i = 0; i < rank; i++) {
-    // Start with the most minor dimension, which is order[0].
-    int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
-    assert(ctas % split == 0);
-    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
-           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
-  }
-
-  // Transpose to standard order (dim0, dim1, ...).
-  return ret.transposeOuts(outDimNames);
-}
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -239,7 +210,7 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
       layout *= LinearLayout::identity1D(tmaShape[i], kOffset, outDimNames[i]);
     }
     layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
-    return combineCtaCgaWithShape(layout, shared.getCTALayout(), shape);
+    return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);
 
@@ -297,7 +268,7 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   reshapedLayout = ensureLayoutNotSmallerThan(
       reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
       shapePerCTA);
-  return combineCtaCgaWithShape(reshapedLayout, shared.getCTALayout(), shape);
+  return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
 }
 
 /// Function to generate lane and warp layout for dot operands.
@@ -466,7 +437,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[order[2]]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
 }
 
 std::optional<LinearLayout>
@@ -566,7 +537,7 @@ chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
-  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCGALayout(), shape);
 }
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
@@ -658,7 +629,7 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   // layout's out-size is smaller than the shape, we follow this order to
   // extend each dimension to match the shape. After that, we can transpose
   // to match the standard output order.
-  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape)
+  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCGALayout(), shape)
       .transposeOuts(outDimNames);
 }
 
@@ -775,7 +746,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                                            outDimNames[batchIndex]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
 }
 
 LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
@@ -865,7 +836,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   LinearLayout ctaLayout = tileLayout.transposeOuts(repDimNames) *
                            warpLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCGALayout(), shape);
 }
 
 LinearLayout
@@ -877,7 +848,7 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
 LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
@@ -917,7 +888,7 @@ LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
                            lanesLayout.transposeOuts(repDimNames) *
                            warpsLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(operandLayout), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(operandLayout), shape);
 }
 
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
@@ -985,7 +956,7 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   ctaLayout *= identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder)
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
 LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
@@ -1015,7 +986,7 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
                                            kDim, S("warp"))
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(dot), shape);
 }
 
 LinearLayout
@@ -1041,28 +1012,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   parentShape.insert(parentShape.begin() + getDim(), 1);
   LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
-  // Remove dimension getDim() from the parent layout.
-  //
-  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
-  //     that removes the relevant out-dim.
-  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
-  //     from parent in-dims to slice out-dims.
-  //  3. Fix up duplicate registers introduced by slicing.
-  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
-  LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
-    if (idx == getDim()) {
-      // Because we're multiplying by all zeros, we could replace outDimNames[0]
-      // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
-                                         outDimNames[0]);
-    } else {
-      transform *=
-          LinearLayout::identity1D(parentLL.getOutDimSize(outDim), outDim,
-                                   outDimNames[idx - (idx < getDim() ? 0 : 1)]);
-    }
-  }
-  LinearLayout sliceLL = parentLL.compose(transform);
+  auto sliceLL = removeStandardDim(parentLL, getDim());
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -1308,7 +1258,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
+                                    CGAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
@@ -1323,7 +1273,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   }
 
   LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
+      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), labeledShape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   // Calculate the shape of the ctaLayout, which is `shape` divided by the
@@ -1456,7 +1406,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                            warpLayout.transposeOuts(outDimNames);
 
   return combineCtaCgaWithShape(
-      ctaLayout, CTALayoutAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+      ctaLayout, CGAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1472,7 +1422,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayout) {
+                                          CGAEncodingAttr cgaLayout) {
   unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1501,7 +1451,7 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
       LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
       LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
       broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, 1u, kWarp);
-  return combineCtaCgaWithShape(LL, ctaLayout, shape);
+  return combineCtaCgaWithShape(LL, cgaLayout, shape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
@@ -1586,9 +1536,8 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto ctaLay = CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
-                                   /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
-  auto finalLay = combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, 2);
+  auto finalLay = combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
   return finalLay;
 }
 

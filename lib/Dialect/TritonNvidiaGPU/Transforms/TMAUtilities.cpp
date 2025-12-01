@@ -1,5 +1,6 @@
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
+#include <triton/Tools/LayoutUtils.h>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -16,56 +17,61 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
   return indices;
 }
 
-ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
-                                           ArrayRef<int64_t> shape) {
+ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
+                                             ArrayRef<int64_t> shape) {
   auto rank = shape.size();
-  if (ctaLayout.getRank() == rank)
-    return ctaLayout;
+  if (cgaLayout.getRank() == rank)
+    return cgaLayout;
 
-  auto ctx = ctaLayout.getContext();
-  if (ctaLayout.getRank() > rank) {
-    unsigned rankDiff = ctaLayout.getRank() - rank;
-    return ttg::CTALayoutAttr::get(
-        ctx, ctaLayout.getCTAsPerCGA().drop_front(rankDiff),
-        ctaLayout.getCTASplitNum().drop_front(rankDiff),
-        ctaLayout.getCTAOrder().drop_front(rankDiff));
+  auto ctx = cgaLayout.getContext();
+  if (cgaLayout.getRank() > rank) {
+    auto ll = cgaLayout.getLinearLayout();
+    // Broadcast over the first rankDiff dims
+    unsigned rankDiff = cgaLayout.getRank() - rank;
+    for (int i = 0; i < rankDiff; ++i) {
+      ll = removeStandardDim(ll, 0);
+    }
+    return ttg::CGAEncodingAttr::get(ctx, ll);
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
-  auto rankDiff = rank - ctaLayout.getRank();
+  auto rankDiff = rank - cgaLayout.getRank();
   for (unsigned i = 0; i < rankDiff; ++i) {
     assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
   }
-  SmallVector<unsigned> CTAsPerCGA(rank, 1);
-  SmallVector<unsigned> CTASplitNum(rank, 1);
-  SmallVector<unsigned> CTAOrder(rank, 1);
-
-  llvm::copy(ctaLayout.getCTAsPerCGA(), CTAsPerCGA.begin() + rankDiff);
-  llvm::copy(ctaLayout.getCTASplitNum(), CTASplitNum.begin() + rankDiff);
-  for (unsigned i = 0; i < rankDiff; ++i) {
-    CTAOrder[i] = rank - i;
+  auto ll = cgaLayout.getLinearLayout();
+  auto kBlock = *ll.getInDimNames().begin();
+  auto standardOuts = standardOutDimNames(ctx, rank);
+  // Append to front
+  for (int i = cgaLayout.getRank(); i < rank; ++i) {
+    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
   }
-  llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
-  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder);
+  // Rename out dims to dim0..dimn-1
+  auto dimSizes = ll.getOutDims();
+  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
+    dimSizes[i].first = dim;
+  }
+  ll = LinearLayout(ll.getBases(), dimSizes, false);
+  return ttg::CGAEncodingAttr::get(ctx, ll);
 }
 
 ttg::SharedEncodingTrait
 updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
                        RankedTensorType tensorType) {
   auto ctx = encoding.getContext();
-  auto ctaLayout = ttg::getCTALayout(encoding);
+  auto cgaLayout = ttg::getCGALayout(encoding);
   if (auto nvmmaEnc = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCta = nvmmaEnc.getCTALayout();
-    if (!existingCta)
+    auto existingCga = nvmmaEnc.getCGALayout();
+    if (!existingCga)
       return nvmmaEnc;
 
-    auto newCtaEnc = updateCTALayoutForShape(ctaLayout, tensorType.getShape());
+    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return ttg::NVMMASharedEncodingAttr::get(
         ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCtaEnc);
+        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
   }
   if (auto swizEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCta = swizEnc.getCTALayout();
-    if (!existingCta)
+    auto existingCga = swizEnc.getCGALayout();
+    if (!existingCga)
       return swizEnc;
 
     auto rank = tensorType.getRank();
@@ -79,10 +85,10 @@ updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
         continue;
       order.push_back(oldOrder[i]);
     }
-    auto newCtaEnc = updateCTALayoutForShape(ctaLayout, tensorType.getShape());
+    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return ttg::SwizzledSharedEncodingAttr::get(
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        order, newCtaEnc);
+        order, newCgaEnc);
   }
 
   constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";

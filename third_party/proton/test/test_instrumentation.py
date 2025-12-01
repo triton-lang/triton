@@ -760,7 +760,6 @@ def test_overhead(tmp_path: pathlib.Path):
     assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
 
 
-@pytest.mark.skipif(is_hip(), reason="not implemented yet")
 def test_gmem_buffer(tmp_path: pathlib.Path):
 
     @triton.jit

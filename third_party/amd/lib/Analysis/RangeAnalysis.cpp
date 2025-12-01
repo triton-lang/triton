@@ -568,7 +568,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
-                SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {
+                SplatOp, ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -583,7 +583,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
                                                          joinCallback);
         })
-        .Case<JoinOp>([&](auto joinOp) {
+        .Case<JoinOp, CatOp>([&](auto joinOp) {
           return inferResultRangesBinaryOpUnionArgRanges(
               joinOp, argConstIntRanges, joinCallback);
         })
@@ -630,7 +630,7 @@ void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp op) {
 
 void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
-    RegionBranchPoint successor,
+    RegionSuccessor successor,
     ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) {
   LLVM_DEBUG({
     DBGS() << "Visit Region Succesors of ";
@@ -715,10 +715,11 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         if (!inputs.empty()) {
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         }
-        visitNonControlFlowArguments(branch,
-                                     RegionSuccessor(branch->getResults().slice(
-                                         firstIndex, inputs.size())),
-                                     lattices, firstIndex);
+        visitNonControlFlowArguments(
+            branch,
+            RegionSuccessor(
+                branch, branch->getResults().slice(firstIndex, inputs.size())),
+            lattices, firstIndex);
       } else {
         if (!inputs.empty()) {
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();

@@ -130,7 +130,6 @@ struct ConvertTritonAMDGPUToLLVM
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
 
-    AMD::addLocalBarrierAfterAmdGpuAsyncWait(mod);
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
@@ -246,6 +245,9 @@ struct ConvertTritonAMDGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+
+    mlir::triton::AMD::populateWarpIdOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
         mlir::amdgpu::Chipset::parse(this->arch);

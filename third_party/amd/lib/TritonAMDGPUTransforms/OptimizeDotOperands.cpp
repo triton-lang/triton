@@ -9,7 +9,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -83,11 +82,11 @@ public:
     LDBG("Found load of scale: " << loadOp << " for ScaleUpcast: " << op);
     auto srcTy = dyn_cast<RankedTensorType>(loadOp.getType());
     auto sharedOrder = ttg::getOrderForMemory(srcTy);
-    auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+    auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
 
     auto ctx = loadOp.getContext();
     auto attr = ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, sharedOrder,
-                                                     ctaLayout);
+                                                     cgaLayout);
     Location loc = loadOp.getLoc();
     auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
     rewriter.setInsertionPointAfter(loadOp);

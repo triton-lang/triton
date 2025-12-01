@@ -489,7 +489,11 @@ class JITCallable:
         self.__module__ = fn.__module__
 
     def get_capture_scope(self):
-        return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
+        fn = self.fn
+        if fn.__closure__ is None:
+            return self.__globals__
+        nonlocals = {name: cell.cell_contents for name, cell in zip(fn.__code__.co_freevars, fn.__closure__)}
+        return self.__globals__ | nonlocals
 
     @property
     def cache_key(self) -> str:
@@ -709,6 +713,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
+        # add a cache field to the kernel specializations for kernel specific
+        # pass pipelines
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
+            specialization.append(f'("custom_pipeline", {inspect_stages_hash})')
+
         key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
@@ -737,8 +747,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
-            if hasattr(kernel, "result"):
-                kernel = kernel.result()
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
