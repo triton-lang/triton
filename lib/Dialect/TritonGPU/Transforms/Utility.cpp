@@ -614,8 +614,6 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
   if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;
@@ -626,9 +624,6 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
 }
 
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
-  if (isa<triton::CatOp>(op))
-    return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
-                                        targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -932,8 +927,6 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -1083,7 +1076,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
 }
 
 inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
+swizzleDotOperandLike(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
   // DotOperandEncodingAttr with a tile of this shape This works because
@@ -1117,7 +1110,7 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
     return {};
   }
   return ttg::SwizzledSharedEncodingAttr::get(
-      ctx, opIdx, kWidth, type.getShape(), order, ctaLayout,
+      ctx, opIdx, kWidth, type.getShape(), order, cgaLayout,
       type.getElementTypeBitWidth(), false);
 }
 
@@ -1150,22 +1143,22 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto dstTy = cast<RankedTensorType>(user->getResult(0).getType());
 
-      // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
+      // FIXME This may not be correct for multiple CTA, but getCGALayout is NYI
       // for LinearEncodingAttr
-      auto CTALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
-                           ? ttg::getCTALayout(srcTy.getEncoding())
-                           : ttg::getCTALayout(dstTy.getEncoding());
+      auto CGALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
+                           ? ttg::getCGALayout(srcTy.getEncoding())
+                           : ttg::getCGALayout(dstTy.getEncoding());
 
       if (auto dot =
               dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding())) {
         auto order = getOrderForMemory(srcTy);
         unsigned bitWidth = srcTy.getElementTypeBitWidth();
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            val.getContext(), dot, srcTy.getShape(), order, CTALayout, bitWidth,
+            val.getContext(), dot, srcTy.getShape(), order, CGALayout, bitWidth,
             /*needTrans=*/false);
       } else {
         // Try to see if the layout is like an mma microtile
-        tempAttr = swizzleDotOperandLike(dstTy, CTALayout);
+        tempAttr = swizzleDotOperandLike(dstTy, CGALayout);
       }
       if (!tempAttr)
         return std::nullopt;
