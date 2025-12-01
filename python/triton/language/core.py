@@ -4,7 +4,7 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps
+from functools import partial, wraps, cached_property
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
@@ -749,8 +749,13 @@ class tuple_type(base_type):
 
     def __init__(self, types, fields=None):
         self.types = types
-        self.fields = fields or [''] * len(types)
-        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
+        self.fields = fields
+
+    @cached_property
+    def name(self):
+        if self.fields is None:
+            return '[' + ','.join(str(v) for v in self.types) + ']'
+        return '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
@@ -760,8 +765,7 @@ class tuple_type(base_type):
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
         for ty in self.types:
-            if not isinstance(ty, constexpr):
-                ty._flatten_ir_types(builder, out)
+            ty._flatten_ir_types(builder, out)
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
@@ -1276,7 +1280,10 @@ class tuple(base_value):
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     def __getattr__(self, name):
-        return self.values[self.type.fields.index(name)]
+        fields = self.type.fields
+        if fields is None or name not in fields:
+            raise AttributeError(f"'tuple' object has no attribute {name}")
+        return self.values[fields.index(name)]
 
     # TODO: remove
     def _setitem(self, idx, value):
