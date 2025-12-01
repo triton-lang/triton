@@ -519,30 +519,6 @@ def tl_trans(value, *dims, _semantic=None):
     return value.trans(*dims, _semantic=_semantic)
 
 
-@ttgl._core.builtin
-def cat(input, other, can_reorder=False, layout=None, _semantic=None):
-    """
-    Concatenate the two tensors.
-
-    Args:
-        input (tensor): The first input tensor.
-        other (tensor): The second input tensor.
-        can_reorder (bool): Compiler hint. If true, the compiler is allowed to reorder elements while concatenating inputs.  Only use if the order does not matter (e.g., result is only used in reduction ops).  Current implementation of `cat` supports only can_reorder=True.
-        layout (DistributedLayout): The destination layout of the output tensor.
-
-    Returns:
-        tensor: The concatenated tensor.
-    """
-    can_reorder = ttgl._core._unwrap_if_constexpr(can_reorder)
-    layout = ttgl._core._unwrap_if_constexpr(layout)
-    return _semantic.cat(input, other, can_reorder, layout)
-
-
-@gluon.jit
-def tl_cat(lhs, rhs, can_reorder=False):
-    return cat(lhs, rhs, can_reorder, layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]], ttgl.num_warps()))
-
-
 @gluon.jit
 def reset_to_default_layout(value):
     ty: ttgl.constexpr = value.type
