@@ -15,13 +15,13 @@ from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
-
 
 @dataclass(frozen=True)
 class FusedActivation:
@@ -238,7 +238,7 @@ def matmul(a, b, bias,
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
-    # unpack scales
+    # unpack b scale
     b_scale = precision_config.b_mx_scale
     b_has_mx = b_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(b.dtype) == 8
@@ -254,6 +254,7 @@ def matmul(a, b, bias,
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
         b_scale.dtype = torch.uint8
+    # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
@@ -430,12 +431,31 @@ def matmul(a, b, bias,
         b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense", is_scale=True)
     else:
         b_scale_tensor_or_tma = b_scale
+    # create tma descriptor for x_scale
+    a_scale_has_tma = opt_flags.is_persistent and a_has_mx
+    if a_scale_has_tma:
+        # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
+        if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
+            a_scale_has_tma = False
+        if not is_input_batched:
+            a_scale_has_tma = False
+        if opt_flags.block_m < 128 or opt_flags.block_k < 128: # need to be at least 128 for TMA
+            a_scale_has_tma = False
+    if a_scale_has_tma:
+        a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
+        a_scale.dtype = torch.uint8
+        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
+        a_scale_tensor_or_tma = a_scale.storage.make_tma(a_scale_tma_block_size, "dense", is_scale=True)
+    else:
+        a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
     # canonicalize strides
     a_strides = [0]*(3 - a_storage.data.ndim) + list(a_storage.data.stride())
-    a_scale_strides = a_scale.stride() if a_has_mx else (None, None, None)
+    a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
     a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
+
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
@@ -457,7 +477,7 @@ def matmul(a, b, bias,
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a_storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
-                   None if a_scale is None else a_scale.data.view(torch.uint8), *a_scale_strides,
+                   a_scale_tensor_or_tma, *a_scale_strides,
                    b_tensor_or_tma, b_storage.data, *b_storage.data.stride(), b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
