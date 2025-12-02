@@ -1454,13 +1454,13 @@ void mergePartitions(Graph *graph, std::string funcName,
           }
           if (ok) {
             LLVM_DEBUG({
-              llvm::errs() << "\napply heuristic \"" << name << "\"\n";
-              llvm::errs() << edge.getFromNode()->getLabel() << " -> "
+              llvm::dbgs() << "\napply heuristic \"" << name << "\"\n";
+              llvm::dbgs() << edge.getFromNode()->getLabel() << " -> "
                            << edge.getToNode()->getLabel() << "\n";
-              llvm::errs() << "partitions "
+              llvm::dbgs() << "partitions "
                            << edge.getFromNode()->getPartition() << " -> "
                            << edge.getToNode()->getPartition() << "\n";
-              llvm::errs() << "flags "
+              llvm::dbgs() << "flags "
                            << edge.getFromNode()->getPartition()->getFlags()
                            << " -> "
                            << edge.getToNode()->getPartition()->getFlags()
