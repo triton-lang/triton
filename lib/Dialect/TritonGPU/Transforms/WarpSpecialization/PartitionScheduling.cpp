@@ -1201,25 +1201,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isNone(from) && isSFU(to);
      }},
 
-    // NONE/cheap SFU merges with consumer (except LOAD, MMA or costly SFU)
-    {"none_consumer",
-     [](Edge edge) {
-       auto from = edge.getFromNode();
-       auto to = edge.getToNode();
-       return (isNone(from) || (isSFU(from) && !isCostlySFU(from))) &&
-              !isNone(to) && !isMMA(to) && !isLoad(to) && !isCostlySFU(to);
-     }},
-
-    // NONE op with a single consumer merges together
-    // {"single_consumer",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    if (from->getNumOutDataEdges() > 1)
-    //      return false;
-    //    return isNone(from) && isNone(to);
-    //  }},
-
     // TMEM load merges with consumer
     // FIXME: limit to single consumer?
     {"tmem_load",
@@ -1227,6 +1208,23 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        return node_isa<ttng::TMEMLoadOp>(from);
+     }},
+
+    // TMEM and STORE groups merge
+    {"tmem_store",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return isTMEM(from) && isStore(to);
+     }},
+
+    // NONE/cheap SFU merges with consumer (except LOAD, MMA or costly SFU)
+    {"none_consumer",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return (isNone(from) || (isSFU(from) && !isCostlySFU(from))) &&
+              !isNone(to) && !isMMA(to) && !isLoad(to) && !isCostlySFU(to);
      }},
 
     // NONE merges with producer (except LOAD or MMA)
@@ -1255,6 +1253,15 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isOnlyNone(from) && isOnlyNone(to);
      }},
 
+    // merge connected NONE and MANUAL partitions together
+    {"connected_none_manual",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return (isOnlyNone(from) && isManual(to)) ||
+              (isOnlyNone(to) && isManual(from));
+     }},
+
     // merge connected partitions together if edge between is expensive
     // TODO: this might be better expressed as a horizontal rule,
     // that aims to keep shmem usage under the limit
@@ -1263,7 +1270,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        return !isLoad(from) && !isLoad(to) && !isMMA(from) && !isMMA(to) &&
-              edge.getSize() > 8192; // FIXME: seemingly arbitrary size...
+              edge.getSize() > 16384; // FIXME: seemingly arbitrary size...
      }},
 };
 
