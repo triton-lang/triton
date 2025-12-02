@@ -9,14 +9,7 @@
 
 namespace proton {
 
-enum class MetricKind {
-  Flexible,
-  Kernel,
-  PCSampling,
-  RocprofPCSampling,
-  Cycle,
-  Count
-};
+enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 
@@ -273,70 +266,6 @@ private:
       "stalled_sleeping",
       "stalled_selected",
   };
-};
-
-class RocprofPCSamplingMetric : public Metric {
-public:
-  enum RocprofPCSamplingMetricKind : int {
-    // Proton aggregation counters
-    NumSamples = 0,
-    NumStalledSamples,
-    // Maps to rocprofiler_pc_sampling_instruction_not_issued_reason_t
-    NotIssuedNone,           // ¯\_(ツ)_/¯
-    NotIssuedNoInstruction,  // no available instruction in instruction cache
-    NotIssuedAluDependency,  // data dep
-    NotIssuedWaitcnt,        // waiting on mem
-    NotIssuedInternal,       // ¯\_(ツ)_/¯
-    NotIssuedBarrier,        // waiting on a barrier
-    NotIssuedArbiterNotWin,  // the instruction did not win the arbiter.
-    NotIssuedArbiterExStall, // arbiter issued an instruction, but the execution
-                             // pipe pushed it back from execution.
-    NotIssuedOtherWait,      // other types of wait (e.g., wait for XNACK
-                             // acknowledgment).
-    NotIssuedSleep,          // wave was sleeping
-    Count
-  };
-
-  RocprofPCSamplingMetric()
-      : Metric(MetricKind::PCSampling, RocprofPCSamplingMetricKind::Count) {}
-
-  RocprofPCSamplingMetric(RocprofPCSamplingMetricKind kind, uint64_t samples,
-                          uint64_t stalledSamples)
-      : RocprofPCSamplingMetric() {
-    this->values[kind] = stalledSamples;
-    this->values[RocprofPCSamplingMetricKind::NumSamples] = samples;
-    this->values[RocprofPCSamplingMetricKind::NumStalledSamples] =
-        stalledSamples;
-  }
-
-  virtual const std::string getName() const {
-    return "RocprofPCSamplingMetric";
-  }
-
-  virtual const std::string getValueName(int valueId) const {
-    return VALUE_NAMES[valueId];
-  }
-
-  virtual bool isProperty(int valueId) const { return false; }
-
-  virtual bool isExclusive(int valueId) const { return false; }
-
-private:
-  const static inline std::string
-      VALUE_NAMES[RocprofPCSamplingMetricKind::Count] = {
-          "num_samples",
-          "num_stalled_samples",
-          "not_issued_none",
-          "not_issued_no_instruction",
-          "not_issued_alu_dependency",
-          "not_issued_waitcnt",
-          "not_issued_internal",
-          "not_issued_barrier",
-          "not_issued_arbiter_not_win",
-          "not_issued_arbiter_ex_stall",
-          "not_issued_other_wait",
-          "not_issued_sleep",
-      };
 };
 
 class CycleMetric : public Metric {

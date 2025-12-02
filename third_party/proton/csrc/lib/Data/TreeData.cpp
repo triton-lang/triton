@@ -255,16 +255,6 @@ void TreeData::dumpHatchet(std::ostream &os) const {
               [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
               pcSamplingMetric->getValues()[i]);
         }
-      } else if (metricKind == MetricKind::RocprofPCSampling) {
-        auto pcSamplingMetric =
-            std::dynamic_pointer_cast<RocprofPCSamplingMetric>(metric);
-        for (size_t i = 0; i < RocprofPCSamplingMetric::Count; i++) {
-          auto valueName = pcSamplingMetric->getValueName(i);
-          inclusiveValueNames.insert(valueName);
-          std::visit(
-              [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
-              pcSamplingMetric->getValues()[i]);
-        }
       } else if (metricKind == MetricKind::Cycle) {
         auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
         uint64_t duration =
