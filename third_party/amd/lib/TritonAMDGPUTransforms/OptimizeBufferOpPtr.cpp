@@ -207,7 +207,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   }
 
   static arith::AddIOp findOffsetAddCandidate(Value incrementedOffset) {
-    auto addOp = dyn_cast<arith::AddIOp>(incrementedOffset.getDefiningOp());
+    auto addOp =
+        dyn_cast_or_null<arith::AddIOp>(incrementedOffset.getDefiningOp());
     return addOp;
   }
 

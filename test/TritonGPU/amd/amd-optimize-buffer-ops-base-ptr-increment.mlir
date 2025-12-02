@@ -1,14 +1,14 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950" --tritonamdgpu-optimize-buffer-op-ptr| FileCheck %s --check-prefixes=COMMON
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950" --tritonamdgpu-optimize-buffer-op-ptr| FileCheck %s --check-prefixes=CHECK
 
-// COMMON-LABEL: add_after_load
-// COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON-DAG: [[Y_OFFSET_CST:%.*]] = arith.constant dense<321>
-// COMMON: scf.for {{.*}} iter_args({{.*}}, {{.*}}, [[X_BASE:%.*]] = {{.*}}, [[Y_BASE:%.*]] = {{.*}})
-// COMMON:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}} :
-// COMMON:   amdg.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} cacheModifier = cg :
-// COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
-// COMMON:   [[NEXT_Y_BASE:%.*]] = tt.addptr [[Y_BASE]]
-// COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]], [[NEXT_Y_BASE]]
+// CHECK-LABEL: add_after_load
+// CHECK-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK-DAG: [[Y_OFFSET_CST:%.*]] = arith.constant dense<321>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, [[X_BASE:%.*]] = {{.*}}, [[Y_BASE:%.*]] = {{.*}})
+// CHECK:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}} :
+// CHECK:   amdg.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} cacheModifier = cg :
+// CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
+// CHECK:   [[NEXT_Y_BASE:%.*]] = tt.addptr [[Y_BASE]]
+// CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]], [[NEXT_Y_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -53,12 +53,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: buffer_load_to_local
-// COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}}
-// COMMON:   amdg.buffer_load_to_local [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
-// COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
-// COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
+// CHECK-LABEL: buffer_load_to_local
+// CHECK-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}}
+// CHECK:   amdg.buffer_load_to_local [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
+// CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -86,12 +86,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: add_before_load
-// COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
-// COMMON:   amdg.buffer_load [[NEXT_X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
-// COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
+// CHECK-LABEL: add_before_load
+// CHECK-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
+// CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
+// CHECK:   amdg.buffer_load [[NEXT_X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -116,13 +116,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: isolated_pattern_nested_loop1
-// COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON: scf.for
-// COMMON:   scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
-// COMMON:     [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
-// COMMON:     scf.yield {{.*}}, [[NEXT_X_BASE]]
+// CHECK-LABEL: isolated_pattern_nested_loop1
+// CHECK: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK: scf.for
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
+// CHECK:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// CHECK:     [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
+// CHECK:     scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -151,13 +151,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: isolated_pattern_nested_loop2
-// COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:   scf.for
-// COMMON:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
-// COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
-// COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
+// CHECK-LABEL: isolated_pattern_nested_loop2
+// CHECK: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
+// CHECK:   scf.for
+// CHECK:     amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
+// CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -186,12 +186,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: convert_with_base_ptr_optimization
-// COMMON: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
-// COMMON: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
-// COMMON:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
-// COMMON:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
-// COMMON:   scf.yield {{.*}}, [[NEXT_X_BASE]]
+// CHECK-LABEL: convert_with_base_ptr_optimization
+// CHECK: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, [[X_BASE:%.*]] = {{.*}})
+// CHECK:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}}
+// CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]]
+// CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -218,10 +218,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: dynamic_base_negative
-// COMMON:   [[X_BASE:%.*]] = tt.addptr
-// COMMON:   amdg.buffer_load [[X_BASE]]
-// COMMON-NOT: tt.addptr
+// CHECK-LABEL: dynamic_base_negative
+// CHECK:   [[X_BASE:%.*]] = tt.addptr
+// CHECK:   amdg.buffer_load [[X_BASE]]
+// CHECK-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -248,8 +248,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: non_uniform_step_negative
-// COMMON-NOT: tt.addptr
+// CHECK-LABEL: non_uniform_step_negative
+// CHECK-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -274,8 +274,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: offsets_possible_overflow_negative
-// COMMON-NOT: tt.addptr
+// CHECK-LABEL: offsets_possible_overflow_negative
+// CHECK-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -301,8 +301,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: two_parallel_addi_negative
-// COMMON-NOT: tt.addptr
+// CHECK-LABEL: two_parallel_addi_negative
+// CHECK-NOT: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -330,13 +330,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // -----
 
 // Check case with three buffer ops in a loop, first and third are optimized, second is rejected because step is not uniform
-// COMMON-LABEL: mixed_optimized_rejected_optimized
+// CHECK-LABEL: mixed_optimized_rejected_optimized
 // CHECK-DAG: [[X_OFFSET:%.*]] = arith.constant dense<123> : tensor<16x64xi32, #blocked>
+// CHECK-DAG: [[Y_OFFSET_INIT:%.*]] = arith.constant dense<456> : tensor<64x32xi32, #blocked>
 // CHECK-DAG: [[Z_OFFSET:%.*]] = arith.constant dense<789> : tensor<32x32xi32, #blocked>
-// CHECK: scf.for {{.*}} iter_args{{.*}}[[Y_OFFSET:%.*]]{{.*}}
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
+// CHECK: scf.for {{.*}} iter_args({{%.*}}[[Y_OFFSET:%.*]] = [[Y_OFFSET_INIT]]
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[X_OFFSET]]{{\]}} : tensor<16x64xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -385,12 +386,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // -----
 
 // Check case with three buffer ops in a loop, only second one is optimized
-// COMMON-LABEL: mixed_rejected_optimized_rejected
-// CHECK-DAG: [[Y_OFFSET:%.*]] = arith.constant dense<123> : tensor<16x64xi32, #blocked>
-// CHECK: scf.for {{.*}} iter_args{{.*}}[[X_OFFSET:%.*]]{{.*}}[[Z_OFFSET:%.*]]{{.*}}
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[X_OFFSET]]{{]}} : tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Y_OFFSET]]{{]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*[}}[[Z_OFFSET]]{{]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
+// CHECK-LABEL: mixed_rejected_optimized_rejected
+// CHECK-DAG: [[X_OFFSET_INIT:%.*]] = arith.constant dense<123> : tensor<16x64xi32, #blocked>
+// CHECK-DAG: [[Y_OFFSET:%.*]] = arith.constant dense<456> : tensor<64x32xi32, #blocked>
+// CHECK-DAG: [[Z_OFFSET_INIT:%.*]] = arith.constant dense<789> : tensor<32x32xi32, #blocked>
+// CHECK: scf.for {{.*}} iter_args([[X_OFFSET:%.*]] = [[X_OFFSET_INIT]], {{.*}}[[Z_OFFSET:%.*]] = [[Z_OFFSET_INIT]]
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[X_OFFSET]]{{\]}} : tensor<16x64xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} cacheModifier = cg : tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} cacheModifier = cg : tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -438,7 +441,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: multiple_offset_uses
+// CHECK-LABEL: multiple_offset_uses
 // CHECK: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -468,7 +471,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: multiple_offset_uses_over_multiple_loops
+// CHECK-LABEL: multiple_offset_uses_over_multiple_loops
 // CHECK: scf.for
 // CHECK:   tt.addptr
 // CHECK:   scf.for
@@ -506,8 +509,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: multiple_addi_in_sequence_negative
-// COMMON-NOT:  tt.addptr
+// CHECK-LABEL: multiple_addi_in_sequence_negative
+// CHECK-NOT:  tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -537,7 +540,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COMMON-LABEL: multiple_buffer_loads_on_one_addi
+// CHECK-LABEL: multiple_buffer_loads_on_one_addi
 // CHECK-COUNT-2: tt.addptr
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -561,5 +564,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
     }
     tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: messed_add_chain_negative
+// CHECK-NOT:  tt.addptr
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @messed_add_chain_negative(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) -> tensor<256xi32, #blocked> attributes {noinline = false} {
+    %zero = arith.constant dense<0> : tensor<256xi32, #blocked>
+    %iter_first = arith.constant 0 : i32
+    %iter_last = arith.constant 15 : i32
+    %iter_step = arith.constant 1 : i32
+
+    %for:2 = scf.for %iter = %iter_first to %iter_last step %iter_step iter_args(%arg1 = %zero, %arg2 = %zero) -> (tensor<256xi32, #blocked>, tensor<256xi32, #blocked>) : i32 {
+      %data = amdg.buffer_load %arg0[%arg1] : tensor<256xi32, #blocked>
+      scf.yield %arg2, %data : tensor<256xi32, #blocked>, tensor<256xi32, #blocked>
+    }
+    tt.return %for#1 : tensor<256xi32, #blocked>
   }
 }
