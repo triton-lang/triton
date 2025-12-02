@@ -824,7 +824,6 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
         assert len(warp1_events) == 2
 
 
-
 def test_event_args(tmp_path: pathlib.Path):
 
     @triton.jit
