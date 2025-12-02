@@ -197,6 +197,24 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
     }
   }
 
+  Partition *scaleTmemCopyPartition = nullptr;
+  auto setScaleCopyPartition = [&](Value scale) {
+    if (loop.isDefinedOutsideOfLoop(scale)) {
+      return;
+    }
+    // If scales are defined by tmem_alloc at this point, it implies that
+    // the scale layout is incompatible with tmem_copy. To make MMA asynchronous
+    // while scales are copied into TMEM via tmem_store, we need to double
+    // buffer scales in TMEM. We create a dedicated partition responsible for
+    // storing scales into double-buffered TMEM.
+    if (auto tmemAlloc = scale.getDefiningOp<ttng::TMEMAllocOp>()) {
+      if (!scaleTmemCopyPartition) {
+        scaleTmemCopyPartition = partitions.addPartition(0);
+      }
+      setPartition(tmemAlloc, scaleTmemCopyPartition);
+    }
+  };
+
   // Find MMAs to pipeline.
   SmallVector<ttng::MMAv5OpInterface> mmas;
   for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
@@ -237,6 +255,12 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
       setPartition(op, mmaPartition);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
+    }
+
+    if (auto mmaScaled =
+            dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {
+      setScaleCopyPartition(mmaScaled.getAScale());
+      setScaleCopyPartition(mmaScaled.getBScale());
     }
   }
 
