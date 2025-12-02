@@ -454,9 +454,9 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
     torch.manual_seed(0)
 
     def cast(x, dtype):
-        if use_tcgen05 or dtype != torch.float32:
+        if dtype != torch.float32:
             return x.to(dtype)
-        # For b16 and fp32
+        # For b16 and fp32 (in both hopper and blackwell it seems)
         # Element-wise multiplication of matrix A and B is performed with specified precision.
         # wgmma.mma_async operation involving type .tf32 will truncate lower 13 bits of the 32-bit
         # input data before multiplication is issued
@@ -692,9 +692,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     torch.manual_seed(0)
 
     def cast(x, dtype):
-        if use_tcgen05 or dtype != torch.float32:
+        if dtype != torch.float32:
             return x.to(dtype)
-        # For b16 and fp32
+        # For b16 and fp32 (in both hopper and blackwell it seems)
         # Element-wise multiplication of matrix A and B is performed with specified precision.
         # wgmma.mma_async operation involving type .tf32 will truncate lower 13 bits of the 32-bit
         # input data before multiplication is issued
