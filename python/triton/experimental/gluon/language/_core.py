@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
@@ -95,6 +96,7 @@ def builtin(fn: T) -> T:
         return fn(*args, **kwargs)
 
     setattr(wrapper, GLUON_BUILTIN, True)
+    wrapper.signature = inspect.signature(fn)
 
     return wrapper
 
