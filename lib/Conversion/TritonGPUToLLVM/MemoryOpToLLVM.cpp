@@ -13,6 +13,118 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+// Helper for LocalGather/ScatterOpConversion.
+// For gather: storeVals is empty, returns loaded values.
+// For scatter: storeVals contains values to store, returns empty.
+SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
+                                  MemDescType memDescTy,
+                                  SharedMemoryObject smemObj, Type llvmElemTy,
+                                  ArrayRef<Value> idxValues,
+                                  ArrayRef<SmallVector<Value>> coords,
+                                  unsigned axis, ArrayRef<Value> storeVals,
+                                  RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool isScatter = !storeVals.empty();
+
+  // Get the shared memory layout (linear component for padded layouts)
+  auto sharedEnc =
+      cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+  LinearLayout sharedLayout;
+  if (paddedEnc) {
+    sharedLayout = paddedEnc.getLinearComponent();
+  } else {
+    sharedLayout = toLinearLayout(memDescTy);
+  }
+  LinearLayout invSharedLayout = sharedLayout.invert();
+
+  // Get layout dimension names for all dims
+  SmallVector<StringAttr> allDims;
+  for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
+    allDims.push_back(str_attr("dim" + Twine(dim)));
+  }
+
+  auto kOffset = str_attr("offset");
+
+  // Get the subslice affine offset (non-zero for memdesc subslices)
+  Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+
+  SmallVector<Value> results;
+  if (!isScatter) {
+    results.resize(coords.size());
+  }
+
+  for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
+    // Convert index to i32 if needed
+    Value idx = idxVal;
+    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+    if (idxWidth > 32) {
+      idx = b.trunc(i32_ty, idx);
+    } else if (idxWidth < 32) {
+      idx = b.zext(i32_ty, idx);
+    }
+
+    // Copy coordinates and replace the axis coordinate with the index value
+    SmallVector<Value> indices(coords[i]);
+    indices[axis] = idx;
+
+    // Apply inverted shared layout to compute offset
+    SmallVector<std::pair<StringAttr, Value>> inputs;
+    for (unsigned dim = 0; dim < indices.size(); ++dim) {
+      inputs.push_back({allDims[dim], indices[dim]});
+    }
+
+    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+    // Extract the offset value
+    Value offset = nullptr;
+    for (auto [name, value] : outputs) {
+      if (name == kOffset) {
+        offset = value;
+        break;
+      }
+    }
+    assert(offset && "expected offset output from inverted shared layout");
+
+    // For subslices, the physical offset is computed as:
+    //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
+    //
+    // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
+    // enforces:
+    // 1. Subslice offsets must be multiples of the tile size
+    // 2. Subslice offsets must map to power-of-2 physical offsets
+    //
+    // These constraints ensure the bit ranges of L⁻¹(coords) and
+    // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
+    offset = b.xor_(offset, affineOffset);
+
+    // Add padding offset for padded layouts (non-linear component)
+    Value ptr;
+    if (paddedEnc) {
+      // Convert offset to bytes for padding calculation
+      Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
+      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
+                                    offsetBytes, /*offsetInBytes=*/true);
+      // GEP in bytes: base + offset*elemSize + padOffset
+      Value totalOffset = b.add(offsetBytes, padOffset);
+      ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
+                  totalOffset);
+    } else {
+      ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
+                  offset);
+    }
+
+    if (isScatter) {
+      b.store(storeVals[i], ptr);
+    } else {
+      results[i] = b.load(llvmElemTy, ptr);
+    }
+  }
+
+  return results;
+}
+
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -245,112 +357,23 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto memDescVal = op.getSrc();
-    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto memDescTy = cast<MemDescType>(op.getSrc().getType());
     auto regTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
-    unsigned axis = op.getAxis();
 
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout (linear component for padded layouts)
-    auto sharedEnc =
-        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-    LinearLayout sharedLayout;
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = toLinearLayout(memDescTy);
-    }
-    LinearLayout invSharedLayout = sharedLayout.invert();
-
-    // Get layout dimension names for all dims
-    SmallVector<StringAttr> allDims;
-    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
-      allDims.push_back(str_attr("dim" + Twine(dim)));
-    }
-
-    auto kOffset = str_attr("offset");
-
-    // Get the subslice affine offset (non-zero for memdesc subslices)
-    Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-
-    // Unpack the runtime index values
     SmallVector<Value> idxValues =
         unpackLLElements(loc, adaptor.getIndices(), rewriter);
-
-    // Emit the indices of the result tensor owned by this thread
     SmallVector<SmallVector<Value>> dstIndices =
         emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
                     /*withCTAOffset=*/true);
 
-    // For each output element, replace the axis coordinate with the index value
-    SmallVector<Value> results(dstIndices.size());
-    for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
-      // Convert index to i32 if needed
-      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
-      if (idxWidth > 32) {
-        idx = b.trunc(i32_ty, idx);
-      } else if (idxWidth < 32) {
-        idx = b.zext(i32_ty, idx);
-      }
-
-      // Replace the coordinate at the gather axis with the index value
-      indices[axis] = idx;
-
-      // Apply inverted shared layout to compute offset
-      SmallVector<std::pair<StringAttr, Value>> inputs;
-      for (unsigned dim = 0; dim < indices.size(); ++dim) {
-        inputs.push_back({allDims[dim], indices[dim]});
-      }
-
-      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-
-      // Extract the offset value
-      Value offset = nullptr;
-      for (auto [name, value] : outputs) {
-        if (name == kOffset) {
-          offset = value;
-          break;
-        }
-      }
-      assert(offset && "expected offset output from inverted shared layout");
-
-      // For subslices, the physical offset is computed as:
-      //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
-      //
-      // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
-      // enforces:
-      // 1. Subslice offsets must be multiples of the tile size
-      // 2. Subslice offsets must map to power-of-2 physical offsets
-      //
-      // These constraints ensure the bit ranges of L⁻¹(coords) and
-      // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
-      offset = b.xor_(offset, affineOffset);
-
-      // Add padding offset for padded layouts (non-linear component)
-      if (paddedEnc) {
-        // Convert offset to bytes for padding calculation
-        Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                      offsetBytes, /*offsetInBytes=*/true);
-        // GEP in bytes: base + offset*elemSize + padOffset
-        Value totalOffset = b.add(offsetBytes, padOffset);
-        Value ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
-                          totalOffset);
-        results[i] = b.load(llvmElemTy, ptr);
-      } else {
-        // Load from shared memory at the computed offset
-        Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
-                          smemObj.getBase(), offset);
-        results[i] = b.load(llvmElemTy, ptr);
-      }
-    }
+    auto results = lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy,
+                                  idxValues, dstIndices, op.getAxis(),
+                                  /*storeVals=*/{}, rewriter);
 
     Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
@@ -376,113 +399,24 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto memDescVal = op.getDst();
-    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto memDescTy = cast<MemDescType>(op.getDst().getType());
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
-    unsigned axis = op.getAxis();
 
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout (linear component for padded layouts)
-    auto sharedEnc =
-        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-    LinearLayout sharedLayout;
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = toLinearLayout(memDescTy);
-    }
-    LinearLayout invSharedLayout = sharedLayout.invert();
-
-    // Get layout dimension names for all dims
-    SmallVector<StringAttr> allDims;
-    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
-      allDims.push_back(str_attr("dim" + Twine(dim)));
-    }
-
-    auto kOffset = str_attr("offset");
-
-    // Get the subslice affine offset (non-zero for memdesc subslices)
-    Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-
-    // Unpack the runtime values and index values
     SmallVector<Value> values =
         unpackLLElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> idxValues =
         unpackLLElements(loc, adaptor.getIndices(), rewriter);
-
-    // Emit the indices of the values tensor owned by this thread
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
 
-    // For each value element, replace the axis coordinate with the index value
-    for (auto [i, idx, indices] : llvm::enumerate(idxValues, srcIndices)) {
-      // Convert index to i32 if needed
-      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
-      if (idxWidth > 32) {
-        idx = b.trunc(i32_ty, idx);
-      } else if (idxWidth < 32) {
-        idx = b.zext(i32_ty, idx);
-      }
-
-      // Replace the coordinate at the scatter axis with the index value
-      indices[axis] = idx;
-
-      // Apply inverted shared layout to compute offset
-      SmallVector<std::pair<StringAttr, Value>> inputs;
-      for (unsigned dim = 0; dim < indices.size(); ++dim) {
-        inputs.push_back({allDims[dim], indices[dim]});
-      }
-
-      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-
-      // Extract the offset value
-      Value offset = nullptr;
-      for (auto [name, value] : outputs) {
-        if (name == kOffset) {
-          offset = value;
-          break;
-        }
-      }
-      assert(offset && "expected offset output from inverted shared layout");
-
-      // For subslices, the physical offset is computed as:
-      //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
-      //
-      // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
-      // enforces:
-      // 1. Subslice offsets must be multiples of the tile size
-      // 2. Subslice offsets must map to power-of-2 physical offsets
-      //
-      // These constraints ensure the bit ranges of L⁻¹(coords) and
-      // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
-      offset = b.xor_(offset, affineOffset);
-
-      // Add padding offset for padded layouts (non-linear component)
-      if (paddedEnc) {
-        // Convert offset to bytes for padding calculation
-        Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                      offsetBytes, /*offsetInBytes=*/true);
-        // GEP in bytes: base + offset*elemSize + padOffset
-        Value totalOffset = b.add(offsetBytes, padOffset);
-        Value ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
-                          totalOffset);
-        b.store(values[i], ptr);
-      } else {
-        // Store to shared memory at the computed offset
-        Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
-                          smemObj.getBase(), offset);
-        b.store(values[i], ptr);
-      }
-    }
+    lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy, idxValues,
+                   srcIndices, op.getAxis(), values, rewriter);
 
     rewriter.eraseOp(op);
     return success();
