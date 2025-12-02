@@ -279,6 +279,43 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     ttgl.store(out_ptrs, acc)
 
 
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize("ASYNC", [True, False])
+def test_warpgroup_mma(ASYNC):
+    torch.manual_seed(0)
+    M, N, K = 64, 32, 32
+    warps = [4, 1]
+    block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+    out = torch.zeros((M, N), device="cuda", dtype=torch.float16)
+    mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout,
+        block_layout,
+        block_layout,
+        acc_layout,
+        shared_layout_a,
+        shared_layout_b,
+        ttgl.float16,
+        ASYNC,
+        False,
+        num_warps=warps[0] * warps[1],
+    )
+
+    ref = torch.matmul(a, b)
+
+    torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
 @gluon.jit
 def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
                                  NUM_K_TILES: ttgl.constexpr, block_layout_c: ttgl.constexpr,
@@ -331,43 +368,6 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, M: ttgl.constexpr, N: 
     offs_m = ttgl.arange(0, M)[:, None]
     offs_n = ttgl.arange(0, N)[None, :]
     ttgl.store(out_ptr + offs_m * N + offs_n, acc)
-
-
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
-@pytest.mark.parametrize("ASYNC", [True, False])
-def test_warpgroup_mma(ASYNC):
-    torch.manual_seed(0)
-    M, N, K = 64, 32, 32
-    warps = [4, 1]
-    block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
-    acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
-    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
-    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
-    out = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    mma_kernel[(1, )](
-        a,
-        b,
-        out,
-        M,
-        N,
-        K,
-        block_layout,
-        block_layout,
-        block_layout,
-        acc_layout,
-        shared_layout_a,
-        shared_layout_b,
-        ttgl.float16,
-        ASYNC,
-        False,
-        num_warps=warps[0] * warps[1],
-    )
-
-    ref = torch.matmul(a, b)
-
-    torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
 @pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
@@ -454,8 +454,12 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
     torch.manual_seed(0)
 
     def cast(x, dtype):
-        if dtype != torch.float32:
+        if use_tcgen05 or dtype != torch.float32:
             return x.to(dtype)
+        # For b16 and fp32
+        # Element-wise multiplication of matrix A and B is performed with specified precision.
+        # wgmma.mma_async operation involving type .tf32 will truncate lower 13 bits of the 32-bit
+        # input data before multiplication is issued
         x = x.view(torch.int32)
         x = x & ~((1 << 13) - 1)
         return x.view(dtype)
@@ -688,13 +692,15 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     torch.manual_seed(0)
 
     def cast(x, dtype):
-        if dtype != torch.float32:
-            return x.to(torch_dtype)
-        else:
-            # zero-out the lower 13 bits
-            x = x.view(torch.int32)
-            x = x & ~((1 << 13) - 1)
-            return x.view(dtype)
+        if use_tcgen05 or dtype != torch.float32:
+            return x.to(dtype)
+        # For b16 and fp32
+        # Element-wise multiplication of matrix A and B is performed with specified precision.
+        # wgmma.mma_async operation involving type .tf32 will truncate lower 13 bits of the 32-bit
+        # input data before multiplication is issued
+        x = x.view(torch.int32)
+        x = x & ~((1 << 13) - 1)
+        return x.view(dtype)
 
     # Sample bf16 as tf32 does not use the full range
     device = triton.runtime.driver.active.get_current_device()
