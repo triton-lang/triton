@@ -147,7 +147,7 @@ def get_blas_tflops(dtype, workspace_size=32 * 1024 * 1024, device="cuda"):
             dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fnuz}[dtype]
         else:
             raise RuntimeError(f"Unsupported CDNA version: {cdna_version}")
-        c_dtype = torch.float16
+        c_dtype = dtype if dtype.itemsize == 2 else torch.float16
         hipblas = amd.hipblas.HipblasLt(workspace)
         bench_fn = hipblas.matmul
     else:
