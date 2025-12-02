@@ -216,7 +216,8 @@ class shared_memory_descriptor_type(base_type):
 
     def mangle(self) -> str:
         shape_str = "_".join([str(s) for s in self.shape])
-        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
+        alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
+        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
 
 
 class shared_memory_descriptor(base_value):
