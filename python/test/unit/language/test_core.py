@@ -6383,7 +6383,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if is_hip_cdna3() and src_shape == [128, 64] and indices_shape == [256, 64]:
+    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
         pytest.skip('Not enough LDS.')
