@@ -376,14 +376,14 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (32, 32, 32), (256, 128, 32),
                                                        (64, 16, 64)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
-@pytest.mark.parametrize("two_ctas", [False])
+@pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, two_ctas):
     acc_dtype = torch.float32
 
     if ctas_per_cga != [1, 1]:
         pytest.skip("Only ctas_per_cga=[1, 1] supported for now")
-    if two_ctas:
-        pytest.skip("2CTA mode not supported for now")
+    if ctas_per_cga[0] == 1 and two_ctas:
+        pytest.skip("Need at least 2 CTAs along M for 2CTA mode")
 
     def compute_swizzling(bitwidth, K):
         return min(128, K * bitwidth // 8)
