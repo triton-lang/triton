@@ -54,4 +54,12 @@ MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
                                /*mutableMemory*/ true);
 }
 
+scf::ForOp getOuterWSLoop(scf::ForOp innerFor) {
+  auto wsLoop = innerFor;
+  while (wsLoop && !wsLoop->hasAttr(triton::kWarpSpecializeAttrName)) {
+    wsLoop = wsLoop->getParentOfType<scf::ForOp>();
+  }
+  return wsLoop;
+}
+
 } // namespace mlir::triton::nvws
