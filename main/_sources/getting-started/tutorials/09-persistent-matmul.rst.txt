@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-744
+.. GENERATED FROM PYTHON SOURCE LINES 21-759
 
 
 
@@ -62,17 +62,17 @@ Note that currently this tutorial will fail on devices with a small shared memor
       TMA Persistent (warp_specialize=False): ...      TMA Persistent (warp_specialize=False): ⭕  
       Tensor Descriptor Persistent (warp_specialize=False): ...      Tensor Descriptor Persistent (warp_specialize=False): ⭕  
 
-    Benchmarking cublas: ...    Benchmarking cublas: done
+    Benchmarking cuBLAS: ...    Benchmarking cuBLAS: done
     Benchmarking torch: ...    Benchmarking torch: done
     Benchmarking naive: ...    Benchmarking naive: done
     Benchmarking persistent: ...    Benchmarking persistent: done
-    168.520 16311.341 ROOT
-    ├─ 175.901 3906.706 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3906.706 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 166.687 4122.672 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 157.135 4373.290 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 175.813 3908.673 torch [M=8192, N=8192, K=512]
-       └─ nan 3908.673 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    168.455 16317.555 ROOT
+    ├─ 176.065 3903.064 cuBLAS [M=8192, N=8192, K=512]
+    │  └─ nan 3903.064 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 166.471 4128.015 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 157.051 4375.620 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 175.715 3910.856 torch [M=8192, N=8192, K=512]
+       └─ nan 3910.856 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -97,16 +97,29 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     from typing import Optional
 
-    if torch.cuda.is_available():
-        from triton._C.libtriton import nvidia
-        cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-        cublas = nvidia.cublas.CublasLt(cublas_workspace)
-    else:
-        cublas = None
-
 
     def is_cuda():
         return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+    def is_hip():
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+    if is_cuda():
+        from triton._C.libtriton import nvidia
+        device_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+        device_blas = nvidia.cublas.CublasLt(device_workspace)
+    elif is_hip():
+        from triton._C.libtriton import amd
+        device_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+        device_blas = amd.hipblas.HipblasLt(device_workspace)
+    else:
+        device_blas = None
+
+
+    def device_blas_name():
+        return 'cuBLAS' if is_cuda() else 'hipBLAS'
 
 
     def supports_tma():
@@ -658,7 +671,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         return c
 
 
-    def cublas_matmul(a, b):
+    def device_blas_matmul(a, b):
         # Check constraints.
         assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
         M, K = a.shape
@@ -667,9 +680,10 @@ Note that currently this tutorial will fail on devices with a small shared memor
         c = torch.empty((M, N), device=a.device, dtype=dtype)
         bytes_per_elem = a.element_size()
         flops_str = f"flops{bytes_per_elem * 8}"
-        with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
+        blas_name = device_blas_name()
+        with proton.scope(f"{blas_name} [M={M}, N={N}, K={K}]",
                           {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
-            cublas.matmul(a, b, c)
+            device_blas.matmul(a, b, c)
         return c
 
 
@@ -711,8 +725,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         b = b.T.contiguous()
 
-        if cublas is not None:
-            bench_fn("cublas", reps, warmup_reps, cublas_matmul, a, b)
+        if device_blas is not None:
+            blas_name = device_blas_name()
+            bench_fn(blas_name, reps, warmup_reps, device_blas_matmul, a, b)
         if dtype == torch.float16:
             bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
         bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
@@ -748,7 +763,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         naive_result = matmul(a, b.T).to(torch.float16)
         run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
-        run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
+        run_test(naive_result, device_blas_matmul, a, b, device_blas_name(), enabled=device_blas is not None)
         run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
 
         kernels = [
@@ -788,7 +803,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         args = parser.parse_args()
 
         if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
-            print("This example requires CUDA with fp8 support.")
+            print("This example requires CUDA/HIP with fp8 support.")
         else:
             dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
@@ -811,7 +826,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 27.178 seconds)
+   **Total running time of the script:** (1 minutes 24.460 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
