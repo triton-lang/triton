@@ -375,7 +375,6 @@ def _rocprofiler_headers_present(include_dir: str) -> bool:
 
 
 def _run_command(cmd, cwd=None):
-    print(f"[setup.py] Running: {' '.join(cmd)} (cwd={cwd or os.getcwd()})")
     subprocess.check_call(cmd, cwd=cwd)
 
 

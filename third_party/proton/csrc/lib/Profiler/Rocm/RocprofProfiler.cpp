@@ -60,8 +60,6 @@ RocprofilerRuntimeState &getRuntimeState() {
   return state;
 }
 
-std::once_flag configureOnce;
-
 void ensureRocprofilerConfigured();
 
 class AgentIdMapper : public Singleton<AgentIdMapper> {
@@ -139,33 +137,13 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
 }
 
 void ensureRocprofilerConfigured() {
-  std::call_once(configureOnce, []() {
-    // Check if already configured (e.g., via ROCP_TOOL_LIBRARIES env var)
-    auto &state = getRuntimeState();
-    if (state.configured) {
-      return;
-    }
-
-    int status = 0;
-    rocprofiler::isInitialized<true>(&status);
-    if (status > 0) {
-      // rocprofiler is initialized - check if by us (via ROCP_TOOL_LIBRARIES)
-      if (state.configured) {
-        return;
-      }
-      throw std::runtime_error(
-          "[PROTON] ROCProfiler-SDK is already configured by another tool");
-    }
-    auto ret = rocprofiler::forceConfigure<true>(&rocprofiler_configure);
-    if (ret != ROCPROFILER_STATUS_SUCCESS) {
-      throw std::runtime_error(
-          "[PROTON] Failed to configure ROCProfiler-SDK runtime");
-    }
-  });
-
+  // ROCProfiler-SDK must be configured before HIP initializes.
+  // This happens automatically when using the proton CLI, which sets
+  // ROCP_TOOL_LIBRARIES before launching Python.
   if (!getRuntimeState().configured) {
     throw std::runtime_error(
-        "[PROTON] ROCProfiler-SDK runtime is not initialized");
+        "[PROTON] ROCProfiler-SDK is not initialized. "
+        "On AMD GPUs, use the proton CLI: proton [options] script.py");
   }
 }
 
@@ -391,6 +369,9 @@ void RocprofProfiler::RocprofProfilerPimpl::markerCallback(
     rocprofiler_user_data_t *userData, void *arg) {
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
     return;
+  // Check runtime setting - allows dynamic enable/disable of NVTX
+  if (!getBoolEnv("TRITON_ENABLE_NVTX", true))
+    return;
   auto *payload = static_cast<rocprofiler_callback_tracing_marker_api_data_t *>(
       record.payload);
   auto op = static_cast<rocprofiler_tracing_operation_t>(record.operation);
@@ -455,10 +436,6 @@ void RocprofProfiler::RocprofProfilerPimpl::kernelBufferCallback(
 void RocprofProfiler::RocprofProfilerPimpl::processKernelRecord(
     RocprofProfiler &profiler, RocprofProfilerPimpl &impl,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record) {
-  auto metric = convertDispatchToMetric(record);
-  if (!metric)
-    return;
-
   auto &correlation = profiler.correlation;
   auto hasCorrelation =
       correlation.corrIdToExternId.contain(record->correlation_id.internal);
@@ -478,6 +455,10 @@ void RocprofProfiler::RocprofProfilerPimpl::processKernelRecord(
 
   if (!isGraph) {
     for (auto *data : dataSet) {
+      // Create fresh metric for each Data to avoid shared state issues
+      auto metric = convertDispatchToMetric(record);
+      if (!metric)
+        continue;
       auto scopeId = externId;
       if (isAPI) {
         scopeId = data->addOp(externId, kernelName);
@@ -486,6 +467,10 @@ void RocprofProfiler::RocprofProfilerPimpl::processKernelRecord(
     }
   } else {
     for (auto *data : dataSet) {
+      // Create fresh metric for each Data to avoid shared state issues
+      auto metric = convertDispatchToMetric(record);
+      if (!metric)
+        continue;
       auto childId = data->addOp(externId, kernelName);
       data->addMetric(childId, metric);
     }

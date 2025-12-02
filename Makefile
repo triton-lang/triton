@@ -9,6 +9,11 @@ PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
+# For ROCm: set ROCP_TOOL_LIBRARIES so rocprofiler-sdk loads proton at startup
+# Is this easiest/best way to check where the .so is?
+LIBPROTON_PATH := $(shell $(PYTHON) -c "import triton._C.libproton as p; print(p.__file__)" 2>/dev/null)
+PROTON_ENV := $(if $(LIBPROTON_PATH),ROCP_TOOL_LIBRARIES=$(LIBPROTON_PATH),)
+
 # Incremental builds
 
 .PHONY: all
@@ -75,9 +80,9 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) --tb=short -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead"
-	$(PYTEST) --tb=short -s third_party/proton/test/test_override.py
-	$(PYTEST) --tb=short -s third_party/proton/test/test_instrumentation.py::test_overhead
+	$(PROTON_ENV) $(PYTEST) --tb=short -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead"
+	$(PROTON_ENV) $(PYTEST) --tb=short -s third_party/proton/test/test_override.py
+	$(PROTON_ENV) $(PYTEST) --tb=short -s third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton

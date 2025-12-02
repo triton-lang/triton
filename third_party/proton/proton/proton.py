@@ -1,8 +1,76 @@
 import argparse
 import sys
 import os
-from .profile import start, finalize, _select_backend, _normalize_backend
-from .flags import flags
+
+_PROTON_REEXEC_MARKER = "_PROTON_ROCM_REEXEC"
+
+
+def _is_rocm_system():
+    return (os.path.exists('/opt/rocm') or os.environ.get('ROCM_PATH') or os.environ.get('HIP_PATH'))
+
+
+def _get_proton_lib_path():
+    try:
+        import triton._C.libproton as libproton
+        lib_dir = os.path.dirname(libproton.__file__)
+        for name in ['libproton.so', 'proton.so', 'libproton_backend.so']:
+            candidate = os.path.join(lib_dir, name)
+            if os.path.exists(candidate):
+                return candidate
+    except ImportError:
+        pass
+    return None
+
+
+def _get_rocm_roctx_lib():
+    candidates = [
+        '/opt/rocm/lib/librocprofiler-sdk-roctx.so',
+        os.path.join(os.environ.get('ROCM_PATH', ''), 'lib/librocprofiler-sdk-roctx.so'),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _maybe_reexec_for_rocm():
+    """
+    ROCProfiler-SDK requires:
+    1. ROCP_TOOL_LIBRARIES - tool library loaded before HIP initializes
+    2. LD_PRELOAD with librocprofiler-sdk-roctx.so - for roctx/nvtx marker interception
+    """
+    if os.environ.get(_PROTON_REEXEC_MARKER) or os.environ.get('ROCP_TOOL_LIBRARIES'):
+        return
+
+    if not _is_rocm_system():
+        return
+
+    lib_path = _get_proton_lib_path()
+    if not lib_path:
+        return
+
+    os.environ['ROCP_TOOL_LIBRARIES'] = lib_path
+    os.environ[_PROTON_REEXEC_MARKER] = '1'
+
+    # Set LD_PRELOAD for roctx marker interception
+    roctx_lib = _get_rocm_roctx_lib()
+    if roctx_lib:
+        existing_preload = os.environ.get('LD_PRELOAD', '')
+        if existing_preload:
+            os.environ['LD_PRELOAD'] = f"{roctx_lib}:{existing_preload}"
+        else:
+            os.environ['LD_PRELOAD'] = roctx_lib
+
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+# Perform re-exec check immediately (before any triton imports)
+_maybe_reexec_for_rocm()
+
+# These imports MUST be after _maybe_reexec_for_rocm() to ensure rocprofiler-sdk
+# is configured before HIP initializes (triggered by importing triton).
+from .profile import start, finalize, _select_backend, _normalize_backend  # noqa: E402
+from .flags import flags  # noqa: E402
 
 
 def parse_arguments():
