@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
+#include <limits>
 #include <set>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -37,8 +38,14 @@ namespace llvm {
 using namespace mlir::triton;
 
 template <> struct DenseMapInfo<BufferRegion> {
-  static BufferRegion getEmptyKey() { return BufferRegion{0, 0}; }
-  static BufferRegion getTombstoneKey() { return BufferRegion{0, 0}; }
+  static BufferRegion getEmptyKey() {
+    constexpr uint32_t empty = std::numeric_limits<uint32_t>::max();
+    return BufferRegion{empty, empty};
+  }
+  static BufferRegion getTombstoneKey() {
+    constexpr uint32_t tombstone = std::numeric_limits<uint32_t>::max() - 1;
+    return BufferRegion{tombstone, tombstone};
+  }
   static unsigned getHashValue(const BufferRegion &r) {
     return llvm::hash_combine(r.baseOffset, r.length);
   }
