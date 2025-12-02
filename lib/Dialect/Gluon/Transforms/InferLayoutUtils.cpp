@@ -76,7 +76,7 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
 }
 
 bool encodingsMayVary(Operation *op) {
-  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp,
+  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
              triton::TransOp>(op);
 }
 
