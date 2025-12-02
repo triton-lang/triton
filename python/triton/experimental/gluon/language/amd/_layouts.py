@@ -48,13 +48,13 @@ class AMDMFMALayout(DistributedLayout):
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("element_bitwidth", _unwrap_if_constexpr(self.element_bitwidth))
         super().__setattr__("tiles_per_warp", _unwrap_if_constexpr(self.tiles_per_warp))
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
         if self.element_bitwidth is None:
-            object.__setattr__(self, "element_bitwidth", 32)
+            super().__setattr__("element_bitwidth", 32)
         if self.tiles_per_warp is None:
-            object.__setattr__(self, "tiles_per_warp", [1] * len(self.warps_per_cta))
+            super().__setattr__("tiles_per_warp", [1] * len(self.warps_per_cta))
 
-        object.__setattr__(self, "cga_layout", self.cga_layout)
         self.verify()
 
     def _to_ir(self, builder):
@@ -143,7 +143,7 @@ class AMDWMMALayout(DistributedLayout):
 
         instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
         super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
-        object.__setattr__(self, "cga_layout", self.cga_layout)
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
         self.verify()
 
     def _to_ir(self, builder):

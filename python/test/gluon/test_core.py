@@ -1,5 +1,4 @@
 import torch
-import itertools
 import math
 import pytest
 import re
@@ -18,7 +17,6 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_hopper,
 )
-from triton.runtime.errors import OutOfResources
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -227,39 +225,9 @@ def test_device_tma_store():
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 
-@gluon.constexpr_function
-def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.constexpr:
-    if isinstance(layout_a, TensorMemoryLayout):
-        return layout_a.two_ctas
-
-    # TODO Implement as a helper
-    def has_cta_split(layout, cta_split_num):
-        if hasattr(layout, "cga_layout"):
-            if not layout.cga_layout:
-                return cta_split_num == [1, 1]
-            rank = layout.rank
-            derived_split = [1] * rank
-            for basis in layout.cga_layout:
-                idx = next((i for i, v in enumerate(basis) if v != 0), None)
-                if idx is not None and idx < rank:
-                    derived_split[idx] *= 2
-            return derived_split == cta_split_num
-
-        # Fallback for SharedLinearLayout
-        assert isinstance(layout, ttgl.SharedLinearLayout)
-        max_stride = [0, 0]
-        for b in itertools.chain(layout.offset_bases, layout.block_bases):
-            for i, bi in enumerate(b):
-                max_stride[i] = max(max_stride[i], bi)
-        basis = [max_stride[0], 0] if cta_split_num == [2, 1] else [0, max_stride[1]]
-        return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
-
-    return has_cta_split(layout_a, [2, 1]) and has_cta_split(layout_b, [1, 2])
-
-
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
-               block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, mma_layout: ttgl.constexpr,
+               block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
                shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
                ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr, mma_barrier_layout: ttgl.constexpr = None):
     a_offs_m = ttgl.arange(0, M)[:, None]
@@ -276,8 +244,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
     smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
 
-    # TODO: Generalize
-    two_ctas: ttgl.constexpr = is_two_ctas(shared_layout_a, shared_layout_b)
+    two_ctas: ttgl.constexpr = isinstance(acc_layout, TensorMemoryLayout) and acc_layout.two_ctas
     fence_async_shared(cluster=two_ctas)
 
     if USE_TCGEN05:
@@ -285,32 +252,30 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
 
-        acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], mma_layout)
+        acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
         tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
-        mbarrier.wait(mma_barrier, phase=0)
+        mbarrier.wait(mma_barrier, phase=0, deps=[smem_a, smem_b])
         mbarrier.invalidate(mma_barrier)
 
         tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
             acc_dtype,
             (M, N),
-            mma_layout,
+            acc_layout,
             num_warps=ttgl.num_warps(),
             cga_layout=block_layout_c.cga_layout,
         )
         acc = acc_tmem.load(tmem_reg_layout)
     else:
-        acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=mma_layout)
+        acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=acc_layout)
         acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
-    acc = ttgl.convert_layout(acc, block_layout_c)
 
     out_offs_m = ttgl.arange(0, M)[:, None]
     out_offs_n = ttgl.arange(0, N)[None, :]
     out_ptrs = out + out_offs_m * N + out_offs_n
-    out_ptrs = ttgl.set_auto_layout(out_ptrs, block_layout_c)
     ttgl.store(out_ptrs, acc)
 
 
@@ -321,7 +286,7 @@ def test_warpgroup_mma(ASYNC):
     M, N, K = 64, 32, 32
     warps = [4, 1]
     block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
-    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
+    acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
     shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
     shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
@@ -337,7 +302,7 @@ def test_warpgroup_mma(ASYNC):
         block_layout,
         block_layout,
         block_layout,
-        mma_layout,
+        acc_layout,
         shared_layout_a,
         shared_layout_b,
         ttgl.float16,
@@ -361,7 +326,7 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
-@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [2, 8]])
+@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
                            shape_n, shape_k, ctas_per_cga, two_ctas):
@@ -370,9 +335,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
         pytest.skip("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
+    if ctas_per_cga[0] == 1 and two_ctas:
+        pytest.skip("Need at least 2 CTAs along M for 2CTA mode")
     use_tcgen05 = is_blackwell()
-    if two_ctas and ctas_per_cga != [2, 1]:
-        pytest.skip("twoCTA MMA is only supported for [2, 1] CTAs per CGA for now")
 
     torch_dtype_map = {
         8: torch.float8_e4m3fn,
@@ -390,12 +355,13 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     N = instr_shape[1] * warps[1]
     K = instr_shape[2]
 
-    cta_split_a = [ctas_per_cga[0], 1]
-    cta_split_b = [1, ctas_per_cga[1]]
-    ctas_per_cga_b = list(ctas_per_cga)
     if two_ctas:
-        cta_split_b = [1, 2]
-        ctas_per_cga_b = [1, 2]
+        assert ctas_per_cga[0] >= 2, "Need at least 2 CTAs along M for 2CTA mode"
+        ctas_per_cga_b = [ctas_per_cga[0] // 2, 2 * ctas_per_cga[1]]
+    else:
+        ctas_per_cga_b = ctas_per_cga
+    cta_split_a = [ctas_per_cga[0], 1]
+    cta_split_b = [1, ctas_per_cga_b[1]]
 
     def min_shape(swizzling, dim0, dim1, trans):
         tile_cols = (8 * max(16, swizzling)) // bitwidth
@@ -412,11 +378,20 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     M, K = min_shape(swizzling_a, M, K, transpose_a)
     K, N = min_shape(swizzling_b, K, N, transpose_b)
     M *= shape_m * ctas_per_cga[0]
-    N *= shape_n * max(ctas_per_cga[1], ctas_per_cga_b[1])
+    N *= shape_n * ctas_per_cga_b[1]
     K *= shape_k
     instr_shape[1] *= shape_n
 
-    if two_ctas and (N > 512 // max(M // 128, 1)):
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+
+    if is_blackwell():
+        # Avoid too many rows in TMEM
+        MAX_ROWS = 512
+        if M * N // 128 // num_ctas > MAX_ROWS:
+            N //= (M * N // 128 // num_ctas // MAX_ROWS)
+
+    # No idea what's going on TBH
+    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) != (1, 1, 1):
         pytest.skip("FIXME: Fails with Illegal Instruction error. Not sure why")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
@@ -424,38 +399,28 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     def log2_int(x):
         return x.bit_length() - 1
 
-    def get_shared_swizzling_zero(M, K, transpose, ctas_per_cga, cta_split_num, cta_order):
-        # K-contig
+    def get_shared_swizzling_zero(M, K, transpose, cga_layout):
+        if cga_layout:
+            dim_cga = [1, 1]
+            for b in cga_layout:
+                for i, bi in enumerate(b):
+                    if bi != 0:
+                        dim_cga[i] *= 2
+            cta_shape = (M // dim_cga[0], K // dim_cga[1])
+            cta_layout = get_shared_swizzling_zero(cta_shape[0], cta_shape[1], transpose, None)
+            cga_bases = list(cga_layout)
+            for b in cga_bases:
+                for i in range(len(b)):
+                    b[i] *= cta_shape[i]
+            return ttgl.SharedLinearLayout(cta_layout.offset_bases, cga_bases)
         if transpose:
-            ctas_per_cga = [ctas_per_cga[1], ctas_per_cga[0]]
-            cta_split_num = [cta_split_num[1], cta_split_num[0]]
-            cta_order = [cta_order[1], cta_order[0]]
-            shared = get_shared_swizzling_zero(K, M, False, ctas_per_cga, cta_split_num, cta_order)
-
-            def transpose_bases(bases):
-                for i in range(len(bases)):
-                    bases[i] = [bases[i][1], bases[i][0]]
-                return bases
-
-            bases = transpose_bases(shared.offset_bases)
-            blocks = transpose_bases(shared.block_bases)
-            return ttgl.SharedLinearLayout(bases, blocks)
-        if ctas_per_cga[0] > 1 or ctas_per_cga[1] > 1:
-            # Broadcast along the inner dimension
-            M = M // cta_split_num[0]
-            K = K // cta_split_num[1]
-            shared = get_shared_swizzling_zero(M, K, False, [1, 1], [1, 1], [0, 1])
-            shape = [M, K]
-            blocks = []
-            for order in cta_order:
-                split = cta_split_num[order]
-                for s in range(log2_int(ctas_per_cga[order])):
-                    block = [0, 0]
-                    if s < log2_int(split):
-                        block[order] = shape[order] << s
-                    blocks.append(block)
-            return ttgl.SharedLinearLayout(shared.offset_bases, blocks)
-
+            assert not cga_layout
+            shared = get_shared_swizzling_zero(K, M, False, cga_layout)
+            # Transpose the bases
+            bases = list(shared.offset_bases)
+            for i in range(len(bases)):
+                bases[i] = [bases[i][1], bases[i][0]]
+            return ttgl.SharedLinearLayout(bases)
         bases = []
         for i in range(log2_int(128 // bitwidth)):
             bases.append([0, 1 << i])
@@ -472,35 +437,57 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     cta_order = [1, 0]
 
     # TODO Remove this function altogether
+
     from triton._C.libtriton.gluon_ir import make_cga_layout
-    cga_layout_a = make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
-    cga_layout_b = make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
-    cga_layout_c = make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+    if two_ctas:
+
+        def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
+            ctas_per_cga = list(ctas_per_cga)
+            cta_split = list(cta_split)
+            assert cta_split[two_cta_dim] > 1
+            cta_split[two_cta_dim] //= 2
+            ctas_per_cga[two_cta_dim] //= 2
+            aux_cga_layout = make_cga_layout(ctas_per_cga, cta_split, cta_order)
+            assert two_cta_dim in (0, 1)
+            basis = [0, 0]
+            basis[two_cta_dim] = 1
+            for b in aux_cga_layout:
+                b[two_cta_dim] *= 2
+            cga_layout = [basis] + aux_cga_layout
+            return cga_layout
+
+        cga_layout_a = make_2cta_cga_layout(ctas_per_cga, cta_split_a, cta_order, 0)
+        cga_layout_b = make_2cta_cga_layout(ctas_per_cga_b, cta_split_b, cta_order, 1)
+        cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0)
+    else:
+        cga_layout_a = make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
+        cga_layout_b = make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
+        cga_layout_c = make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+
     block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
                                         cga_layout=cga_layout_a)
     block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_b)
     if swizzling_a == 0:
-        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, ctas_per_cga, cta_split_a, cta_order)
+        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, cga_layout_a)
     else:
         shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_a, cga_layout=cga_layout_a)
     if swizzling_b == 0:
-        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, ctas_per_cga_b, cta_split_b, cta_order)
+        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, cga_layout_b)
     else:
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, cga_layout=cga_layout_b)
     if use_tcgen05:
         tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
-        mma_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
+        acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
-        mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
+        acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                                  cga_layout=cga_layout_c)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_c)
-    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
     mma_barrier_layout = None
     if use_tcgen05:
         # The layout of this mbarrier seems to be irrelevant right now
@@ -522,37 +509,33 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
             return x.view(dtype)
 
     # Sample bf16 as tf32 does not use the full range
-    a = cast(torch.randn((M, K), device="cuda", dtype=torch.float32), torch_dtype)
-    b = cast(torch.randn((K, N), device="cuda", dtype=torch.float32), torch_dtype)
-    out = torch.zeros((M, N), device="cuda", dtype=out_dtype)
+    device = triton.runtime.driver.active.get_current_device()
+    a = cast(torch.randn((M, K), device=device, dtype=torch.float32), torch_dtype)
+    b = cast(torch.randn((K, N), device=device, dtype=torch.float32), torch_dtype)
+    out = torch.zeros((M, N), device=device, dtype=out_dtype)
 
-    try:
-        compiled = mma_kernel[(1, )](
-            a,
-            b,
-            out,
-            M,
-            N,
-            K,
-            block_layout_a,
-            block_layout_b,
-            block_layout_c,
-            mma_layout,
-            shared_layout_a,
-            shared_layout_b,
-            gl_acc_dtype,
-            False,
-            use_tcgen05,
-            mma_barrier_layout,
-            num_warps=warps[0] * warps[1],
-            num_ctas=num_ctas,
-        )
-    except OutOfResources:
-        # FIXME: Compute a priori
-        pytest.skip("Not enough shared memory")
+    compiled = mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout_a,
+        block_layout_b,
+        block_layout_c,
+        acc_layout,
+        shared_layout_a,
+        shared_layout_b,
+        gl_acc_dtype,
+        False,
+        use_tcgen05,
+        mma_barrier_layout,
+        num_warps=warps[0] * warps[1],
+        num_ctas=num_ctas,
+    )
 
-    if two_ctas:
-        assert "two_ctas" in compiled.asm["ttgir"]
+    assert two_ctas == ("two_ctas" in compiled.asm["ttgir"])
 
     try:
         allow_tf32 = torch.backends.cuda.matmul.allow_tf32
