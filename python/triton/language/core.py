@@ -1812,6 +1812,8 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     b = reshape(b, (math.prod(leading), b.shape[-1]), _semantic=_semantic)
 
     c = join(a, b, _semantic=_semantic)
+    # swap the two last dims.
+    c = permute(c, [0, 2, 1], _semantic=_semantic)
     c = reshape(c, leading + [a.shape[-1] + b.shape[-1]], _semantic=_semantic)
     return permute(c, inv_order, _semantic=_semantic)
 
