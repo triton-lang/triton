@@ -824,6 +824,63 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
         assert len(warp1_events) == 2
 
 
+def test_event_args(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_block_metadata.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Verify we have events
+        assert len(events) > 0
+
+        # Verify each event has the required metadata in args
+        for event in events:
+            assert "args" in event
+            args = event["args"]
+
+            assert "Init Time (ns)" in args
+            assert "Post Final Time (ns)" in args
+            assert "Finalization Time (ns)" in args
+
+            # Verify timing values are reasonable
+            init_time = args["Init Time (ns)"]
+            post_final_time = args["Post Final Time (ns)"]
+            finalization_time = args["Finalization Time (ns)"]
+
+            assert init_time >= 0
+            assert post_final_time >= 0
+            assert finalization_time >= 0
+
+
 def test_threaded_kernel_call(tmp_path: pathlib.Path):
 
     import threading
