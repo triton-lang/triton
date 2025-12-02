@@ -37,13 +37,17 @@ struct Options {
   bool dump_dot = false;
   bool dump_loop_only = false;
   bool dump_data_only = false;
-  bool manual = false;
 };
 
-Options &get_options() {
-  // FIXME: hacky having this as a global variable
-  static Options global_options;
-  return global_options;
+Options get_options() {
+  Options options;
+  options.dump_dot =
+      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT");
+  options.dump_data_only =
+      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
+  options.dump_loop_only =
+      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
+  return options;
 }
 
 class Graph;
@@ -142,20 +146,7 @@ size_t computeCost(Operation *op) {
         elementCount += tensorTy.getNumElements();
     }
     return elementCount;
-    // if (elementCount > 256) {
-    //   setPartition(&op, defaultPartition);
-    //   scheduleDependencies(loop, partitions, defaultPartition, &op);
-    // }
   }
-
-  // auto inp = exp2.getOperand();
-  // auto shape = cast<TensorType>(inp.getType()).getShape();
-  // size_t size = 1;
-  // for (auto x : shape)
-  //   size *= x;
-  // auto cycles = size / 16;
-  // return cycles;
-  //}
 
   return 0;
 }
@@ -171,7 +162,6 @@ public:
   bool empty() const { return nodes.empty(); }
 
   size_t getStage() const {
-    // FIXME: correct behaviour?
     if (flags & Flags::MMA)
       return 1;
     return 0;
@@ -216,6 +206,7 @@ private:
 
 } // namespace
 } // namespace mlir::triton::gpu
+
 namespace llvm {
 template <> struct DenseMapInfo<mlir::triton::gpu::Port> {
   static inline mlir::triton::gpu::Port getEmptyKey() { return {}; }
@@ -235,6 +226,7 @@ template <> struct DenseMapInfo<mlir::triton::gpu::Port> {
   }
 };
 } // namespace llvm
+
 namespace mlir::triton::gpu {
 namespace {
 
@@ -561,29 +553,6 @@ bool isScalarLoad(Node *node) {
   return true;
 }
 
-bool isAsyncLoad(Node *node) {
-  // Special case:
-  // tt.load that occurs in a sequence:
-  //    tt.load -> ttg.local_alloc -> ttng.tc_gen5_mma
-  // is placed in a load partition, and later lowered to cp.async
-  if (node_isa<tt::LoadOp>(node)) {
-    auto outs = node->getOutEdges();
-    if (outs.size() == 1) {
-      auto local_alloc = outs.front().getToNode();
-      if (local_alloc->getOp() &&
-          isa<ttg::LocalAllocOp>(local_alloc->getOp())) {
-        auto outs = local_alloc->getOutEdges();
-        if (outs.size() == 1) {
-          auto mma = outs.front().getToNode();
-          if (mma->getOp() && isa<ttng::MMAv5OpInterface>(mma->getOp()))
-            return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 bool isViewOp(Operation *op) {
   return isa<tt::BroadcastOp, tt::ExpandDimsOp, ttg::ConvertLayoutOp>(op) ||
          op->hasTrait<OpTrait::MemDescViewTrait>();
@@ -597,15 +566,13 @@ Flags getNodeFlags(Node *node) {
     if (op->hasAttr("store"))
       return Flags::STORE;
 
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)
-        //|| (isAsyncLoad(node) && !isScalarLoad(node))
-    )
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
       return Flags::LOAD;
     if (isa<tt::DescriptorStoreOp, tt::DescriptorScatterOp>(op))
       return Flags::STORE;
     if (isa<ttng::MMAv5OpInterface>(op))
       return Flags::MMA;
-    if (isa</*ttng::TMEMAllocOp,*/ ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op))
+    if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op))
       return Flags::TMEM;
     if (isa<math::Exp2Op>(op))
       return Flags::SFU;
@@ -651,8 +618,8 @@ void Partition::merge(Partition *lhs, Partition *rhs) {
   for (auto node : nodes) {
     node->setPartition(rhs);
   }
-  // FIXME: remove empty partitions? we just ignore them in later parts of the
-  // code
+  // FIXME: remove empty partitions? we just ignore
+  // them in later parts of the code
 }
 
 Node *Edge::getFromNode() const { return from.getNode(); }
@@ -687,8 +654,6 @@ Type Edge::getType() const {
 }
 
 size_t Edge::getSize() const {
-  // TODO: do we want to include the element type? i.e. return the number of
-  // bytes?
   auto type = getType();
 
   if (auto tensor = dyn_cast<TensorType>(type)) {
@@ -843,7 +808,6 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
           // omit
 
         } else {
-          // assert(op->getNumRegions() == 0);
           auto node =
               graph->addNode(op, op->getNumOperands(), op->getNumResults());
           nodes[op] = node;
@@ -873,9 +837,6 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
         if (operands.find(key) != operands.end()) {
           auto inputPort = operands[key];
           Node::addEdge(outputPort, inputPort);
-        } else {
-          // llvm::report_fatal_error(
-          //    "use not found for op when constructing data flow graph");
         }
       } else {
         llvm::report_fatal_error(
@@ -896,12 +857,6 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
-      // if (isa<tt::LoadOp>(op)) {
-      //   if (isAsyncLoad(node) && !isScalarLoad(node)) {
-      //     node->setDataValue(0);
-      //     values.push_back({node, 0});
-      //   }
-      // }
       if (isa<ttng::TMEMLoadOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
@@ -990,7 +945,7 @@ SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
   return edges;
 }
 
-bool deserializeManualPartitions(Operation *region, Graph *graph) {
+void deserializeManualPartitions(Operation *region, Graph *graph) {
   std::map<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
     if (node->isOp()) {
@@ -1004,7 +959,6 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
             manual_partitions[id] = partition;
-
             LLVM_DEBUG({
               llvm::errs() << "deserialize manual partition:";
               partition->dump();
@@ -1015,8 +969,6 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
       }
     }
   });
-
-  return !manual_partitions.empty();
 }
 
 bool isNone(Node *node) {
@@ -1145,10 +1097,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
 
        auto view_partition = edge.getToNode()->getPartition();
        auto out_edges = getOutCrossingEdges(view_partition);
-       if (out_edges.size() != 1) {
-         assert(false); // FIXME: should never reach here?
-         return false;
-       }
+       assert(out_edges.size() == 1);
        auto out_edge = out_edges[0];
 
        auto in_size = edge.getSize();
@@ -1288,39 +1237,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isNone(to) && !isNone(from) && !isMMA(from) && !isLoad(from);
      }},
 
-    // TMEM partitions merge, if edge is high cost
-    // {"tmem_high_cost",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isTMEM(from) && isTMEM(to) && edge.getSize() >= 256;
-    //  }},
-
-    // SFU merges with consumer
-    //{"sfu_consumer",
-    // [](Edge edge) {
-    //   auto from = edge.getFromNode();
-    //   auto to = edge.getToNode();
-    //   return isSFU(from) && !isNone(to);
-    // }},
-
-    // // TMEM store op merges with uses
-    // {"tmem_store",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return node_isa<ttng::TMEMStoreOp>(to) && isNone(from);
-    //  }},
-
-    // // NONE/TMEM ops preceeding STORE merged together
-    // {"store",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return from->isOp() && to->isOp() && (isNone(from) || isTMEM(from)) &&
-    //           isStore(to);
-    //  }},
-
     // merge connected STORE partitions together
     // these are both using tt.descriptor_store and have a dataflow edge
     // between, so avoid communicating between partitions via aref
@@ -1349,55 +1265,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return !isLoad(from) && !isLoad(to) && !isMMA(from) && !isMMA(to) &&
               edge.getSize() > 8192; // FIXME: seemingly arbitrary size...
      }},
-
-    // // merge connected MMA partitions together
-    // {"connected_mma",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isMMA(from) && isMMA(to);
-    //  }},
-
-    // // NONE ops following TMEM/STORE merged together
-    // {"none_following",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return (isTMEM(from) || isStore(from)) && isNone(to);
-    //  }},
-    //
-    // // NONE group followed by STORE should merge
-    // {"none_store",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isNone(from) && isStore(to);
-    //  }},
-    //
-    // // NONE group followed by NONE should merge
-    // {"none_none",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isNone(from) && isNone(to);
-    //  }},
-    //
-    // // NONE group followed by LOAD should merge
-    // {"none_load",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isNone(from) && isLoad(to);
-    //  }},
-    //
-    // // NONE group followed by TMEM should merge
-    // {"none_tmem",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return isNone(from) && isTMEM(to);
-    //  }},
-
 };
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
@@ -1424,43 +1291,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
        auto to = edge.getToNode();
        return !(node_isa<ttng::TMEMAllocOp>(from) && isMMA(to));
      }},
-
-    // don't merge partition with high cost, with other partitions with low
-    // costs
-    // {"cost",
-    //  [](Edge edge) {
-    //    auto from = edge.getFromNode();
-    //    auto to = edge.getToNode();
-    //    return !(node_isa<ttng::TMEMAllocOp>(from) && isMMA(to));
-    //  }},
-};
-
-bool isCritical(Partition *partition) {
-  SmallVector<Node *> stack;
-  DenseSet<Node *> seen;
-  for (auto node : partition->getNodes()) {
-    stack.push_back(node);
-    seen.insert(node);
-  }
-
-  while (!stack.empty()) {
-    auto node = stack.back();
-    stack.pop_back();
-    if (!node->isData())
-      continue;
-    if (node->isOp() && isa<ttng::MMAv5OpInterface>(node->getOp()))
-      return true;
-
-    for (auto edge : node->getOutEdges()) {
-      auto next_node = edge.getToNode();
-      if (!seen.contains(next_node)) {
-        stack.push_back(next_node);
-        seen.insert(next_node);
-      }
-    }
-  }
-
-  return false;
 };
 
 SetVector<Partition *> getConsumingPartitions(Partition *partition) {
@@ -1554,18 +1384,6 @@ SmallVector<
            return (a_is_none && b_is_store) || (a_is_store && b_is_none);
          }},
 
-        // merge store partitions
-        // {"store",
-        //  [](Partition *a, Partition *b) {
-        //    auto a_is_store = (a->getFlags() & Flags::STORE) ||
-        //                      (a->getFlags() & Flags::TMEM) ||
-        //                      (a->getFlags() == Flags::NONE);
-        //    auto b_is_store = (b->getFlags() & Flags::STORE) ||
-        //                      (b->getFlags() & Flags::TMEM) ||
-        //                      (b->getFlags() == Flags::NONE);
-        //    return a_is_store && b_is_store;
-        //  }},
-
         // merge TMEM partitions together, if they use the same tmem alloc
         // and that alloc is used in more than 2 partitions
         // as aref does not support tmem with more than 2 partitions
@@ -1599,7 +1417,7 @@ void mergePartitions(Graph *graph, std::string funcName,
   // Note: this implementation is slow. It can be improved by incrementally
   // updating the data structures rather than rebuilding the whole lot when a
   // rule is applied
-  const auto &options = get_options();
+  auto options = get_options();
   LLVM_DEBUG({ llvm::errs() << "#### applying heuristics...\n"; });
   int iter = 0;
   bool changed = false;
@@ -1709,34 +1527,12 @@ void mergePartitions(Graph *graph, std::string funcName,
   visualize(funcName, "merge-step", "partition based merge complete", graph,
             vis_info);
 
-  // push broadcast ops into consumer partition, to reduce shared memory
-  // pressure
-  // FIXME: doesn't actually do anything, just checks this is the case
-  // as the heuristics should guarantee this anyway
-  // {
-  //   bool changed = false;
-  //   do {
-  //     changed = false;
-  //     auto crossingEdges = getCrossingEdges(graph);
-  //     for (auto edge : crossingEdges) {
-  //       auto from = edge.getFromNode();
-  //       if (!from->isOp())
-  //         continue;
-  //       auto op = from->getOp();
-  //       if (isa_and_nonnull<tt::BroadcastOp, tt::ExpandDimsOp>(op))
-  //         assert(false &&
-  //                "FIXME: push broadcast/expand dims into previous
-  //                partition");
-  //     }
-  //   } while (changed);
-  // }
-
   LLVM_DEBUG({ llvm::errs() << "\n#### heuristics done\n"; });
 }
 
 void propagatePartitions(Graph *graph, std::string funcName,
                          VisualizationInfo &vis_info) {
-  auto &options = get_options();
+  auto options = get_options();
 
   if (options.dump_dot)
     visualize(funcName, "propagate", "before propagate", graph, vis_info);
@@ -1822,8 +1618,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
 
           for (auto edge : node->getInEdges())
             propagate(edge, edge.getFromNode());
-          // for (auto edge : node->getOutEdges())
-          //  propagate(edge, edge.getToNode());
         }
       }
     }
@@ -1857,8 +1651,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
           }
         }
       }
-      // must have changed something, otherwise infinite loop
-      // assert(changed);
       // remove all nodes that now have a partition
       nodes.erase(
           std::remove_if(nodes.begin(), nodes.end(),
@@ -1956,7 +1748,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
 
 void duplicateCheapOps(Graph *graph, std::string funcName,
                        VisualizationInfo &vis_info) {
-  auto &options = get_options();
+  auto options = get_options();
 
   if (options.dump_dot)
     visualize(funcName, "duplicate", "before duplicate cheap ops", graph,
@@ -2065,7 +1857,7 @@ void visualize(std::string key, std::string filename, std::string title,
   auto idx = keys[key];
   keys[key]++;
 
-  const auto &options = get_options();
+  auto options = get_options();
 
   std::stringstream path;
   path << "graph-" << key << "-" << std::setfill('0') << std::setw(4) << idx
@@ -2586,18 +2378,12 @@ private:
       return std::stoi(value);
     };
 
-    auto &options = get_options();
-    options.dump_dot =
-        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT");
-    options.dump_data_only =
-        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
-    options.dump_loop_only =
-        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
+    auto options = get_options();
 
     auto graph = buildGraph(op);
     auto initValues = initialDataValues(graph.get());
     propagateDataValues(initValues);
-    options.manual = deserializeManualPartitions(op, graph.get());
+    deserializeManualPartitions(op, graph.get());
     VisualizationInfo vis_info;
     auto key = func.getSymName().str() + "_" + std::to_string(idx);
     if (options.dump_dot)
