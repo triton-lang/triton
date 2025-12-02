@@ -579,11 +579,6 @@ void init_gluon_ir(py::module &&m) {
                                                        *mask);
              }
            })
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
-           })
       .def("create_fp4_to_fp",
            [](GluonOpBuilder &self, Value src, Type elemType,
               int axis) -> Value {
