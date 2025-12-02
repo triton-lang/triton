@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_cuda, get_cdna_version
+from .target_info import is_hip, is_cuda
 
 
 @dataclass
