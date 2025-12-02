@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_cuda
+from .target_info import is_hip, is_cuda, get_cdna_version
 
 
 @dataclass
@@ -140,7 +140,7 @@ def get_blas_tflops(dtype, workspace_size=32 * 1024 * 1024, device="cuda"):
         cublas = nvidia.cublas.CublasLt(workspace)
         bench_fn = cublas.matmul
     elif is_hip():
-        cdna_version = get_cuda_version()
+        cdna_version = get_cdna_version()
         if cdna_version == 4:
             dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
         elif cdna_version == 3:
