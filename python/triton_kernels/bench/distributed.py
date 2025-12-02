@@ -347,11 +347,9 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
     # dense cases
     [
         # small batch size
-        (128, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), 
-        (128, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1),
+        (128, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (128, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1),
         # large batch size
-        (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), 
-        (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)
+        (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)
     ]
     # moe cases - test parallelism
     + [
