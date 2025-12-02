@@ -1,5 +1,5 @@
 import pytest
-from triton_kernels.triton_kernels.roofline import get_memset_tbps, get_blas_tflops
+from triton_kernels.roofline import get_memset_tbps, get_blas_tflops
 
 
 def test_get_memset_tbps():
