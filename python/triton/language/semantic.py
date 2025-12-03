@@ -599,6 +599,9 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = self.builder.get_null_value(dtype.to_ir(self.builder))
+        elif dtype.is_fp8():
+            value = self.builder.get_fp32(value)
+            value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
         else:
             get_value_fn = getattr(self.builder, f"get_{dtype.name}")
             value = get_value_fn(value)
