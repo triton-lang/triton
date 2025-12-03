@@ -59,7 +59,7 @@ private:
   ScopeIdParent scopeParentIds;
 };
 
-class ModuleScopeIdAllocation : public CallGraph<ScopeIdAllocation> {
+class ModuleScopeIdAllocation : public triton::CallGraph<ScopeIdAllocation> {
 public:
   using FuncOffsetMapT =
       llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeId>;
