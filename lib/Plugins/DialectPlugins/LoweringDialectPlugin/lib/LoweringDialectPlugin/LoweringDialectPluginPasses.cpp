@@ -15,23 +15,23 @@ namespace mlir::triton::loweringdialectplugin {
 #include "LoweringDialectPlugin/LoweringDialectPluginPasses.h.inc"
 
 namespace {
-class LoweringDialectPluginMagicOpInserterRewriter
-    : public OpRewritePattern<func::FuncOp> {
-public:
-  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(func::FuncOp op,
-                                PatternRewriter &rewriter) const final {
-    // Note: This is what I want this pass to do, no luck so far:
-    // auto magicOp = mlir::triton::loweringdialectplugin::MagicOp::create(
-    //     builder, op.getLoc(), op.getOpResult(0));
-    // op.replaceAllUsesWith(magicOp);
-    if (op.getSymName() == "bar") {
-      rewriter.modifyOpInPlace(op, [&op]() { op.setSymName("foo"); });
-      return success();
-    }
-    return failure();
-  }
-};
+// class LoweringDialectPluginMagicOpInserterRewriter
+//     : public OpRewritePattern<func::FuncOp> {
+// public:
+//   using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+//   LogicalResult matchAndRewrite(func::FuncOp op,
+//                                 PatternRewriter &rewriter) const final {
+//     // Note: This is what I want this pass to do, no luck so far:
+//     // auto magicOp = mlir::triton::loweringdialectplugin::MagicOp::create(
+//     //     builder, op.getLoc(), op.getOpResult(0));
+//     // op.replaceAllUsesWith(magicOp);
+//     if (op.getSymName() == "bar") {
+//       rewriter.modifyOpInPlace(op, [&op]() { op.setSymName("foo"); });
+//       return success();
+//     }
+//     return failure();
+//   }
+// };
 
 class LoweringDialectPluginMagicOpRewriter
     : public OpRewritePattern<mlir::triton::loweringdialectplugin::MagicOp> {
@@ -47,20 +47,20 @@ public:
   }
 };
 
-class LoweringDialectPluginMagicOpInserter
-    : public impl::LoweringDialectPluginMagicOpInserterBase<
-          LoweringDialectPluginMagicOpInserter> {
-public:
-  using impl::LoweringDialectPluginMagicOpInserterBase<
-      LoweringDialectPluginMagicOpInserter>::LoweringDialectPluginMagicOpInserterBase;
-  void runOnOperation() final {
-    RewritePatternSet patterns(&getContext());
-    patterns.add<LoweringDialectPluginMagicOpInserterRewriter>(&getContext());
-    FrozenRewritePatternSet patternSet(std::move(patterns));
-    if (failed(applyPatternsGreedily(getOperation(), patternSet)))
-      signalPassFailure();
-  }
-};
+// class LoweringDialectPluginMagicOpInserter
+//     : public impl::LoweringDialectPluginMagicOpInserterBase<
+//           LoweringDialectPluginMagicOpInserter> {
+// public:
+//   using impl::LoweringDialectPluginMagicOpInserterBase<
+//       LoweringDialectPluginMagicOpInserter>::LoweringDialectPluginMagicOpInserterBase;
+//   void runOnOperation() final {
+//     RewritePatternSet patterns(&getContext());
+//     patterns.add<LoweringDialectPluginMagicOpInserterRewriter>(&getContext());
+//     FrozenRewritePatternSet patternSet(std::move(patterns));
+//     if (failed(applyPatternsGreedily(getOperation(), patternSet)))
+//       signalPassFailure();
+//   }
+// };
 
 class LoweringDialectPluginMagicOp
     : public impl::LoweringDialectPluginMagicOpBase<
