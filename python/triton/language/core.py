@@ -4,7 +4,7 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps
+from functools import partial, wraps, cached_property
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
@@ -43,6 +43,7 @@ def builtin(fn: T) -> T:
         return fn(*args, **kwargs)
 
     setattr(wrapper, TRITON_BUILTIN, True)
+    wrapper.signature = inspect.signature(fn)
 
     return wrapper
 
@@ -82,6 +83,7 @@ def _tensor_member_fn(fn: T) -> T:
     new_params[0] = new_params[0].replace(name='self')
     new_sig = orig_sig.replace(parameters=new_params)
     wrapper.__signature__ = new_sig
+    wrapper.signature = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
     # If fn is a builtin, mark the wrapper as a builtin too.
     if is_builtin(fn):
@@ -188,7 +190,11 @@ class constexpr_type(base_type):
         return hash(self.value)
 
     def mangle(self) -> str:
-        return repr(self)
+        if hasattr(self.value, "mangle"):
+            val = self.value.mangle()
+        else:
+            val = repr(self.value)
+        return f"c{val}"
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         return
@@ -749,8 +755,13 @@ class tuple_type(base_type):
 
     def __init__(self, types, fields=None):
         self.types = types
-        self.fields = fields or [''] * len(types)
-        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
+        self.fields = fields
+
+    @cached_property
+    def name(self):
+        if self.fields is None:
+            return '[' + ','.join(str(v) for v in self.types) + ']'
+        return '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
@@ -760,8 +771,7 @@ class tuple_type(base_type):
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
         for ty in self.types:
-            if not isinstance(ty, constexpr):
-                ty._flatten_ir_types(builder, out)
+            ty._flatten_ir_types(builder, out)
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
@@ -1276,7 +1286,10 @@ class tuple(base_value):
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     def __getattr__(self, name):
-        return self.values[self.type.fields.index(name)]
+        fields = self.type.fields
+        if fields is None or name not in fields:
+            raise AttributeError(f"'tuple' object has no attribute {name}")
+        return self.values[fields.index(name)]
 
     # TODO: remove
     def _setitem(self, idx, value):
@@ -3455,14 +3468,14 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     max_val = args[0]
     for arg in args[1:]:
         max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if max_val.type.is_block():
-        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead")
     return max_val
 
 
@@ -3479,12 +3492,12 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     min_val = args[0]
     for arg in args[1:]:
         min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if min_val.type.is_block():
-        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead")
     return min_val
