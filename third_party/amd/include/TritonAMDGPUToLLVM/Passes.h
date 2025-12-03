@@ -24,15 +24,7 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 namespace mlir::triton::AMD {
-/// @brief Creates pass that keep LDS consumption within specified limits.
-/// @param arch target architecture name, for example "gfx940"
-/// @param customLDSLimit defines LDS size available for one thread block
-/// zero value tells pass that whole LDS is available on a device
-/// @return created pass
-std::unique_ptr<OperationPass<ModuleOp>>
-createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertWarpPipelinePass();
-
 void runScalarizePackedFOpsPass(llvm::Function &F);
 
 } // namespace mlir::triton::AMD

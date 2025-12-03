@@ -75,7 +75,7 @@ def test_err_in_unary_op():
     # ok, but the error message needs to point to the correct spot.
     @triton.jit
     def kernel():
-        not (0, 0)
+        -(0, 0)
 
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
