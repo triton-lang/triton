@@ -179,12 +179,14 @@ StageCluster getStageClusterForProducer(Value producedValue) {
   } else if (auto op = producedValue.getDefiningOp()) {
     return getStageCluster(op);
   } else if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
-    auto block = arg.getOwner();
     Operation *defOp;
     while (true) {
       if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
-        auto yieldOperand =
-            block->getTerminator()->getOperand(arg.getArgNumber() - 1);
+        auto terminator = arg.getOwner()->getTerminator();
+        if (!isa<scf::YieldOp>(terminator)) {
+          return {};
+        }
+        auto yieldOperand = terminator->getOperand(arg.getArgNumber() - 1);
         if (yieldOperand == producedValue) {
           return {};
         }
