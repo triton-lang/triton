@@ -33,18 +33,18 @@ using namespace mlir;
 
 static void addTritonPluginPass(mlir::PassManager *pm) {
   pm->addPass(mlir::triton::loweringdialectplugin::
-                  createLoweringDialectPluginMagicOpInserter());
+                  createLoweringDialectPluginMagicOp());
 }
 
 static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::loweringdialectplugin::
-        createLoweringDialectPluginMagicOpInserter();
+        createLoweringDialectPluginMagicOp();
   });
 }
 
 static const char *ADD_PLUGIN_PASS_NAME =
-    "loweringdialectplugin_magicop_inserter";
+    "loweringdialectplugin_magicop";
 static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
 static std::unordered_map<std::string, void (*)()> registryMap = {
