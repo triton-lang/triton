@@ -183,8 +183,12 @@ StageCluster getStageClusterForProducer(Value producedValue) {
     Operation *defOp;
     while (true) {
       if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
-        producedValue =
+        auto yieldOperand =
             block->getTerminator()->getOperand(arg.getArgNumber() - 1);
+        if (yieldOperand == producedValue) {
+          return {};
+        }
+        producedValue = yieldOperand;
         continue;
       }
       defOp = producedValue.getDefiningOp();
