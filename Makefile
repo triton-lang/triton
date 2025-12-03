@@ -33,9 +33,9 @@ test-cpp:
 test-unit: all
 	cd python/test/unit && $(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 --ignore=language/test_line_info.py \
 		--ignore=language/test_subprocess.py --ignore=test_debug.py
-	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 python/test/unit/language/test_subprocess.py
-	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 python/test/unit/test_debug.py --forked
-	$(PYTEST) --tb=short -s -n 6 --durations=10 python/triton_kernels/tests/
+	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 --pytest-durations=0 python/test/unit/language/test_subprocess.py
+	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 --pytest-durations=0 python/test/unit/test_debug.py --forked
+	$(PYTEST) --tb=short -s -n 6 --durations=10 --pytest-durations=0 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) --tb=short -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) --tb=short -vs python/tutorials/06-fused-attention.py
@@ -45,7 +45,7 @@ test-unit: all
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 python/test/gluon
+	$(PYTEST) --tb=short -s -n $(NUM_PROCS) --durations=10 --pytest-durations=0 python/test/gluon
 
 .PHONY: test-distributed
 test-distributed: all
