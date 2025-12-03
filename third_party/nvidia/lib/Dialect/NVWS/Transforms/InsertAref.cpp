@@ -178,6 +178,23 @@ StageCluster getStageClusterForProducer(Value producedValue) {
     return getStageCluster(opt->second);
   } else if (auto op = producedValue.getDefiningOp()) {
     return getStageCluster(op);
+  } else if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
+    auto block = arg.getOwner();
+    Operation *defOp;
+    while (true) {
+      if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
+        producedValue =
+            block->getTerminator()->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      defOp = producedValue.getDefiningOp();
+      break;
+    }
+    if (defOp) {
+      return getStageCluster(defOp);
+    } else {
+      return {};
+    }
   } else {
     return {};
   }
