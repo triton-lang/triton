@@ -52,7 +52,8 @@ def _maybe_reexec_for_rocm():
     os.environ['ROCP_TOOL_LIBRARIES'] = lib_path
     os.environ[_PROTON_REEXEC_MARKER] = '1'
 
-    # Set LD_PRELOAD for roctx marker interception
+    # Set LD_PRELOAD for roctx marker interception so it doesn't use the old library
+    # probably not best way
     roctx_lib = _get_rocm_roctx_lib()
     if roctx_lib:
         existing_preload = os.environ.get('LD_PRELOAD', '')
@@ -64,10 +65,9 @@ def _maybe_reexec_for_rocm():
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-# Perform re-exec check immediately (before any triton imports)
 _maybe_reexec_for_rocm()
 
-# These imports MUST be after _maybe_reexec_for_rocm() to ensure rocprofiler-sdk
+# these imports MUST be after _maybe_reexec_for_rocm() to ensure rocprofiler-sdk
 # is configured before HIP initializes (triggered by importing triton).
 from .profile import start, finalize, _select_backend, _normalize_backend  # noqa: E402
 from .flags import flags  # noqa: E402

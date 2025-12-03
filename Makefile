@@ -9,11 +9,6 @@ PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
 NUM_PROCS ?= 8
 
-# For ROCm: set ROCP_TOOL_LIBRARIES so rocprofiler-sdk loads proton at startup
-# Is this easiest/best way to check where the .so is?
-LIBPROTON_PATH := $(shell $(PYTHON) -c "import triton._C.libproton as p; print(p.__file__)" 2>/dev/null)
-PROTON_ENV := $(if $(LIBPROTON_PATH),ROCP_TOOL_LIBRARIES=$(LIBPROTON_PATH),)
-
 # Incremental builds
 
 .PHONY: all
