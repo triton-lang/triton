@@ -201,17 +201,41 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
+template <typename TOp>
+LogicalResult verifyTMAEncoding(TOp *op, Value desc, Attribute enc) {
+  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
+  if (!nvmma)
+    return op->emitOpError("TMA descriptor must have NVMMA shared layout");
+  auto descTy = cast<TensorDescType>(desc.getType());
+  auto descEnc = dyn_cast_if_present<NVMMASharedEncodingAttr>(
+      descTy.getBlockType().getEncoding());
+  // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
+  // rank-reducing loads
+  if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
+      descEnc.getSwizzlingByteWidth() != nvmma.getSwizzlingByteWidth() ||
+      descEnc.getElementBitWidth() != nvmma.getElementBitWidth() ||
+      descEnc.getFp4Padded() != nvmma.getFp4Padded())
+    return op->emitOpError("TMA descriptor layout must match shared layout");
+  if (nvmma.getTransposed())
+    return op->emitOpError("TMA descriptor layout must not be transposed");
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
     return failure();
   if (getCoord().size() < 1 || getCoord().size() > 5)
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
-  if (!getResult().getType().getMutableMemory())
+  auto resultType = getResult().getType();
+  if (!resultType.getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  if (!isa<NVMMASharedEncodingAttr>(getResult().getType().getEncoding()))
-    return emitOpError("TMA result must have NVMMA shared layout");
-  return success();
+  return verifyTMAEncoding(this, getDesc(), resultType.getEncoding());
+}
+
+// -- AsyncTMACopyLocalToGlobalOp --
+LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
+  return verifyTMAEncoding(this, getDesc(), getSrc().getType().getEncoding());
 }
 
 // -- AsyncTMAGatherOp --
@@ -222,13 +246,18 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
+  if (failed(verifyTMAEncoding(this, getDesc(), resultType.getEncoding())))
+    return failure();
   return DescriptorGatherOp::verifyResultType(*this, resultType,
                                               getXOffsets().getType());
 }
 
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
-  return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
+  auto srcType = getSrc().getType();
+  if (failed(verifyTMAEncoding(this, getDesc(), srcType.getEncoding())))
+    return failure();
+  return DescriptorGatherOp::verifyResultType(*this, srcType,
                                               getXOffsets().getType());
 }
 
