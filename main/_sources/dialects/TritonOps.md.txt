@@ -378,6 +378,36 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+### `tt.cat` (triton::CatOp)
+
+_Concatenate 2 tensors_
+
+Syntax:
+
+```
+operation ::= `tt.cat` $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
+```
+
+Traits: `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `lhs` | ranked tensor of floating-point or integer or ptr values |
+| `rhs` | ranked tensor of floating-point or integer or ptr values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
 ### `tt.clampf` (triton::ClampFOp)
 
 _Clamp operation for floating point types_
