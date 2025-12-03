@@ -16,7 +16,7 @@ def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, dev
     torch.zeros([1], dtype=torch.int32, device=device)
 
     @triton.jit(debug=jit_flag)
-    def _kernel(COND: tl.constexpr, MASK: tl.constexpr):
+    def _kernel(COND, MASK):
         tl.device_assert(COND, 'test', mask=MASK)
 
     is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
