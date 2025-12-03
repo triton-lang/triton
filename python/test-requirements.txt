@@ -4,6 +4,7 @@ numpy
 pytest
 pytest-forked
 pytest-xdist
+pytest-durations
 scipy>=1.7.1
 llnl-hatchet
 expecttest
