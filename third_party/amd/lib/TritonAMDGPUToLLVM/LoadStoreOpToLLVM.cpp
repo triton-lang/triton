@@ -1719,7 +1719,7 @@ struct AtomicCASOpConversion
             failureOrdering, StringRef(scopeStr.value()));
 
         // Extract the new_loaded value from the pair.
-        Value ret = b.extract_val(valueElemTy, cmpxchg, i);
+        Value ret = b.extract_val(valueElemTy, cmpxchg, 0);
         resultVals[i] = ret;
       } else { // for scalar
         // Build blocks to bypass the atomic instruction for ~rmwMask.
