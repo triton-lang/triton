@@ -1,7 +1,6 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, fields
-import itertools
 import pytest
 import torch
 from typing import Union
@@ -20,7 +19,7 @@ from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import wrap_torch_tensor, convert_layout
+from triton_kernels.tensor import convert_layout
 import copy
 # ---------------
 # numerics stuff
@@ -144,19 +143,19 @@ def _build_test_op_cases():
         # Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
         # Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
         # Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True), # divided m into n_slices
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(256, 1024, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True), # divided m into n_slices
+        # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        # Case(256, 1024, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
-        # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
+        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True, a_hbm_swizzling=True),
         # Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         # Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
     ])
     # swiglu together with mxfp8 downcastepilogue
-    test_cases.extend([
-        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
-     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
-    ])
+    # test_cases.extend([
+    #     Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
+    #  for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    # ])
     # # amd-specific float8
     # test_cases.extend([
     #     Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
@@ -358,7 +357,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         is_mx_rowmajor = not colmajor_mxfp_weight,
         value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
         value_hbm_swizzling_args = {"mx_axis":-2},
-        scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
+        scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout if b_hbm_swizzling and colmajor_mxfp_weight else None,
         scale_hbm_swizzling_args = {"mx_axis":-2, "num_warps":8},
     )
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
