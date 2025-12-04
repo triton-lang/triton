@@ -16,8 +16,7 @@ namespace mlir::triton::dialectplugin {
 
 namespace {
 
-
-LogicalResult PluginMagicOp(FunctionOpInterface func) {
+LogicalResult ConvertPluginMagicOp(FunctionOpInterface func) {
   MLIRContext *context = func.getContext();
   Location loc = func->getLoc();
   OpBuilder builder(context);
@@ -32,22 +31,24 @@ LogicalResult PluginMagicOp(FunctionOpInterface func) {
 
 } // namespace
 
-class DialectPluginMagicOpPass
+class ConvertPluginGPUToTritonGPUPass
     : public impl::DialectPluginMagicOpBase<
-          DialectPluginMagicOpPass> {
+          ConvertPluginGPUToTritonGPUPass> {
 public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    MLIRContext *context = &getContext();
     Location loc = m->getLoc();
     FunctionOpInterface func = *m.getOps<FunctionOpInterface>().begin();
-    if (failed(PluginMagicOp(func))) {
+    RewritePatternSet patterns(context);
+    if (failed(ConvertPluginMagicOp(func))) {
       signalPassFailure();
     }
   }
 };
 
-std::unique_ptr<OperationPass<ModuleOp>> createDialectPluginMagicOpPass() {
-  return std::make_unique<DialectPluginMagicOpPass>();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertPluginGPUToTritonGPUPass() {
+  return std::make_unique<ConvertPluginGPUToTritonGPUPass>();
 }
 
 } // namespace mlir::triton::dialectplugin

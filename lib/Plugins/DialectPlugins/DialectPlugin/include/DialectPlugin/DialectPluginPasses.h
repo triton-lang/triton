@@ -15,7 +15,7 @@ namespace dialectplugin {
 #define GEN_PASS_DECL
 #include "DialectPlugin/DialectPluginPasses.h.inc"
 
-std::unique_ptr<OperationPass<ModuleOp>> createDialectPluginMagicOpPass();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertPluginGPUToTritonGPUPass();
 
 #define GEN_PASS_REGISTRATION
 #include "DialectPlugin/DialectPluginPasses.h.inc"
