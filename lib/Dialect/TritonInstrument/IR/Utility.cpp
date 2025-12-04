@@ -92,7 +92,8 @@ createAliasingMatrix(ArrayRef<BufferRegion> regions) {
     uint64_t endI = startI + regions[i].length;
     if (regions[i].length == 0)
       continue;
-    for (size_t j = i + 1; j < numRegions; ++j) {
+    // Include self-aliasing
+    for (size_t j = i; j < numRegions; ++j) {
       uint64_t startJ = regions[j].baseOffset;
       uint64_t endJ = startJ + regions[j].length;
       if (regions[j].length == 0)

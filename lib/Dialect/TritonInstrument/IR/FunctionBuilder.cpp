@@ -1410,7 +1410,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     StringRef operandName, Value pred, MemType memType,
     Operation *insertPoint) {
   if (auxData.buffers[(int)memType].empty() ||
-      auxData.writeVisibility[(int)memType].empty()) {
+      auxData.writeVisibility[(int)memType].empty() ||
+      auxData.aliasMatrices[(int)memType].empty()) {
     return;
   }
   if (!pred)
@@ -1423,10 +1424,15 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
       auxData.writeVisibility[(int)memType].at(insertPoint).type);
+  Value aliasMatrixVal =
+      auxData.aliasMatrices[(int)memType].at(insertPoint).value;
+  auto aliasMatrixType = cast<RankedTensorType>(
+      auxData.aliasMatrices[(int)memType].at(insertPoint).type);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {bufOffset, lengthVal,  pred,
-                             threadVal, buffersVal, writeVisibilityVal};
+  SmallVector<Value> args = {bufOffset,     lengthVal,  pred,
+                             threadVal,     buffersVal, writeVisibilityVal,
+                             aliasMatrixVal};
   std::string message = "Buffer being accessed has outstanding writes.";
   if (!operandName.empty())
     message += " Operand: " + operandName.str();
@@ -1434,20 +1440,36 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
                         buffersType.cloneWith(std::nullopt, b.getI1Type())};
   createCallToCachedFunction(
       b, "verify_write_visibility", args, assertInfo,
-      {buffersType, writeVisibilityType, (int)memType},
-      [buffersType, writeVisibilityType](ImplicitLocOpBuilder &fb,
-                                         Block *entryBlock) {
+      {buffersType, writeVisibilityType, aliasMatrixType, (int)memType},
+      [buffersType, writeVisibilityType,
+       aliasMatrixType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
         Value threadVal = entryBlock->getArgument(3);
         Value buffers = entryBlock->getArgument(4);
         Value writeVisibilityPtr = entryBlock->getArgument(5);
+        Value aliasMatrix = entryBlock->getArgument(6);
 
         Value writeVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
         Value descriptor = createBufferDescriptor(fb, bufOffset, lengthVal);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, descriptor);
+        auto bufferMaskType = cast<RankedTensorType>(buffersEqBuf.getType());
+        auto i1AliasType = cast<RankedTensorType>(
+            aliasMatrixType.cloneWith(std::nullopt, fb.getI1Type()));
+        Value zeroAlias =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, aliasMatrixType);
+        Value aliasMatrixBool = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ne, aliasMatrix, zeroAlias);
+        Value bufMaskMatrix =
+            convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, i1AliasType);
+        Value aliasingMask =
+            arith::AndIOp::create(fb, aliasMatrixBool, bufMaskMatrix);
+        Value aliasVector = createBitwiseOrReduce(fb, aliasingMask, /*axis=*/0);
+        aliasVector =
+            createConvertLayout(fb, aliasVector, bufferMaskType.getEncoding());
+        buffersEqBuf = aliasVector;
         Value writeVisibilityZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
         Value bufVisibility = arith::SelectOp::create(
