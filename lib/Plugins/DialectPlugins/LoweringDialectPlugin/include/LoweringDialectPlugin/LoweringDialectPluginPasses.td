@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 
 
-def LoweringDialectPluginMagicOp: Pass<"loweringdialectplugin-magic-op", "::mlir::ModuleOp"> {
+def LoweringDialectPluginMagicOp: Pass<"loweringdialectplugin-magic-op", "mlir::ModuleOp"> {
   let summary = "Lowers a MagicOp into an mlir::arith::addIOp";
   let description = [{
     Lowers a MagicOp into an mlir::arith::addIOp:
@@ -21,6 +21,8 @@ def LoweringDialectPluginMagicOp: Pass<"loweringdialectplugin-magic-op", "::mlir
     }
     ```
   }];
+    let constructor = "createLoweringDialectPluginMagicOpPass()";
+  let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
 #endif // LOWERINGDIALECTPLUGIN_PASS

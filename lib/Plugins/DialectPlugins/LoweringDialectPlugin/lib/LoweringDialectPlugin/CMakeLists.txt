@@ -12,6 +12,7 @@ add_mlir_dialect_library(MLIRLoweringDialectPlugin
         ${PROJECT_SOURCE_DIR}/lib/Plugins/include/
 
         DEPENDS
+        TritonIR
         TritonTableGen
         TritonCanonicalizeIncGen
         MLIRLoweringDialectPluginPassesIncGen
