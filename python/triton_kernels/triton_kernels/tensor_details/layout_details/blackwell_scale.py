@@ -4,16 +4,17 @@ from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-
-from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
-from .base import Layout
 from triton_kernels import target_info
+from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
+
+from .base import Layout
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
 SWIZZLE_SIZE_INNER = tl.constexpr(4)
 SWIZZLE_SIZE_OUTER = tl.constexpr(128)
 
 
+# fmt: off
 @dataclass
 class BlackwellMXScaleLayout(Layout):
     B: int
