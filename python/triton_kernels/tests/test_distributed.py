@@ -236,6 +236,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     g.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri_graph)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+    symm_mem_pool.release()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)

@@ -341,6 +341,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
                                    atol=1.0, equal_nan=True)
 
     dist.barrier()
+    symm_mem_pool.release()
     dist.destroy_process_group()
 
 
