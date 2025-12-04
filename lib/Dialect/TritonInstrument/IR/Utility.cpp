@@ -79,6 +79,34 @@ createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder, MemType memType,
           tensorType};
 }
 
+SmallVector<SmallVector<uint8_t>>
+createAliasingMatrix(ArrayRef<BufferRegion> regions) {
+  SmallVector<SmallVector<uint8_t>> matrix;
+  size_t numRegions = regions.size();
+  matrix.resize(numRegions);
+  for (size_t i = 0; i < numRegions; ++i)
+    matrix[i].assign(numRegions, /*Value=*/0);
+
+  for (size_t i = 0; i < numRegions; ++i) {
+    uint64_t startI = regions[i].baseOffset;
+    uint64_t endI = startI + regions[i].length;
+    if (regions[i].length == 0)
+      continue;
+    for (size_t j = i + 1; j < numRegions; ++j) {
+      uint64_t startJ = regions[j].baseOffset;
+      uint64_t endJ = startJ + regions[j].length;
+      if (regions[j].length == 0)
+        continue;
+      bool alias = (startI < endJ) && (startJ < endI);
+      if (alias) {
+        matrix[i][j] = 1;
+        matrix[j][i] = 1;
+      }
+    }
+  }
+  return matrix;
+}
+
 Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
                                      TypedValue<RankedTensorType> tensor) {
   Type elType = tensor.getType().getElementType();
@@ -102,6 +130,30 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   TypedValue<RankedTensorType> tensor =
       createConstIntTensor(b, b.getLoc(), 0, type);
   return createInitializedScratchMemory(b, tensor);
+}
+
+TypedValue<RankedTensorType>
+createAliasMatrixTensor(ImplicitLocOpBuilder &b,
+                        ArrayRef<SmallVector<uint8_t>> matrix, Region *region) {
+  size_t rows = matrix.size();
+  if (rows == 0)
+    return {};
+  size_t cols = matrix.front().size();
+  for (const auto &row : matrix)
+    assert(row.size() == cols && "Expected square alias matrix");
+
+  auto type = getIntTensorType(
+      region, {static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
+      /*bitWidth=*/8);
+  SmallVector<APInt> values;
+  values.reserve(rows * cols);
+  for (const auto &row : matrix)
+    for (uint8_t v : row)
+      values.emplace_back(/*numBits=*/8, v);
+
+  auto denseAttr = DenseElementsAttr::get(type, values);
+  Value constValue = arith::ConstantOp::create(b, b.getLoc(), type, denseAttr);
+  return cast<TypedValue<RankedTensorType>>(constValue);
 }
 
 bool hasCpAsync(ModuleOp module) {
@@ -312,6 +364,24 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
               createBufferDescriptorsTensor(b, memType, bufRegions[iMemType])};
         });
     int numBufs = bufRegions[iMemType].size();
+
+    auto aliasMatrixData = createAliasingMatrix(bufRegions[iMemType]);
+    if (!aliasMatrixData.empty()) {
+      auto aliasTensor =
+          createAliasMatrixTensor(b, aliasMatrixData, entryRegion);
+      aliasMatrices[iMemType].insert(entryRegion,
+                                     {aliasTensor, aliasTensor.getType()});
+      passToWarpSpecialize(entryPoint, aliasMatrices[iMemType].at(entryRegion),
+                           aliasMatrices[iMemType]);
+      createInWarpSpecialize(
+          entryPoint, aliasMatrices[iMemType],
+          [aliasMatrixData](ImplicitLocOpBuilder &nestedBuilder) {
+            Region *region = nestedBuilder.getInsertionBlock()->getParent();
+            auto tensor =
+                createAliasMatrixTensor(nestedBuilder, aliasMatrixData, region);
+            return ValueType{tensor, tensor.getType()};
+          });
+    }
 
     writeVisibility[iMemType].insert(
         entryRegion, {createZeroInitStateTensor(b, numBufs, 0, 64),

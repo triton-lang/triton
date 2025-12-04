@@ -75,6 +75,7 @@ struct AuxDataMap {
   RegionToValueMap readVisibility[numMemTypes];
   RegionToValueMap readTracking[numMemTypes];
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  RegionToValueMap aliasMatrices[numMemTypes];
   RegionToValueMap lock;
   RegionToValueMap waiting;
 
