@@ -1,15 +1,15 @@
-#ifndef LOWERINGDIALECTPLUGIN_OPS
-#define LOWERINGDIALECTPLUGIN_OPS
+#ifndef DIALECTPLUGIN_OPS
+#define DIALECTPLUGIN_OPS
 
-include "LoweringDialectPlugin/LoweringDialectPluginTypes.td"
+include "DialectPlugin/DialectPluginTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
-def LoweringDialectPlugin_MagicOp : LoweringDialectPlugin_Op<"magic", [Pure,
+def DialectPlugin_MagicOp : DialectPlugin_Op<"magic", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "Illustrates how to define an operation.";
     let description = [{
-        The `loweringdialectplugin.magic` operation illustrates how to define a new
+        The `dialectplugin.magic` operation illustrates how to define a new
         operation in a dialect. It uses an operation trait to declare that it
         has no side effects.
 
@@ -20,7 +20,7 @@ def LoweringDialectPlugin_MagicOp : LoweringDialectPlugin_Op<"magic", [Pure,
         ```mlir
         %0 = arith.constant 2 : i32
         // Apply the magic operation to %0
-        %1 = loweringdialectplugin.magic %0 : i32
+        %1 = dialectplugin.magic %0 : i32
         ```
     }];
 
@@ -32,4 +32,4 @@ def LoweringDialectPlugin_MagicOp : LoweringDialectPlugin_Op<"magic", [Pure,
     }];
 }
 
-#endif // LOWERINGDIALECTPLUGIN_OPS
+#endif // DIALECTPLUGIN_OPS

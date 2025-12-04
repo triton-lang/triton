@@ -1,20 +1,20 @@
-#include "LoweringDialectPlugin/LoweringDialectPluginDialect.h"
-#include "LoweringDialectPlugin/LoweringDialectPluginOps.h"
-#include "LoweringDialectPlugin/LoweringDialectPluginTypes.h"
+#include "DialectPlugin/DialectPluginDialect.h"
+#include "DialectPlugin/DialectPluginOps.h"
+#include "DialectPlugin/DialectPluginTypes.h"
 
 using namespace mlir;
-using namespace mlir::triton::loweringdialectplugin;
+using namespace mlir::triton::dialectplugin;
 
-#include "LoweringDialectPlugin/LoweringDialectPluginOpsDialect.cpp.inc"
+#include "DialectPlugin/DialectPluginOpsDialect.cpp.inc"
 
 //===----------------------------------------------------------------------===//
-// LoweringDialectPlugin dialect.
+// DialectPlugin dialect.
 //===----------------------------------------------------------------------===//
 
-void LoweringDialectPluginDialect::initialize() {
+void DialectPluginDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "LoweringDialectPlugin/LoweringDialectPluginOps.cpp.inc"
+#include "DialectPlugin/DialectPluginOps.cpp.inc"
       >();
   registerTypes();
 }
@@ -23,8 +23,8 @@ void LoweringDialectPluginDialect::initialize() {
 #include "mlir/InitAllDialects.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
 
-#include "LoweringDialectPlugin/LoweringDialectPluginDialect.h"
-#include "LoweringDialectPlugin/LoweringDialectPluginPasses.h"
+#include "DialectPlugin/DialectPluginDialect.h"
+#include "DialectPlugin/DialectPluginPasses.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
@@ -32,19 +32,19 @@ void LoweringDialectPluginDialect::initialize() {
 using namespace mlir;
 
 static void addTritonPluginPass(mlir::PassManager *pm) {
-  pm->addPass(mlir::triton::loweringdialectplugin::
-                  createLoweringDialectPluginMagicOpPass());
+  pm->addPass(mlir::triton::dialectplugin::
+                  createDialectPluginMagicOpPass());
 }
 
 static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::triton::loweringdialectplugin::
-        createLoweringDialectPluginMagicOpPass();
+    return mlir::triton::dialectplugin::
+        createDialectPluginMagicOpPass();
   });
 }
 
 static const char *ADD_PLUGIN_PASS_NAME =
-    "loweringdialectplugin_magicop";
+    "dialectplugin_magicop";
 static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
 static std::unordered_map<std::string, void (*)()> registryMap = {
@@ -94,16 +94,16 @@ tritonEnumeratePluginDialects(uint32_t *dialectCount,
   *dialectCount = 1;
   if (!dialectNames)
     return TP_SUCCESS;
-  dialectNames[0] = "LoweringDialectPlugin";
+  dialectNames[0] = "DialectPlugin";
   return TP_SUCCESS;
 }
 
 extern "C" __attribute__((visibility("default"))) DialectPluginLibraryInfo
 tritonGetDialectPluginInfo(const char *name) {
-  return {MLIR_PLUGIN_API_VERSION, "LoweringDialectPlugin", LLVM_VERSION_STRING,
+  return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {
-            registry->insert<mlir::triton::loweringdialectplugin::
-                                 LoweringDialectPluginDialect>();
-            mlir::triton::loweringdialectplugin::registerPasses();
+            registry->insert<mlir::triton::dialectplugin::
+                                 DialectPluginDialect>();
+            mlir::triton::dialectplugin::registerPasses();
           }};
 }
