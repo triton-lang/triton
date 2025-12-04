@@ -43,9 +43,6 @@ class SymmetricMemoryPool:
 
     def release(self):
         if self._is_initialized:
-            self.buf = None
-            self.bufs = None
-            self.hdl = None
             self._is_initialized = False
             self.size = 0
             self.regions = {}
