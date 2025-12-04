@@ -1667,7 +1667,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
 def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     check_type_supported(dtype_str, device)
@@ -6383,7 +6383,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if is_hip_cdna3() and src_shape == [128, 64] and indices_shape == [256, 64]:
+    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
         pytest.skip('Not enough LDS.')

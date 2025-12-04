@@ -324,6 +324,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
     $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {

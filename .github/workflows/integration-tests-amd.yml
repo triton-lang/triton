@@ -146,6 +146,11 @@ jobs:
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
+          # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+            AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
+          fi
+
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
