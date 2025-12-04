@@ -356,7 +356,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     buffers[iMemType].insert(
         entryRegion,
         {createBufferDescriptorsTensor(b, memType, bufRegions[iMemType])});
-    // Buffer pointers are rematerialized in the warp specialize region,
+    // Buffer descriptors are rematerialized in the warp specialize region,
     // not passed as an argument.
     createInWarpSpecialize(
         entryPoint, buffers[iMemType], [&](ImplicitLocOpBuilder &b) {
@@ -371,8 +371,6 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
           createAliasMatrixTensor(b, aliasMatrixData, entryRegion);
       aliasMatrices[iMemType].insert(entryRegion,
                                      {aliasTensor, aliasTensor.getType()});
-      passToWarpSpecialize(entryPoint, aliasMatrices[iMemType].at(entryRegion),
-                           aliasMatrices[iMemType]);
       createInWarpSpecialize(
           entryPoint, aliasMatrices[iMemType],
           [aliasMatrixData](ImplicitLocOpBuilder &nestedBuilder) {
