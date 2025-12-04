@@ -33,13 +33,13 @@ using namespace mlir;
 
 static void addTritonPluginPass(mlir::PassManager *pm) {
   pm->addPass(mlir::triton::dialectplugin::
-                  createDialectPluginMagicOpPass());
+                  createConvertPluginGPUToTritonGPUPass());
 }
 
 static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::dialectplugin::
-        createDialectPluginMagicOpPass();
+        createConvertPluginGPUToTritonGPUPass();
   });
 }
 

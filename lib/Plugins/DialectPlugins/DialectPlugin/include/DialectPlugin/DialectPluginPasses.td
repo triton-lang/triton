@@ -21,7 +21,7 @@ def DialectPluginMagicOp: Pass<"dialectplugin-magic-op", "mlir::ModuleOp"> {
     }
     ```
   }];
-    let constructor = "createDialectPluginMagicOpPass()";
+    let constructor = "createConvertPluginGPUToTritonGPUPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
