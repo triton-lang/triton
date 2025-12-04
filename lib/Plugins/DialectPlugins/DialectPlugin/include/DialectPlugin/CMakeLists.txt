@@ -12,8 +12,8 @@ mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
 add_mlir_doc(DialectPluginOps DialectPluginOps DialectPlugin/ -gen-op-doc)
 
 set(LLVM_TARGET_DEFINITIONS DialectPluginDialect.td)
-mlir_tablegen(Dialect.h.inc -gen-dialect-decls)
-mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs)
+mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=dialectplugin)
+mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=dialectplugin)
 add_mlir_doc(DialectPluginDialect DialectPluginDialect DialectPlugin/ -gen-dialect-doc)
 
 set(LLVM_TARGET_DEFINITIONS DialectPluginTypes.td)
@@ -21,6 +21,5 @@ mlir_tablegen(Types.h.inc -gen-typedef-decls)
 mlir_tablegen(Types.cpp.inc -gen-typedef-defs)
 
 set(LLVM_TARGET_DEFINITIONS DialectPluginPasses.td)
-mlir_tablegen(DialectPluginPasses.h.inc --gen-pass-decls)
-
+mlir_tablegen(DialectPluginPasses.h.inc --gen-pass-decls -name=dialectplugin)
 add_public_tablegen_target(MLIRDialectPluginPassesIncGen)
