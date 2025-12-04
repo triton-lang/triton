@@ -45,6 +45,7 @@ class SymmetricMemoryPool:
         if self._is_initialized:
             self.hdl.barrier(channel=0)
             self.hdl = None
+            self.buf = None
             self.bufs = None
             self._is_initialized = False
             self.size = 0
