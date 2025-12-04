@@ -4,25 +4,11 @@
 include "mlir/Pass/PassBase.td"
 
 
-def DialectPluginMagicOp: Pass<"dialectplugin-magic-op", "mlir::ModuleOp"> {
-  let summary = "Converts a MagicOp into an mlir::arith::addIOp";
-  let description = [{
-    Lowers a MagicOp into an mlir::arith::addIOp:
-    ```
-    tt.func @bar() {
-      %0 = tt.get_program_id x : i32
-      %1 = dialectplugin.magic %0 : i32
-      tt.return
-    }
-    tt.func @bar() {
-      %0 = tt.get_program_id x : i32
-      %1 = arith.addi %0, %0 : i32
-      tt.return
-    }
-    ```
-  }];
-    let constructor = "createConvertPluginGPUToTritonGPUPass()";
-  let dependentDialects = ["mlir::triton::TritonDialect"];
+def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-llvm", "mlir::ModuleOp"> {
+  let summary = "Converts a MagicOp to LLVM";
+  let constructor = "mlir::triton::dialectplugin::createConvertPluginGPUToLLVMPass()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect"];
 }
 
 #endif // DIALECTPLUGIN_PASS

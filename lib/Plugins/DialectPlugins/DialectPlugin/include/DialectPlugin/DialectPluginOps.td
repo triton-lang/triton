@@ -5,6 +5,9 @@ include "DialectPlugin/DialectPluginTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
+class DialectPlugin_Op<string mnemonic, list<Trait> traits = []> :
+        Op<DialectPlugin_Dialect, mnemonic, traits>;
+
 def DialectPlugin_MagicOp : DialectPlugin_Op<"magic", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "Illustrates how to define an operation.";

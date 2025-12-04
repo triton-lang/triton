@@ -7,12 +7,16 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/raw_ostream.h"
-
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "DialectPlugin/DialectPluginPasses.h"
+
+using namespace mlir;
+using namespace mlir::triton;
 
 namespace mlir::triton::dialectplugin {
 #define GEN_PASS_DEF_DIALECTPLUGINMAGICOP
 #include "DialectPlugin/DialectPluginPasses.h.inc"
+}
 
 namespace {
 
@@ -23,17 +27,18 @@ LogicalResult ConvertPluginMagicOp(FunctionOpInterface func) {
   func.walk([&](mlir::triton::dialectplugin::MagicOp op) {
       builder.setInsertionPoint(op);
       auto a = op.getInput();
-      auto newOp = arith::AddIOp::create(builder, loc, a, a);
-      op->erase();
+      auto newOp = mlir::LLVM::ZeroOp::create(builder, loc, a.getType());
+      op.replaceAllUsesWith(newOp.getResult());
+      op.erase();
   });
   return success();
 }
 
 } // namespace
 
-class ConvertPluginGPUToTritonGPUPass
-    : public impl::DialectPluginMagicOpBase<
-          ConvertPluginGPUToTritonGPUPass> {
+class ConvertPluginGPUToLLVMPass
+    : public mlir::triton::dialectplugin::impl::DialectPluginMagicOpBase<
+          ConvertPluginGPUToLLVMPass> {
 public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -47,8 +52,9 @@ public:
   }
 };
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertPluginGPUToTritonGPUPass() {
-  return std::make_unique<ConvertPluginGPUToTritonGPUPass>();
+namespace mlir::triton::dialectplugin {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertPluginGPUToLLVMPass() {
+  return std::make_unique<ConvertPluginGPUToLLVMPass>();
 }
 
 } // namespace mlir::triton::dialectplugin
