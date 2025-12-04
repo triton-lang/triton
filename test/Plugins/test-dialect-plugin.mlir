@@ -6,7 +6,7 @@
 module {
   tt.func @bar() {
     %0 = tt.get_program_id x : i32
-    %1 = loweringdialectplugin.magic %0 : i32
+    %1 = dialectplugin.magic %0 : i32
     tt.return 
   }
 }  // module
