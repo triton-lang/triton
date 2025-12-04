@@ -33,23 +33,6 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-struct Options {
-  bool dump_dot = false;
-  bool dump_loop_only = false;
-  bool dump_data_only = false;
-};
-
-Options get_options() {
-  Options options;
-  options.dump_dot =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT");
-  options.dump_data_only =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
-  options.dump_loop_only =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
-  return options;
-}
-
 class Graph;
 class Node;
 
@@ -535,24 +518,6 @@ template <typename... Args> bool node_isa(Node *node) {
   return node->isOp() && isa<Args...>(node->getOp());
 }
 
-bool isScalarLoad(Node *node) {
-  if (!node_isa<tt::LoadOp>(node))
-    return false;
-
-  auto op = cast<tt::LoadOp>(node->getOp());
-
-  op->getResult(0).getType().dump();
-  if (auto tensorType =
-          dyn_cast<mlir::RankedTensorType>(op->getResult(0).getType())) {
-    for (auto dim : tensorType.getShape())
-      if (dim != 1)
-        return false;
-    return true;
-  }
-
-  return true;
-}
-
 bool isViewOp(Operation *op) {
   return isa<tt::BroadcastOp, tt::ExpandDimsOp, ttg::ConvertLayoutOp>(op) ||
          op->hasTrait<OpTrait::MemDescViewTrait>();
@@ -639,7 +604,8 @@ bool Edge::crossesPartitions() const {
     return false;
   if (!from.getNode()->hasPartition() || !to.getNode()->hasPartition())
     return false;
-  // FIXME: may not handle multiple partitions correctly
+  // FIXME: only considers edges between nodes assigned to single partitions
+  // as crossing a boundary
   if (from.getNode()->getPartitions().size() != 1 ||
       to.getNode()->getPartitions().size() != 1)
     return false;
@@ -1392,45 +1358,36 @@ SmallVector<
          }},
 
         // merge TMEM partitions together, if they use the same tmem alloc
-        // and that alloc is used in more than 2 partitions
-        // as aref does not support tmem with more than 2 partitions
-        // FIXME: this is a bit broken - it might merge too much - i.e. doesn't
-        // just merge up to 2 partitions
+        // aref does not support tmem with more than 2 partitions
+        // and the tmem_alloc'd memory can maximally be used by an MMA
+        // partition and a TMEM partition
         {"tmem",
          [](Partition *a, Partition *b) {
            auto a_is_tmem = (a->getFlags() & Flags::TMEM);
            auto b_is_tmem = (b->getFlags() & Flags::TMEM);
-           if (!a_is_tmem || !b_is_tmem) {
+           if (!a_is_tmem || !b_is_tmem)
              return false;
-           }
            auto allocs_a = getTMEMAllocs(a);
            auto allocs_b = getTMEMAllocs(b);
-           // if the sets are overlapping
-           bool overlap = false;
-           for (auto alloc_a : allocs_a) {
-             if (allocs_b.contains(alloc_a)) {
-               overlap = true;
-               break;
-             }
-           }
-           if (!overlap)
-             return false;
-           return true;
+           // if the sets are overlapping, alloc is used by both TMEM partitions
+           for (auto alloc_a : allocs_a)
+             if (allocs_b.contains(alloc_a))
+               return true;
+           return false;
          }},
 };
 
 void mergePartitions(Graph *graph, std::string funcName,
                      VisualizationInfo &vis_info) {
-  // Note: this implementation is slow. It can be improved by incrementally
-  // updating the data structures rather than rebuilding the whole lot when a
-  // rule is applied
-  auto options = get_options();
   LLVM_DEBUG({ llvm::errs() << "#### applying heuristics...\n"; });
-  int iter = 0;
+
   bool changed = false;
   do {
     changed = false;
 
+    // Note: this implementation mayb be slow. It could be improved by
+    // incrementally updating the set of crossing edges rather than rebuilding
+    // it on each iteration
     auto crossingEdges = getCrossingEdges(graph);
     LLVM_DEBUG({
       llvm::errs() << "\n"
@@ -1441,46 +1398,40 @@ void mergePartitions(Graph *graph, std::string funcName,
       for (auto edge : crossingEdges) {
         if (apply(edge)) {
 
-          // check if applying the heuristic will observe the contraints
+          // check if applying the heuristic will satisfy the constraints
           bool ok = true;
-          // Note: constraints just prevent epilogue partition ops merging
-          // into mma partitions, so disable them if we don't want epilogue
-          // partitions
           for (auto [name, constraint] : constraints) {
             if (!constraint(edge)) {
               ok = false;
               break;
             }
           }
-          if (ok) {
-            LLVM_DEBUG({
-              llvm::dbgs() << "\napply heuristic \"" << name << "\"\n";
-              llvm::dbgs() << edge.getFromNode()->getLabel() << " -> "
-                           << edge.getToNode()->getLabel() << "\n";
-              llvm::dbgs() << "partitions "
-                           << edge.getFromNode()->getPartition() << " -> "
-                           << edge.getToNode()->getPartition() << "\n";
-              llvm::dbgs() << "flags "
-                           << edge.getFromNode()->getPartition()->getFlags()
-                           << " -> "
-                           << edge.getToNode()->getPartition()->getFlags()
-                           << "\n";
-            });
+          if (!ok)
+            continue;
 
-            // merge the partitions
-            auto from_partition = edge.getFromNode()->getPartition();
-            auto to_partition = edge.getToNode()->getPartition();
-            Partition::merge(from_partition, to_partition);
+          LLVM_DEBUG({
+            llvm::dbgs() << "\napply heuristic \"" << name << "\"\n";
+            llvm::dbgs() << edge.getFromNode()->getLabel() << " -> "
+                         << edge.getToNode()->getLabel() << "\n";
+            llvm::dbgs() << "partitions " << edge.getFromNode()->getPartition()
+                         << " -> " << edge.getToNode()->getPartition() << "\n";
+            llvm::dbgs() << "flags "
+                         << edge.getFromNode()->getPartition()->getFlags()
+                         << " -> "
+                         << edge.getToNode()->getPartition()->getFlags()
+                         << "\n";
+          });
 
-            if (options.dump_dot) {
-              visualize(funcName, "merge-step",
-                        std::string("merge: rule ") + name, graph, vis_info);
-            }
-            iter++;
+          // merge the partitions
+          auto from_partition = edge.getFromNode()->getPartition();
+          auto to_partition = edge.getToNode()->getPartition();
+          Partition::merge(from_partition, to_partition);
 
-            changed = true;
-            break;
-          }
+          visualize(funcName, "merge-step", std::string("merge: rule ") + name,
+                    graph, vis_info);
+
+          changed = true;
+          break;
         }
       }
       if (changed)
@@ -1495,9 +1446,8 @@ void mergePartitions(Graph *graph, std::string funcName,
     // look at every pair of partitions and check if they should be merged
     auto merge_partitions_step = [&]() {
       SmallVector<Partition *> all_partitions;
-      for (auto &partition : graph->getPartitions()) {
+      for (auto &partition : graph->getPartitions())
         all_partitions.push_back(partition.get());
-      }
       for (auto [name, apply] : partition_heuristics) {
         for (auto partitionA : all_partitions) {
           for (auto partitionB : all_partitions) {
@@ -1511,12 +1461,8 @@ void mergePartitions(Graph *graph, std::string funcName,
                 partitionB->dump();
               });
               Partition::merge(partitionA, partitionB);
-              if (options.dump_dot) {
-                std::stringstream filename;
-                visualize(funcName, "merge-step",
-                          std::string("merge: rule ") + name, graph, vis_info);
-              }
-              iter++;
+              visualize(funcName, "merge-step",
+                        std::string("merge: rule ") + name, graph, vis_info);
               return false;
             }
           }
@@ -1539,10 +1485,7 @@ void mergePartitions(Graph *graph, std::string funcName,
 
 void propagatePartitions(Graph *graph, std::string funcName,
                          VisualizationInfo &vis_info) {
-  auto options = get_options();
-
-  if (options.dump_dot)
-    visualize(funcName, "propagate", "before propagate", graph, vis_info);
+  visualize(funcName, "propagate", "before propagate", graph, vis_info);
 
   // propagate partitions to parent ops
   SmallVector<Node *> leaves;
@@ -1630,8 +1573,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
     }
   }
 
-  if (options.dump_dot)
-    visualize(funcName, "propagate", "after propagate", graph, vis_info);
+  visualize(funcName, "propagate", "after propagate", graph, vis_info);
 
   // propagate partitions to non-data nodes (forward)
   {
@@ -1671,8 +1613,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
     }
   }
 
-  if (options.dump_dot)
-    visualize(funcName, "propagate", "propagate forward", graph, vis_info);
+  visualize(funcName, "propagate", "propagate forward", graph, vis_info);
 
   // propagate partitions of tt.reduce into its body
   graph->walk([&](Node *node) {
@@ -1683,8 +1624,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
     }
   });
 
-  if (options.dump_dot)
-    visualize(funcName, "propagate", "propagate reduce", graph, vis_info);
+  visualize(funcName, "propagate", "propagate reduce", graph, vis_info);
 
   // Corner case: tmem store following tmem alloc should be in a warp
   // partition with 4 warps (i.e. a non-mma partition)
@@ -1721,8 +1661,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
     }
   });
 
-  if (options.dump_dot)
-    visualize(funcName, "propagate", "tmem store corner case", graph, vis_info);
+  visualize(funcName, "propagate", "tmem store corner case", graph, vis_info);
 
   // propagate partitions for patched up nodes to non-data nodes
   for (auto node : patched_nodes) {
@@ -1755,11 +1694,8 @@ void propagatePartitions(Graph *graph, std::string funcName,
 
 void duplicateCheapOps(Graph *graph, std::string funcName,
                        VisualizationInfo &vis_info) {
-  auto options = get_options();
-
-  if (options.dump_dot)
-    visualize(funcName, "duplicate", "before duplicate cheap ops", graph,
-              vis_info);
+  visualize(funcName, "duplicate", "before duplicate cheap ops", graph,
+            vis_info);
 
   // for each partition:
   // look at all crossing edges leaving the partition
@@ -1782,18 +1718,12 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
       auto partition = start->getPartition();
 
       auto isCandidate = [](Node *node) {
-        // FIXME: ignore costly SFU
         return (getNodeFlags(node) == Flags::NONE ||
                 getNodeFlags(node) == Flags::SFU);
       };
 
-      if (!isCandidate(edge.getToNode())) {
+      if (!isCandidate(edge.getToNode()))
         continue;
-      }
-
-      // llvm::errs() << "\n\ntry\n";
-      // edge.getFromNode()->dump();
-      // edge.getToNode()->dump();
 
       auto update = [&]() {
         std::map<Node *, Node *> parentMap;
@@ -1804,41 +1734,29 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
 
         while (!stack.empty()) {
           auto node = stack.back();
-          // llvm::dbgs() << "visit\n";
-          // node->dump();
           stack.pop_back();
           if (!seen.contains(node)) {
             seen.insert(node);
             for (auto edge : node->getOutEdges()) {
               auto child = edge.getToNode();
               if (!seen.contains(child)) {
-                // llvm::dbgs() << "child\n";
-                // child->dump();
                 if (child->getPartitions().size() != 1 || !isCandidate(child)) {
-                  // llvm::dbgs() << "no match, ignore path\n";
+                  // do nothing
                 } else if (child->getPartition() == partition) {
-                  // llvm::dbgs() << "same partition, follow...\n";
                   parentMap.emplace(child, node);
                   stack.push_back(child);
                 } else if (child->getPartition() == startPartition) {
-                  // llvm::dbgs() << "HIT!\n";
                   // found a path, set all nodes on the path to the partition
-                  // llvm::dbgs() << "set partition\n";
                   node->addPartition(startPartition);
-                  // node->dump();
                   while (parentMap.find(node) != parentMap.end()) {
                     node = parentMap[node];
                     node->addPartition(startPartition);
-                    // node->dump();
                   }
 
-                  if (options.dump_dot)
-                    visualize(funcName, "duplicate", "duplicate cheap ops",
-                              graph, vis_info);
+                  visualize(funcName, "duplicate", "duplicate cheap ops", graph,
+                            vis_info);
 
                   return;
-                } else {
-                  // llvm::dbgs() << "no match, ignore path\n";
                 }
               }
             }
@@ -1849,13 +1767,19 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
     }
   }
 
-  if (options.dump_dot)
-    visualize(funcName, "duplicate", "duplicate cheap ops done", graph,
-              vis_info);
+  visualize(funcName, "duplicate", "duplicate cheap ops done", graph, vis_info);
 }
 
 void visualize(std::string key, std::string filename, std::string title,
                Graph *graph, VisualizationInfo &info) {
+
+  if (!tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT"))
+    return;
+
+  const auto dump_data_only =
+      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
+  const auto dump_loop_only =
+      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
 
   static std::map<std::string, int> keys;
   if (keys.find(key) == keys.end()) {
@@ -1863,8 +1787,6 @@ void visualize(std::string key, std::string filename, std::string title,
   }
   auto idx = keys[key];
   keys[key]++;
-
-  auto options = get_options();
 
   std::stringstream path;
   path << "graph-" << key << "-" << std::setfill('0') << std::setw(4) << idx
@@ -1893,25 +1815,16 @@ void visualize(std::string key, std::string filename, std::string title,
     return info.partition_colors[partition];
   };
 
-  // reset colors
-  // info.partition_colors.clear();
-  // for (auto &partition : graph->getPartitions()) {
-  //   if (partition->empty())
-  //     continue;
-  //   getPartitionColor(partition.get());
-  // }
-
   // add nodes
   std::function<void(Node *)> visitNodes = [&](Node *graph) {
     for (auto &node_obj : graph->getNodes()) {
       auto node = node_obj.get();
 
-      if (options.dump_data_only && !node->isData() && !node->containsData())
+      if (dump_data_only && !node->isData() && !node->containsData())
         // skip if dumping data nodes only, and this op is non-data or doesn't
         // contain a data node
         continue;
-      if (options.dump_loop_only && !node->inLoopBody() &&
-          !node->containsLoopBody())
+      if (dump_loop_only && !node->inLoopBody() && !node->containsLoopBody())
         // skip if dumping loop body nodes only
         continue;
 
@@ -2087,7 +2000,6 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
         ifOp.elseYield()->setAttr(kPartitionAttrName, partitionsAttr);
       }
     }
-    // FIXME: handle ReduceOp
   };
 
   auto setPartitionOutputsAttr = [&](Operation *op, size_t idx, size_t size,
@@ -2238,9 +2150,8 @@ void deduplicateViewOps(
       auto partitionsRef =
           cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName)).asArrayRef();
       SmallVector<int> partitions(partitionsRef.begin(), partitionsRef.end());
-      if (partitionedOps.find(partitions) == partitionedOps.end()) {
+      if (partitionedOps.find(partitions) == partitionedOps.end())
         partitionedOps[partitions] = {};
-      }
       partitionedOps[partitions].push_back(op);
     }
     for (auto partition : partitionedOps) {
@@ -2258,9 +2169,6 @@ void deduplicateViewOps(
 }
 
 void assignPartitionIds(Graph *graph) {
-  // assign unique ids for partitions
-  // starting with store partitions, followed by everything else
-  // FIXME: this is a hack, why is ordering important?
   size_t idx = 0;
 
   SmallVector<Partition *> store_partitions;
@@ -2303,25 +2211,22 @@ void assignPartitionIds(Graph *graph) {
   }
 }
 
-void assignDefaultPartitions(Graph *graph) {
+void assignPartitionsForOpsWithNoUse(Graph *graph) {
   // nodes with no partition placed in same partition as other ops in the
   // region or default partition if none. Note: we can't just use partitions
   // of parent op, as this includes things like tmem tokens
   Partition *defaultPartition = nullptr;
-  for (auto &partition : graph->getPartitions()) {
-    if (partition->id && *partition->id == 0) {
+  for (auto &partition : graph->getPartitions())
+    if (partition->id && *partition->id == 0)
       defaultPartition = partition.get();
-    }
-  }
   graph->walk([&](Node *node) {
     if (node->getPartitions().empty()) {
       bool done = false;
       auto parent = node->getParent();
       if (parent && parent->isOp()) {
         for (auto &otherNode : parent->getNodes()) {
-          if (node == otherNode.get()) {
+          if (node == otherNode.get())
             continue;
-          }
           if (otherNode->isOp() && otherNode->hasPartition()) {
             node->addPartitions(otherNode->getPartitions());
             done = true;
@@ -2385,46 +2290,36 @@ private:
       return std::stoi(value);
     };
 
-    auto options = get_options();
-
     auto graph = buildGraph(op);
     auto initValues = initialDataValues(graph.get());
     propagateDataValues(initValues);
     deserializeManualPartitions(op, graph.get());
+
     VisualizationInfo vis_info;
     auto key = func.getSymName().str() + "_" + std::to_string(idx);
-    if (options.dump_dot)
-      visualize(key, "input", "input", graph.get(), vis_info);
+    visualize(key, "input", "input", graph.get(), vis_info);
     initialPartitionAssignment(graph.get());
-    if (options.dump_dot)
-      visualize(key, "initial", "initial partitions", graph.get(), vis_info);
+    visualize(key, "initial", "initial partitions", graph.get(), vis_info);
     mergePartitions(graph.get(), key, vis_info);
-    if (options.dump_dot)
-      visualize(key, "merge", "merged", graph.get(), vis_info);
+    visualize(key, "merge", "merged", graph.get(), vis_info);
     propagatePartitions(graph.get(), key, vis_info);
-    if (options.dump_dot)
-      visualize(key, "propagate", "propagated", graph.get(), vis_info);
+    visualize(key, "propagate", "propagated", graph.get(), vis_info);
 
     assignPartitionIds(graph.get());
-    if (options.dump_dot)
-      visualize(key, "assign-partition-ids", "assign partition ids",
-                graph.get(), vis_info);
+    visualize(key, "assign-partition-ids", "assign partition ids", graph.get(),
+              vis_info);
     // Handle case where ops with no uses (like llvm.intr.assume) get no
-    // partition Assign them to default partition, and rerun propagation
-    assignDefaultPartitions(graph.get());
-    if (options.dump_dot)
-      visualize(key, "assign-default", "assign default", graph.get(), vis_info);
+    // partition assigned
+    assignPartitionsForOpsWithNoUse(graph.get());
+    visualize(key, "assign-no-use", "assign no use", graph.get(), vis_info);
     propagatePartitions(graph.get(), key, vis_info);
-    if (options.dump_dot)
-      visualize(key, "propagate", "propagated", graph.get(), vis_info);
-
-    // FIXME: optimization - looks for paths of NONE ops, from one partition,
-    // through another partition, and back to the same partition. Duplicate
-    // these to avoid the copying involved (i.e. assign to both partitions)
+    visualize(key, "propagate", "propagated", graph.get(), vis_info);
+    // Optimization: looks for paths of NONE ops with low cost, from one
+    // partition, through another partition, and back to the same partition.
+    // Duplicates these to avoid the aref involved (i.e. assign to both
+    // partitions)
     duplicateCheapOps(graph.get(), key, vis_info);
-
-    if (options.dump_dot)
-      visualize(key, "final", "final", graph.get(), vis_info);
+    visualize(key, "final", "final", graph.get(), vis_info);
 
     LLVM_DEBUG({
       llvm::errs() << "\nfinal partitions:\n";
@@ -2440,6 +2335,12 @@ private:
   }
 
   void cloneMultiPartitionDataOps(Operation *region) {
+    // FIXME: this transformation runs after the partition scheduling is
+    // complete It clones "data" ops with multiple partitions assigned, as
+    // insert-aref pass cannot currently handly these. E.g. an op assigned to
+    // partitions 0,1 will be cloned into two ops, one in partition 0 and the
+    // other in partition 1 and all uses are updated correctly.
+
     // build data flow graph to find all data ops
     DenseSet<Operation *> dataOps;
     {
@@ -2447,9 +2348,8 @@ private:
       auto initValues = initialDataValues(graph.get());
       propagateDataValues(initValues);
       graph->walk([&](Node *node) {
-        if (node->isOp() && node->isData()) {
+        if (node->isOp() && node->isData())
           dataOps.insert(node->getOp());
-        }
       });
     }
 
@@ -2463,9 +2363,8 @@ private:
       region->walk([&](Operation *op) {
         auto partitions = getPartitionIds(op);
         if (partitions.contains(partition) && partitions.size() > 1 &&
-            dataOps.contains(op)) {
+            dataOps.contains(op))
           ops.push_back(op);
-        }
       });
 
       SmallVector<Operation *> oldOps;
