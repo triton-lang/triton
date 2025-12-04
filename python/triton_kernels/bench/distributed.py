@@ -64,6 +64,12 @@ def initialize_matmul(
     )
 
 
+def cleanup_matmul():
+    if not _is_distributed_launch():
+        return
+    symm_mem_pool.release()
+
+
 def setup() -> Tuple[int, int]:
     if _is_distributed_launch():
         world_size = int(os.environ["WORLD_SIZE"])
