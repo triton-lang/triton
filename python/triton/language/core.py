@@ -14,7 +14,7 @@ from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
-from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
 T = TypeVar('T')
 
@@ -353,9 +353,9 @@ def _unwrap_if_constexpr(o):
     if isinstance(o, list):
         return [_unwrap_if_constexpr(x) for x in o]
     if isinstance(o, builtins.tuple):
-        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+        return _tuple_create(o, [_unwrap_if_constexpr(x) for x in o])
     if isinstance(o, tuple):
-        return tuple(_unwrap_if_constexpr(x) for x in o)
+        return tuple([_unwrap_if_constexpr(x) for x in o], o.type)
     return o.value if isinstance(o, constexpr) else o
 
 

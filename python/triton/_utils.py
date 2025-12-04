@@ -146,3 +146,12 @@ def get_primitive_bitwidth(dtype: str) -> int:
 
 def is_namedtuple(val):
     return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
+
+
+def _tuple_create(arg, contents):
+    # NamedTuples and tuples have different construction semantics. NamedTuple
+    # has a constructor that takes individual arguments, while tuple takes an
+    # iterable. Both have type "tuple" making it difficult to distinguish
+    # between them, but only NamedTuple has "_fields" and apparently this is how
+    # everyone does the check.
+    return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)
