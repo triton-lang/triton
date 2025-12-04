@@ -113,10 +113,10 @@ def _p_matmul(
         Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
 
     is_w_microscaled: tl.constexpr = WMxScale is not None
-    tl.static_assert(not is_w_microscaled or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
+    w_type: tl.constexpr = get_dtype(W)
+    tl.static_assert(not is_w_microscaled or W_TRANSPOSE or w_type == tl.float8e4nv, "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
-        w_type: tl.constexpr = get_dtype(W)
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(get_dtype(WMxScale) == tl.uint8, "mx_scale_ptr must be uint8")

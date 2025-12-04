@@ -12,6 +12,7 @@ SWIZZLE_SIZE_INNER = tl.constexpr(4)
 SWIZZLE_SIZE_OUTER = tl.constexpr(128)
 
 
+# fmt: off
 @dataclass
 class BlackwellMXScaleLayout(Layout):
     B: int
@@ -230,7 +231,8 @@ class BlackwellActMXScaleLayout(Layout):
 
             # upper bound static padded rows: need to be static not related to ex_hist
             n_experts = ex_hist.shape[0]
-            self.M_pad = 128 * 8 * n_experts # each expert allow 8 128 blocks
+            # hack to reserve enough space
+            self.M_pad = self.M * 2  # hack to reserve enough space
 
     def swizzle_data(self, data):
         if self.mode == "batched":
