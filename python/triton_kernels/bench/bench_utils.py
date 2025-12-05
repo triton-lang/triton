@@ -52,7 +52,7 @@ def _make_default_mlp_activation() -> FusedActivation:
 def _make_mx4_quantization_opts(batch: int, w_dtype: str) -> dict:
     if w_dtype != "mx4" or is_hip():
         return {}
-    num_warps = 4 if batch <= 512 else 8
+    num_warps = 4 if batch <= 512 and cuda_capability_geq(10, 0) else 8
     value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
     scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
     return {
