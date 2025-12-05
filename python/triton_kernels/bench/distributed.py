@@ -64,6 +64,12 @@ def initialize_matmul(
     )
 
 
+def cleanup_matmul():
+    if not _is_distributed_launch():
+        return
+    symm_mem_pool.release()
+
+
 def setup() -> Tuple[int, int]:
     if _is_distributed_launch():
         world_size = int(os.environ["WORLD_SIZE"])
@@ -336,6 +342,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
                                    atol=1.0, equal_nan=True)
 
     dist.barrier()
+    symm_mem_pool.release()
     dist.destroy_process_group()
 
 
