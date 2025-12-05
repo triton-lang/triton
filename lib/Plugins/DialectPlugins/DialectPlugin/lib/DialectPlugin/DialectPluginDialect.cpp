@@ -44,7 +44,7 @@ static void registerTritonPluginPass() {
 }
 
 static const char *ADD_PLUGIN_PASS_NAME =
-    "dialectplugin_magicop";
+    "plugingpu_conversion";
 static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
 static std::unordered_map<std::string, void (*)()> registryMap = {
