@@ -482,7 +482,7 @@ def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, 
     # AsyncCopy requires >= 32 bits per lane so we have to pass divisibility for arguments used in pointer arithmetic
     attrs = []
     if ASYNC_LOAD_TYPE == "ASYNC_COPY":
-        attrs = {k: [["tt.divisibility", 16]] for k in [(x, ) for x in range(12)]}
+        attrs = {(k, ): [["tt.divisibility", 16]] for k in [0, 1, 2, 3, 4, 5, 6, 8, 10]}
 
     k = triton.compile(
         # Inner strides need to be constexpr (1) to get contiguity. Note the compiler frontend does the same for normal dispatches

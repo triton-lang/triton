@@ -75,7 +75,7 @@ def test_err_in_unary_op():
     # ok, but the error message needs to point to the correct spot.
     @triton.jit
     def kernel():
-        not (0, 0)
+        -(0, 0)
 
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
@@ -473,6 +473,62 @@ def test_unused_result():
     obtained_err_msg = str(e.value).split('\n')[-1]
 
     assert expected_err_msg == obtained_err_msg
+
+
+@tl.core._aggregate
+class Square:
+    x: tl.tensor
+
+    @triton.constexpr_function
+    def __init__(self, x):
+        self.x = x
+
+    @triton.must_use_result
+    @triton.constexpr_function
+    def power(self):
+        return 2
+
+    @triton.must_use_result
+    @triton.jit
+    def compute(self):
+        return self.x * self.x
+
+
+def test_bound_unused_result():
+
+    @triton.jit
+    def evil_square_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a.compute()
+
+    @triton.jit
+    def good_square_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a = a.compute()
+
+    triton.compile(triton.compiler.ASTSource(fn=good_square_kernel, signature={}, constexprs={}))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=evil_square_kernel, signature={}, constexprs={}))
+
+    assert "The result of a.compute is not being used" in str(e.value)
+
+    @triton.jit
+    def evil_power_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a.power()
+
+    @triton.jit
+    def good_power_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a = a.power()
+
+    triton.compile(triton.compiler.ASTSource(fn=good_power_kernel, signature={}, constexprs={}))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=evil_power_kernel, signature={}, constexprs={}))
+
+    assert "The result of a.power is not being used" in str(e.value)
 
 
 def test_err_constexpr_and_do_not_specialize():

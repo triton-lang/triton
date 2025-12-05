@@ -364,3 +364,22 @@ def test_tuple_float():
         x, y = float("-inf"), float("inf")  # noqa: F841
 
     _namedtuple_float_tuple_kernel[(1, )]()
+
+
+@triton.constexpr_function
+def passthrough_constexpr(x):
+    return x
+
+
+class TrivialTuple(NamedTuple):
+    foo: tl.constexpr
+
+
+@pytest.mark.interpreter
+def test_tuple_constexpr_function():
+
+    @triton.jit
+    def kernel():
+        tl.static_assert(passthrough_constexpr(TrivialTuple(0)).foo == 0)
+
+    kernel[(1, )]()

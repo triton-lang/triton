@@ -300,21 +300,22 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
-  auto *barrierOperand = ptxBuilder.newOperand(barrier, "l");
+  barrier = b.ptrtoint(i32_ty, barrier);
+  auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
   std::string opcode;
   if (twoCTAs) {
-    // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be broadcasted into CTAid 0 and 1
-    auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
+    auto ctaId = b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
+    auto totalCTAs = lookupNumCTAs(rewriter);
+    auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
+    Value mask = b.shl(b.i16_val(3), ctaIdLead);
+    auto *ctaMask = ptxBuilder.newOperand(mask, "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
              "cluster.multicast::cluster.b64 [$1], $2;";
   } else {
-    opcode =
-        "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-        ".mbarrier::arrive::one.b64 [$1];";
+    opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
   }
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
@@ -379,8 +380,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     ttng::ClusterArriveOp::create(rewriter, loc, false);
     ttng::ClusterWaitOp::create(rewriter, loc);
 
-    Value clusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-    Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
+    Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
+    Value cluster0 = tb.icmp_eq(leftClusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }
   pred = tb.and_(pred, isWarp0);
@@ -413,7 +415,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto tensorMemAttr =
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
-  unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  unsigned mmaSizeN = std::min(tensorMemAttr.getBlockN(), 256u);
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
@@ -484,7 +486,6 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  auto dLayout = cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
 
@@ -505,8 +506,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
       DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
-    return dLoader.tmemLoad(m * dLayout.getBlockM(), n * dLayout.getBlockN(),
-                            rewriter, loc);
+    return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,
+                            loc);
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,

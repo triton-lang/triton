@@ -8,7 +8,7 @@ import triton_kernels
 import triton_kernels.roofline as roofline
 import triton_kernels.swiglu
 from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, cuda_capability_geq
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
@@ -43,7 +43,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt1 = dict()
     opt2 = dict()
     if w_dtype == "mx4":
-        num_warps = 4 if batch <= 512 else 8
+        # on hopper we only use 8 warps when weight is scaled
+        num_warps = 4 if batch <= 512 and cuda_capability_geq(10, 0) else 8
         value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
         scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
             mx_axis=1, num_warps=num_warps)
@@ -57,11 +58,11 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     wg, wg_flex, wg_scale = quantize_weight(wg, "bf16")
     w1, w1_flex, w1_scale = quantize_weight(w1, w_dtype, **opt1)
     w2, w2_flex, w2_scale = quantize_weight(w2, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), weight_scale=wg_scale)
+    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
                           (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), weight_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), weight_scale=w2_scale)
+    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
+    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
 
     # -- benchmark --
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]

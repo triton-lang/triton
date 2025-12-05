@@ -232,6 +232,8 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ts"] = static_cast<double>(ts) / freq;
           element["dur"] = static_cast<double>(dur) / freq;
           json args;
+          args["Init Time (ns)"] = bt->initTime;
+          args["Post Final Time (ns)"] = bt->postFinalTime;
           args["Finalization Time (ns)"] = bt->postFinalTime - bt->preFinalTime;
           args["Frequency (MHz)"] = freq;
           element["args"] = args;
