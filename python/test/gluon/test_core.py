@@ -574,6 +574,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     K *= shape_k
     instr_shape[1] *= shape_n
 
+    num_warps = warps[0] * warps[1]
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
 
     if is_blackwell():
@@ -582,9 +583,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         if M * N // 128 // num_ctas > MAX_ROWS:
             N //= (M * N // 128 // num_ctas // MAX_ROWS)
 
-    # No idea what's going on TBH
-    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) != (1, 1, 1):
-        pytest.skip("FIXME: Fails with Illegal Instruction error. Not sure why")
+    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) == (2, 4, 1):
+        pytest.skip("FIXME: Fails with wrong answer. Need to investigate")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 
@@ -725,7 +725,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         False,
         use_tcgen05,
         mma_barrier_layout,
-        num_warps=warps[0] * warps[1],
+        num_warps=num_warps,
         num_ctas=num_ctas,
     )
 

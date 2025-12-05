@@ -8,7 +8,7 @@ import triton_kernels
 import triton_kernels.roofline as roofline
 import triton_kernels.swiglu
 from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, cuda_capability_geq
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
@@ -43,7 +43,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt1 = dict()
     opt2 = dict()
     if w_dtype == "mx4":
-        num_warps = 4 if batch <= 512 else 8
+        # on hopper we only use 8 warps when weight is scaled
+        num_warps = 4 if batch <= 512 and cuda_capability_geq(10, 0) else 8
         value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
         scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
             mx_axis=1, num_warps=num_warps)
