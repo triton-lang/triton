@@ -37,8 +37,8 @@ class BackendOptions:
 
     def __post_init__(self):
         if self.debug:
-            self.sanitize_overflow = True
-            self.enable_assertions = True
+            object.__setattr__(self, "sanitize_overflow", True)
+            object.__setattr__(self, "enable_assertions", True)
 
 
 class BaseBackend(metaclass=ABCMeta):
