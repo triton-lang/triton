@@ -3,7 +3,7 @@
 #include "DialectPlugin/DialectPluginTypes.h"
 
 using namespace mlir;
-using namespace mlir::triton::dialectplugin;
+using namespace mlir::triton::plugin;
 
 #include "DialectPlugin/DialectPluginOpsDialect.cpp.inc"
 
@@ -32,19 +32,16 @@ void DialectPluginDialect::initialize() {
 using namespace mlir;
 
 static void addTritonPluginPass(mlir::PassManager *pm) {
-  pm->addPass(mlir::triton::dialectplugin::
-                  createConvertPluginGPUToLLVMPass());
+  pm->addPass(mlir::triton::plugin::createConvertPluginGPUToLLVMPass());
 }
 
 static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::triton::dialectplugin::
-        createConvertPluginGPUToLLVMPass();
+    return mlir::triton::plugin::createConvertPluginGPUToLLVMPass();
   });
 }
 
-static const char *ADD_PLUGIN_PASS_NAME =
-    "plugingpu_conversion";
+static const char *ADD_PLUGIN_PASS_NAME = "plugingpu_conversion";
 static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
 static std::unordered_map<std::string, void (*)()> registryMap = {
@@ -100,10 +97,10 @@ tritonEnumeratePluginDialects(uint32_t *dialectCount,
 
 extern "C" __attribute__((visibility("default"))) DialectPluginLibraryInfo
 tritonGetDialectPluginInfo(const char *name) {
-  return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
-          [](DialectRegistry *registry) {
-            registry->insert<mlir::triton::dialectplugin::
-                                 DialectPluginDialect>();
-            mlir::triton::dialectplugin::registerdialectpluginPasses();
-          }};
+  return {
+      MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
+      [](DialectRegistry *registry) {
+        registry->insert<mlir::triton::plugin::DialectPluginDialect>();
+        mlir::triton::plugin::registerpluginPasses();
+      }};
 }

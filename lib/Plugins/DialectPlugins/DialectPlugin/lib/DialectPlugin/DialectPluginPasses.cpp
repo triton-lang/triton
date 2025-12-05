@@ -1,21 +1,20 @@
+#include "DialectPlugin/DialectPluginPasses.h"
 #include "DialectPlugin/DialectPluginDialect.h"
 #include "DialectPlugin/DialectPluginOps.h"
-#include "DialectPlugin/DialectPluginPasses.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
-
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::NVIDIA;
 
-namespace mlir::triton::dialectplugin {
+namespace mlir::triton::plugin {
 #define GEN_PASS_DEF_DIALECTPLUGINMAGICOP
 #include "DialectPlugin/DialectPluginPasses.h.inc"
-}
+} // namespace mlir::triton::plugin
 
 namespace {
 class PluginLLVMConversionTarget : public ConversionTarget {
@@ -24,20 +23,21 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
-    addIllegalDialect<mlir::triton::dialectplugin::DialectPluginDialect>();
+    addIllegalDialect<mlir::triton::plugin::DialectPluginDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
 
 struct PluginMagicOpConversion
-: public ConvertOpToLLVMPattern<mlir::triton::dialectplugin::MagicOp> {
+    : public ConvertOpToLLVMPattern<mlir::triton::plugin::MagicOp> {
   PluginMagicOpConversion(LLVMTypeConverter &typeConverter,
-                        const TargetInfoBase &targetInfo,
-                        PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {}
+                          const TargetInfoBase &targetInfo,
+                          PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
-  matchAndRewrite(mlir::triton::dialectplugin::MagicOp op, OpAdaptor adaptor,
+  matchAndRewrite(mlir::triton::plugin::MagicOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto a = op.getInput();
@@ -45,28 +45,28 @@ struct PluginMagicOpConversion
     rewriter.replaceOp(op, newOp);
     return success();
   }
+
 private:
   const TargetInfoBase &targetInfo;
-
 };
 
 } // namespace
 
-namespace mlir::triton::dialectplugin {
+namespace mlir::triton::plugin {
 void populatePluginGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit) {
   patterns.add<PluginMagicOpConversion>(typeConverter, targetInfo);
-return;
+  return;
 }
-} // namespace mlir::triton::dialectplugin
+} // namespace mlir::triton::plugin
 
 struct ConvertPluginGPUToLLVMPass
-    : public mlir::triton::dialectplugin::impl::DialectPluginMagicOpBase<
+    : public mlir::triton::plugin::impl::DialectPluginMagicOpBase<
           ConvertPluginGPUToLLVMPass> {
   explicit ConvertPluginGPUToLLVMPass(int32_t computeCapability,
-                                        int32_t ptxVersion) {
+                                      int32_t ptxVersion) {
     this->computeCapability = computeCapability;
     this->ptxVersion = ptxVersion;
   }
@@ -79,7 +79,7 @@ struct ConvertPluginGPUToLLVMPass
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::dialectplugin::populatePluginGPUOpPatterns(
+    mlir::triton::plugin::populatePluginGPUOpPatterns(
         typeConverter, patterns, tritonTargetInfo, 1);
     auto convTarget = PluginLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -87,12 +87,11 @@ struct ConvertPluginGPUToLLVMPass
   }
 };
 
-
-namespace mlir::triton::dialectplugin {
+namespace mlir::triton::plugin {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertPluginGPUToLLVMPass(int32_t computeCapability,
-                                       int32_t ptxVersion) {
+                                 int32_t ptxVersion) {
   return std::make_unique<ConvertPluginGPUToLLVMPass>(computeCapability,
-                                                        ptxVersion);
-  }
-} // namespace mlir::triton::dialectplugin
+                                                      ptxVersion);
+}
+} // namespace mlir::triton::plugin

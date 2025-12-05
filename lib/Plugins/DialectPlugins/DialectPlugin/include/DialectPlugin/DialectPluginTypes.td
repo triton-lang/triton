@@ -15,7 +15,7 @@ class DialectPlugin_Type<string name, string typeMnemonic, list<Trait> traits = 
 
 def DialectPlugin_CustomType : DialectPlugin_Type<"Custom", "custom"> {
     let summary = "DialectPlugin custom type";
-    let description = "Custom type in dialectplugin dialect";
+    let description = "Custom type in plugin dialect";
     let parameters = (ins StringRefParameter<"the custom value">:$value);
     let assemblyFormat = "`<` $value `>`";
 }
