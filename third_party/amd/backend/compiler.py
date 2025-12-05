@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, BackendOptions
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
@@ -28,16 +28,11 @@ def is_in_thread_transpose_enabled(arch):
 
 
 @dataclass(frozen=True)
-class HIPOptions:
+class HIPOptions(BackendOptions):
     num_warps: int = 4
     waves_per_eu: int = 0
     num_stages: int = 2
     num_ctas: int = 1
-    extern_libs: dict = None
-    debug: bool = False
-    sanitize_overflow: bool = False
-    enable_assertions: bool = False
-    arch: str = None
     # We have native support for OCP fp8 variants since CDNA4/RDNA4. For earlier generations,
     # we software emulate the support for them.
     # UZ fp8 variants (fp8e4b8 and fp8e5b16) are natively supported for CDNA3. For other
@@ -51,9 +46,7 @@ class HIPOptions:
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
     allow_flush_denorm: bool = False
-    max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
-    instrumentation_mode: str = ""
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -77,6 +70,8 @@ class HIPOptions:
     schedule_hint: str = 'none'
 
     def __post_init__(self):
+        super().__post_init__()
+
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)

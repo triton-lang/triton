@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, BackendOptions
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton.runtime.errors import PTXASError
@@ -103,7 +103,7 @@ def sm_arch_from_capability(capability: int):
 
 
 @dataclass(frozen=True)
-class CUDAOptions:
+class CUDAOptions(BackendOptions):
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
@@ -123,15 +123,11 @@ class CUDAOptions:
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee", 'bf16x3', 'bf16x6')
     max_num_imprecise_acc_default: bool = None
-    extern_libs: dict = None
-    debug: bool = False
     backend_name: str = 'cuda'
-    sanitize_overflow: bool = False
-    enable_assertions: bool = False
-    arch: str = None
-    instrumentation_mode: str = ""
 
     def __post_init__(self):
+        super().__post_init__()
+
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -174,10 +170,6 @@ class CUDABackend(BaseBackend):
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
             opts["enable_assertions"] = True
-
-        if "debug" in opts and opts["debug"]:
-            opts["enable_assertions"] = True
-            opts["sanitize_overflow"] = True
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})

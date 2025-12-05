@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Union, Tuple
 from types import ModuleType
 
 
@@ -18,6 +18,27 @@ class Language(Enum):
     """The input language being compiled by the backend."""
     TRITON = 0
     GLUON = 1
+
+
+@dataclass(frozen=True)
+class BackendOptions:
+    extern_libs: dict = None
+    debug: bool = False
+    sanitize_overflow: bool = False
+    enable_assertions: bool = False
+    arch: str = None
+    supported_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
+    default_dot_input_precision: str = ""
+    allowed_dot_input_precisions: Tuple[str] = ()
+    max_num_imprecise_acc_default: int = 0
+    backend_name: str = ""
+    instrumentation_mode: str = ""
+
+    def __post_init__(self):
+        if self.debug:
+            self.sanitize_overflow = True
+            self.enable_assertions = True
 
 
 class BaseBackend(metaclass=ABCMeta):

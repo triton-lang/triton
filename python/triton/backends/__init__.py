@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Type, TypeVar, Union
 from types import ModuleType
 from .driver import DriverBase
-from .compiler import BaseBackend
+from .compiler import BaseBackend, BackendOptions
 
 if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points

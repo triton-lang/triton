@@ -12,6 +12,7 @@ import triton.language as tl
 import dataclasses
 from dataclasses import dataclass
 
+from triton.backends.compiler import BackendOptions
 from triton.language.semantic import TritonSemantic
 from triton.runtime.jit import KernelInterface
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -127,18 +128,16 @@ class TensorDescHandle:
 
 
 @dataclass(frozen=True)
-class InterpreterOptions:
-    extern_libs: dict = None
-    debug: bool = False
-    sanitize_overflow: bool = False
-    enable_assertions: bool = False
-    arch: str = None
+class InterpreterOptions(BackendOptions):
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
+
+    def __post_init__(self):
+        super().__post_init__()
 
 
 def _validate_np_data_size(np_array, tl_dtype):
