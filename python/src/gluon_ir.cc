@@ -561,6 +561,21 @@ void init_gluon_ir(py::module &&m) {
              auto blockTyLayout = blockTy.cloneWithEncoding(layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
            })
+      .def("get_in_thread_transposed_encoding",
+           [](GluonOpBuilder &self, Type tensorType) -> Attribute {
+             auto castedType = dyn_cast<RankedTensorType>(tensorType);
+             assert(
+                 castedType &&
+                 "expecting tensor type in get_in_thread_transposed_encoding");
+             auto shape = castedType.getShape();
+             auto blockEncoding = dyn_cast<triton::gpu::BlockedEncodingAttr>(
+                 castedType.getEncoding());
+             assert(blockEncoding && "expect tensor in blocked encoding");
+             auto ll = ttag::InThreadTransposeOp::deduceOutputLayout(
+                 shape, blockEncoding);
+             return self.getChecked<ttg::LinearEncodingAttr>(self.getContext(),
+                                                             ll);
+           })
       .def("is_convert_layout_trivial",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
              auto dstTy = cast<RankedTensorType>(resultTy);
@@ -895,6 +910,14 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int num) {
              ValueRange tokens;
              self.create<ttag::AsyncTDMWait>(tokens, num);
+           })
+      .def("create_in_thread_transpose",
+           [](GluonOpBuilder &self, Type dstType, Value src,
+              Attribute dstEnc) -> Value {
+             auto completeDstType =
+                 cast<RankedTensorType>(dstType).cloneWithEncoding(dstEnc);
+             return self.create<ttag::InThreadTransposeOp>(completeDstType,
+                                                           src);
            })
       .def("create_async_copy_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier) {

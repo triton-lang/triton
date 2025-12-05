@@ -10,8 +10,10 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
+    is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
+    is_hip_cdna,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -1865,3 +1867,38 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@gluon.jit
+def in_thread_transpose_kernel(input, output, M: ttgl.constexpr, N: ttgl.constexpr, block_layout: ttgl.constexpr,
+                               shared_layout: ttgl.constexpr):
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, block_layout))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, block_layout))[None, :]
+
+    load_data = ttgl.load(input + offs_m * N + offs_n)
+    transposed_data = ttgl.amd.cdna3.in_thread_transpose(load_data)
+    smem = ttgl.allocate_shared_memory(input.dtype.element_ty, [M, N], shared_layout, transposed_data)
+    out_data = smem.load(block_layout)
+    ttgl.store(output + offs_m * N + offs_n, out_data)
+
+
+@pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()), reason="Requires CDNA or RDNA")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.int8])
+@pytest.mark.parametrize("registers_shape", [[4, 4], [8, 4], [4, 8], [8, 8]])
+def test_in_thread_transpose(registers_shape, dtype):
+    torch.manual_seed(0)
+    threads_shape = [1, THREADS_PER_WARP]
+    warps_shape = [1, 1]
+    M = registers_shape[0] * threads_shape[0]
+    N = registers_shape[1] * threads_shape[1]
+    block_layout = ttgl.BlockedLayout(registers_shape, threads_shape, warps_per_cta=warps_shape, order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0, 1])
+    input_buffer = (torch.randn((M, N), device="cuda") * 100).to(dtype)
+    output_buffer = torch.zeros((M, N), device="cuda", dtype=dtype)
+    in_thread_transpose_kernel[(1, )](input_buffer, output_buffer, M, N, block_layout, shared_layout,
+                                      num_warps=math.prod(warps_shape))
+
+    print(input_buffer.to("cpu").numpy()[0:registers_shape[0], 0:registers_shape[1]])
+    print(output_buffer.to("cpu").numpy()[0:registers_shape[0], 0:registers_shape[1]])
+
+    torch.testing.assert_close(input_buffer, output_buffer, atol=1e-3, rtol=1e-3)

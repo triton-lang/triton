@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "in_thread_transpose"
 ]
 
 _atomic_op_str_to_op = {
@@ -236,3 +236,31 @@ def buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None, _se
 
     return _buffer_atomic_rmw_impl('xchg', ptr, offsets, value, "cdna3", mask=mask, sem=sem, scope=scope,
                                    _semantic=_semantic)
+
+
+@builtin
+def in_thread_transpose(src, _semantic: GluonSemantic = None):
+    """
+    Special case of convert layout operation, which transposes values inside each thread:
+       --- logical dimension1 --->
+    d | -- lane 0 - | -- lane 1 - |     | -- lane 0 - | -- lane 1 - |
+    i | reg0 | reg1 | reg0 | reg1 |     | reg0 | reg2 | reg0 | reg2 |
+    m | reg2 | reg3 | reg2 | reg3 | ==> | reg1 | reg3 | reg1 | reg3 |
+    2 | -- lane 2 - | -- lane 3 - |     | -- lane 2 - | -- lane 3 - |
+    | | reg0 | reg1 | reg0 | reg1 |     | reg0 | reg2 | reg0 | reg2 |
+    V | reg2 | reg3 | reg2 | reg3 |     | reg1 | reg3 | reg1 | reg3 |
+
+    Could be used to adjust layout order before store in shared memory for more efficient access.
+
+    Args:
+        src (tensor in blocked encoding): arbitrary 2d tensor in blocked encoding
+    """
+    assert isinstance(src.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
+    assert isinstance(src.type.layout, ttgl.BlockedLayout), "expected input layout to be BlockedLayout"
+
+    builder = _semantic.builder
+    transposed_encoding = builder.get_in_thread_transposed_encoding(src.type.to_ir(builder))
+    ret_ty = ttgl.distributed_type(src.type.element_ty, src.type.shape, ttgl.AutoLayout())
+    handle = builder.create_in_thread_transpose(ret_ty.to_ir(builder),
+                                                _semantic.to_tensor(src).handle, transposed_encoding)
+    return ttgl.tensor(handle, ret_ty)
