@@ -1784,8 +1784,9 @@ static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, S
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
+  auto isaFamily = triton::AMD::deduceISAFamily(arch);
   if (tail && is16BitElem) {
-    if (arch == "gfx942" || arch == "gfx950")
+    if (isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4)
       return 8;
     else
       return 4;
