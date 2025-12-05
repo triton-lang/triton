@@ -15,7 +15,7 @@ def DialectPlugin_Dialect : Dialect {
         illustrate the basic setup required to develop MLIR-based tools without
         working inside of the LLVM source tree.
     }];
-    let cppNamespace = "mlir::triton::dialectplugin";
+    let cppNamespace = "::mlir::triton::dialectplugin";
 
     let useDefaultTypePrinterParser = 1;
     let extraClassDeclaration = [{
