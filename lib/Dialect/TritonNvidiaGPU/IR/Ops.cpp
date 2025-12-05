@@ -407,6 +407,10 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("The col stride of the return operand must be 32 / ")
            << retType.getElementTypeBitWidth() << " but got "
            << retEnc.getColStride();
+  // The maximum size of a MMA instruction is 128x256
+  if (retEnc.getBlockN() > 256)
+    return emitOpError("The block size of the return operand must be less than "
+                       "or equal to 256");
 
   auto aSplit = getCTASplitNum(aEnc);
   auto bSplit = getCTASplitNum(bEnc);
@@ -421,6 +425,43 @@ LogicalResult TCGen5MMAOp::verify() {
 
   if (getTwoCtas()) {
     auto retSplit = getCTASplitNum(retEnc);
+
+    auto nPerCTA = retType.getDimSize(1) / retSplit[1];
+
+    // [Note: numRepN > 1 and two_ctas]
+    // Consider, just as an example, num_ctas=16, and a huge tile of shape
+    // MNK = 512x64x2048
+    // This is an example of layout with numRepN=2 and two_ctas=true:
+    // Layout RHS:
+    // #ttg.memdesc<64x2048xf16,
+    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
+    //                      elementBitWidth = 16,
+    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
+    //
+    // As a LinearLayout:
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
+    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
+    //
+    // The issue is that the data from the CTA1 should be next to that of the
+    // first part of the instruction. Now, the max instruction size is 128x256,
+    // so the layout we should use is
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
+    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
+    // (note how we swapped the bases [0, 256] and [0, 128])
+    // The issue with this layout is that it breaks the invariant that the
+    // CGALayout splits the CGA tile into contiguous CTA tiles,
+    // i.e. total_layout = cta_layout * cga_layout.
+    // This is used all over the place, to the point that for all legacy layouts
+    // we represent the CGALayout as the `cga_layout` we have to multiply on the
+    // right.
+    // We could allow with a bit of effort SharedLinearLayouts that did not
+    // divide on the right by a CGALayout, but for now we throw a lovely error.
+    if (nPerCTA > 256)
+      return emitOpError(
+          "We don't allow to emit more than one mma instruction along N. "
+          "Reduce the block or increase the number of warps or CTAs along N");
 
     unsigned retM = retSplit[0];
     unsigned retN = retSplit[1];
