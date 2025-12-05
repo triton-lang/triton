@@ -252,10 +252,20 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     uint32_t subBufferSize = getMemDescSize(memdescSubsliceOp.getType());
     uint32_t relativeOffset = getMemDescSubsliceByteOffset(memdescSubsliceOp);
     for (auto &region : in.regions) {
-      uint64_t base = static_cast<uint64_t>(region.baseOffset) + relativeOffset;
-      assert(base <= std::numeric_limits<uint32_t>::max() &&
-             "buffer region offset overflow");
-      regionInfo.regions.insert({static_cast<uint32_t>(base), subBufferSize});
+      regionInfo.regions.insert(
+          {region.baseOffset + relativeOffset, subBufferSize});
+    }
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+  }
+  if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
+    RegionInfo in = operands[0]->getValue();
+    uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
+    uint32_t relativeOffset = tmemSubsliceOp.getN();
+    for (auto &region : in.regions) {
+      regionInfo.regions.insert(
+          {region.baseOffset + relativeOffset, subBufferSize});
     }
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
