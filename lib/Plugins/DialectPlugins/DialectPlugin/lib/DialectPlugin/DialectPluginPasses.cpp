@@ -6,6 +6,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -21,10 +22,13 @@ class PluginLLVMConversionTarget : public ConversionTarget {
 public:
   explicit PluginLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
+    addLegalDialect<::mlir::gpu::GPUDialect>();
+    addLegalDialect<::mlir::arith::ArithDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addIllegalDialect<mlir::triton::plugin::DialectPluginDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+
   }
 };
 
@@ -36,12 +40,20 @@ struct PluginMagicOpConversion
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // Let's just do something kind of silly for the example to show what is possible.
+  // Take the input to the magic op and add to the thread id since Triton doesn't
+  // directly expose the thread id this is how a plugin writer could get it and do something
+  // with it
   LogicalResult
   matchAndRewrite(mlir::triton::plugin::MagicOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto a = op.getInput();
-    auto newOp = mlir::LLVM::ZeroOp::create(rewriter, loc, a.getType());
+    Value tid =
+        ::mlir::gpu::ThreadIdOp::create(rewriter, loc, ::mlir::gpu::Dimension::x);
+    Value threadId = arith::IndexCastOp::create(rewriter, loc, i32_ty, tid);
+    auto newOp = b.add(a, threadId);
     rewriter.replaceOp(op, newOp);
     return success();
   }
