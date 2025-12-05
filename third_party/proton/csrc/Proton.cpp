@@ -3,12 +3,35 @@
 #include <cstdint>
 #include <map>
 #include <stdexcept>
+#include <variant>
 
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
 
 using namespace proton;
+
+// For simplicity, the Python interface restricts metrics to int64_t and double.
+// without uint64_t. Allowing types such as uint64_t vs. int64_t would force
+// users to handle subtle type differences for the same metric name, which would
+// be confusing and error-prone.
+using PythonMetricValueType = std::variant<int64_t, double>;
+namespace {
+
+std::map<std::string, MetricValueType> convertPythonMetrics(
+    const std::map<std::string, PythonMetricValueType> &metrics) {
+  std::map<std::string, MetricValueType> converted;
+  for (const auto &[name, value] : metrics) {
+    converted.emplace(name, std::visit(
+                                [](auto &&v) -> MetricValueType {
+                                  return MetricValueType(v);
+                                },
+                                value));
+  }
+  return converted;
+}
+
+} // namespace
 
 static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;
@@ -120,9 +143,12 @@ static void initProton(pybind11::module &&m) {
 
   m.def(
       "add_metrics",
-      [](size_t scopeId, const std::map<std::string, MetricValueType> &metrics,
+      [](size_t scopeId,
+         const std::map<std::string, PythonMetricValueType> &metrics,
          const std::map<std::string, TensorMetric> &tensorMetrics) {
-        SessionManager::instance().addMetrics(scopeId, metrics, tensorMetrics);
+        auto convertedMetrics = convertPythonMetrics(metrics);
+        SessionManager::instance().addMetrics(scopeId, convertedMetrics,
+                                              tensorMetrics);
       },
       pybind11::arg("scopeId"), pybind11::arg("metrics"),
       pybind11::arg("tensorMetrics") = std::map<std::string, TensorMetric>());
