@@ -311,17 +311,25 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
 @pytest.mark.parametrize(
     "batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP",
     # dense cases
-    [(1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)]
+    [
+        # small batch size
+        (128, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (128, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1),
+        # large batch size
+        (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)
+    ]
     # moe cases - test parallelism
     + [
+        (128, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 4),
     ] +
     # moe cases - test precision
     ([
+        (128, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 4),
     ] if has_native_mx4 else [
+        (128, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 4),
     ]),

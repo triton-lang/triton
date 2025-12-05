@@ -614,6 +614,8 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
+  if (isa<triton::CatOp>(op))
+    return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
   if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;
@@ -624,6 +626,9 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
 }
 
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
+  if (isa<triton::CatOp>(op))
+    return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
+                                        targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -927,6 +932,8 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
+      if (isa<triton::CatOp>(definingOp))
+        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -1708,6 +1715,18 @@ LogicalResult verifyBarrierType(Operation *op,
     return op->emitOpError(
         "barrier allocation must be a descriptor of 1xi64 type");
   return success();
+}
+
+std::optional<bool> getBoolFromConstant(Value cst) {
+  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp) {
+    return std::nullopt;
+  }
+  assert(constantOp.getValue());
+  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
+    return boolAttr.getValue();
+  }
+  return std::nullopt;
 }
 
 } // namespace mlir::triton

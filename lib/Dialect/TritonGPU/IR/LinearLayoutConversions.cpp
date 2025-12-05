@@ -1067,23 +1067,20 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
       blockM *= 2;
       splitM /= 2;
     }
-    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
         ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
         encoding.getCTASplitN(), encoding.getTwoCTAs());
     auto ret =
-        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
-        split;
-    // In this case, we swap the basis of the last row and last column as per
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding);
+    // In this case, we swap the basis of the last row and last column
     // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
-      auto &rowBases = bases[kRow];
-      auto &colBases = bases[kCol];
-      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
+      std::swap(bases[kRow].back(), bases[kCol].back());
       ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
     }
-    return ret;
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
+    return ret * split;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 

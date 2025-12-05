@@ -599,6 +599,9 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = self.builder.get_null_value(dtype.to_ir(self.builder))
+        elif dtype.is_fp8():
+            value = self.builder.get_fp32(value)
+            value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
         else:
             get_value_fn = getattr(self.builder, f"get_{dtype.name}")
             value = get_value_fn(value)
@@ -646,6 +649,12 @@ class TritonSemantic(Generic[TensorTy]):
 
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
         return self.tensor(self.builder.create_expand_dims(input.handle, axis), ret_ty)
+
+    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool) -> TensorTy:
+        assert can_reorder, "current implementation of `cat` always may reorder elements"
+        assert len(lhs.shape) == 1
+        ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
+        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
