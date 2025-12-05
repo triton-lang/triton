@@ -226,13 +226,11 @@ class BlackwellActMXScaleLayout(Layout):
             #     (ex_hist[i] + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M for i in range(len(ex_hist))
             # ]
             self.ex_hist_padded = ((ex_hist + self.ALIGN_M - 1) // self.ALIGN_M) * self.ALIGN_M
-            # self.M_pad = sum(self.ex_hist_padded)
-            # print(f"ex_hist_padded {self.ex_hist_padded}")
 
             # upper bound static padded rows: need to be static not related to ex_hist
             n_experts = ex_hist.shape[0]
-            # hack to reserve enough space
-            self.M_pad = self.M * 2  # hack to reserve enough space
+            # additional padding should be at most self.ALIGN_M per expert
+            self.M_pad = triton.cdiv(self.M, self.ALIGN_M) * self.ALIGN_M + n_experts * self.ALIGN_M
 
     def swizzle_data(self, data):
         if self.mode == "batched":
