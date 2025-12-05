@@ -182,35 +182,35 @@ public:
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
   void createStageAccessForCommitCall(ImplicitLocOpBuilder &b, Value buf,
-                                      int thread, Value pred, ValueType buffers,
-                                      ValueType outstandingCommits,
+                                      int thread, Value pred, MemType memType,
+                                      CommitKind::Kind commitKind,
                                       Operation *insertPoint);
   // commitAccesses: convert staged entries to 1 and increment outstanding
   // commits greater than zero for the committing thread.
   void createCommitAccessesCall(ImplicitLocOpBuilder &b, int thread, Value pred,
-                                ValueType outstandingCommits,
+                                CommitKind::Kind commitKind,
                                 Operation *insertPoint);
   // clearOutstandingCommitsTransferWrites: clear entries farther than
   // outstandingNum from the thread and set write visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferWritesCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-      int outstandingNum, Value pred, ValueType outstandingCommits,
-      ValueType writeVisibility, Operation *insertPoint);
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // clearOutstandingCommitsTransferReads: clear entries farther than
   // outstandingNum from the thread and set read visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferReadsCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-      int outstandingNum, Value pred, ValueType outstandingCommits,
-      ValueType readVisibility, Operation *insertPoint);
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
   void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
                                          int thread,
                                          StringRef pendingAccessType,
-                                         Value pred, ValueType buffers,
-                                         ValueType outstandingCommits,
+                                         Value pred, MemType memType,
+                                         CommitKind::Kind commitKind,
                                          Operation *insertPoint);
 
 private:
