@@ -10,9 +10,9 @@ class DialectPlugin_Op<string mnemonic, list<Trait> traits = []> :
 
 def DialectPlugin_MagicOp : DialectPlugin_Op<"magic", [Pure,
                                              SameOperandsAndResultType]> {
-    let summary = "Illustrates how to define an operation.";
+    let summary = "Illustrates how to define a custom operation.";
     let description = [{
-        The `dialectplugin.magic` operation illustrates how to define a new
+        The `plugin.magic` operation illustrates how to define a new
         operation in a dialect. It uses an operation trait to declare that it
         has no side effects.
 
@@ -23,7 +23,7 @@ def DialectPlugin_MagicOp : DialectPlugin_Op<"magic", [Pure,
         ```mlir
         %0 = arith.constant 2 : i32
         // Apply the magic operation to %0
-        %1 = dialectplugin.magic %0 : i32
+        %1 = plugin.magic %0 : i32
         ```
     }];
 

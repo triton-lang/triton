@@ -6,7 +6,7 @@ include "mlir/Pass/PassBase.td"
 
 def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-llvm", "mlir::ModuleOp"> {
   let summary = "Converts PluginGPU Ops to LLVM";
-  let constructor = "mlir::triton::dialectplugin::createConvertPluginGPUToLLVMPass(80, 80)";
+  let constructor = "mlir::triton::plugin::createConvertPluginGPUToLLVMPass(80, 80)";
 
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
    let options = [

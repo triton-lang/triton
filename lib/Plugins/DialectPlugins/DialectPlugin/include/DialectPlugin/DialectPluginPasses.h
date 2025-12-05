@@ -11,17 +11,17 @@ namespace mlir {
 class ModuleOp;
 
 namespace triton {
-namespace dialectplugin {
+namespace plugin {
 #define GEN_PASS_DECL
 #include "DialectPlugin/DialectPluginPasses.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertPluginGPUToLLVMPass(int32_t computeCapability = 80,
-                                       int32_t ptxVersion = 80);
+                                 int32_t ptxVersion = 80);
 
 #define GEN_PASS_REGISTRATION
 #include "DialectPlugin/DialectPluginPasses.h.inc"
-} // namespace dialectplugin
+} // namespace plugin
 } // namespace triton
 } // namespace mlir
 

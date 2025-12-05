@@ -5,7 +5,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-using namespace mlir::triton::dialectplugin;
+using namespace mlir::triton::plugin;
 
 #define GET_TYPEDEF_CLASSES
 #include "DialectPlugin/DialectPluginOpsTypes.cpp.inc"
