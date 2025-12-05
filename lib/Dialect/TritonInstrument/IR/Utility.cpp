@@ -145,12 +145,12 @@ createAliasMatrixTensor(ImplicitLocOpBuilder &b,
 
   auto type = getIntTensorType(
       region, {static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
-      /*bitWidth=*/8);
+      /*bitWidth=*/1);
   SmallVector<APInt> values;
   values.reserve(rows * cols);
   for (const auto &row : matrix)
     for (uint8_t v : row)
-      values.emplace_back(/*numBits=*/8, v);
+      values.emplace_back(/*numBits=*/1, v);
 
   auto denseAttr = DenseElementsAttr::get(type, values);
   Value constValue = arith::ConstantOp::create(b, b.getLoc(), type, denseAttr);

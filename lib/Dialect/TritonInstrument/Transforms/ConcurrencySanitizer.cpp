@@ -504,12 +504,13 @@ private:
                                           allocOp.getResult());
       }
     }
-    if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->pred = mmav5Op.getPred();
+      info->pred = mmav5Op.getPredicate();
       for (auto [barrier, barrierPred] :
-           llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds())) {
+           llvm::zip(mmav5Op.getCompletionBarriers(),
+                     mmav5Op.getCompletionBarrierPreds())) {
         info->barriers.push_back({barrier, barrierPred, 1});
       }
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
