@@ -67,6 +67,12 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
   if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
     return {initBarrierOp.getOperand()};
   }
+  if (auto barrierExpectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+    return {barrierExpectOp.getAlloc()};
+  }
+  if (auto invalBarrierOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
+    return {invalBarrierOp.getAlloc()};
+  }
   if (auto asyncOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return {asyncOp.getBarrier()};
   }
@@ -213,6 +219,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
           getOrCreate<dataflow::Executable>(getProgramPointBefore(&entry));
       propagateIfChanged(exec, exec->setToLive());
     }
+    return success();
   }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(localAllocOp);
@@ -222,6 +229,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(tmemAllocOp);
@@ -231,6 +239,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     RegionInfo in = operands[0]->getValue();
@@ -246,6 +255,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
   }
   if (auto memdescSubsliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
@@ -258,6 +268,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
@@ -270,7 +281,22 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
   }
+  // "Passthrough" ops that don't modify the buffer regions.
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
+          ttg::MemDescReinterpretOp>(op)) {
+    // Just propagate the regions from the operand.
+    RegionInfo in = operands[0]->getValue();
+    for (auto &region : in.regions) {
+      regionInfo.regions.insert(region);
+    }
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
+  }
+  vaerifyOpIsSupported(op);
   return success();
 }
 
@@ -328,8 +354,8 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
           ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
           ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
-          ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp>(
-          op)) {
+          ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
+          ttng::BarrierExpectOp, ttng::InvalBarrierOp>(op)) {
     return true;
   }
   // Allocations with operands write to the memory.
@@ -341,6 +367,22 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
     return true;
   }
   return false;
+}
+
+void BufferRegionAnalysis::vaerifyOpIsSupported(Operation *op) {
+  bool hasMemoryOperands = llvm::any_of(op->getOperands(), [](Value v) {
+    return isUsedAsSharedMemory(v) || isUsedAsTensorMemory(v);
+  });
+  if (!hasMemoryOperands) {
+    return;
+  }
+  if (isMemoryAccessOperation(op)) {
+    return;
+  }
+  op->emitError(
+      "Operation accessing memory unaccounted for in buffer region analysis");
+  llvm::report_fatal_error(
+      "Operation accessing memory unaccounted for in buffer region analysis");
 }
 
 } // namespace mlir::triton
