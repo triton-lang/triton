@@ -422,7 +422,8 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
-  assert(numRepN == 1 && "grep for [Note: numRepN > 1 and two_ctas]");
+  assert((!twoCTAs || numRepN == 1) &&
+         "grep for [Note: numRepN > 1 and two_ctas]");
   int numRepK = ceil<unsigned>(K, mmaSizeK);
 
   SmallVector<int64_t> shapeA = op.shapeA;
