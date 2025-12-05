@@ -28,7 +28,7 @@ class Storage:
     def device(self):
         return self.data.device
 
-    def is_tma_compliant(self):
+    def is_tma_compliant(self, is_scale=False):
         # TMAs didn't exist until Hopper
         if not cuda_capability_geq(9, 0):
             return False
@@ -43,7 +43,7 @@ class Storage:
         except ValueError:
             major_dim = -1
         ndim = self.data.ndim
-        bitwidth = 4 if self.data.dtype == torch.uint8 else self.data.element_size() * 8
+        bitwidth = 4 if self.data.dtype == torch.uint8 and not is_scale else self.data.element_size() * 8
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
@@ -62,7 +62,8 @@ class Storage:
             block_shape[indx] = block_shape[indx] // 2
             if isinstance(self.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
                 raise ValueError(
-                    "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
+                    "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs."
+                )
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
 
@@ -179,7 +180,6 @@ class Tensor:
 # ---------------------------------------------------------------------------- #
 @dataclass
 class Bitmatrix(Tensor):
-
     def __post_init__(self):
         assert self.dtype == BIT
         super().__post_init__()
