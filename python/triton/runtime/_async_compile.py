@@ -28,6 +28,11 @@ class FutureKernel:
         self.kernel = kernel
         return kernel
 
+    def __getattr__(self, name):
+        # Defer to the compiled kernel so users can interact with this object
+        # like a normal CompiledKernel without needing to call result() first.
+        return getattr(self.result(), name)
+
 
 class AsyncCompileMode:
 

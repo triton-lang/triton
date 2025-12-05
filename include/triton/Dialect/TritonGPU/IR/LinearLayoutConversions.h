@@ -17,7 +17,7 @@ class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
-class CTAEncodingAttr;
+class CGAEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -77,9 +77,9 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 // given shape.
 //
 // See the nomenclature note at the top of LinearLayoutConversions.cpp for why
-// the variable with type CTAEncodingAttr is called cgaLayoutAttr.
+// the variable with type CGAEncodingAttr is called cgaLayoutAttr.
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTAEncodingAttr cgaLayoutAttr,
+                                    CGAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape);
 
 // In this function, we construct a linear layout representing the
@@ -133,7 +133,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTAEncodingAttr ctaLayout);
+                                          CGAEncodingAttr cgaLayout);
 
 // Create LinearLayout for nvidia mma tile.
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,

@@ -83,7 +83,7 @@ struct ClipAsyncCopySizePerThread
     auto newBlockEnc = BlockedEncodingAttr::get(
         copyOp.getContext(), srcTy.getShape(), contigPerThread,
         blockedEnc.getOrder(), numWarps, threadsPerWarp,
-        blockedEnc.getCTALayout());
+        blockedEnc.getCGALayout());
 
     // insert cvt's after src, mask, and other
     auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {

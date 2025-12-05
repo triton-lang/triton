@@ -288,14 +288,14 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
       std::swap(p[0], p[1]);
   }
 
-  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+  auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
   triton::LinearLayout linearComponent(
       {
           {StringAttr::get(ctx, "offset"), bases},
       },
       triton::standardOutDimNames(ctx, rank));
   linearComponent = triton::gpu::combineCtaCgaWithShape(
-      linearComponent, ctaLayout, srcTy.getShape());
+      linearComponent, cgaLayout, srcTy.getShape());
 
   unsigned paddingInterval = 1024 / elemByteWidth;
   unsigned paddingInElems = paddingBytes / elemByteWidth;

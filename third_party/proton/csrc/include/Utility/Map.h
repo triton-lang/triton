@@ -2,7 +2,9 @@
 #define PROTON_UTILITY_MAP_H_
 
 #include <map>
+#include <mutex>
 #include <shared_mutex>
+#include <utility>
 
 namespace proton {
 
@@ -49,6 +51,11 @@ public:
   void clear() {
     std::unique_lock<std::shared_mutex> lock(mutex);
     map.clear();
+  }
+
+  size_t size() {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return map.size();
   }
 
 private:

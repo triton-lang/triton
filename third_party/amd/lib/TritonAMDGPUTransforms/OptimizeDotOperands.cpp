@@ -82,11 +82,11 @@ public:
     LDBG("Found load of scale: " << loadOp << " for ScaleUpcast: " << op);
     auto srcTy = dyn_cast<RankedTensorType>(loadOp.getType());
     auto sharedOrder = ttg::getOrderForMemory(srcTy);
-    auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+    auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
 
     auto ctx = loadOp.getContext();
     auto attr = ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, sharedOrder,
-                                                     ctaLayout);
+                                                     cgaLayout);
     Location loc = loadOp.getLoc();
     auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
     rewriter.setInsertionPointAfter(loadOp);

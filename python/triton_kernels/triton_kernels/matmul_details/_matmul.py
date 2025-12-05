@@ -451,7 +451,7 @@ def _matmul(
 
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
-        N_MX_BLOCK: tl.constexpr = tl.cdiv(N, MXFP_BLOCK_SIZE)
+        N_MX_BLOCK = tl.cdiv(N, MXFP_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")

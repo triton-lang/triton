@@ -144,7 +144,7 @@ def get_tmem_reg_layout(
         layout (TensorMemoryLayout): Tensor memory layout descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-        cga_layout (Sequence[Sequence[int]]): CTA layout bases describing CTA distribution.
+        cga_layout (Sequence[Sequence[int]]): CGA layout bases describing CTA distribution.
     """
 
     def _unwrap(x):
@@ -237,7 +237,7 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
+    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
 
@@ -269,7 +269,7 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic) -> None:
+    def slice(self, start, length, _semantic: GluonSemantic = None) -> None:
         """
         Create a slice of the tensor memory descriptor along the last dimension.
 

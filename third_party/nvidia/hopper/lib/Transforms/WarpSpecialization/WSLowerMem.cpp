@@ -52,7 +52,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -107,7 +107,7 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -176,7 +176,7 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
   assert(tensorType);
 
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice

@@ -2,6 +2,7 @@
 #define PROTON_PROFILER_PROFILER_H_
 
 #include "Data/Data.h"
+#include "Data/Metric.h"
 #include "Utility/Singleton.h"
 
 #include <atomic>
@@ -18,7 +19,7 @@ namespace proton {
 
 /// A profiler contains utilities provided by the profiler library to
 /// collect and analyze performance data.
-class Profiler {
+class Profiler : public MetricInterface {
 public:
   Profiler() = default;
 
@@ -57,21 +58,21 @@ public:
   /// Register a data object to the profiler.
   /// A profiler can yield metrics to multiple data objects.
   Profiler *registerData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
     dataSet.insert(data);
     return this;
   }
 
   /// Unregister a data object from the profiler.
   Profiler *unregisterData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
     dataSet.erase(data);
     return this;
   }
 
   /// Get the set of data objects registered to the profiler.
   std::set<Data *> getDataSet() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
+    std::shared_lock<std::shared_mutex> lock(dataSetMutex);
     return dataSet;
   }
 
@@ -87,16 +88,43 @@ public:
     return modeAndOptions;
   }
 
+  void addMetrics(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &scalarMetrics,
+      const std::map<std::string, TensorMetric> &tensorMetrics) override {
+    std::unique_lock<std::shared_mutex> lock(mutex);
+    this->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
+  }
+
+  /// These fields are not persistent, function pointers will be changed
+  /// when modules and contexts are switched.
+  /// So we just set them as thread local storage before the application kernel
+  /// starts or after the application kernel ends.
+  void setMetricKernels(void *tensorMetricKernel, void *scalarMetricKernel,
+                        void *stream) override {
+    this->tensorMetricKernel = tensorMetricKernel;
+    this->scalarMetricKernel = scalarMetricKernel;
+    this->metricKernelStream = stream;
+  }
+
 protected:
   virtual void doStart() = 0;
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
   virtual void doSetMode(const std::vector<std::string> &modeAndOptions) = 0;
+  virtual void
+  doAddMetrics(size_t scopeId,
+               const std::map<std::string, MetricValueType> &scalarMetrics,
+               const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
+  mutable std::shared_mutex mutex;
   // `dataSet` can be accessed by both the user thread and the background
   // threads
-  mutable std::shared_mutex mutex;
+  mutable std::shared_mutex dataSetMutex;
   std::set<Data *> dataSet;
+  static thread_local void *tensorMetricKernel;
+  static thread_local void *scalarMetricKernel;
+  static thread_local void *metricKernelStream;
 
 private:
   bool started{};

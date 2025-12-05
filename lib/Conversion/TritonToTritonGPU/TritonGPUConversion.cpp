@@ -144,9 +144,9 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
   std::array<unsigned, 2> warpsPerCta = {1, numWarps};
 
   MLIRContext *ctx = type.getContext();
-  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/2);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
   auto parentEncoding = BlockedEncodingAttr::get(
-      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
+      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, cgaLayout);
   auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
   if (enc == newEncoding)
     return {};

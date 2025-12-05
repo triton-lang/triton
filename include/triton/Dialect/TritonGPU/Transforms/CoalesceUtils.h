@@ -10,7 +10,7 @@ namespace mlir::triton::gpu {
 BlockedEncodingAttr buildCoalescedEncoding(
     MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     Operation *op, int numWarps, int threadsPerWarp,
-    triton::gpu::CTAEncodingAttr CTALayout, SmallVector<int64_t> shapePerCTA);
+    triton::gpu::CGAEncodingAttr cgaLayout, SmallVector<int64_t> shapePerCTA);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_COALESCINGUTILS_H_

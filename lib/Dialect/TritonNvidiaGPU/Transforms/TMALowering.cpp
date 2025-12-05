@@ -36,10 +36,10 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
       sharedMemorySpace, /*mutableMemory=*/true);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
-  auto barrierCTALayout =
-      gpu::CTAEncodingAttr::getDefault(tensorType.getContext(), 1);
+  auto barrierCGALayout =
+      gpu::CGAEncodingAttr::getDefault(tensorType.getContext(), 1);
   auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(
-      tensorType.getContext(), 1, 1, 1, {0}, barrierCTALayout);
+      tensorType.getContext(), 1, 1, 1, {0}, barrierCGALayout);
   gpu::MemDescType barrierMemDescType =
       gpu::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);

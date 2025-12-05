@@ -39,12 +39,26 @@ DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
 
 DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
 
+DEFINE_DISPATCH(ExternLibCuda, streamDestroy, cuStreamDestroy, CUstream)
+
 DEFINE_DISPATCH(ExternLibCuda, memcpyDToHAsync, cuMemcpyDtoHAsync, void *,
                 CUdeviceptr, size_t, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, memsetD32Async, cuMemsetD32Async, CUdeviceptr,
+                unsigned int, size_t, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, memAlloc, cuMemAlloc, CUdeviceptr *, size_t)
+
+DEFINE_DISPATCH(ExternLibCuda, memFree, cuMemFree, CUdeviceptr)
 
 DEFINE_DISPATCH(ExternLibCuda, memAllocHost, cuMemAllocHost, void **, size_t)
 
 DEFINE_DISPATCH(ExternLibCuda, memFreeHost, cuMemFreeHost, void *)
+
+DEFINE_DISPATCH(ExternLibCuda, launchKernel, cuLaunchKernel, CUfunction,
+                unsigned int, unsigned int, unsigned int, unsigned int,
+                unsigned int, unsigned int, unsigned int, CUstream, void **,
+                void **)
 
 Device getDevice(uint64_t index) {
   CUdevice device;

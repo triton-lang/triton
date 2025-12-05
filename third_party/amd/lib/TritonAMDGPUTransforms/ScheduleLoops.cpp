@@ -158,11 +158,11 @@ static bool isCoalesced(RankedTensorType loadType,
   // [0, 1]], ...}>, so we don't use largest vectorization here as well. This
   // should be updated once vectorization in load op lowering is fixed..
   //
-  // auto ctaLayout = ttg::getCTALayout(loadType.getEncoding());
+  // auto cgaLayout = ttg::getCGALayout(loadType.getEncoding());
   // // Dummy shared layout that emulates global memory so we can use
   // // largestVectorisation utility.
   // auto sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
-  //     ctx, 1, 1, 1, blockedEnc.getOrder(), ctaLayout);
+  //     ctx, 1, 1, 1, blockedEnc.getOrder(), cgaLayout);
   // auto sharedLL = triton::gpu::toLinearLayout(shape, sharedEncoding);
   // auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
 

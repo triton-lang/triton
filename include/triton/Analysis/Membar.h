@@ -101,7 +101,7 @@ class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
 
 public:
-  using FuncBlockInfoMapT = CallGraph<BlockInfo>::FuncDataMapT;
+  using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -179,11 +179,11 @@ private:
 /// after returning. This way users do not have to explicitly insert membars
 /// before and after function calls, but might be a bit conservative.
 template <typename AnalysisType>
-class ModuleMembarOrFenceAnalysis : public CallGraph<BlockInfo> {
+class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:
   ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
                               MembarFilterFn filter = nullptr)
-      : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
+      : triton::CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
         moduleAllocation(moduleAllocation), filter(filter) {}
 
   void run() {

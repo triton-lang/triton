@@ -343,10 +343,11 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.parametrize("flatten", [False, True] if is_blackwell() else [True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
-                                               use_fp8):
+                                               use_fp8, flatten):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8):
         pytest.skip("uses too much shared memory")
     dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
@@ -373,7 +374,8 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 
     kernel = matmul_tma_persistent_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
-                                                   num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=is_blackwell())
+                                                   num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=flatten
+                                                   and is_blackwell())
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
         assert "ttng.tc_gen5_mma" in ttgir
@@ -477,3 +479,238 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+@triton.jit
+def attention_persistent_inner_loop_kernel(  #
+        desc_q, desc_k, desc_v,  #
+        desc_acc, l_i_ptr, m_i_ptr,  #
+        M, N, qk_scale,  #
+        BLOCK_M: tl.constexpr,  #
+        HEAD_DIM: tl.constexpr,  #
+        warp_specialize: tl.constexpr,  #
+        num_stages: tl.constexpr):
+    prog_id = tl.program_id(0)
+    num_sm = tl.num_programs(0)
+    num_tiles = tl.cdiv(M, BLOCK_M)
+
+    tiles_per_sm = num_tiles // num_sm
+    if prog_id < num_tiles % num_sm:
+        tiles_per_sm += 1
+
+    tile_idx = prog_id
+    for _ in tl.range(0, tiles_per_sm, warp_specialize=warp_specialize, num_stages=num_stages):
+        m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+        l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+        acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
+        off_m = tile_idx * BLOCK_M
+        q = desc_q.load([off_m, 0])
+
+        for start_n in tl.range(0, N, HEAD_DIM):
+            start_n = tl.multiple_of(start_n, HEAD_DIM)
+            k = desc_k.load([start_n, 0]).T
+
+            qk = tl.dot(q, k)
+
+            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_ij[:, None]
+            p = tl.math.exp2(qk)
+            alpha = tl.math.exp2(m_i - m_ij)
+            l_ij = tl.sum(p, 1)
+            acc = acc * alpha[:, None]
+
+            v = desc_v.load([start_n, 0])
+            p = p.to(v.dtype)
+            acc = tl.dot(p, v, acc)
+
+            l_i = l_i * alpha + l_ij
+            m_i = m_ij
+
+        desc_acc.store([off_m, 0], acc.to(q.dtype))
+        tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M), l_i)
+        tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M), m_i)
+
+        tile_idx += num_sm
+
+
+@pytest.mark.parametrize("M, N", [(8192, 8192), (1024, 1024)])
+@pytest.mark.parametrize("BLOCK_M", [64, 128])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.parametrize("disable_acc_multibuf", [False, True])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf,
+                                                      num_warps, use_fp8):
+    if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
+        # These configurations currently use too much shared memory.
+        if (num_warps, num_stages) in [(4, 4), (8, 4), (8, 3), (4, 3)]:
+            pytest.skip("uses too much shared memory")
+
+    dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
+
+    torch.manual_seed(42)
+
+    q = torch.randn((M, HEAD_DIM), device="cuda").to(dtype)
+    k = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+    v = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+
+    acc_ref = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    acc = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i = torch.empty((M, ), dtype=dtype, device="cuda")
+
+    desc_q = TensorDescriptor(q, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_k = TensorDescriptor(k, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = TensorDescriptor(v, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc_ref = TensorDescriptor(acc_ref, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                    block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+
+    NUM_SM = 4
+    attention_persistent_inner_loop_kernel[(NUM_SM, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                                       HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
+                                                  BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+
+    torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+@triton.jit
+def grouped_matmul_tma_kernel(
+    group_a_ptrs,
+    group_b_ptrs,
+    group_c_ptrs,
+    gm,
+    gn,
+    gk,
+    g_lds,
+    group_size,
+    NUM_SM: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+):
+    dtype = tl.float16
+    num_m_tiles = tl.cdiv(gm, BLOCK_SIZE_M)
+    num_n_tiles = tl.cdiv(gn, BLOCK_SIZE_N)
+    num_tiles = num_m_tiles * num_n_tiles
+    start_pid = tl.program_id(axis=0)
+
+    for g in tl.range(group_size, warp_specialize=True):
+        lda = tl.load(g_lds + g * 3)
+        ldb = tl.load(g_lds + g * 3 + 1)
+        ldc = tl.load(g_lds + g * 3 + 2)
+
+        a_ptr = tl.load(group_a_ptrs + g).to(tl.pointer_type(dtype))
+        b_ptr = tl.load(group_b_ptrs + g).to(tl.pointer_type(dtype))
+        c_ptr = tl.load(group_c_ptrs + g).to(tl.pointer_type(dtype))
+
+        a_desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[gm, gk],
+            strides=[lda, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+        )
+
+        b_desc = tl.make_tensor_descriptor(
+            b_ptr,
+            shape=[gn, gk],
+            strides=[ldb, 1],
+            block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+        )
+        c_desc = tl.make_tensor_descriptor(
+            c_ptr,
+            shape=[gm, gn],
+            strides=[ldc, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+        )
+
+        for tile_idx in tl.range(start_pid, num_tiles, NUM_SM):
+            tile_m_idx = tile_idx // num_n_tiles
+            tile_n_idx = tile_idx % num_n_tiles
+            offs_am = tile_m_idx * BLOCK_SIZE_M
+            offs_bn = tile_n_idx * BLOCK_SIZE_N
+
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+            for kk in range(0, tl.cdiv(gk, BLOCK_SIZE_K)):
+                a = a_desc.load([offs_am, kk * BLOCK_SIZE_K])
+                b = b_desc.load([offs_bn, kk * BLOCK_SIZE_K])
+                accumulator += tl.dot(a, b.T)
+
+            offs_cm = tile_m_idx * BLOCK_SIZE_M
+            offs_cn = tile_n_idx * BLOCK_SIZE_N
+
+            c = accumulator.to(dtype)
+            c_desc.store([offs_cm, offs_cn], c)
+
+
+def group_gemm_tma_fn(group_A, group_B):
+    assert len(group_A) == len(group_B)
+    group_size = len(group_A)
+
+    A_addrs = []
+    B_addrs = []
+    C_addrs = []
+    g_lds = []
+    group_C = []
+    M, K = group_A[0].shape
+    N, _ = group_B[0].shape
+
+    for i in range(group_size):
+        A = group_A[i]
+        B = group_B[i]
+        C = torch.empty((M, N), device="cuda", dtype=A.dtype)
+        group_C.append(C)
+        A_addrs.append(A.data_ptr())
+        B_addrs.append(B.data_ptr())
+        C_addrs.append(C.data_ptr())
+        g_lds += [A.stride(0), B.stride(0), C.stride(0)]
+
+    d_a_ptrs = torch.tensor(A_addrs, device="cuda")
+    d_b_ptrs = torch.tensor(B_addrs, device="cuda")
+    d_c_ptrs = torch.tensor(C_addrs, device="cuda")
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="cuda")
+
+    def alloc_fn(size: int, _, __):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    grid = lambda META: (META['NUM_SM'], )
+    out = grouped_matmul_tma_kernel[grid](d_a_ptrs, d_b_ptrs, d_c_ptrs, M, N, K, d_g_lds, group_size, BLOCK_SIZE_M=128,
+                                          BLOCK_SIZE_N=128, BLOCK_SIZE_K=64, NUM_SM=4, num_stages=3)
+    assert "ttg.warp_specialize" in out.asm["ttgir"]
+    return group_C
+
+
+@pytest.mark.parametrize("M", [128, 256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("N", [256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("K", [128, 512, 1024, 2048, 4096])
+@pytest.mark.parametrize("group_size", [4, 8, 16])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_grouped_gemm(M, N, K, group_size):
+    torch.manual_seed(42)
+    group_A = []
+    group_B = []
+    group_B_T = []
+
+    for i in range(group_size):
+        A = torch.rand((M, K), device="cuda", dtype=torch.float16)
+        B = torch.rand((K, N), device="cuda", dtype=torch.float16)
+        B_T = B.T.contiguous()
+        group_A.append(A)
+        group_B.append(B)
+        group_B_T.append(B_T)
+
+    ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
+
+    tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
+    for i in range(group_size):
+        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)

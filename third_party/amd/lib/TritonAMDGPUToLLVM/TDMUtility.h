@@ -51,7 +51,9 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
                       int numWarps, unsigned padInterval, unsigned padAmount,
                       ArrayRef<Value> offset, Value dstPtr, Value pred,
-                      Type elementType, Value barrierPtr, bool isLoad);
+                      Value multicastMask, Type elementType, Value barrierPtr,
+                      bool isLoad, const triton::LinearLayout &cgaLayout,
+                      Value ctaId);
 
 } // namespace mlir::LLVM::AMD
 

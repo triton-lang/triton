@@ -206,10 +206,18 @@ def make_default_opt_flags_nvidia(
     else:
         if slice_size <= 64 and routing_data is not None and routing_data.slice_sizes is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and slice_size >= 16 and torch.cuda.get_device_capability()[0] >= 10:
+            if (
+                lhs_dtype == torch.bfloat16
+                and rhs_dtype == FP4
+                and slice_size >= 16
+                and torch.cuda.get_device_capability()[0] >= 10
+            ):
                 block_m = max(16, min(triton.next_power_of_2(8 * slice_size), 128))
             else:
                 block_m = max(16, min(triton.next_power_of_2(2 * slice_size), 64))
+            if block_m == 64 and precision_config.c_mx_scale is not None and rhs_dtype == FP4 and torch.cuda.get_device_capability()[0] >= 10:
+                # when having both fused_activation and mxfp8 downcast in epilogue, block_m=64 causing shared memory overflow
+                block_m = 128
         else:
             block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
     # block n

@@ -58,7 +58,7 @@ class warpgroup_mma_accumulator(_core.base_value):
 
 
 @_core.builtin
-def warpgroup_mma_init(value, _semantic):
+def warpgroup_mma_init(value, _semantic=None):
     assert isinstance(value, _core.tensor)
     return warpgroup_mma_accumulator(value.handle, value.type)
 

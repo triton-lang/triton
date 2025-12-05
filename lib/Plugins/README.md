@@ -199,7 +199,33 @@ This functionality can be toggled on and off by just commenting out this line in
 knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
 without needing any core compiler changes or rebuilding Triton.
 
-## Example 3: Fully customizing the compiler pipeline with pass and op insertions at abitrary locations
+## Example 3: Inserting a new pass into the compiler pipeline at an arbitary point.
+
+Example 2 added a new pass to the end of the ttgir "stage". However the plugin pass's location is arbitary and can be dynamically inserted anywhere in the pipeline. Replacing the inspect_stages_hook function from example 2 instead with:
+
+```python
+def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
+    module_name = 'dynamic_module'
+    spec = importlib.util.spec_from_loader(module_name, loader=None)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    stage_src = textwrap.dedent(inspect.getsource(self.make_ttir))
+    stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
+    # Inject plugin pass right after loop unroll in the dynamically loaded stage source
+    stage_src = stage_src.replace(
+        "passes.ttir.add_loop_unroll(pm)",
+        "passes.ttir.add_loop_unroll(pm)\n    passes.plugin.add_plugin(pm)"
+    )
+    exec(stage_src, module.__dict__)
+    make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
+    stages["ttir"] = make_lambda(module.make_ttir)
+    return get_key(), get_hash()
+```
+directs the new pass's placement based on other surrounding passes. Knowing which passes are in the pipeline a priori can challenging, therefore in the next example we show how to dump and inspect the entire pipeline that is run for a particlar kernel to allow for precise placement of specialized out of tree passes even if the upstream pass pipeline structure changes.
+
+## Example 4: Fully customizing the compiler pipeline with pass and op insertions at abitrary locations
 
 Here we now run two kernels one with the full standard Triton pipeline and one with fully customized pipeline entirely from within
 kernel code with modifying any core Triton compiler code or recompiling. We run the kernel with a hook to output the standard pipeline, modify

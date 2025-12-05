@@ -79,7 +79,10 @@ def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
-    @triton.jit
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 
@@ -103,11 +106,13 @@ def test_cudagraph(tmp_path: pathlib.Path):
             with proton.scope(f"iter_{i}"):
                 fn()
 
-    proton.enter_scope("test")
-    g.replay()
+    with proton.scope("test0"):
+        g.replay()
+
+    with proton.scope("test1"):
+        g.replay()
+
     g.reset()
-    torch.cuda.synchronize()
-    proton.exit_scope()
     proton.finalize()
 
     with temp_file.open() as f:
@@ -116,24 +121,28 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # {torch.ones, add, foo, test}
     assert len(data[0]["children"]) >= 4
     # find the test frame
-    test_frame = None
+    test0_frame = None
+    test1_frame = None
     for child in data[0]["children"]:
-        if child["frame"]["name"] == "test":
-            test_frame = child
-            break
-    assert test_frame is not None
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+        if child["frame"]["name"] == "test1":
+            test1_frame = child
+    assert test0_frame is not None
+    assert test1_frame is not None
     # {torch.ones, add, foo}
     if is_hip():
-        assert len(test_frame["children"]) >= 2
-        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+        assert len(test0_frame["children"]) >= 2
+        assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
         # cuda backend supports "<captured_at>" annotation
-        child = test_frame["children"][0]
-        assert child["frame"]["name"] == "<captured_at>"
-        # 0...9 iterations
-        assert len(child["children"]) == 10
-        # check one of the iterations
-        assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+        for test_frame in [test0_frame, test1_frame]:
+            child = test_frame["children"][0]
+            assert child["frame"]["name"] == "<captured_at>"
+            # 0...9 iterations
+            assert len(child["children"]) == 10
+            # check one of the iterations
+            assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
@@ -522,3 +531,141 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
         kernel = proton_scope["children"][0]
     assert "elementwise" in kernel["frame"]["name"]
     assert kernel["metrics"]["count"] == 1
+
+
+def test_tensor_metrics_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    x = torch.ones((10, 10), device="cuda", dtype=torch.float32)
+    x_mean = x.mean()
+    x_std = x.std()
+    with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
+        torch.randn((10, 10), device="cuda")
+        torch.zeros_like(x)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 4
+    # get the test frame
+    test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test":
+            test_frame = child
+            break
+    assert test_frame is not None
+    assert test_frame["metrics"]["x_mean"] == 1.0
+    assert test_frame["metrics"]["x_std"] == 0.0
+
+
+def test_tensor_metrics_hook(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metric_value = torch.tensor(8.0, device="cuda")
+        return {"name": "foo_test", "flops": metric_value}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((8, ), device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, x.numel(), y, num_warps=4)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    # metadata scope + foo_test
+    assert len(children) == 2
+    foo_test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+            break
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["flops"] == 8.0
+
+
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        x_sum = x.sum()
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device="cuda")
+        with proton.metadata_state():
+            a_sum = a.sum()
+        with proton.scope("scope_b", metrics={"sum": a_sum}):
+            b = torch.ones((2, 2), device="cuda")
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    # four kernels
+    fn()
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for _ in range(10):
+            fn()
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    # metadata scope + kernels + scope_a + scope_b + test0
+    assert len(children) == 7
+    test0_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    capture_at_frame = test0_frame["children"][0]
+
+    foo_test_frame = None
+    scope_a_frame = None
+    scope_b_frame = None
+    for child in capture_at_frame["children"]:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["bytes"] == 160
+    assert foo_test_frame["metrics"]["flops"] == 40
+    assert scope_a_frame is not None
+    assert scope_a_frame["metrics"]["bytes"] == 160
+    assert scope_b_frame is not None
+    assert scope_b_frame["metrics"]["sum"] == 40.0

@@ -10,7 +10,7 @@ class MBarrierLayout(SwizzledSharedLayout):
     Layout for mbarrier synchronization.
 
     Args:
-        cga_layout (List[List[int]]): CTA layout bases. Defaults to [].
+        cga_layout (List[List[int]]): CGA layout bases. Defaults to [].
     """
 
     def __init__(self, cga_layout=None):

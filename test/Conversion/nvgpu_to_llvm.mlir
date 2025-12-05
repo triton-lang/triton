@@ -129,7 +129,7 @@ llvm.func @warpid_warp_specialize() {
   // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
   // CHECK: [[ID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
   // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-  %0 = nvg.warp_id
+  %0 = ttg.warp_id
   // CHECK: "use"([[UNIFORM]])
   "use"(%0) : (i32) -> ()
 
@@ -140,7 +140,7 @@ llvm.func @warpid_warp_specialize() {
     // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK: [[ID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
     // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = nvg.warp_id
+    %1 = ttg.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
     ttg.warp_yield
@@ -155,7 +155,7 @@ llvm.func @warpid_warp_specialize() {
     // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C192]]
     // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
     // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = nvg.warp_id
+    %1 = ttg.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
     ttg.warp_return
@@ -169,7 +169,7 @@ llvm.func @warpid_warp_specialize() {
     // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C128]]
     // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
     // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = nvg.warp_id
+    %1 = ttg.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
     ttg.warp_return
@@ -186,7 +186,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 // CHECK-LABEL: @one_warp
 tt.func @one_warp() -> i32 {
   // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-  %0 = nvg.warp_id
+  %0 = ttg.warp_id
   // CHECK-NEXT: return [[C0]]
   tt.return %0 : i32
 }
@@ -206,7 +206,7 @@ tt.func @one_contextual_warp() {
   // CHECK: partition0
   partition0() num_warps(1) {
     // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-    %0 = nvg.warp_id
+    %0 = ttg.warp_id
     // CHECK-NEXT: "use"([[C0]])
     "use"(%0) : (i32) -> ()
     ttg.warp_return

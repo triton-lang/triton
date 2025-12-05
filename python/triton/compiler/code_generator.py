@@ -2,6 +2,7 @@ import ast
 import builtins
 import contextlib
 import copy
+import functools
 import inspect
 import re
 import warnings
@@ -16,7 +17,7 @@ from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
 from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
-from .._utils import find_paths_if, get_iterable_path, set_iterable_path, is_namedtuple
+from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -28,15 +29,13 @@ def check_identifier_legality(name, type):
     return name
 
 
-def mangle_fn(name, arg_tys, constants, caller_context):
+def mangle_fn(name, arg_tys, caller_context):
     # doesn't mangle ret type, which must be a function of arg tys
-    mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
-    mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
-    mangled_constants = mangled_constants.replace('.', '_d_')
-    mangled_constants = mangled_constants.replace("'", '_sq_')
+    mangled_args = '_'.join([ty.mangle() for ty in arg_tys])
+    mangled_args = mangled_args.replace("'", '_sq_')
     # [ and ] are not allowed in LLVM identifiers
-    mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
-    ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
+    mangled_args = mangled_args.replace('[', '_').replace(']', '_')
+    ret = f'{name}__{mangled_args}'
     if caller_context is not None:
         ret += caller_context.mangle()
     return ret
@@ -72,6 +71,11 @@ def _check_fn_args(node, fn, args):
                 )
 
 
+def _check(cond, msg_fn, category=TypeError):
+    if not cond:
+        raise category(msg_fn())
+
+
 def _apply_to_tuple_values(value, fn):
     if is_namedtuple(type(value)):
         fields = value._fields
@@ -104,17 +108,6 @@ def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 
-def _clone_triton_value(val):
-    handles = []
-    val._flatten_ir(handles)
-    clone, _ = val.type._unflatten_ir(handles, 0)
-    return clone
-
-
-def _clone_scope(scope):
-    return {name: _clone_triton_value(val) if _is_triton_value(val) else val for name, val in scope.items()}
-
-
 class enter_sub_region:
 
     def __init__(self, generator):
@@ -122,8 +115,8 @@ class enter_sub_region:
 
     def __enter__(self):
         # record lscope & local_defs in the parent scope
-        self.liveins = _clone_scope(self.generator.lscope)
-        self.prev_defs = _clone_scope(self.generator.local_defs)
+        self.liveins = dict(self.generator.lscope)
+        self.prev_defs = dict(self.generator.local_defs)
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
         self.insert_point = self.generator.builder.get_insertion_point()
@@ -225,10 +218,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constants, attrs):
+    def __init__(self, ret_types, arg_types, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
-        self.constants = constants
         self.attrs = attrs
 
     def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
@@ -243,12 +235,8 @@ class ASTFunction:
         return self.flatten_ir_types(builder, self.ret_types)
 
     def serialize(self, builder: ir.builder):
-        # fill up IR values in template
-        # > build function
-        is_val = lambda path, _: path not in self.constants and _ is not None
-        val_paths = list(find_paths_if(self.arg_types, is_val))
-        arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
-        arg_types_ir = self.flatten_ir_types(builder, arg_types)
+        # > build mlir function type
+        arg_types_ir = self.flatten_ir_types(builder, self.arg_types)
         ret_types_ir = self.return_types_ir(builder)
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
@@ -260,13 +248,11 @@ class ASTFunction:
             return language.constexpr(None)
 
         vals = make_template(self.arg_types)
-        is_val = lambda path, _: path not in self.constants and _ is not None
-        val_paths = list(find_paths_if(self.arg_types, is_val))
-        # > add IR values to the template
-        cursor = 0
         handles = [fn.args(i) for i in range(fn.get_num_args())]
-        for path in val_paths:
-            ty = get_iterable_path(self.arg_types, path)
+        cursor = 0
+
+        def build_value(path, ty):
+            nonlocal cursor, handles
             # > set attributes
             attr_specs = self.attrs.get(path, [])
             for attr_name, attr_val in attr_specs:
@@ -274,10 +260,8 @@ class ASTFunction:
             # > build frontend value
             val, cursor = ty._unflatten_ir(handles, cursor)
             set_iterable_path(vals, path, val)
-        # > add constexpr values to the template
-        constants = self.constants
-        for path, val in constants.items():
-            set_iterable_path(vals, path, language.constexpr(val))
+
+        apply_with_path(self.arg_types, build_value)
         return vals
 
 
@@ -317,6 +301,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
+
+        self.return_vals: List[base_value | None] = []
+        self.return_ips: List[Tuple[ir.InsertPoint, ir.Loc]] = []
 
         self.gscope = {}
         for k, v in gscope.items():
@@ -544,33 +531,87 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
-        handles = []
-
-        def decay(value):
-            if isinstance(value, language.tuple):
-                return _apply_to_tuple_values(value, decay)
-            elif isinstance(value, (language.constexpr, int, float)):
-                return self.semantic.to_tensor(value)
-            return value
-
-        ret_value = decay(ret_value)
-
         if ret_value is None:
-            ret_ty = language.void
-        else:
-            assert isinstance(ret_value, language.core.base_value)
-            ret_value._flatten_ir(handles)
-            ret_ty = ret_value.type
-        self.builder.ret(handles)
-        if self.ret_type is None:
-            self.ret_type = ret_ty
-        elif self.ret_type != ret_ty:
-            raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
+            ret_value = language.constexpr(None)
+        self.return_vals.append(ret_value)
+        self.return_ips.append(self._get_insertion_point_and_loc())
 
         # A return op must always terminate the basic block, so we create a dead
         # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
+
+    def decide_return_type(self):
+        assert len(self.return_vals) == len(self.return_ips)
+        if not self.return_vals:
+            return language.constexpr_type(None)
+
+        tl = language.core
+
+        def error_msg(a, b):
+            err = f"Return type mismatch: {a} and {b}. "
+            err += f"Note all return types were: {return_types}"
+            return err
+
+        def common_type(a, b):
+            if isinstance(a, tl.tuple_type):
+                _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
+                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
+            if isinstance(a, tl.constexpr_type):
+                if a == b:
+                    return a
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
+            elif isinstance(b, tl.constexpr_type):
+                a = self.semantic.to_tensor_type(a)
+                b = self.semantic.to_tensor_type(b)
+            _check(a == b, lambda: error_msg(a, b))
+            return a
+
+        return_types = [x.type for x in self.return_vals]
+        return functools.reduce(common_type, return_types)
+
+    def cast_to(self, value, ty):
+        if value.type == ty:
+            return value
+
+        tl = language.core
+        if isinstance(value, tl.tuple):
+            assert isinstance(ty, tl.tuple_type)
+            return tl.tuple(
+                [self.cast_to(v, t) for v, t in zip(value.values, ty.types)],
+                ty,
+            )
+        if isinstance(value, tl.constexpr):
+            if isinstance(ty, tl.constexpr_type):
+                _check(value.type == ty, lambda: f"Return type mismatch {value.type} and {ty}")
+                return value
+            return self.semantic.scalar_constant(value.value, ty)
+        _check(value.type == ty, lambda: f"Return type mismatch {value.type} and {ty}")
+        return value
+
+    def handle_returns(self):
+        return_type = self.decide_return_type()
+        ip, loc = self._get_insertion_point_and_loc()
+
+        assert len(self.return_vals) == len(self.return_ips)
+        for ret, ret_ip in zip(self.return_vals, self.return_ips):
+            self._set_insertion_point_and_loc(*ret_ip)
+            assert not self.builder.get_insertion_block().has_terminator()
+            ret = self.cast_to(ret, return_type)
+            ret_handles = flatten_values_to_ir([ret])
+            self.builder.ret(ret_handles)
+
+        self._set_insertion_point_and_loc(ip, loc)
+        self.ret_type = return_type
+        assert not self.builder.get_insertion_block().has_terminator()
+        if isinstance(self.ret_type, language.tuple_type):
+            self.prototype.ret_types = list(self.ret_type.types)
+        else:
+            self.prototype.ret_types = [self.ret_type]
+        self.fn.reset_type(self.prototype.serialize(self.builder))
+        self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -612,18 +653,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
 
         # finalize function
-        assert not self.builder.get_insertion_block().has_terminator()
-        if self.ret_type is None or self.ret_type == language.void:
-            self.ret_type = language.void
-            self.builder.ret([])
-        else:
-            if isinstance(self.ret_type, language.tuple_type):
-                self.prototype.ret_types = self.ret_type.types
-            else:
-                self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
-        self.fn.finalize()
+        self.handle_returns()
 
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
@@ -1283,28 +1313,22 @@ class CodeGenerator(ast.NodeVisitor):
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
-        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        bound_args = fn.signature.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+        args = bound_args.arguments
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
-            if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
+            if not isinstance(arg, base_value) or isinstance(arg, JITCallable):
                 args[i] = language.core.constexpr(arg)
-        args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
-        args_cst = {path: get_iterable_path(args, path) for path in args_cst}
-        args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
-        args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
         caller_context = caller_context or self.caller_context
-        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst, caller_context)
+        arg_types = [arg.type for arg in args]
+        fn_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            arg_types = [
-                language.core.constexpr if arg is None or isinstance(arg,
-                                                                     (bool, int, language.core.dtype)) else arg.type
-                for arg in args
-            ]
-            prototype = ASTFunction([], arg_types, args_cst, dict())
+            prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1324,10 +1348,8 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        args_val = flatten_values_to_ir(args_val)
+        args_val = flatten_values_to_ir(args)
         call_op = self.builder.call(symbol, args_val)
-        if callee_ret_type == language.void:
-            return None
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
@@ -1335,6 +1357,14 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, (BoundJITMethod, BoundConstexprFunction)):
             args.insert(0, fn.__self__)
             fn = fn.__func__
+
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
@@ -1342,14 +1372,16 @@ class CodeGenerator(ast.NodeVisitor):
                 fn, ConstexprFunction):
             extra_kwargs = dict()
 
+            sig = getattr(fn, "signature", None)
             if isinstance(fn, ConstexprFunction):
-                sig = inspect.signature(fn.__call__)
-            else:
-                sig = inspect.signature(fn)
-            if '_semantic' in sig.parameters:
                 extra_kwargs["_semantic"] = self.semantic
-            if '_generator' in sig.parameters:
-                extra_kwargs['_generator'] = self
+            else:
+                if sig is None:
+                    sig = inspect.signature(fn)
+                if '_semantic' in sig.parameters:
+                    extra_kwargs["_semantic"] = self.semantic
+                if '_generator' in sig.parameters:
+                    extra_kwargs['_generator'] = self
             try:
                 ret = fn(*args, **extra_kwargs, **kws)
                 # builtin functions return plain tuples for readability
@@ -1391,13 +1423,6 @@ class CodeGenerator(ast.NodeVisitor):
             static_implementation = self.statically_implemented_functions.get(fn)
             if static_implementation is not None:
                 return static_implementation(self, node)
-
-        mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
-            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
-            if isinstance(mur, str):
-                error_message.append(mur)
-            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = []
@@ -1517,37 +1542,32 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is None:
             return
-        with warnings.catch_warnings():
-            # The ast library added visit_Constant and deprecated some other
-            # methods but we can't move to that without breaking Python 3.6 and 3.7.
-            warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
-            warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            last_node = self.cur_node
+        last_node = self.cur_node
+        last_loc = self.builder.get_loc()
+        self.cur_node = node
+        if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+            if self.name_loc_as_prefix is not None:
+                self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
+            else:
+                self.builder.set_loc(here_loc)
             last_loc = self.builder.get_loc()
-            self.cur_node = node
-            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
-                if self.name_loc_as_prefix is not None:
-                    self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
-                else:
-                    self.builder.set_loc(here_loc)
-                last_loc = self.builder.get_loc()
-            try:
-                ret = super().visit(node)
-            except CompilationError:
+        try:
+            ret = super().visit(node)
+        except CompilationError:
+            raise
+        except Exception as e:
+            if knobs.compilation.front_end_debugging:
                 raise
-            except Exception as e:
-                if knobs.compilation.front_end_debugging:
-                    raise
-                # Wrap the error in a CompilationError which contains the source
-                # of the @jit function.
-                raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
+            # Wrap the error in a CompilationError which contains the source
+            # of the @jit function.
+            raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
 
-            # Reset the location to the last one before the visit
-            if last_loc:
-                self.cur_node = last_node
-                self.builder.set_loc(last_loc)
-            return ret
+        # Reset the location to the last one before the visit
+        if last_loc:
+            self.cur_node = last_node
+            self.builder.set_loc(last_loc)
+        return ret
 
     def generic_visit(self, node):
         raise self._unsupported(node, "unsupported AST node type: {}".format(type(node).__name__))
@@ -1617,7 +1637,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     for path, value in src.constants.items():
         apply_constexpr_types(arg_types, list(path)[::-1], value)
 
-    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
+    prototype = ASTFunction([], arg_types, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple

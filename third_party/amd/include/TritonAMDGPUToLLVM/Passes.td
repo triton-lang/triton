@@ -3,18 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def OptimizeAMDLDSUsage : Pass<"optimize-amd-lds-usage", "mlir::ModuleOp"> {
-    let summary = "Minimize LDS usage";
-    let constructor = "mlir::triton::AMD::createOptimizeLDSUsagePass(\"\")";
-
-    let options = [
-        Option<"targetArch", "target-arch", "std::string", /*default*/"",
-               "gfx target device architecture, e.g., gfx942">,
-        Option<"customLDSLimit", "lds-limit", "int", /*default*/"0",
-               "custom limit of LDS consumption, if not provided, maximum LDS size is used">,
-    ];
-}
-
 def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
 

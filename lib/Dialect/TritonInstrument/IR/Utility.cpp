@@ -18,24 +18,24 @@ namespace {
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int size,
                                                   unsigned int warps) {
-  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/1);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/1);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{size},
                                   /*threadsPerWarp=*/{32},
                                   /*warpsPerCTA=*/{warps},
-                                  /*order=*/{0}, ctaLayout);
+                                  /*order=*/{0}, cgaLayout);
 }
 
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int buffers,
                                                   unsigned int barriers,
                                                   unsigned int warps) {
-  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/2);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{buffers, barriers},
                                   /*threadsPerWarp=*/{1, 32},
                                   /*warpsPerCTA=*/{1, warps},
-                                  /*order=*/{0, 1}, ctaLayout);
+                                  /*order=*/{0, 1}, cgaLayout);
 }
 
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,

@@ -10,9 +10,6 @@ using ElemLocationKey = SmallVector<std::pair<StringAttr, int32_t>>;
 
 SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp);
 
-// [FIXME LL] Kill this function
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType tensorTy);
-
 // Build element coordinates for a given register ID.
 // All other hardware dimensions (lane, warp, block) are set to 0.
 ElemLocationKey getElemCoordinatesFromRegisters(LinearLayout ll, unsigned regId,

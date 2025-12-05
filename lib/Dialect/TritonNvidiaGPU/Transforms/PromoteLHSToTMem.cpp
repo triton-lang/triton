@@ -20,10 +20,10 @@ namespace nvidia_gpu {
 namespace {
 template <class MMAOpTy>
 Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, gpu::MemDescType lhsTMEMType,
-                           ttg::CTAEncodingAttr ctaLayout) {
+                           ttg::CGAEncodingAttr cgaLayout) {
   int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
   return nvidia_gpu::getDefaultLayoutForTmemLdSt(lhsTMEMType, numWarps,
-                                                 ctaLayout);
+                                                 cgaLayout);
 }
 
 template <class MMAOpTy> class LHSToTMem : public OpRewritePattern<MMAOpTy> {
@@ -46,7 +46,7 @@ public:
     auto srcLayout = srcType.getEncoding();
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
-    auto CTASplitNum = triton::gpu::getCTALayout(srcLayout).getCTASplitNum();
+    auto CTASplitNum = triton::gpu::getCGALayout(srcLayout).getCTASplitNum();
     // TMem encoding for A operand is the same as for D (Acc), but packed for
     // bitwidth=16
     unsigned elemBitWidth =
@@ -73,7 +73,7 @@ public:
       if (!comesFromLoadOrBlockArg(src) ||
           triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
         newLayout = getLHSTMemLayout(tcGen5MMAOp, lhsMemDescType,
-                                     ttg::getCTALayout(srcType.getEncoding()));
+                                     ttg::getCGALayout(srcType.getEncoding()));
       } else {
         return failure();
       }

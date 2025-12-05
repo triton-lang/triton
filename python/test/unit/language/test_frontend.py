@@ -152,9 +152,6 @@ class TypeWithBuiltinInitializer:
     def __init__(self, _semantic=None):
         self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    def modify(self, value, _semantic=None):
-        self.value = value
-
 
 @filecheck_test
 @triton.jit
@@ -164,48 +161,6 @@ def test_aggregate_initializers():
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     anchor(value)
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
-    value.modify(tl.arange(4, 8))
-    anchor(value)
-
-
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_for_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_for_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    for i in range(0, 2):
-        # CHECK: [[RET:%.*]] = scf.for
-        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]]
-
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]])
-
-
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_while_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_while_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    i = 0
-    # CHECK: [[C0:%.*]] = arith.constant 0 :
-    while i < 1:
-        # CHECK: [[RET:%.*]]:2 = scf.while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
-        # CHECK: do
-        i = 1
-        # CHECK: [[C1:%.*]] = arith.constant 1 :
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]], [[C1]]
-
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]]#0)
 
 
 @triton.jit
@@ -299,11 +254,11 @@ def add_rhs_constexpr(agg):
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
@@ -331,10 +286,10 @@ def pass_tuple_aggregate(agg):
 @triton.jit
 def test_aggregate_with_tuple():
     # CHECK-LABEL: test_aggregate_with_tuple
-    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
     agg = AggregateWithTuple.create(tl.arange(0, 4))
     pass_tuple_aggregate(agg)
-    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
 
 
 @triton.constexpr_function
@@ -524,13 +479,13 @@ class AggregateWithConstexprFunction:
 @triton.jit
 def test_aggregate_constexpr_function():
     agg = AggregateWithConstexprFunction(4)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    # CHECK: call @{{.*}}anchor{{.*}}c4
     anchor(agg.val)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.val_squared)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.square_val())
 
 
@@ -548,7 +503,7 @@ def function_taking_list(arg):
 @triton.jit
 def test_constexpr_function_taking_list():
     a: tl.constexpr = function_taking_list(make_list(4, 8, 16))
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_8_
+    # CHECK: call @{{.*}}anchor{{.*}}c8
     anchor(a)
 
 
@@ -556,19 +511,19 @@ def test_constexpr_function_taking_list():
 @triton.jit
 def test_constexpr_min_max():
     a: tl.constexpr = min(1, 2)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_1_
+    # CHECK: call @{{.*}}anchor{{.*}}c1
     anchor(a)
 
     b: tl.constexpr = min(1, 2, -3)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_-3_
+    # CHECK: call @{{.*}}anchor{{.*}}c-3
     anchor(b)
 
     c: tl.constexpr = max(3, 4)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    # CHECK: call @{{.*}}anchor{{.*}}c4
     anchor(c)
 
     d: tl.constexpr = max(3, 4, 5)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_5_
+    # CHECK: call @{{.*}}anchor{{.*}}c5
     anchor(d)
 
 
@@ -609,3 +564,55 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.interpreter
+def test_constexpr_return():
+
+    @triton.jit
+    def get_constexpr_value():
+        return tl.constexpr(42)
+
+    @triton.jit
+    def test():
+        x: tl.constexpr = get_constexpr_value()
+        tl.static_assert(x == 42)
+
+    run_parser(test)
+
+
+@pytest.mark.interpreter
+def test_return_promotion():
+
+    @triton.jit
+    def signbit(x):
+        if x < 0:
+            return 1
+        else:
+            return 0
+
+    @triton.jit
+    def tuple_return(x):
+        if x < 0:
+            return 1, x
+        else:
+            return 0, x
+
+    @triton.jit
+    def kernel():
+        # constexpr if -> constexpr returned
+        a: tl.constexpr = signbit(-1)
+        tl.static_assert(a == 1)
+
+        # dynamic if -> promote to tensor
+        tmp = -1
+        tl.static_assert(signbit(tmp).type == tl.int32)
+
+        # constexpr if -> single return
+        b: tl.constexpr = tuple_return(-1)
+        tl.static_assert(b[0] == 1 and b[1] == -1)
+
+        c = tuple_return(tmp)
+        tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)

@@ -39,16 +39,16 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
   if (auto src = dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(layout))
     return triton::gpu::AMDMfmaEncodingAttr::get(
         ctx, src.getVersion(), warpsPerCTA, src.getInstrShape(),
-        src.getIsTransposed(), src.getCTALayout(), src.getTilesPerWarp(),
+        src.getIsTransposed(), src.getCGALayout(), src.getTilesPerWarp(),
         src.getElementBitWidth());
   if (auto src = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(layout))
     return triton::gpu::AMDWmmaEncodingAttr::get(
         ctx, src.getVersion(), src.getIsTransposed(), warpsPerCTA,
-        src.getTilesPerWarp(), src.getCTALayout(), src.getInstrShape());
+        src.getTilesPerWarp(), src.getCGALayout(), src.getInstrShape());
   if (auto src = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout))
     return triton::gpu::BlockedEncodingAttr::get(
         ctx, src.getSizePerThread(), src.getThreadsPerWarp(), warpsPerCTA,
-        src.getOrder(), src.getCTALayout());
+        src.getOrder(), src.getCGALayout());
   if (auto src = dyn_cast<triton::gpu::DotOperandEncodingAttr>(layout)) {
     auto parent = cast<triton::gpu::DistributedEncodingTrait>(src.getParent());
     parent = createTmpLayout(parent, warpsPerCTA);
