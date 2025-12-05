@@ -290,7 +290,7 @@ def matmul(a, b, bias,
     can_use_tma = (
         a.numel() > 0 and a.storage.is_tma_compliant() and
         b.numel() > 0 and b.storage.is_tma_compliant() and
-        (b_scale is None or b_scale.storage.is_tma_compliant()) and
+        (b_scale is None or b_scale.storage.is_tma_compliant(is_scale=True)) and
         # (b_scale is None or b_scale.storage.is_tma_compliant(is_scale=True)) and
         (ragged_dimension != "M" or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
@@ -316,7 +316,7 @@ def matmul(a, b, bias,
             print(f"{(c_acc_in is None or c_acc_is_c)=}")
         if b_scale is not None and not target_info.has_native_mxfp():
             print(f"{(b_scale is None or target_info.has_native_mxfp())=}")
-        if ragged_dimension != "K" or b.stride(-1) != 1 or b_ragged_metadata.slice_sizes_divisibility is not None:
+        if ragged_dimension == "K" and b.stride(-1) != 1 and b_ragged_metadata.slice_sizes_divisibility is None:
             print(f"{(ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)=}")
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
@@ -442,7 +442,7 @@ def matmul(a, b, bias,
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
-        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if b_transpose or isinstance(b_scale.storage.layout, BlackwellMXScaleLayout) else [scale_block_k, opt_flags.block_n]
+        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if isinstance(b_scale.storage.layout, BlackwellMXScaleLayout) else [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale.storage.layout, StridedLayout):
             b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
