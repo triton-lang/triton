@@ -583,8 +583,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         if M * N // 128 // num_ctas > MAX_ROWS:
             N //= (M * N // 128 // num_ctas // MAX_ROWS)
 
-    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) == (2, 4, 1):
-        pytest.skip("FIXME: Fails with wrong answer. Need to investigate")
+    if two_ctas and N // ctas_per_cga[1] == 512:
+        # grep for [Note: numRepN > 1 and two_ctas]
+        pytest.skip("grep for [Note: numRepN > 1 and two_ctas]")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 
@@ -671,7 +672,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, cga_layout=cga_layout_b)
     if use_tcgen05:
-        tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
+        tmem_shape = (min(M // ctas_per_cga[0], 128), min(N // ctas_per_cga[1], 256))
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
