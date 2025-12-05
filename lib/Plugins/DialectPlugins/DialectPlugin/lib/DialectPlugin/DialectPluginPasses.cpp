@@ -36,10 +36,14 @@ LogicalResult ConvertPluginMagicOp(FunctionOpInterface func) {
 
 } // namespace
 
-class ConvertPluginGPUToLLVMPass
+struct ConvertPluginGPUToLLVMPass
     : public mlir::triton::dialectplugin::impl::DialectPluginMagicOpBase<
           ConvertPluginGPUToLLVMPass> {
-public:
+  explicit ConvertPluginGPUToLLVMPass(int32_t computeCapability,
+                                        int32_t ptxVersion) {
+    this->computeCapability = computeCapability;
+    this->ptxVersion = ptxVersion;
+  }
   void runOnOperation() override {
     ModuleOp m = getOperation();
     MLIRContext *context = &getContext();
@@ -52,9 +56,12 @@ public:
   }
 };
 
-namespace mlir::triton::dialectplugin {
-std::unique_ptr<OperationPass<ModuleOp>> createConvertPluginGPUToLLVMPass() {
-  return std::make_unique<ConvertPluginGPUToLLVMPass>();
-}
 
+namespace mlir::triton::dialectplugin {
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertPluginGPUToLLVMPass(int32_t computeCapability,
+                                       int32_t ptxVersion) {
+  return std::make_unique<ConvertPluginGPUToLLVMPass>(computeCapability,
+                                                        ptxVersion);
+  }
 } // namespace mlir::triton::dialectplugin
