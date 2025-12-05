@@ -118,7 +118,10 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
     auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
+    // FIXME: currently linear layout do not have order info, so
+    // use the kWidth instead of linear layout's consecutiveInOut
+    *vecSize = cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding())
+                   .getKWidth();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
@@ -168,7 +171,14 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
+
+      // FIXME: currently linear layout do not have order info, it's assuming an
+      // order, so override it if specified by blocked encoding
+      SmallVector<unsigned> order = getOrderForMemory(srcTy);
+      if (auto blocked =
+              dyn_cast<ttg::BlockedEncodingAttr>(srcTy.getEncoding()))
+        order = llvm::to_vector(blocked.getOrder());
+
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -764,6 +774,13 @@ void lowerLoop(scf::ForOp forOp,
       load->removeAttr(AttrBypassLDS);
       loadToInfo[load] = {nullptr, distance, use};
     } else {
+      auto loadTy = cast<RankedTensorType>(load->getResult(0).getType());
+      auto blocked = cast<ttg::BlockedEncodingAttr>(loadTy.getEncoding());
+      auto order = blocked.getOrder();
+      // FIXME: only support async_copy if it's row-major
+      if (order[0] != order.size() - 1)
+        continue;
+
       LDBG("Deduce shared encoding for: " << *load);
       auto sharedEncoding =
           getSharedEncIfAllUsersAreDotEnc(load, axisInfoAnalysis, targetInfo,
