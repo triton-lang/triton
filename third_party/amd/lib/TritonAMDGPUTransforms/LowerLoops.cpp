@@ -118,7 +118,9 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
     auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
+    // use the dot prefered vector size
+    *vecSize = cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding())
+                   .getKWidth();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
@@ -168,7 +170,14 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
+
+      // currently linear layout assumes an order from regBase
+      // override it if specified by blocked encoding
+      SmallVector<unsigned> order = getOrderForMemory(srcTy);
+      if (auto blocked =
+              dyn_cast<ttg::BlockedEncodingAttr>(srcTy.getEncoding()))
+        order = llvm::to_vector(blocked.getOrder());
+
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
