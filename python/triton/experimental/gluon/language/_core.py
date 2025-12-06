@@ -280,6 +280,44 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_store(self, value)
 
     @builtin
+    def gather(self, indices, axis, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Gather elements from shared memory along a specified axis using an indices tensor.
+
+        For each output position I, the operation reads from src where the coordinate at
+        the gather axis is replaced by indices[I]:
+          result[I] = src[I[0], ..., indices[I], ..., I[n]]
+
+        Args:
+            indices (tensor): Tensor specifying which indices to gather along the axis.
+            axis (int): The axis along which to gather values.
+
+        Returns:
+            tensor: Gluon tensor with the gathered elements (same shape as indices).
+        """
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_gather(self, indices, axis)
+
+    @builtin
+    def scatter(self, values, indices, axis, _semantic: GluonSemantic = None):
+        """
+        Scatter elements to shared memory along a specified axis using an indices tensor.
+
+        For each input position I, the operation writes to dst where the coordinate at
+        the scatter axis is replaced by indices[I]:
+          dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+
+        Args:
+            values (tensor): Tensor with values to scatter (same shape as indices).
+            indices (tensor): Tensor specifying which indices to scatter to along the axis.
+            axis (int): The axis along which to scatter values.
+        """
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_scatter(self, values, indices, axis)
+
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Create a subview of shared memory by slicing along a given dimension.
