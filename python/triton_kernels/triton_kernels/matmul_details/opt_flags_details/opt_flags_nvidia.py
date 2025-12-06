@@ -58,10 +58,6 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
         block_k = min(block_k, 128)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
         block_k = min(block_k, 32)
-    b_mx_scale_layout = get_layout(precision_config.b_mx_scale)
-    if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
-        min_block_k = b_mx_scale_layout.num_warps * int(MXFP_BLOCK_SIZE)
-        block_k = max(min_block_k, block_k)
     return block_k
 
 
