@@ -7,6 +7,7 @@ from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version
 from triton_kernels.tensor import FP4
 import torch
+from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 from triton_kernels.tensor import bitwidth, get_layout
 
@@ -239,6 +240,12 @@ def make_default_opt_flags_nvidia(
         is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
+            is_persistent = False
+        if (
+            (b_scale_layout := get_layout(precision_config.b_mx_scale)) is not None and
+            isinstance(b_scale_layout, HopperMXScaleLayout)
+        ):
+            # TODO: persistent kernel is currently slower than non-persistent
             is_persistent = False
     block_n = block_n_tma if is_persistent else block_n
     # block k

@@ -116,7 +116,6 @@ def _matmul(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
 
-        # TODO: refactor if/else when triton front end improves
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             tl.static_assert(not is_x_microscaled)
