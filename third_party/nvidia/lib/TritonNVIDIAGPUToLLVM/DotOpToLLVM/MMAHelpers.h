@@ -128,8 +128,9 @@ public:
       assert(maybeWarpToOffsetb128->getNumOutDims() == 2);
       bases[kWarp][0] = {0, 0};
       bases[kWarp][1] = {0, 0};
-      auto warpGroupToOffsetb128 = LinearLayout(
-          bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
+      auto warpGroupToOffsetb128 =
+          LinearLayout(std::move(bases), warpToOffset.getOutDims(),
+                       /*requireSurjective=*/false);
       Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
@@ -278,9 +279,9 @@ private:
             }
           }
           // Multiply by 2 or round up to the next power of 2
-          shmemTileInv =
-              LinearLayout(bases, {{kOffset, llvm::NextPowerOf2(maxBasis)}},
-                           /*requireSurjective=*/false);
+          shmemTileInv = LinearLayout(std::move(bases),
+                                      {{kOffset, llvm::NextPowerOf2(maxBasis)}},
+                                      /*requireSurjective=*/false);
           // Add a trivial block dimension as getReps expects both layouts to
           // have the same outdims
           shmemTileInv *=

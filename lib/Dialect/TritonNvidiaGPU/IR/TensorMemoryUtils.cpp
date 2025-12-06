@@ -252,7 +252,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
-      reps = LinearLayout(basis, reps.getOutDims(), /*isSurjective=*/false);
+      reps = LinearLayout(std::move(basis), reps.getOutDims(),
+                          /*isSurjective=*/false);
       msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
     }
   }
@@ -297,7 +298,7 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   auto bases = cvt.getBases();
   bases[kWarp][0] = {32, 0};
   bases[kWarp][1] = {64, 0};
-  cvt = LinearLayout(bases, cvt.getOutDims(),
+  cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());

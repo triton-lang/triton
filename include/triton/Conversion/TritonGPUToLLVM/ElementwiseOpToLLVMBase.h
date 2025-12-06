@@ -94,8 +94,8 @@ public:
         bases_inv[d][i] = {0};
       }
     }
-    auto invBroadcast =
-        LinearLayout(bases_inv, invReg.getOutDims(), /*isSurjective=*/false);
+    auto invBroadcast = LinearLayout(std::move(bases_inv), invReg.getOutDims(),
+                                     /*isSurjective=*/false);
     auto cvt = llReg.compose(invBroadcast);
 
     // Deduplicate the result values

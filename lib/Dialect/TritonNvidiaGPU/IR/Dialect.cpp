@@ -108,7 +108,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
     LinearLayout::BasesT bases;
     bases[kLane] = std::vector<std::vector<int32_t>>{
         {8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}};
-    tile *= LinearLayout(bases, {kRow, kCol});
+    tile *= LinearLayout(std::move(bases), {kRow, kCol});
   } else if (atom == TMemAccessAtom::I16x128b) {
     tile *= LinearLayout::identity1D(4, kLane, kCol) *
             LinearLayout::identity1D(8, kLane, kRow) *
@@ -126,7 +126,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
     auto bases = tile.getBases();
     bases[kWarp].push_back({32, 0});
     bases[kWarp].push_back({64, 0});
-    tile = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
+    tile = LinearLayout(std::move(bases), {{kRow, 128}, {kCol, nCol}}, false);
   }
   return tile;
 }
@@ -290,7 +290,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   if (row16) {
     bases[row16].push_back({16, 0});
   }
-  tile = LinearLayout(bases,
+  tile = LinearLayout(std::move(bases),
                       {{rowColDims[0], 128},
                        {rowColDims[1], tile.getOutDimSize(rowColDims[1])}},
                       false);
@@ -328,13 +328,13 @@ getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
     auto layout = getDistributedLayoutForTmemLdSt(
         memType, TMemAccessAtom::I16x256b, numWarps, cgaLayout);
     if (layout) {
-      return LinearEncodingAttr::get(ctx, *layout);
+      return LinearEncodingAttr::get(ctx, std::move(*layout));
     }
   }
   auto layout = getDistributedLayoutForTmemLdSt(
       memType, TMemAccessAtom::I32x32b, numWarps, cgaLayout);
   assert(layout);
-  return LinearEncodingAttr::get(ctx, *layout);
+  return LinearEncodingAttr::get(ctx, std::move(*layout));
 }
 
 std::optional<DistributedEncodingTrait>
@@ -348,7 +348,7 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
       memType, TMemAccessAtom::I32x32b, numWarps, cgaLayout);
   if (!layout)
     return std::nullopt;
-  auto ret = *layout;
+  auto ret = std::move(*layout);
 
   // Optimisation for reductions:
   // We can map lane=16 to any dimension, and it will be lowered to 32x16bx2.
@@ -375,7 +375,7 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
       std::swap(bases[kWarp][2], bases[kLane][4]);
       return LinearEncodingAttr::get(
           tensorType.getContext(),
-          LinearLayout(bases, ret.getOutDims(), ret.isSurjective()));
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective()));
     }
   }
   return std::nullopt;
@@ -393,8 +393,8 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
     auto ll =
         getDistributedLayoutForTmemLdSt(memType, atom, numWarps, cgaLayout);
     if (ll) {
-      layouts.push_back(
-          LinearEncodingAttr::get(tensorType.getContext(), ll.value()));
+      layouts.push_back(LinearEncodingAttr::get(tensorType.getContext(),
+                                                std::move(ll.value())));
     }
   }
   // Small hack until we generalise isDistributedLayoutTMemCompatible

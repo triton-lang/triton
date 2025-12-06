@@ -611,7 +611,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
       intervalPads.emplace_back(interval, padding);
     }
-    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, dst);
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, std::move(dst));
     return success();
   }
 
@@ -619,7 +619,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
-  dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
+  dstEnc = SharedLinearEncodingAttr::get(ctx, std::move(dstLL),
+                                         sharedEnc.getAlignment());
   return success();
 }
 

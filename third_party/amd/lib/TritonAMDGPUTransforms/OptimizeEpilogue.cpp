@@ -74,7 +74,7 @@ usePermlaneSwapToOptimizeStore(PatternRewriter &rewriter, Value ptr, Value val,
     return nullptr;
 
   Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
-      oldStoreOp.getContext(), storeLL.value());
+      oldStoreOp.getContext(), std::move(storeLL.value()));
   auto newPtrType = ptrType.cloneWithEncoding(newEncoding);
   Value newPtr = triton::gpu::ConvertLayoutOp::create(rewriter, ptr.getLoc(),
                                                       newPtrType, ptr);

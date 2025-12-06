@@ -90,8 +90,8 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
 
   auto transposedLayout =
       ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
-  auto transposedEncoding =
-      ttg::LinearEncodingAttr::get(memStoreOp->getContext(), transposedLayout);
+  auto transposedEncoding = ttg::LinearEncodingAttr::get(
+      memStoreOp->getContext(), std::move(transposedLayout));
 
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);

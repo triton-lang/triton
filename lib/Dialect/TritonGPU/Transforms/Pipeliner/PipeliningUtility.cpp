@@ -449,7 +449,7 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
       std::vector<std::vector<int32_t>>(llvm::Log2_32(numCTAs), {0});
   auto dims = standardOutDimNames(ctx, 1);
   auto barrierCGALayout =
-      ttg::CGAEncodingAttr::get(ctx, LinearLayout(bases, dims));
+      ttg::CGAEncodingAttr::get(ctx, LinearLayout(std::move(bases), dims));
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(

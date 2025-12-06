@@ -582,7 +582,7 @@ public:
     auto value = std::move(it->second);
     bases.erase(it);
     bases.insert({newDim, std::move(value)});
-    return LinearLayout(bases, getOutDims(),
+    return LinearLayout(std::move(bases), getOutDims(),
                         /*requireSurjective=*/isSurjective());
   }
 
