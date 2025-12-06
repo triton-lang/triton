@@ -35,11 +35,9 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 // Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
-// Gets the order of a tensor from its contiguity. Places the dimensions with
-// the largest contiguity as the inner most dimension. If the contiguity is
-// all ones, returns the order {dim - 1, dim - 2, ..., 0}
-SmallVector<unsigned, 4>
-getOrderFromContiguity(const SmallVector<int64_t> &contiguity);
+// Return an array of indices enumerating the elements of 'arr' in descending
+// order (so that result[i] is the index of the i-th largest element of 'arr')
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
 
 // Return the operand used to access the memory in the operation
 Value getMemAccessPtr(Operation *op);
