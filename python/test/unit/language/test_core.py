@@ -6187,12 +6187,13 @@ def test_num_programs(device):
 
     @triton.jit
     def kernel(input):
-        num_programs_0 = tl.num_programs(0)
-        num_programs_1 = tl.num_programs(1)
-        num_programs_2 = tl.num_programs(2)
-        tl.store(input, num_programs_0)
-        tl.store(input + 1, num_programs_1)
-        tl.store(input + 2, num_programs_2)
+        if tl.program_id(0) == 0 and tl.program_id(1) == 0 and tl.program_id(2) == 0:
+            num_programs_0 = tl.num_programs(0)
+            num_programs_1 = tl.num_programs(1)
+            num_programs_2 = tl.num_programs(2)
+            tl.store(input, num_programs_0)
+            tl.store(input + 1, num_programs_1)
+            tl.store(input + 2, num_programs_2)
 
     kernel[grid](input)
     assert torch.all(input == torch.tensor(grid, device=device))
