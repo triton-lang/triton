@@ -518,9 +518,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
-        assert num_partitions == len(
-            worker_num_regs
-        ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
+
+        if worker_num_regs is not None:
+            assert num_partitions == len(
+                worker_num_regs
+            ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
 
         builder = self.builder
         insert_pt = builder.get_insertion_point()
@@ -539,7 +541,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         builder.restore_insertion_point(insert_pt)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
-        ws_op.set_requested_registers(worker_num_regs)
+
+        if worker_num_regs is not None:
+            ws_op.set_requested_registers(worker_num_regs)
 
         # Emit the partition regions.
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
