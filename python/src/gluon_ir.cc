@@ -105,8 +105,7 @@ struct GluonOpBuilder : public TritonOpBuilder {
         getContext(), [&](Diagnostic &diag) { printDiagStr(os, diag); });
 
     if (failed(AttrOrType::verifyInvariants(
-            [&] { return mlir::emitError(getLastLoc()); },
-            std::forward<ArgTs>(args)...)))
+            [&] { return mlir::emitError(getLastLoc()); }, args...)))
       throw std::runtime_error(os.str());
 
     return AttrOrType::get(ctx, std::forward<ArgTs>(args)...);
