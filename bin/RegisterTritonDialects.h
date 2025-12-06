@@ -153,6 +153,19 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
     for (const char *passName : passNames)
       if (auto result = TP.registerPass(passName); !result)
         llvm::report_fatal_error(result.takeError());
+
+    std::vector<const char *> dialectNames;
+    if (auto result = TP.getDialectHandles(dialectNames); !result)
+      llvm::report_fatal_error(result.takeError());
+
+    for (unsigned i = 0; i < dialectNames.size(); ++i) {
+      const char *dialectName = dialectNames.data()[i];
+      auto result = TP.getDialectPluginInfo(dialectName);
+      if (!result)
+        llvm::report_fatal_error(result.takeError());
+      ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
+      dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
+    }
   }
 
   registry.insert<

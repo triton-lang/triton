@@ -52,20 +52,31 @@ llvm::Error TritonPlugin::loadPlugin() {
   auto enumeratePassesAPIOrErr =
       getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
           ENUMERATE_PASSES);
+  auto enumerateDialectsAPIOrErr =
+      getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+          ENUMERATE_DIALECTS);
   auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
   auto registerPassAPIOrErr =
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+  auto dialectPluginInfoAPIOrErr =
+      getAPI<dialectPluginInfoType, dialectPluginInfoCType>(DIALECT_PLUGININFO);
 
   if (auto Err = enumeratePassesAPIOrErr.takeError())
+    return Err;
+  if (auto Err = enumerateDialectsAPIOrErr.takeError())
     return Err;
   if (auto Err = addPassAPIOrErr.takeError())
     return Err;
   if (auto Err = registerPassAPIOrErr.takeError())
     return Err;
+  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
+    return Err;
 
   enumeratePassesAPI = *enumeratePassesAPIOrErr;
+  enumerateDialectsAPI = *enumerateDialectsAPIOrErr;
   addPassAPI = *addPassAPIOrErr;
   registerPassAPI = *registerPassAPIOrErr;
+  dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   isLoaded = true;
   return llvm::Error::success();
 }
@@ -101,6 +112,11 @@ TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
 }
 
 llvm::Expected<TritonPluginResult>
+TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
+  return enumeratePyBindHandles(enumerateDialectsAPI, dialectNames);
+}
+
+llvm::Expected<TritonPluginResult>
 TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
   if (auto Err = loadPlugin())
     return Err;
@@ -112,4 +128,11 @@ TritonPlugin::registerPass(const char *passHandle) {
   if (auto Err = loadPlugin())
     return Err;
   return checkAPIResult(registerPassAPI(passHandle), passHandle);
+}
+
+llvm::Expected<::mlir::DialectPluginLibraryInfo>
+TritonPlugin::getDialectPluginInfo(const char *dialectName) {
+  if (auto Err = loadPlugin())
+    return Err;
+  return dialectPluginInfoAPI(dialectName);
 }
