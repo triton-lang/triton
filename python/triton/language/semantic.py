@@ -1847,7 +1847,7 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(self.builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
     def device_assert(self, cond: TensorTy, msg: str, mask: Optional[TensorTy]) -> TensorTy:
-        if not self.builder.options.debug:
+        if not self.builder.options.enable_assertions:
             return
         if mask is not None:
             cond = self.or_(cond, self.not_(mask))
