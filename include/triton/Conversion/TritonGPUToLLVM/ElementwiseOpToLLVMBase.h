@@ -71,6 +71,12 @@ public:
       // the result must be a tensor
       return resultVals;
 
+    // Disable deduplicating for AMDWmma temporarily as it causes
+    // test failures. See: https://github.com/ROCm/triton/issues/909
+    Attribute encoding = rtType.getEncoding();
+    if (!encoding || isa<AMDWmmaEncodingAttr>(encoding))
+      return resultVals;
+
     // Bail out if we don't have the constancy analysis
     AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
     if (!axisInfo)
