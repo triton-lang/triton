@@ -117,6 +117,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();
   mlir::registerTritonAMDGPUInThreadTranspose();
+  mlir::registerTritonAMDGPUOptimizeWarpLayout();
   mlir::registerTritonAMDGPUCoalesceAsyncCopy();
   mlir::registerTritonAMDGPUUpdateAsyncWaitCount();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
