@@ -451,11 +451,6 @@ class HIPBackend(BaseBackend):
                             dump_file_id)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
-        # TODO: Remove the following workaround once LLVM is bumped to include: https://github.com/llvm/llvm-project/pull/169851
-        # Workaround for LLVM ERROR: cannot evaluate equated symbol 'amdgcn.device.init.num_named_barrier'
-        if knobs.compilation.enable_asan and 'gfx1250' not in options.arch:
-            amdgcn = amdgcn.replace('.amdgpu_metadata',
-                                    '\t.set\tamdgcn.device.init.num_named_barrier, 0\n.amdgpu_metadata')
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
