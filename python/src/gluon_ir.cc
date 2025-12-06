@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -903,6 +904,13 @@ void init_gluon_ir(py::module &&m) {
       .def("create_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           })
+      .def("create_warp_pipeline_border",
+           [](GluonOpBuilder &self, const std::string &marker) {
+             auto border = self.create<ROCDL::SchedBarrier>(0);
+             auto ctx = self.getContext();
+             border->setAttr("triton.warp_pipeline.border",
+                             StringAttr::get(ctx, marker));
            });
 
   m.def(
