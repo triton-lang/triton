@@ -160,9 +160,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto ctx = funcOp->getContext();
 
     if (triton::isKernel(funcOp)) {
-      // Set an attribute to indicate this function is a kernel entry.
-      newFuncOp->setAttr(NVVM::NVVMDialect::getKernelFuncAttrName(),
-                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
       newFuncOp.setLinkage(LLVM::Linkage::External);
     } else {
       // The noinline attribute will be used by the LLVM codegen to prevent
@@ -173,36 +170,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
     }
 
-    // Determine the actual number of required warps.
-    int numWarps = triton::gpu::lookupNumWarps(funcOp);
-    if (auto totalNumWarps = funcOp.getParentOp()->getAttrOfType<IntegerAttr>(
-            "ttg.total-num-warps"))
-      numWarps = totalNumWarps.getInt();
-
-    int numCTAs = 1;
-    if (auto module = funcOp->getParentOfType<ModuleOp>()) {
-      if (auto moduleAttr =
-              module->getAttrOfType<IntegerAttr>(triton::gpu::AttrNumCTAsName))
-        numCTAs = moduleAttr.getInt();
-    }
-
-    // Set `nvvm.maxnreg` if it was specified on the module.
-    if (Attribute maxnregAttr =
-            funcOp.getParentOp()->getAttr(triton::gpu::AttrMaxRegistersName))
-      newFuncOp->setAttr(NVVM::NVVMDialect::getMaxnregAttrName(), maxnregAttr);
-
-    // Do we want to do this for nCTAs == 1 whenever sm >= 90?
-    if (numCTAs > 1) {
-      // Request a specific number of CTAs per cluster in the generated PTX.
-      newFuncOp->setAttr(NVVM::NVVMDialect::getClusterDimAttrName(),
-                         rewriter.getDenseI32ArrayAttr(numCTAs));
-    }
-
-    // Set an attribute for reqntidx, it could be used in latter LLVM codegen
-    // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr(NVVM::NVVMDialect::getReqntidAttrName(),
-                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
-
+    // Set target specific function attributes
+    targetInfo.setLLVMFunctionAttributes(funcOp, newFuncOp);
     rewriter.eraseOp(funcOp);
     rewriter.eraseOp(amendedFuncOp);
 
