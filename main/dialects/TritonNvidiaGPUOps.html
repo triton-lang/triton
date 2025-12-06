@@ -1323,7 +1323,7 @@ of a 2D memdesc as this is the only one we can do for TMem.</p>
 <p>Blocks the program progress until the mbarrier object in <code class="docutils literal notranslate"><span class="pre">alloc</span></code> completes
 its current phase.</p>
 <p>This lowers a waitloop using PTX instruction
-mbarrier.try_wait.parity.shared.b64.</p>
+mbarrier.try_wait.parity.shared::cta.b64.</p>
 <p>Accepts optional list of memory. If present, it is assumed that any of the
 dependencies may be accessed until the barrier completes.</p>
 <p>The barrier behavior is described here:
