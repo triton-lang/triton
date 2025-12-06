@@ -179,6 +179,9 @@ def ptx_get_version(cuda_version) -> int:
     '''
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
+    if major == 13:
+        # CUDA 13.0+ uses PTX 8.9+
+        return 89 + minor
     if major == 12:
         return 80 + minor
     if major == 11:
