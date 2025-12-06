@@ -125,12 +125,6 @@ def _p_matmul(
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(get_dtype(WMxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
-        tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL_SCALE" or
-                         SWIZZLE_MX_SCALE == "HOPPER_SCALE" or
-                         SWIZZLE_MX_SCALE is None,
-                         "Only Hopper and Blackwell swizzling are supported for scales")
-        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None,
-                         "Only Hopper swizzling is supported for values")
 
         # We have pack 2 fp4 values in a byte
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
@@ -143,7 +137,7 @@ def _p_matmul(
             W_K_MULTIPLIER: tl.constexpr = 2
             W_N_DIVISOR: tl.constexpr = 4
         else:
-            # We have pack 2 fp4 values in a  byte
+            # We have pack 2 fp4 values in a byte
             W_K_DIVISOR: tl.constexpr = 2 if is_w_mxfp4 else 1
             W_K_MULTIPLIER: tl.constexpr = 1
             W_N_DIVISOR: tl.constexpr = 1
@@ -348,7 +342,7 @@ def _p_matmul(
                 off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
                 tl.static_assert(MX_PACK_DIVISOR % W_K_DIVISOR == 0)
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
-                    flattened_expt_n_idx = off_w_z * ((N + 127) // 128) + (off_w_n // 128)
+                    flattened_expt_n_idx = off_w_z * ((N + 127) // 128) + (off_n // 128)
                     w_scales = WMxScale.load([0, flattened_expt_n_idx, off_k_mx // 4, 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
