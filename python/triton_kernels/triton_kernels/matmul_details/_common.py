@@ -125,9 +125,9 @@ def compute_offsets(
         off_w_z,
         off_x_z,
         off_y_z,
-        off_x_slice, # offset for the current slice vs 0
-        off_x_slice_tile, # block offset for the current slice vs 0 
-        off_x_m, # offset for the current block vs slice start
+        off_x_slice,  # offset for the current slice vs 0
+        off_x_slice_tile,  # block offset for the current slice vs 0
+        off_x_m,  # offset for the current block vs slice start
         off_x_k,
         off_w_k,
     )

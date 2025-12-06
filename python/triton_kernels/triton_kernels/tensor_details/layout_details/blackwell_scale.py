@@ -5,7 +5,9 @@ import torch
 import triton
 import triton.language as tl
 
+from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
 from .base import Layout
+from triton_kernels import target_info
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
 SWIZZLE_SIZE_INNER = tl.constexpr(4)
@@ -39,21 +41,19 @@ class BlackwellMXScaleLayout(Layout):
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
         data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(
-            self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K
-        )
+        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
+                            self.SWIZZLE_K)
         data = data.transpose(2, 4).contiguous()
         data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
         return data
 
     def unswizzle_data(self, data):
-        data = data.reshape(
-            self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32, self.SWIZZLE_K
-        )
+        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
+                            self.SWIZZLE_K)
         data = data.transpose(2, 4)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
         data = data.transpose(-1, -2)
-        return data[..., : self.K, : self.N]
+        return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
         assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
@@ -62,138 +62,236 @@ class BlackwellMXScaleLayout(Layout):
 
 @triton.jit
 def pad_segments_kernel(
-    data_ptr,                     # *input* base pointer
-    ex_hist_ptr,                  # int32[H]
-    ex_hist_padded_ptr,           # int32[H]
-    in_offsets_ptr,               # int32[H] row offsets in `data`
-    out_offsets_ptr,              # int32[H] row offsets in `padded_data`
-    K: tl.constexpr,              # input width
-    K_pad: tl.constexpr,          # output width
-    stride_in_m, stride_in_n,     # data.stride(0), data.stride(1)
-    stride_out_m, stride_out_n,   # padded_data.stride(0), stride(1)
-    out_ptr,                      # *output* base pointer
-    BLOCK_M: tl.constexpr,        # block of rows
-    BLOCK_N: tl.constexpr,        # block of cols
+    data_ptr,
+    out_ptr,
+    slice_sizes_ptr,
+    slice_offs_ptr,
+    block_offs_ptr,
+    block_schedule_ptr,
+    K: tl.constexpr,
+    K_pad: tl.constexpr,
+    stride_in_m,
+    stride_in_n,
+    stride_out_m,
+    stride_out_n,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    N_BLOCKS_PER_COL: tl.constexpr,
+    N_SLICES: tl.constexpr,
+    NUM_SMS: tl.constexpr,
 ):
-    # program ids
-    pid_seg = tl.program_id(0)    # which segment i
-    pid_row_blk = tl.program_id(1) # which row-block within padded segment
+    useful_grid_m = tl.load(block_offs_ptr + N_SLICES)  # number of valid blks we care about in the output
+    num_blocks = useful_grid_m * N_BLOCKS_PER_COL
 
-    # segment-specific metadata
-    m      = tl.load(ex_hist_ptr + pid_seg)            # actual rows
-    m_pad  = tl.load(ex_hist_padded_ptr + pid_seg)     # padded rows
-    in_base_rows  = tl.load(in_offsets_ptr  + pid_seg) # row offset in `data`
-    out_base_rows = tl.load(out_offsets_ptr + pid_seg) # row offset in `out`
+    for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS):
+        blk_m_idx = block_id // N_BLOCKS_PER_COL
+        blk_n_idx = block_id % N_BLOCKS_PER_COL
 
-    # row indices (within this segment)
-    row_offsets = pid_row_blk * BLOCK_M + tl.arange(0, BLOCK_M)
-    col_offsets = tl.arange(0, BLOCK_N)
+        # get expert index and block index within the expert
+        block_schedule = tl.load(block_schedule_ptr + blk_m_idx)  # always should get a valid block
+        slice_idx = block_schedule & 0x0000FFFF
+        blk_m_idx_in_slice = block_schedule >> 16
 
-    # global row indices in input/output
-    out_rows = out_base_rows + row_offsets[:, None]
-    out_cols = col_offsets[None, :]
+        # for the current output block, get the masked input block
+        slice_size = tl.load(slice_sizes_ptr + slice_idx)  # actual rows
+        input_slice_base = tl.load(slice_offs_ptr + slice_idx)  # row offset in `data`
+        in_ptrs = data_ptr + input_slice_base * stride_in_m  # move in_ptrs to the start of the input slice
 
-    in_rows = in_base_rows + row_offsets[:, None]
-    in_cols = col_offsets[None, :]
+        in_rows = blk_m_idx_in_slice * BLOCK_M + tl.arange(0, BLOCK_M)
+        in_cols = blk_n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
 
-    # masks
-    row_in_range_out = row_offsets < m_pad
-    col_in_range_out = col_offsets < K_pad
-    out_mask = row_in_range_out[:, None] & col_in_range_out[None, :]
+        row_in_range_in = in_rows < slice_size
+        col_in_range_in = in_cols < K
+        in_mask = row_in_range_in[:, None] & col_in_range_in[None, :]
 
-    row_in_range_in = row_offsets < m
-    col_in_range_in = col_offsets < K
-    in_mask = row_in_range_in[:, None] & col_in_range_in[None, :]
+        out_rows = blk_m_idx * BLOCK_M + tl.arange(0, BLOCK_M)
+        out_cols = blk_n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+        col_in_range_out = out_cols < K_pad
+        out_mask = col_in_range_out[None, :]
 
-    # default pad value = 0
-    # load from input where valid, else 0
-    vals = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        # default pad value = 0
+        vals = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        # compute linear ptrs with strides
+        in_ptrs = in_ptrs + in_rows[:, None] * stride_in_m + in_cols[None, :] * stride_in_n
+        vals = tl.load(in_ptrs, mask=in_mask & out_mask, other=0.0)
 
-    # compute linear ptrs with strides
-    in_ptrs = data_ptr + in_rows * stride_in_m + in_cols * stride_in_n
-    vals = tl.load(in_ptrs, mask=in_mask & out_mask, other=0.0)
-
-    # store into output
-    out_ptrs = out_ptr + out_rows * stride_out_m + out_cols * stride_out_n
-    tl.store(out_ptrs, vals, mask=out_mask)
+        # store into output
+        out_ptrs = out_ptr + out_rows[:, None] * stride_out_m + out_cols[None, :] * stride_out_n
+        tl.store(out_ptrs, vals, mask=out_mask)
 
 
-def pad_segments_triton(data, ex_hist, ex_hist_padded, K, K_pad, total_padded_rows):
+def pad_segments_triton(data, ragged_metadata, block_size_to_align, M_pad, K, K_pad):
     """
-    data:           [total_M, K]       (contiguous or with known strides)
-    ex_hist:        [H] int32/long     (segment lengths)
-    ex_hist_padded: [H] int32/long     (padded lengths)
-    returns padded_data: [sum(ex_hist_padded), K_pad]
+    Pads the number of rows in each slice to be multiple of block_size_to_align
+    and the number of columns to be multiple of BLOCK_N
+
+    Input data has static shape [M, K] which include valid rows and padded rows.
+    The number of valid rows equals to the sum of ragged_metadata.slice_sizes and varies across batches.
+    Here we allocate enough static size for padded output but only overwrite the rows that correspond to a padded version of each expert.
+
+    Example:
+    input data: [10, 10] with 6 valid rows and 4 padded rows
+    ragged_metadata.slice_sizes: [2, 1, 3] means 3 experts with 2, 1, 3 valid rows respectively
+    block_size_to_align: 4 means we want to pad the number of rows in each slice to be multiple of 4
+
+    We allocate a output with shape [16, 10] which is the maximum number of rows we need even if all 10 rows are valid;
+    Each expert is padded to 4 rows;
+    The output will have rows: [x, x, 0, 0, x, 0, 0, 0, x, x, x, 0, 0, 0, 0, 0] (x means valid row, 0 means padded row)
+
+    Args:
+        data: input data
+        ragged_metadata: ragged metadata
+        block_size_to_align: block size to align
+        M_pad: padded number of rows
+        K: input width
+        K_pad: padded number of columns
     """
-    assert data.is_cuda
-    assert ex_hist.is_cuda and ex_hist_padded.is_cuda
-    assert ex_hist.dim() == 1 and ex_hist_padded.dim() == 1
-    assert ex_hist.shape == ex_hist_padded.shape
+    slice_sizes = ragged_metadata.slice_sizes
+    slice_offs = ragged_metadata.slice_offs
+    block_offs = ragged_metadata.block_offs(block_size_to_align)
+    block_schedule = ragged_metadata.block_schedule(block_size_to_align)
 
-    device = data.device
-    H = ex_hist.shape[0]
-
-    ex_hist_int = ex_hist.to(torch.int32)
-    ex_hist_padded_int = ex_hist_padded.to(torch.int32)
-
-    # prefix sums in *rows*
-    # in_offsets[i] = sum_{j < i} ex_hist[j]
-    # out_offsets[i] = sum_{j < i} ex_hist_padded[j]
-
-    # from exp_hist to offset format
-    in_offsets = torch.empty_like(ex_hist_int)
-    out_offsets = torch.empty_like(ex_hist_padded_int)
-
-    if H > 0:
-        in_offsets.zero_()
-        out_offsets.zero_()
-        if H > 1:
-            torch.cumsum(ex_hist_int[:-1], dim=0, out=in_offsets[1:])
-            torch.cumsum(ex_hist_padded_int[:-1], dim=0, out=out_offsets[1:])
-
-    # total_padded_rows = int(ex_hist_padded_int.sum().item())
-    padded_data = torch.empty(total_padded_rows, K_pad, device=data.device, dtype=data.dtype)
+    padded_data = torch.empty(M_pad, K_pad, device=data.device, dtype=data.dtype)
+    padded_data.fill_(0.0)
 
     # strides (in elements, not bytes)
     stride_in_m, stride_in_n = data.stride()
     stride_out_m, stride_out_n = padded_data.stride()
 
-    BLOCK_M = 32
+    BLOCK_M = block_size_to_align
     BLOCK_N = 64
 
-    grid = (
-        H,
-        triton.cdiv(128*2, BLOCK_M),
-    )
-
-    pad_segments_kernel[grid](
+    max_grid = triton.cdiv(M_pad, BLOCK_M) * triton.cdiv(K_pad, BLOCK_N)
+    num_sms = target_info.num_sms()
+    grid = min(num_sms, max_grid)
+    pad_segments_kernel[(grid, )](
         data,
-        ex_hist_int,
-        ex_hist_padded_int,
-        in_offsets,
-        out_offsets,
+        padded_data,
+        slice_sizes,
+        slice_offs,
+        block_offs,
+        block_schedule,
         K,
         K_pad,
         stride_in_m,
         stride_in_n,
         stride_out_m,
         stride_out_n,
-        padded_data,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
+        N_BLOCKS_PER_COL=triton.cdiv(K_pad, BLOCK_N),
+        N_SLICES=slice_sizes.shape[0],
+        NUM_SMS=num_sms,
     )
 
     return padded_data
+
+
+@triton.jit
+def unpad_segments_kernel(
+    padded_ptr,
+    out_ptr,
+    slice_sizes_ptr,
+    slice_offs_ptr,
+    block_offs_ptr,
+    block_schedule_ptr,
+    K: tl.constexpr,
+    K_pad: tl.constexpr,
+    stride_pad_m,
+    stride_pad_n,
+    stride_out_m,
+    stride_out_n,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    N_BLOCKS_PER_COL: tl.constexpr,
+    N_SLICES: tl.constexpr,
+    NUM_SMS: tl.constexpr,
+):
+    useful_grid_m = tl.load(block_offs_ptr + N_SLICES)
+    num_blocks = useful_grid_m * N_BLOCKS_PER_COL
+
+    for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS):
+        blk_m_idx = block_id // N_BLOCKS_PER_COL
+        blk_n_idx = block_id % N_BLOCKS_PER_COL
+
+        block_schedule = tl.load(block_schedule_ptr + blk_m_idx)
+        slice_idx = block_schedule & 0x0000FFFF
+        blk_m_idx_out_slice = block_schedule >> 16
+
+        slice_size = tl.load(slice_sizes_ptr + slice_idx)
+        out_slice_base = tl.load(slice_offs_ptr + slice_idx)  # output is unpadded format
+        out_ptrs_base = out_ptr + out_slice_base * stride_out_m
+
+        out_rows = blk_m_idx_out_slice * BLOCK_M + tl.arange(0, BLOCK_M)
+        out_cols = blk_n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+
+        row_out_range = out_rows < slice_size
+        col_out_range = out_cols < K
+        mask = row_out_range[:, None] & col_out_range[None, :]
+
+        pad_rows = blk_m_idx * BLOCK_M + tl.arange(0, BLOCK_M)
+        pad_cols = blk_n_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+        pad_mask = pad_cols < K_pad
+
+        padded_ptrs = padded_ptr + pad_rows[:, None] * stride_pad_m + pad_cols[None, :] * stride_pad_n
+        vals = tl.load(padded_ptrs, mask=pad_mask[None, :], other=0.0)
+
+        out_ptrs = out_ptrs_base + out_rows[:, None] * stride_out_m + out_cols[None, :] * stride_out_n
+        tl.store(out_ptrs, vals, mask=mask)
+
+
+def unpad_segments_triton(padded_data, ragged_metadata, block_size_to_align, M, K, K_pad):
+    slice_sizes = ragged_metadata.slice_sizes
+    slice_offs = ragged_metadata.slice_offs
+    block_offs = ragged_metadata.block_offs(block_size_to_align)
+    block_schedule = ragged_metadata.block_schedule(block_size_to_align)
+
+    # output tensor with exact ragged rows/cols
+    data = torch.empty(M, K, device=padded_data.device, dtype=padded_data.dtype)
+    data.fill_(0.0)
+
+    stride_pad_m, stride_pad_n = padded_data.stride()
+    stride_out_m, stride_out_n = data.stride()
+
+    BLOCK_M = block_size_to_align
+    BLOCK_N = 64
+
+    max_grid = triton.cdiv(padded_data.shape[0], BLOCK_M) * triton.cdiv(K_pad, BLOCK_N)
+    num_sms = target_info.num_sms()
+    grid = min(num_sms, max_grid)
+
+    unpad_segments_kernel[(grid, )](
+        padded_data,
+        data,
+        slice_sizes,
+        slice_offs,
+        block_offs,
+        block_schedule,
+        K,
+        K_pad,
+        stride_pad_m,
+        stride_pad_n,
+        stride_out_m,
+        stride_out_n,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        N_BLOCKS_PER_COL=triton.cdiv(K_pad, BLOCK_N),
+        N_SLICES=slice_sizes.shape[0],
+        NUM_SMS=num_sms,
+    )
+
+    return data
+
 
 class BlackwellActMXScaleLayout(Layout):
     # Swizzling for activation tensor [M, K], M can be ragged dimension and equals to sum of expert bs
     name: str = "BLACKWELL_SCALE"
 
-    def __init__(self, shape, ex_hist: torch.Tensor | None = None) -> None:
+    def __init__(self, shape, ragged_metadata: RaggedTensorMetadata | None = None) -> None:
         super().__init__(shape)
         if len(shape) == 2:
             (
-                self.M,  # sum of expert bs
+                self.M,
                 self.K,
             ) = shape
             self.B = 1
@@ -201,11 +299,10 @@ class BlackwellActMXScaleLayout(Layout):
         else:
             assert len(shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {shape}"
             (
-                *self.leading_shape,
-                self.M,  # sum of expert bs
+                self.B,
+                self.M,
                 self.K,
             ) = shape
-            self.B = math.prod(self.leading_shape)
             self.mode = "batched"
         self.ALIGN_K = 8
         self.ALIGN_M = 128
@@ -215,39 +312,37 @@ class BlackwellActMXScaleLayout(Layout):
         if self.mode == "batched":
             self.M_pad = (self.M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
         else:
+            # In ragged mode, input often include padded tokens
+            # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
+            # And the rest of rows are padded tokens
+            self.ragged_metadata = ragged_metadata
 
-            # if ex_hist is None:
-            #     ex_hist = [self.M]
-            self.ex_hist = ex_hist
+            n_slices = ragged_metadata.slice_sizes.shape[0]
+            max_n_blocks = ragged_metadata.n_blocks(
+                n_slices, self.M, self.ALIGN_M
+            )  # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
 
-            # pad each ex_hist to be the min multiple of ALIGN_M
-            # self.ex_hist_padded = [
-            #     (ex_hist[i] + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M for i in range(len(ex_hist))
-            # ]
-            self.ex_hist_padded = ((ex_hist + self.ALIGN_M - 1) // self.ALIGN_M) * self.ALIGN_M
-            # self.M_pad = sum(self.ex_hist_padded)
-            # print(f"ex_hist_padded {self.ex_hist_padded}")
-
-            # upper bound static padded rows: need to be static not related to ex_hist
-            n_experts = ex_hist.shape[0]
-            self.M_pad = 128 * 8 * n_experts # each expert allow 8 128 blocks
+            # create a static size scratchpad for output
+            self.M_pad = self.ALIGN_M * max_n_blocks
 
     def swizzle_data(self, data):
         if self.mode == "batched":
-            padded_data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
+            padded_data = torch.nn.functional.pad(
+                data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
             padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
             padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
             padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
         else:
+            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
             padded_data = pad_segments_triton(
                 data,
-                ex_hist=self.ex_hist,
-                ex_hist_padded=self.ex_hist_padded,
-                K=self.K,
-                K_pad=self.K_pad,
-                total_padded_rows=self.M_pad,
+                self.ragged_metadata,
+                self.ALIGN_M,
+                self.M_pad,
+                self.K,
+                self.K_pad,
             )
-            # print(f"padded_data after swizzling {padded_data.shape}")
+
             padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
             padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
             padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
@@ -255,11 +350,24 @@ class BlackwellActMXScaleLayout(Layout):
         return padded_data
 
     def unswizzle_data(self, data):
-        # Kernel to reserve unswizzled data
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
         data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
-        data = data.reshape(*self.leading_shape, self.M_pad, self.K_pad)
-        return data[..., :self.M, :self.K]
+        data = data.reshape(self.B, self.M_pad, self.K_pad)
+
+        if self.mode == "batched":
+            return data[..., :self.M, :self.K]
+
+        # ragged path: map padded blocks back into the original ragged rows
+        assert self.B == 1, "ragged scale layout only supports 2D input"
+        data = unpad_segments_triton(
+            data.squeeze(0),
+            self.ragged_metadata,
+            self.ALIGN_M,
+            self.M,
+            self.K,
+            self.K_pad,
+        )
+        return data
 
     def swizzle_block_shape(self, block_shape):
         assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
@@ -283,11 +391,9 @@ def unswizzle_mx_scale_bw(
 
 
 @triton.jit
-def unswizzle_act_mx_scale_bw(
-    x,
-    SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
-    SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
-):
+def unswizzle_act_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
+                              SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
+                              ):
     # input block shape is [1, BLOCK_M//128, BLOCK_K//32//4, 2, 256] and we want to unswizzle it to [BLOCK_M, BLOCK_K//32]
     shape_1: tl.constexpr = x.shape[1]
     shape_2: tl.constexpr = x.shape[2]
