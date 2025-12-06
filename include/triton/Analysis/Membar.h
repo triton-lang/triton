@@ -2,8 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
-
-#include <set>
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 
@@ -14,80 +13,169 @@ class OpBuilder;
 /// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
-struct BlockInfo {
-  using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
+// Represents the complete view chain for an access operation
+struct ViewChain {
+public:
+  // Parse view chain from a value, collecting subslice offsets. This builder
+  // is loop-aware and provides fine-grained access information
+  static ViewChain getFineGrainAccess(Value value,
+                                      Allocation::BufferId bufferId,
+                                      Interval<size_t> allocationInterval);
 
-  IntervalMapT syncReadIntervals;
-  IntervalMapT syncWriteIntervals;
+  // Builder for accesses that represent accesses to the whole
+  // allocation (scratch buffers, ArriveBarrierOp, layout changes, ..)
+  static ViewChain getWholeAllocAccess(Allocation::BufferId id,
+                                       Interval<size_t> interval) {
+    ViewChain vc;
+    vc.bufferId = id;
+    vc.allocationInterval = interval;
+    return vc;
+  }
+
+  bool operator==(const ViewChain &other) const {
+    return subsliceOffsets == other.subsliceOffsets &&
+           allocationAccessTy == other.allocationAccessTy &&
+           bufferId == other.bufferId &&
+           allocationInterval == other.allocationInterval;
+  }
+
+  bool intersects(const ViewChain &other) const;
+
+  void print(raw_ostream &os) const {
+    os << "shape=";
+    if (allocationAccessTy) {
+      llvm::interleave(allocationAccessTy.getShape(), os, "x");
+    } else {
+      os << "?";
+    }
+    os << " offsets=[";
+    if (subsliceOffsets) {
+      llvm::interleaveComma(*subsliceOffsets, os);
+    } else {
+      os << "unknown";
+    }
+    os << "] bufferId=";
+    if (bufferId != Allocation::InvalidBufferId)
+      os << bufferId;
+    else
+      os << "invalid";
+    os << " interval=[" << allocationInterval.start() << ","
+       << allocationInterval.end() << ")";
+  }
+
+private:
+  // Only allow ViewChain construction through get*AllocAccess
+  ViewChain() = default;
+  // Offsets from subslice. nullopt if full offsets couldn't be determined
+  std::optional<SmallVector<int64_t>> subsliceOffsets;
+  // Type at the access point (load, store, ..)
+  triton::gpu::MemDescType allocationAccessTy;
+  Allocation::BufferId bufferId = Allocation::InvalidBufferId;
+  // The allocated interval for this buffer
+  Interval<size_t> allocationInterval;
+};
+
+struct BlockInfo {
+  using ViewChainListT = SmallVector<ViewChain, 2>;
+  using ViewChainMapT = std::map<Operation *, ViewChainListT>;
+  using BufferLayoutMapT = std::map<Allocation::BufferId, Attribute>;
+
+  ViewChainMapT syncReadViewChains;
+  ViewChainMapT syncWriteViewChains;
+  BufferLayoutMapT bufferLayouts;
 
   BlockInfo() = default;
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    for (auto &interval : other.syncReadIntervals)
-      syncReadIntervals[interval.first].insert(interval.second.begin(),
-                                               interval.second.end());
-    for (auto &interval : other.syncWriteIntervals)
-      syncWriteIntervals[interval.first].insert(interval.second.begin(),
-                                                interval.second.end());
+    // Avoid inserting duplicate ViewChains, otherwise Membar
+    // cannot to reach a fixed point
+    for (auto &[op, chains] : other.syncReadViewChains) {
+      for (const auto &chain : chains)
+        if (!llvm::is_contained(syncReadViewChains[op], chain))
+          syncReadViewChains[op].push_back(chain);
+    }
+    for (auto &[op, chains] : other.syncWriteViewChains) {
+      for (const auto &chain : chains)
+        if (!llvm::is_contained(syncWriteViewChains[op], chain))
+          syncWriteViewChains[op].push_back(chain);
+    }
+    for (auto &[bufferId, layout] : other.bufferLayouts)
+      bufferLayouts.insert_or_assign(bufferId, layout);
     return *this;
   }
 
   void dump() {
-    auto &err = llvm::errs();
-    err << "Block Interval:\n";
-    err << "  Read Intervals:\n";
-    for (auto &[interval, ops] : syncReadIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
-      err << "\n";
+    auto &os = llvm::errs();
+    os << "Block ViewChains:\n";
+    os << "  Read ViewChains:\n";
+    for (auto &[op, viewChains] : syncReadViewChains) {
+      for (auto &viewChain : viewChains) {
+        os << "    " << op->getName() << ": ";
+        viewChain.print(os);
+        os << "\n";
+      }
     }
-    err << "  Write Intervals:\n";
-    for (auto &[interval, ops] : syncWriteIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
-      err << "\n";
+    os << "  Write ViewChains:\n";
+    for (auto &[op, viewChains] : syncWriteViewChains) {
+      for (auto &viewChain : viewChains) {
+        os << "    " << op->getName() << ": ";
+        viewChain.print(os);
+        os << "\n";
+      }
+    }
+    os << "  Buffer Layouts:\n";
+    for (auto &[bufferId, layout] : bufferLayouts) {
+      os << "    bufferId=" << bufferId << " layout=";
+      layout.print(os);
+      os << "\n";
     }
   }
 
-  /// Returns true if intervals in two BlockInfo objects are intersected.
+  /// Returns true if ViewChains in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
-    return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals,
+    return /*RAW*/ isIntersected(syncWriteViewChains, other.syncReadViewChains,
                                  filter) ||
            /*WAR*/
-           isIntersected(syncReadIntervals, other.syncWriteIntervals, filter) ||
+           isIntersected(syncReadViewChains, other.syncWriteViewChains,
+                         filter) ||
            /*WAW*/
-           isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
+           isIntersected(syncWriteViewChains, other.syncWriteViewChains,
+                         filter);
   }
 
-  /// Clears the intervals because a barrier is inserted.
+  /// Clears the ViewChains and layout tracking because a barrier is inserted.
   void sync() {
-    syncReadIntervals.clear();
-    syncWriteIntervals.clear();
+    syncReadViewChains.clear();
+    syncWriteViewChains.clear();
+    bufferLayouts.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
-    return syncReadIntervals == other.syncReadIntervals &&
-           syncWriteIntervals == other.syncWriteIntervals;
+    return syncReadViewChains == other.syncReadViewChains &&
+           syncWriteViewChains == other.syncWriteViewChains &&
+           bufferLayouts == other.bufferLayouts;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  bool isIntersected(const IntervalMapT &lhsIntervalSet,
-                     const IntervalMapT &rhsIntervalSet,
+  bool isIntersected(const ViewChainMapT &lhsViewChains,
+                     const ViewChainMapT &rhsViewChains,
                      MembarFilterFn filter) const {
-    for (auto &lhs : lhsIntervalSet)
-      for (auto &rhs : rhsIntervalSet)
-        if (lhs.first.intersects(rhs.first))
-          for (auto lhsOp : lhs.second)
-            for (auto rhsOp : rhs.second)
+    for (auto &[lhsOp, lhsViewChains] : lhsViewChains) {
+      for (auto &lhsViewChain : lhsViewChains) {
+        for (auto &[rhsOp, rhsViewChains] : rhsViewChains) {
+          for (auto &rhsViewChain : rhsViewChains) {
+            if (lhsViewChain.intersects(rhsViewChain)) {
               if (!filter || !filter(lhsOp, rhsOp))
                 return true;
-
+            }
+          }
+        }
+      }
+    }
     return false;
   }
 };

@@ -125,24 +125,19 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // TODO: handle proxy read cases. Those are currently handled in
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
+              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto viewChain =
+                  ViewChain::getFineGrainAccess(value, bufferId, interval);
+
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
-                  proxyBlockInfo
-                      .syncWriteIntervals[allocation->getAllocatedInterval(
-                          bufferId)]
-                      .insert(op);
+                  proxyBlockInfo.syncWriteViewChains[op].push_back(viewChain);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
-                curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncWriteViewChains[op].push_back(viewChain);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncReadViewChains[op].push_back(viewChain);
               }
             }
           }
@@ -156,8 +151,9 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // starting from a shared memory write, followed by a series of shared memory
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncReadIntervals[interval].insert(op);
+    ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
+        scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
+    curBlockInfo.syncReadViewChains[op].push_back(scratchViewChain);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
