@@ -1073,7 +1073,6 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     auto ret =
         tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding);
     // In this case, we swap the basis of the last row and last column
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
       std::swap(bases[kRow].back(), bases[kCol].back());
