@@ -10,6 +10,7 @@ import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 from triton_kernels.tensor import bitwidth, get_layout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
+import triton_kernels.tensor as _tensor
 
 @dataclass
 class OptFlags:
@@ -248,7 +249,7 @@ def make_default_opt_flags_nvidia(
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
     # adjut block_m based on is_persistent signal
-    if precision_config.a_mx_scale is not None and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout) and is_persistent:
+    if isinstance(precision_config.a_mx_scale, _tensor.Tensor) and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout) and is_persistent:
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     # block k

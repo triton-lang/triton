@@ -1,5 +1,6 @@
 import torch
 import triton
+import triton_kernels.tensor as _tensor
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, bitwidth, get_layout
@@ -37,11 +38,14 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     # block_k needs to match the cacheline size (1024 bits)
     block_k = int(1024 // min(lhs_width, rhs_width))
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    has_mx_act_scale = precision_config is not None and precision_config.a_mx_scale is not None
+    has_swizzled_mx_act_scale = precision_config is not None and isinstance(precision_config.a_mx_scale, _tensor.Tensor)
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
-    elif is_persistent and has_mx_act_scale and isinstance(precision_config.a_mx_scale.storage.layout,
-                                                           BlackwellActMXScaleLayout):
+    elif (
+        is_persistent
+        and has_swizzled_mx_act_scale
+        and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout)
+    ):
         # x scale has been swizzled to BlackwellActMXScaleLayout, enforce block_k to be multiple of 128
         block_k = max(block_k, 128)
     elif k is not None:  # cover small k case
