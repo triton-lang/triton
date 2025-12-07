@@ -16,7 +16,7 @@ from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
-from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
@@ -291,7 +291,8 @@ def matmul(a, b, bias,
     can_use_tma = (
         a.numel() > 0 and a.storage.is_tma_compliant() and
         b.numel() > 0 and b.storage.is_tma_compliant() and
-        (b_scale is None or b_scale.storage.is_tma_compliant()) and
+        (b_scale is None or b_scale.storage.is_tma_compliant(is_scale=True)) and
+        # (b_scale is None or b_scale.storage.is_tma_compliant(is_scale=True)) and
         (ragged_dimension != "M" or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (c is None or c.stride(-1) == 1) and
@@ -301,6 +302,23 @@ def matmul(a, b, bias,
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
+    if not can_use_tma:
+        if not a.storage.is_tma_compliant():
+            print(f"{a.storage.is_tma_compliant()=}")
+        if not b.storage.is_tma_compliant():
+            print(f"{b.storage.is_tma_compliant()=}")
+        if b_scale is not None and not b_scale.storage.is_tma_compliant(is_scale=True):
+            print(f"{(b_scale is None or b_scale.storage.is_tma_compliant(is_scale=True))=}")
+        if ragged_dimension == "M" and a.stride(-1) != 1:
+            print(f"{ragged_dimension=} {a.stride(-1)=}")
+        if c is not None and c.stride(-1) != 1:
+            print(f"{(c is None or c.stride(-1) == 1)=}")
+        if c_acc_in is not None and not c_acc_is_c:
+            print(f"{(c_acc_in is None or c_acc_is_c)=}")
+        if b_scale is not None and not target_info.has_native_mxfp():
+            print(f"{(b_scale is None or target_info.has_native_mxfp())=}")
+        if ragged_dimension == "K" and b.stride(-1) != 1 and b_ragged_metadata.slice_sizes_divisibility is None:
+            print(f"{(ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)=}")
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
         # becomes the last dim that will be divided by 32. This to be a multiple
@@ -425,7 +443,7 @@ def matmul(a, b, bias,
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
-        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if b_transpose else [scale_block_k, opt_flags.block_n]
+        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if isinstance(b_scale.storage.layout, BlackwellMXScaleLayout) else [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale.storage.layout, StridedLayout):
             b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
@@ -433,15 +451,12 @@ def matmul(a, b, bias,
     else:
         b_scale_tensor_or_tma = b_scale
     # create tma descriptor for x_scale
-    a_scale_has_tma = opt_flags.is_persistent and a_has_mx
-    if a_scale_has_tma:
-        # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
-        if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
-            a_scale_has_tma = False
-        if not is_input_batched:
-            a_scale_has_tma = False
-        if opt_flags.block_m < 128 or opt_flags.block_k < 128: # need to be at least 128 for TMA
-            a_scale_has_tma = False
+    a_scale_has_tma = False
+    if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
+        # check if we can use tma for x scale
+        assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
+        assert opt_flags.block_m >= 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
+        a_scale_has_tma = True
     if a_scale_has_tma:
         a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
         a_scale.dtype = torch.uint8
@@ -472,6 +487,15 @@ def matmul(a, b, bias,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
+    assert len(out_matmul.stride()) == 4
+    assert len(out_matmul_scale_strides) >= 4
+    assert len(a_strides) == 3
+    assert len(a_scale_strides) == 3
+    assert len(b_storage.data.stride()) == 3
+    assert len(b_scale_strides) == 3
+    assert len(c_acc_strides) == 3
+    assert len(expt_data_x) == 6
+    assert len(expt_data_w) == 6
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),

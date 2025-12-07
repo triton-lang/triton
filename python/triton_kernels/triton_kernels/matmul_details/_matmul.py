@@ -189,11 +189,11 @@ def _matmul(
 
     (
         expt_id, start_z, start_z_out,
-        start_m, off_m,
+        start_m, _, off_m,
         off_k_x, off_k_w
     ) = compute_offsets(
             pid_s, pid_m, pid_k,
-            XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
             WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
             RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
