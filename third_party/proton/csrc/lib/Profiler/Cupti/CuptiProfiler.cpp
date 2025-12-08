@@ -295,6 +295,9 @@ public:
 
   PopResult popAllIfReachCapacity(size_t numNewNodes, size_t capacity) {
     std::lock_guard<std::mutex> lock(mutex);
+    if (deviceQueues.empty()) {
+      return {0, {}};
+    }
     auto device = runtime->getDevice();
     auto &queue = deviceQueues[device];
     if ((queue.totalNumNodes + numNewNodes) * 2 * sizeof(uint64_t) <=
