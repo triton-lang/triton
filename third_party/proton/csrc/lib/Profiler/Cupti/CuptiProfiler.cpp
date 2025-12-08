@@ -731,7 +731,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // Flush the tensor metric buffer
   auto popResult = pendingGraphQueue.popAll();
   metricBuffer->flush(
-      [&](void * /*device*/, uint8_t *data, size_t dataSize) {
+      [&](uint8_t *data, size_t dataSize) {
         auto *recordPtr = reinterpret_cast<uint64_t *>(data);
         emitMetricRecords(recordPtr, popResult.second);
       },
