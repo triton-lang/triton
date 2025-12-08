@@ -1,42 +1,75 @@
-import torch
-
-import pytest
 import os
+import subprocess
+import pathlib
+import json
+import pytest
 
-import triton
-import triton.language as tl
-from triton import knobs
-import custom_stages
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
-
-@pytest.mark.parametrize(None, [None])
-@triton.jit
-def add_kernel(x_ptr, y_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    x = tl.load(x_ptr + offsets)
-    y = tl.load(y_ptr + offsets)
-    output = x + y
-    tl.store(output_ptr + offsets, output)
+pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not supported")
 
 
-def test_op(capfd, device: str):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
-        return
-    os.environ['TRITON_ALWAYS_COMPILE'] = '1'
+def test_override(tmp_path: pathlib.Path):
+    dir_path = os.path.dirname(os.path.realpath(__file__))
 
-    size = 1024
-    x = torch.rand(size, device=device)
-    y = torch.rand(size, device=device)
-    output = torch.empty_like(x)
-    grid = lambda meta: (triton.cdiv(output.numel(), meta['BLOCK_SIZE']), )
+    # Run once to get the file dumps
+    first_env = os.environ.copy()
+    first_env["TRITON_ALWAYS_COMPILE"] = "1"
+    first_env["TRITON_KERNEL_DUMP"] = "1"
+    first_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
-    knobs.runtime.add_stages_inspection_hook = custom_stages.inspect_stages_hook_dialect
-    h = add_kernel[grid](x, y, output, BLOCK_SIZE=1024)
+    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=first_env)
 
-    if os.environ.get('TRITON_KERNEL_OVERRIDE', '0') == '0':
-        return
+    ttir_files = list(tmp_path.rglob("*.ttir"))
+    ttgir_files = list(tmp_path.rglob("*.ttgir"))
+    llir_files = list(tmp_path.rglob("*.llir"))
 
-    assert 'plugin.magic' in h.asm["ttir"]
-    assert 'gpu.thread_id  x' in h.asm["ttgir"]
+    assert len(ttir_files) == 1
+    assert len(ttgir_files) == 1
+    assert len(llir_files) == 1
+
+    os.remove(ttgir_files[0])
+    os.remove(llir_files[0])
+
+    if is_cuda():
+        ptx_files = list(tmp_path.rglob("*.ptx"))
+        cubin_files = list(tmp_path.rglob("*.cubin"))
+        assert len(ptx_files) == 1
+        assert len(cubin_files) == 1
+        os.remove(ptx_files[0])
+        os.remove(cubin_files[0])
+
+    if is_hip():
+        pytest.skip("plugin not supported/tested on AMD yet")
+
+
+    filename = str(list(tmp_path.rglob("*.ttir"))[0])
+
+    with open(filename, "r") as infile:
+        file_str = infile.readlines()
+
+    # # Add ttgir instrumentation
+    with open(filename, "w") as outfile:
+        for line in file_str:
+            if "tt.get_program_id x" in line:
+                line = '    %pid_base = arith.constant 0 : i32\n    %pid = plugin.magic %pid_base : i32\n'
+            outfile.write(line)
+
+    # # # Run again with kernel override
+    second_env = os.environ.copy()
+    second_env["TRITON_ALWAYS_COMPILE"] = "1"
+    second_env["TRITON_KERNEL_OVERRIDE"] = "1"
+    second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
+    second_env["TRITON_KERNEL_DUMP"] = "1"
+    second_env["TRITON_DUMP_DIR"] = str(tmp_path)
+    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=second_env)
+
+    with open(ttir_files[0], 'r') as f:
+        ttir = f.read()
+    assert "plugin.magic" in ttir
+
+    ttgir_files = list(tmp_path.rglob("*.ttgir"))
+
+    with open(ttgir_files[0], 'r') as f:
+        ttgir = f.read()
+    assert "gpu.thread_id" in ttgir

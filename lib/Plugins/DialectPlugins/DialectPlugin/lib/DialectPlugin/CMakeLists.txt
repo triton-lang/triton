@@ -20,26 +20,14 @@ add_mlir_dialect_library(MLIRDialectPlugin
         MLIRDialectPluginPassesIncGen
 
         LINK_LIBS PUBLIC
-        MLIRIR
-        MLIRInferTypeOpInterface
-        MLIRFunctionInterfaces
-        MLIRFuncDialect
         MLIRPass
         LLVMSupport
         MLIRSupport
-        TritonGPUIR
-        TritonNvidiaGPUIR
-        TritonInstrumentIR
-        MLIROptLib
-        MLIRRegisterAllDialects
-        MLIRRegisterAllPasses
-        MLIRTransforms
-        NVGPUIR
         TritonNVIDIAGPUToLLVM
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
 
-target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=default)
+target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=hidden)
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(MLIRDialectPlugin PROPERTIES
                           LIBRARY_OUTPUT_DIRECTORY
