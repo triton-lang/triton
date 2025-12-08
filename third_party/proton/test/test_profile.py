@@ -212,7 +212,7 @@ def test_get_data(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("test"):
-        torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device="cuda")
         foo[(1, )](x, 4)
         foo[(1, )](x, 4)
 
