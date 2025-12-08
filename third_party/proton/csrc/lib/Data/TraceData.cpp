@@ -229,9 +229,7 @@ void TraceData::addMetrics(
   }
 }
 
-std::string TraceData::toJsonString() const {
-  throw NotImplemented();
-}
+std::string TraceData::toJsonString() const { throw NotImplemented(); }
 
 void TraceData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);

@@ -121,12 +121,12 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
           if (metricKind == MetricKind::Kernel) {
             std::shared_ptr<KernelMetric> kernelMetric =
                 std::dynamic_pointer_cast<KernelMetric>(metric);
-            uint64_t duration =
-                std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+            uint64_t duration = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Invocations));
-            uint64_t deviceId =
-                std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
+            uint64_t deviceId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceType));
             std::string deviceTypeName =
@@ -155,17 +155,19 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
               auto valueName = pcSamplingMetric->getValueName(i);
               inclusiveValueNames.insert(valueName);
               std::visit(
-                  [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
+                  [&](auto &&value) {
+                    (*jsonNode)["metrics"][valueName] = value;
+                  },
                   pcSamplingMetric->getValues()[i]);
             }
           } else if (metricKind == MetricKind::Cycle) {
             auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
-            uint64_t duration =
-                std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
+            uint64_t duration = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(
                 cycleMetric->getValue(CycleMetric::NormalizedDuration));
-            uint64_t deviceId =
-                std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
+            uint64_t deviceId = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::DeviceType));
             (*jsonNode)["metrics"]

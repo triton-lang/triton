@@ -316,7 +316,8 @@ std::string SessionManager::getData(size_t sessionId) {
   }
   auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
   if (!treeData) {
-    throw std::runtime_error("Only TreeData is supported for getData() for now");
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString();
 }

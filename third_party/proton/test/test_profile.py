@@ -15,7 +15,6 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-from triton.profiler import get_data
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip
 
@@ -225,8 +224,8 @@ def test_get_data(tmp_path: pathlib.Path):
 
     database = proton.get_data(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
-    foo_frame = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
-    ones_frame = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
+    foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
+    ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
 
     proton.finalize()
     assert len(foo_frame) == 1
