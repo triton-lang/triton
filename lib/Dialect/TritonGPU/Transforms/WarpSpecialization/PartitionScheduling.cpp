@@ -1381,23 +1381,29 @@ void mergePartitions(Graph *graph, std::string funcName,
                      VisualizationInfo &vis_info) {
   LLVM_DEBUG({ llvm::errs() << "#### applying heuristics...\n"; });
 
+  // initial worklist is list of all edges that cross partitions
+  auto crossingEdges = getCrossingEdges(graph);
   bool changed = false;
   do {
     changed = false;
 
-    // Note: this implementation mayb be slow. It could be improved by
-    // incrementally updating the set of crossing edges rather than rebuilding
-    // it on each iteration
-    auto crossingEdges = getCrossingEdges(graph);
     LLVM_DEBUG({
       llvm::errs() << "\n"
                    << crossingEdges.size() << " crossing edges remaining\n";
     });
 
     for (auto [name, apply] : heuristics) {
-      for (auto edge : crossingEdges) {
-        if (apply(edge)) {
+      for (auto it = crossingEdges.begin(); it != crossingEdges.end();) {
+        auto edge = *it;
 
+        // remove edges that no longer cross partitions from the worklist
+        if (!edge.crossesPartitions()) {
+          llvm::dbgs() << "\nedge no longer crossing; ignore\n";
+          it = crossingEdges.erase(it);
+          continue;
+        }
+
+        if (apply(edge)) {
           // check if applying the heuristic will satisfy the constraints
           bool ok = true;
           for (auto [name, constraint] : constraints) {
@@ -1406,8 +1412,10 @@ void mergePartitions(Graph *graph, std::string funcName,
               break;
             }
           }
-          if (!ok)
+          if (!ok) {
+            it++;
             continue;
+          }
 
           LLVM_DEBUG({
             llvm::dbgs() << "\napply heuristic \"" << name << "\"\n";
@@ -1429,10 +1437,13 @@ void mergePartitions(Graph *graph, std::string funcName,
 
           visualize(funcName, "merge-step", std::string("merge: rule ") + name,
                     graph, vis_info);
+          crossingEdges.erase(it);
 
           changed = true;
           break;
         }
+
+        it++;
       }
       if (changed)
         break;
