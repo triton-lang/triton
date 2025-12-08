@@ -750,7 +750,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         assert scope_b_frame is not None
         assert foo_frame["metrics"]["bytes"] == 160
         assert foo_frame["metrics"]["flops"] == 40
-        assert foo_frame["metrics"]["device_id"] == device.index
+        assert foo_frame["metrics"]["device_id"] == str(device.index)
         assert scope_a_frame["metrics"]["bytes"] == 160
         assert scope_b_frame["metrics"]["sum"] == 40.0
 
