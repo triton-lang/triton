@@ -707,9 +707,9 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     graphs = []
     for device, stream in zip(devices, streams):
         run_on_device(device, stream)
-        g = torch.cuda.CUDAGraph()
         with torch.cuda.device(device):
             torch.cuda.set_stream(stream)
+            g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
                 for _ in range(10):
                     run_on_device(device, stream)
