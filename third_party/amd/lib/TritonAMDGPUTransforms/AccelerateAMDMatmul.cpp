@@ -1800,32 +1800,44 @@ static bool isTriviallyRelayoutable(Operation *op) {
   return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp, amdgpu::UpcastMXFPOp>(op);
 }
 
-static Value rebuildOrWrapWithNewEncoding(OpBuilder &builder,
-                                          Operation *op,
-                                          Value newOperand,
-                                          Attribute newEncoding) {
+static Operation *cloneWithNewEncoding(OpBuilder &builder,
+                                       Operation *op,
+                                       Attribute newEncoding) {
   auto loc = op->getLoc();
   auto oldResTy = cast<RankedTensorType>(op->getResult(0).getType());
   auto newResTy = RankedTensorType::get(oldResTy.getShape(),
-                                        oldResTy.getElementType(), // preserve element type
+                                        oldResTy.getElementType(),
                                         newEncoding);
 
-  if (auto fp2fp = dyn_cast<tt::FpToFpOp>(op)) {
-    return tt::FpToFpOp::create(builder, loc, newResTy, newOperand,
-                                fp2fp.getRoundingAttr());
-  }
-  if (auto extf = dyn_cast<mlir::arith::ExtFOp>(op)) {
-    return mlir::arith::ExtFOp::create(builder, loc, newResTy, newOperand);
-  }
-  if (auto truncf = dyn_cast<mlir::arith::TruncFOp>(op)) {
-    return mlir::arith::TruncFOp::create(builder, loc, newResTy, newOperand);
-  }
-  if (auto bitcast = dyn_cast<mlir::arith::BitcastOp>(op)) {
-    return mlir::arith::BitcastOp::create(builder, loc, newResTy, newOperand);
-  }
+  auto recreateSimple = [&](auto opTag) -> Operation * {
+    using OpTy = decltype(opTag);
+    Value newVal = OpTy::create(builder, loc, newResTy, op->getOperand(0));
+    return newVal.getDefiningOp();
+  };
 
-  return ttg::ConvertLayoutOp::create(builder, loc, newResTy, newOperand);
+  return llvm::TypeSwitch<Operation *, Operation *>(op)
+      .Case<tt::FpToFpOp>([&](tt::FpToFpOp fp2fp) {
+        Value newVal = tt::FpToFpOp::create(builder, loc, newResTy,
+                                            op->getOperand(0),
+                                            fp2fp.getRoundingAttr());
+        return newVal.getDefiningOp();
+      })
+      .Case<mlir::arith::ExtFOp>([&](auto) { return recreateSimple(mlir::arith::ExtFOp{}); })
+      .Case<mlir::arith::TruncFOp>([&](auto) { return recreateSimple(mlir::arith::TruncFOp{}); })
+      .Case<mlir::arith::TruncIOp>([&](auto) { return recreateSimple(mlir::arith::TruncIOp{}); })
+      .Case<mlir::arith::ExtSIOp>([&](auto) { return recreateSimple(mlir::arith::ExtSIOp{}); })
+      .Case<mlir::arith::ExtUIOp>([&](auto) { return recreateSimple(mlir::arith::ExtUIOp{}); })
+      .Case<mlir::arith::BitcastOp>([&](auto) { return recreateSimple(mlir::arith::BitcastOp{}); })
+      .Case<amdgpu::UpcastMXFPOp>([&](amdgpu::UpcastMXFPOp) {
+        Value newVal = amdgpu::UpcastMXFPOp::create(builder, loc, newResTy, op->getOperand(0));
+        return newVal.getDefiningOp();
+      })
+      .Default([&](Operation *) -> Operation * {
+        op->emitError("unsupported op kind in relayout path");
+        return nullptr;
+      });
 }
+
 
 static bool collectLinearPathToConvert(Value dotOperand,
                                        ttg::ConvertLayoutOp &cvtOpOut,
@@ -1840,30 +1852,42 @@ static bool collectLinearPathToConvert(Value dotOperand,
     }
     if (!isTriviallyRelayoutable(def))
       return false;
+
     if (!cur.hasOneUse() && !isa<tt::FpToFpOp>(def)) {
       return false;
     }
+
     pathOut.push_back(def);
     cur = def->getOperand(0);
   }
   return false;
 }
 
+
 static Value propagateNewLayoutForward(OpBuilder &builder,
                                        ttg::ConvertLayoutOp newCvt,
                                        llvm::ArrayRef<Operation*> path) {
   Value cur = newCvt.getResult();
   Attribute curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
+
   for (auto it = path.rbegin(), e = path.rend(); it != e; ++it) {
     Operation *op = *it;
-    Value newVal = rebuildOrWrapWithNewEncoding(builder, op, cur, curEnc);
-    op->getResult(0).replaceAllUsesWith(newVal);
+    builder.setInsertionPoint(op);
+    Operation *newOp = cloneWithNewEncoding(builder, op, curEnc);
+    if (!newOp) {
+      op->emitError("Failed to relayout: unsupported op kind encountered");
+      return cur;
+    }
+
+    op->getResult(0).replaceAllUsesWith(newOp->getResult(0));
     op->erase();
-    cur = newVal;
+
+    cur = newOp->getResult(0);
     curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
   }
   return cur;
 }
+
 
 static void fixKWidthOfDotOperand(ModuleOp m, StringRef arch) {
   m.walk([&](mlir::triton::DotOp dotOp) {
