@@ -704,15 +704,15 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
     graphs = []
     for device, stream in zip(devices, streams):
-        torch.cuda.set_device(device)
-        torch.cuda.set_stream(stream)
-        # warmup
-        run_on_device(device.index)
-        # graph capture
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
-            for _ in range(10):
-                run_on_device(device.index)
+        with torch.cuda.device(device):
+            torch.cuda.set_stream(stream)
+            # warmup
+            run_on_device(device.index)
+            # graph capture
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g):
+                for _ in range(10):
+                    run_on_device(device.index)
         graphs.append((device, stream, g))
 
     for device, stream, graph in graphs:
