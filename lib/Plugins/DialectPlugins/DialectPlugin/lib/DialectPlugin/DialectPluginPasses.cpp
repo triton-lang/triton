@@ -28,7 +28,6 @@ public:
     addLegalDialect<NVVM::NVVMDialect>();
     addIllegalDialect<mlir::triton::plugin::DialectPluginDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-
   }
 };
 
@@ -40,18 +39,18 @@ struct PluginMagicOpConversion
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
-  // Let's just do something kind of silly for the example to show what is possible.
-  // Take the input to the magic op and add to the thread id since Triton doesn't
-  // directly expose the thread id this is how a plugin writer could get it and do something
-  // with it
+  // Let's just do something kind of silly for the example to show what is
+  // possible. Take the input to the magic op and add to the thread id since
+  // Triton doesn't directly expose the thread id this is how a plugin writer
+  // could get it and do something with it
   LogicalResult
   matchAndRewrite(mlir::triton::plugin::MagicOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto a = op.getInput();
-    Value tid =
-        ::mlir::gpu::ThreadIdOp::create(rewriter, loc, ::mlir::gpu::Dimension::x);
+    Value tid = ::mlir::gpu::ThreadIdOp::create(rewriter, loc,
+                                                ::mlir::gpu::Dimension::x);
     Value threadId = arith::IndexCastOp::create(rewriter, loc, i32_ty, tid);
     auto newOp = b.add(a, threadId);
     rewriter.replaceOp(op, newOp);
@@ -91,8 +90,8 @@ struct ConvertPluginGPUToLLVMPass
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::plugin::populatePluginGPUOpPatterns(
-        typeConverter, patterns, tritonTargetInfo, 1);
+    mlir::triton::plugin::populatePluginGPUOpPatterns(typeConverter, patterns,
+                                                      tritonTargetInfo, 1);
     auto convTarget = PluginLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

@@ -45,6 +45,20 @@ test-unit: all
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
+	TRITON_DUMP_DIR=`pwd`/DUMP_DIR \
+	TRITON_KERNEL_DUMP=1 \
+	TRITON_KERNEL_OVERRIDE=0 \
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	$(PYTEST) -s -vvv python/test/unit/plugins/test_dialect_plugin.py
+	rm -f DUMP_DIR/*/*.{ttgir,llir,ptx,sass,cubin,amdgcn}
+	sed -i \
+	  's/%pid = tt.get_program_id x : i32.*/%pid_base = arith.constant 0 : i32\n    %pid = plugin.magic %pid_base : i32/g' \
+	  DUMP_DIR/*/*.ttir
+	TRITON_OVERRIDE_DIR=`pwd`/DUMP_DIR \
+	TRITON_KERNEL_DUMP=0 \
+	TRITON_KERNEL_OVERRIDE=1 \
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	$(PYTEST) -s -vvv python/test/unit/plugins/test_dialect_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 
 .PHONY: test-gluon
