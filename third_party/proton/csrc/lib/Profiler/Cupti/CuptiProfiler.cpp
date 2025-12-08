@@ -268,10 +268,12 @@ struct GraphState {
   size_t numInstances{1};
 };
 
-// FIXME: it should be a per-stream queue in case we capture graphs from
-// different streams or different devices
+// Track pending graphs per device so flushing a single device won't drain
+// graphs from other devices.
 class PendingGraphQueue {
 public:
+  explicit PendingGraphQueue(Runtime *runtime) : runtime(runtime) {}
+
   struct PendingGraph {
     size_t externId;
     std::map<Data *, std::vector<std::pair<bool, size_t>>> dataToScopeIds;
@@ -279,42 +281,55 @@ public:
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  PendingGraphQueue() = default;
-
   void push(size_t externId,
             const std::map<Data *, std::vector<std::pair<bool, size_t>>>
                 &dataToScopeIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
-    pendingGraphs.push_back(PendingGraph{externId, dataToScopeIds, numNodes});
-    this->totalNumNodes += numNodes;
+    auto device = runtime->getDevice();
+    auto &queue = deviceQueues[device];
+    queue.pendingGraphs.push_back(
+        PendingGraph{externId, dataToScopeIds, numNodes});
+    queue.totalNumNodes += numNodes;
   }
 
   PopResult popAllIfReachCapacity(size_t numNewNodes, size_t capacity) {
     std::lock_guard<std::mutex> lock(mutex);
-    if ((this->totalNumNodes + numNewNodes) * 2 * sizeof(uint64_t) <=
+    auto device = runtime->getDevice();
+    auto &queue = deviceQueues[device];
+    if ((queue.totalNumNodes + numNewNodes) * 2 * sizeof(uint64_t) <=
         capacity) {
       return {0, {}};
     }
-    return popAllLocked();
+    return popAllLocked(queue);
   }
 
   PopResult popAll() {
     std::lock_guard<std::mutex> lock(mutex);
-    return popAllLocked();
+    auto device = runtime->getDevice();
+    auto it = deviceQueues.find(device);
+    if (it == deviceQueues.end()) {
+      return {0, {}};
+    }
+    return popAllLocked(it->second);
   }
 
 private:
-  PopResult popAllLocked() {
+  struct Queue {
+    size_t totalNumNodes{};
+    std::vector<PendingGraph> pendingGraphs;
+  };
+
+  PopResult popAllLocked(Queue &queue) {
     std::vector<PendingGraph> items;
-    items.swap(pendingGraphs);
-    size_t numNodes = totalNumNodes;
-    totalNumNodes = 0;
+    items.swap(queue.pendingGraphs);
+    size_t numNodes = queue.totalNumNodes;
+    queue.totalNumNodes = 0;
     return {numNodes, items};
   }
 
-  size_t totalNumNodes{};
-  std::vector<PendingGraph> pendingGraphs;
+  Runtime *runtime{};
+  std::map<void *, Queue> deviceQueues;
   mutable std::mutex mutex;
 };
 
@@ -323,7 +338,8 @@ private:
 struct CuptiProfiler::CuptiProfilerPimpl
     : public GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface {
   CuptiProfilerPimpl(CuptiProfiler &profiler)
-      : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {
+      : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler),
+        pendingGraphQueue(&CudaRuntime::instance()) {
     runtime = &CudaRuntime::instance();
     metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
   }
@@ -642,10 +658,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
               metricNodeCount, metricBufferCapacity);
           if (drained.first != 0) { // Reached capacity
-            pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
-              auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-              pImpl->emitMetricRecords(recordPtr, drained.second);
-            });
+            pImpl->metricBuffer->flush(
+                [&](void * /*bufferDevice*/, uint8_t *data, size_t dataSize) {
+                  auto *recordPtr = reinterpret_cast<uint64_t *>(data);
+                  pImpl->emitMetricRecords(recordPtr, drained.second);
+                });
           }
           pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                         metricNodeCount);
@@ -713,14 +730,13 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // new activities.
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
-  auto dataSet = profiler.getDataSet();
   auto popResult = pendingGraphQueue.popAll();
   metricBuffer->flush(
-      [&](uint8_t *data, size_t dataSize) {
+      [&](void * /*device*/, uint8_t *data, size_t dataSize) {
         auto *recordPtr = reinterpret_cast<uint64_t *>(data);
         emitMetricRecords(recordPtr, popResult.second);
       },
-      /*flushAll=*/true);
+      /*flushAll=*/false);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
