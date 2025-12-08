@@ -492,12 +492,17 @@ public:
   Node *getRoot() { return root.get(); }
 
   Partition *addPartition() {
-    return partitions.emplace_back(new Partition(this)).get();
+    auto partition = partition_storage.emplace_back(new Partition(this)).get();
+    partitions.insert(partition);
+    return partition;
   }
 
-  const SmallVector<std::unique_ptr<Partition>> &getPartitions() const {
-    return partitions;
+  void erasePartition(Partition *partition) {
+    assert(partition->empty());
+    partitions.remove(partition);
   }
+
+  const SetVector<Partition *> &getPartitions() const { return partitions; }
 
   void walk(const std::function<void(Node *)> &fn) {
     std::function<void(Node *)> do_walk = [&](Node *node) {
@@ -511,7 +516,8 @@ public:
 
 private:
   std::unique_ptr<Node> root;
-  SmallVector<std::unique_ptr<Partition>> partitions;
+  SetVector<Partition *> partitions;
+  SmallVector<std::unique_ptr<Partition>> partition_storage;
 };
 
 template <typename... Args> bool node_isa(Node *node) {
@@ -570,6 +576,8 @@ void Partition::add(Node *node) {
 }
 
 void Partition::merge(Partition *lhs, Partition *rhs) {
+  assert(lhs != rhs);
+
   // Should never be merging MANUAL partitions
   assert(!((lhs->getFlags() & Flags::MANUAL) &&
            (rhs->getFlags() & Flags::MANUAL)));
@@ -583,8 +591,9 @@ void Partition::merge(Partition *lhs, Partition *rhs) {
   for (auto node : nodes) {
     node->setPartition(rhs);
   }
-  // FIXME: remove empty partitions? we just ignore
-  // them in later parts of the code
+
+  // remove the now empty partition
+  lhs->graph->erasePartition(lhs);
 }
 
 Node *Edge::getFromNode() const { return from.getNode(); }
@@ -1457,13 +1466,12 @@ void mergePartitions(Graph *graph, std::string funcName,
     // look at every pair of partitions and check if they should be merged
     auto merge_partitions_step = [&]() {
       SmallVector<Partition *> all_partitions;
-      for (auto &partition : graph->getPartitions())
-        all_partitions.push_back(partition.get());
+      for (auto partition : graph->getPartitions())
+        all_partitions.push_back(partition);
       for (auto [name, apply] : partition_heuristics) {
         for (auto partitionA : all_partitions) {
           for (auto partitionB : all_partitions) {
-            if (partitionA == partitionB || partitionA->empty() ||
-                partitionB->empty())
+            if (partitionA == partitionB)
               continue;
             if (apply(partitionA, partitionB)) {
               LLVM_DEBUG({
@@ -1712,9 +1720,9 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
   // look at all crossing edges leaving the partition
   // do a depth first search through NONE nodes, if we hit the same partition
   // assign all nodes on that path to the partition
-  for (auto &partition : graph->getPartitions()) {
+  for (auto partition : graph->getPartitions()) {
 
-    auto crossingEdges = getOutCrossingEdges(partition.get());
+    auto crossingEdges = getOutCrossingEdges(partition);
 
     for (auto edge : crossingEdges) {
       // only handle start nodes with a single partition
@@ -2086,8 +2094,6 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
   // set stages
   SmallVector<Attribute> stages;
   for (auto &partition : graph->getPartitions()) {
-    if (partition->empty())
-      continue;
     auto id = *partition->id;
     while (id >= stages.size())
       stages.push_back(b.getI32IntegerAttr(0));
@@ -2187,17 +2193,15 @@ void assignPartitionIds(Graph *graph) {
   SmallVector<Partition *> load_partitions;
   SmallVector<Partition *> other_partitions;
 
-  for (auto &partition : graph->getPartitions()) {
-    if (partition->empty())
-      continue;
+  for (auto partition : graph->getPartitions()) {
     if (partition->getFlags() & Flags::STORE)
-      store_partitions.push_back(partition.get());
+      store_partitions.push_back(partition);
     else if (partition->getFlags() & Flags::MMA)
-      mma_partitions.push_back(partition.get());
+      mma_partitions.push_back(partition);
     else if (partition->getFlags() & Flags::LOAD)
-      load_partitions.push_back(partition.get());
+      load_partitions.push_back(partition);
     else
-      other_partitions.push_back(partition.get());
+      other_partitions.push_back(partition);
   }
 
   for (auto partition : other_partitions) {
@@ -2227,9 +2231,9 @@ void assignPartitionsForOpsWithNoUse(Graph *graph) {
   // region or default partition if none. Note: we can't just use partitions
   // of parent op, as this includes things like tmem tokens
   Partition *defaultPartition = nullptr;
-  for (auto &partition : graph->getPartitions())
+  for (auto partition : graph->getPartitions())
     if (partition->id && *partition->id == 0)
-      defaultPartition = partition.get();
+      defaultPartition = partition;
   graph->walk([&](Node *node) {
     if (node->getPartitions().empty()) {
       bool done = false;
@@ -2334,11 +2338,8 @@ private:
 
     LLVM_DEBUG({
       llvm::errs() << "\nfinal partitions:\n";
-      for (auto &partition : graph->getPartitions()) {
-        if (partition->empty())
-          continue;
+      for (auto &partition : graph->getPartitions())
         partition->dump();
-      }
     });
 
     serialize(idx, op, graph.get());
