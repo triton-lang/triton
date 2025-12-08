@@ -173,6 +173,7 @@ class CUDABackend(BaseBackend):
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
             opts["debug"] = True
+            opts["sanitize_overflow"] = False
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
