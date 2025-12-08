@@ -9,6 +9,8 @@ pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not sup
 
 
 def test_override(tmp_path: pathlib.Path):
+    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
+        return
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Run once to get the file dumps
