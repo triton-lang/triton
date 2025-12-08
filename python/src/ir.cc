@@ -370,11 +370,23 @@ void init_triton_ir(py::module &&m) {
     if (std::string filename =
             mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
         !filename.empty()) {
-
       TritonPlugin TP(filename);
-      std::vector<const char *> dialectNames;
-      if (auto result = TP.getDialectHandles(dialectNames); !result)
-        throw TP.err2exp(result.takeError());
+
+      std::string error;
+      auto library = llvm::sys::DynamicLibrary::getPermanentLibrary(
+          filename.c_str(), &error);
+
+      // Do a check to see if only plugin pass symbols are present
+      intptr_t isPassPluginSymbolPresent =
+          (intptr_t)library.getAddressOfSymbol(TP.ENUMERATE_PASSES.c_str());
+      intptr_t isDialectPluginSymbolPresent =
+          (intptr_t)library.getAddressOfSymbol(TP.ENUMERATE_DIALECTS.c_str());
+
+      std::vector<const char *> dialectNames = {};
+      if (isDialectPluginSymbolPresent) {
+        if (auto result = TP.getDialectHandles(dialectNames); !result)
+          llvm::report_fatal_error(result.takeError());
+      }
 
       for (unsigned i = 0; i < dialectNames.size(); ++i) {
         const char *dialectName = dialectNames.data()[i];

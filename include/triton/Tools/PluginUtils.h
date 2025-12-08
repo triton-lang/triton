@@ -20,16 +20,17 @@ struct TritonPlugin {
   TritonPlugin() = delete;
   TritonPlugin(std::string filename) : filename(filename) {}
 
+public:
+  llvm::Error checkLibraryValid(const std::string &error) const;
+  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
+  const std::string ENUMERATE_DIALECTS = "tritonEnumeratePluginDialects";
+  const std::string DIALECT_PLUGININFO = "tritonGetDialectPluginInfo";
+
 private:
   using enumeratePyBindHandlesType =
       std::function<TritonPluginResult(uint32_t *, const char **)>;
   using enumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
-
-  // Put enumerate API names here, these can be involved with
-  // enumeratePyBindHandles
-  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
-  const std::string ENUMERATE_DIALECTS = "tritonEnumeratePluginDialects";
 
   const std::string ADD_PASS = "tritonAddPluginPass";
   using addPassType =
@@ -41,13 +42,10 @@ private:
   using registerPassType = std::function<TritonPluginResult(const char *)>;
   using registerPassCType = TritonPluginResult (*)(const char *);
 
-  const std::string DIALECT_PLUGININFO = "tritonGetDialectPluginInfo";
   using dialectPluginInfoType =
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
   using dialectPluginInfoCType =
       ::mlir::DialectPluginLibraryInfo (*)(const char *);
-
-  llvm::Error checkLibraryValid(const std::string &error) const;
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
 
