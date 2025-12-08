@@ -467,7 +467,8 @@ Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);
+    ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount,
+                                DenseI32ArrayAttr({}));
   }
   // Invalidate and deallocate the barriers.
   rewriter.setInsertionPointAfter(op);

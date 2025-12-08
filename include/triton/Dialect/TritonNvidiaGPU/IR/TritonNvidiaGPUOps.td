@@ -134,12 +134,16 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
       `alloc` is a descriptor to the shared memory allocation. `count` is the
       number of arrives expected by the barrier.
 
+      If `dependentPartitionIds` is provided, the barrier count will be overridden
+      to the cumulative number of threads in the specified partitions.
+
       This lowers to PTX mbarrier.init.shared::cta.b64.
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
-    I32Attr:$count
+    I32Attr:$count,
+    OptionalAttr<DenseI32ArrayAttr>:$dependentPartitionIds
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
   let hasVerifier = 1;
@@ -247,7 +251,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
-    Optional<I1>:$pred
+    Optional<I1>:$pred,
+    OptionalAttr<UnitAttr>:$multiThreadedArrive
   );
 
   let assemblyFormat = [{
@@ -256,7 +261,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+      return build($_builder, $_state, alloc, count,
+                   /*pred=*/Value(), /*multiThreadedArrive=*/mlir::UnitAttr());
     }]>
   ];
 
