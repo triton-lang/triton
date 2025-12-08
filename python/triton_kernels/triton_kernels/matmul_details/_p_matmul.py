@@ -13,6 +13,8 @@ from triton_kernels.numerics_details.flexpoint import (
     compute_scale,
 )
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
@@ -112,25 +114,48 @@ def _p_matmul(
     if Y_TMA_MODE is not None:
         Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
 
+    w_type: tl.constexpr = get_dtype(W)
     is_w_microscaled: tl.constexpr = WMxScale is not None
+    is_x_microscaled: tl.constexpr = XMxScale is not None
+    is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_microscaled or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
-        w_type: tl.constexpr = get_dtype(W)
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(get_dtype(WMxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
-        tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL_SCALE" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
 
         # We have pack 2 fp4 values in a byte
-        W_PACK_DIVISOR: tl.constexpr = 2 if w_type == tl.uint8 else 1
-        PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K // W_PACK_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
+            tl.static_assert(not is_x_microscaled)
+            # We have pack 2 fp4 values in a byte but we divide the dimension by 2
+            # when swizzling
+            W_K_DIVISOR: tl.constexpr = 1
+            W_K_MULTIPLIER: tl.constexpr = 2
+            W_N_DIVISOR: tl.constexpr = 4
+        else:
+            # We have pack 2 fp4 values in a byte
+            W_K_DIVISOR: tl.constexpr = 2 if is_w_mxfp4 else 1
+            W_K_MULTIPLIER: tl.constexpr = 1
+            W_N_DIVISOR: tl.constexpr = 1
+
+        if W_TRANSPOSE:
+            # When weight is transposed, 2 fp4 values are packed per Byte along
+            # the contiguous dimension, K.
+            PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        else:
+            # When weight is not transposed, fp4 values are *not* packed along
+            # the contiguous dimension, N.
+            PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
     else:
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
         tl.static_assert(SWIZZLE_MX_SCALE is None)
-    is_x_microscaled: tl.constexpr = XMxScale is not None
     if is_x_microscaled:
         x_type: tl.constexpr = get_dtype(X)
         tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
@@ -202,6 +227,7 @@ def _p_matmul(
         else:
             shape_m = M
         off_n = BLOCK_N * pid_n
+        off_w_n = PACKED_BLOCK_N_W * pid_n
 
         # ---- offset x ------
         if USE_GATHER_TMA:
@@ -283,7 +309,7 @@ def _p_matmul(
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:
                 if XMxScalePtrs is not None: # not using TMA for x scale load
-                    off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
+                    off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
                     if EVEN_K:
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
@@ -306,30 +332,47 @@ def _p_matmul(
 
             # --- load w ---
             if W_TRANSPOSE:
-                w = tl.reshape(W.load([off_w_z, off_n, off_k_w]), W.block_shape[1:]).T
+                w = tl.reshape(W.load([off_w_z, off_w_n, off_k_w]), W.block_shape[1:]).T
             else:
-                w = tl.reshape(W.load([off_w_z, off_k_w, off_n]), W.block_shape[1:])
+                w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])
 
             # --- load w_scale ---
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
             if is_w_microscaled:
-                off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
-                tl.static_assert(MX_PACK_DIVISOR % W_PACK_DIVISOR == 0)
+                off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
+                tl.static_assert(MX_PACK_DIVISOR % W_K_DIVISOR == 0)
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                     flattened_expt_n_idx = off_w_z * ((N + 127) // 128) + (off_n // 128)
                     w_scales = WMxScale.load([0, flattened_expt_n_idx, off_k_mx // 4, 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
+                elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
+                    # NYI: Hopper swizzling with non-transposed W
+                    tl.static_assert(W_TRANSPOSE)
+                    off_n_scale = pid_n * (BLOCK_N // 32)
+                    off_k_scale = (off_k_w // PACKED_BLOCK_K_W) * MX_SCALE_BLOCK_K * 32
+                    w_scales = WMxScale.load([off_w_z, off_n_scale, off_k_scale])
+                    w_scales = tl.reshape(w_scales, *w_scales.shape[1:])
+                    num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                    w_scales = unswizzle_mxfp4_scale_hopper(w_scales, mx_axis=1, num_warps=num_warps)
                 else:
                     w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
 
             # --- update accumulator ---
             if is_w_microscaled:
-                if SWAP_XW:
-                    acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
+                if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+                    tl.static_assert(x_format == "bf16")
+                    tl.static_assert(w_format == "e2m1")
+                    tl.static_assert(SWAP_XW)
+                    wT = mxfp4_to_bf16_triton(w.T, w_scales, mx_axis=1)
+                    tl.static_assert(wT.dtype == tl.bfloat16)
+                    acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 else:
-                    acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
+                    if SWAP_XW:
+                        acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
             else:
                 if SWAP_XW:
                     acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)

@@ -56,8 +56,9 @@ class BlackwellMXScaleLayout(Layout):
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
-        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
-        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
+        K, N = block_shape
+        assert N >= 128, f"{block_shape[1]=} must be >= 128"
+        return [1, N // 128, K // 4, 2, 256]
 
 
 @triton.jit

@@ -11,6 +11,7 @@ from typing import Callable
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
+from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
@@ -104,6 +105,8 @@ class PrecisionConfig:
 def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
         return precision_config.b_mx_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+    elif target_info.cuda_capability_geq(9, 0):
+        return precision_config.b_mx_scale is not None and opt_flags.is_persistent
 
     return False
 
@@ -296,8 +299,6 @@ def matmul(a, b, bias,
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (c is None or c.stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
-        # for simulated MXFP, not supported
-        (b_scale is None or target_info.has_native_mxfp()) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
@@ -308,8 +309,6 @@ def matmul(a, b, bias,
         # which is too big.
         can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    # hopper w/ mxfp4 doesn't support TMA
-    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(b.dtype) != 4)
     can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx and ragged_dimension != "K"
     block_k = None
     if ragged_dimension == "K":
@@ -338,8 +337,6 @@ def matmul(a, b, bias,
         assert K == K_W
         a_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
-    if b_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
-        raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if b_scale is not None and b_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
         raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # fused activation
@@ -425,8 +422,8 @@ def matmul(a, b, bias,
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
-        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if b_transpose else [scale_block_k, opt_flags.block_n]
-        if isinstance(b_scale.storage.layout, StridedLayout):
+        b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
+        if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
             b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense", is_scale=True)
