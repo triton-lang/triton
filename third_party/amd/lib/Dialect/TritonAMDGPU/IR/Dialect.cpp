@@ -502,20 +502,6 @@ Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
   return {};
 }
 
-LogicalResult ScaledUpcastFp8Op::verify() {
-  RankedTensorType inputTy = getInput().getType();
-  RankedTensorType outputTy = getOutput().getType();
-  RankedTensorType scaleTy = getScale().getType();
-
-  if (outputTy.getEncoding() != scaleTy.getEncoding())
-    return emitError() << "scale and output should have the same encoding";
-
-  if (outputTy.getEncoding() != inputTy.getEncoding())
-    return emitError() << "input and output should have the same encoding";
-
-  return success();
-}
-
 Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
                                               Attribute srcEnc) {
   return srcEnc;

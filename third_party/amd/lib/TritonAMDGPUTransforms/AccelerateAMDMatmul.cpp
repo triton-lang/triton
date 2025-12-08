@@ -997,14 +997,14 @@ public:
 
     Value reshapeScale;
     if (targetInfo.getISAFamily() == AMD::ISAFamily::CDNA4) {
-      // 3) Cast scale to bf16 if not GFX1250, broadcast it and convert the
+      // 3) Cast scale to bf16 if CDNA4, broadcast it and convert the
       // layout
       FloatType bf16Type = rewriter.getBF16Type();
       reshapeScale = extendAndBroadcastScale(
           rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), opIdx);
     } else {
-      // On GFX1250, the scale type is int8, required by hardware instruction
-      // so type should not be converted.
+      // On other architecture, the scale type is int8, required by hardware
+      // instruction so type should not be converted.
       if (opIdx == 1) {
         auto order = getTransposeOrder(rank);
         scale = TransOp::create(rewriter, loc, scale, order);

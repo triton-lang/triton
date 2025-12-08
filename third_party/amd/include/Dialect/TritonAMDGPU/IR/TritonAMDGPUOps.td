@@ -624,6 +624,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     Pure,
     Elementwise,
     SameOperandsAndResultShape,
+    SameOperandsAndResultEncoding,
     DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
   let summary = "Upcast Fp8 and then multiply scale";
 
@@ -642,9 +643,8 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     $input `scale` $scale attr-dict
         `:` type($input) `,` type($scale) `->` type($output)
   }];
-
-  let hasVerifier = 1;
 }
+
 //===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
