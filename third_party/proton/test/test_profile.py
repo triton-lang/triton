@@ -690,25 +690,25 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def run_on_device(device: torch.device, stream: torch.cuda.Stream):
-        with torch.cuda.device(device):
-            torch.cuda.set_stream(stream)
-            with proton.scope(f"scope_a_{device.index}", metrics={"bytes": 4 * 4}):
-                a = torch.ones((2, 2), device=device)
-            with proton.metadata_state():
-                a_sum = a.sum()
-            with proton.scope(f"scope_b_{device.index}", metrics={"sum": a_sum}):
-                b = torch.ones((2, 2), device=device)
-            c = a + b
-            foo[(1, )](a, b, c)
+        with proton.scope(f"scope_a_{device.index}", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device=device)
+        with proton.metadata_state():
+            a_sum = a.sum()
+        with proton.scope(f"scope_b_{device.index}", metrics={"sum": a_sum}):
+            b = torch.ones((2, 2), device=device)
+        c = a + b
+        foo[(1, )](a, b, c)
 
     temp_file = tmp_path / "test_tensor_metrics_multi_device_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
     graphs = []
     for device, stream in zip(devices, streams):
-        run_on_device(device, stream)
         with torch.cuda.device(device):
             torch.cuda.set_stream(stream)
+            # warmup
+            run_on_device(device, stream)
+            # graph capture
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
                 for _ in range(10):
