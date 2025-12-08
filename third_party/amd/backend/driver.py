@@ -644,10 +644,6 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   if (!PyArg_ParseTuple(kernel_metadata, \"iii\", &num_warps, &num_ctas, &shared_memory)) {{
     return NULL;
   }}
-
-  // If num_ctas is equal to one, there is no cooperative grid launch.
-  launch_cooperative_grid = launch_cooperative_grid && (num_ctas > 1);
-
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
