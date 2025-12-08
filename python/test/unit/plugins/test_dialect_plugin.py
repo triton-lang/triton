@@ -1,7 +1,6 @@
 import os
 import subprocess
 import pathlib
-import json
 import pytest
 
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
@@ -41,7 +40,6 @@ def test_override(tmp_path: pathlib.Path):
 
     if is_hip():
         pytest.skip("plugin not supported/tested on AMD yet")
-
 
     filename = str(list(tmp_path.rglob("*.ttir"))[0])
 

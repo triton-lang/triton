@@ -3,19 +3,18 @@ import torch
 import triton
 import triton.language as tl
 from triton import knobs
-import pathlib
 import sys
-import os
 
 from typing import NamedTuple
 import custom_stages
 
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
 
 def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
     BLOCK_SIZE = args["BLOCK_SIZE"]
     return {"name": f"add_{BLOCK_SIZE}"}
+
 
 @triton.jit(launch_metadata=metadata_fn)
 def add_kernel(x_ptr,  # *Pointer* to first input vector.
@@ -34,14 +33,16 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)
 
+
 def add(x: torch.Tensor, y: torch.Tensor, path):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     knobs.runtime.add_stages_inspection_hook = custom_stages.inspect_stages_hook_dialect
-    h = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     return output
+
 
 size = 98432
 x = torch.rand(size, device=DEVICE)
