@@ -10,7 +10,6 @@ import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 from triton_kernels.tensor import bitwidth, get_layout
 
-
 @dataclass
 class OptFlags:
     block_m: int
@@ -240,7 +239,12 @@ def make_default_opt_flags_nvidia(
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
+    # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    # adjut block_m based on is_persistent signal
+    if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
+        # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
+        block_m = 128
     # block k
     block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16:

@@ -433,15 +433,12 @@ def matmul(a, b, bias,
     else:
         b_scale_tensor_or_tma = b_scale
     # create tma descriptor for x_scale
-    a_scale_has_tma = opt_flags.is_persistent and a_has_mx
-    if a_scale_has_tma:
-        # temporary limitation for x scale tma: only support act scale layout is BlackwellActMXScaleLayout and input batched case
-        if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
-            a_scale_has_tma = False
-        if not is_input_batched:
-            a_scale_has_tma = False
-        if opt_flags.block_m < 128 or opt_flags.block_k < 128: # need to be at least 128 for TMA
-            a_scale_has_tma = False
+    a_scale_has_tma = False
+    if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
+        # check if we can use tma for x scale
+        assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
+        assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
+        a_scale_has_tma = True
     if a_scale_has_tma:
         a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
         a_scale.dtype = torch.uint8
