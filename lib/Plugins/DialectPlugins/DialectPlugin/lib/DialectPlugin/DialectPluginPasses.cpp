@@ -28,7 +28,6 @@ public:
     addLegalDialect<NVVM::NVVMDialect>();
     addIllegalDialect<mlir::triton::plugin::DialectPluginDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-
   }
 };
 
