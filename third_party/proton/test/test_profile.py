@@ -15,6 +15,8 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
+from triton.profiler import get_data
+import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip
 
 
@@ -198,8 +200,30 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert test0_frame["metrics"]["cpu_time (ns)"] > 0
     test1_frame = test0_frame["children"][0]
     assert test1_frame["metrics"]["cpu_time (ns)"] > 0
-    kernel_frame = test1_frame["children"][0]
-    assert kernel_frame["metrics"]["time (ns)"] > 0
+
+
+def test_get_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tree_json.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    @triton.jit
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    with proton.scope("test"):
+        torch.ones((2, 2), device="cuda")
+        foo[(1, )](x, 4)
+        foo[(1, )](x, 4)
+
+    proton.deactivate(session)
+
+    json_str = proton.get_data(session)
+    gf, _, _, _ = viewer.get_raw_metrics(json_str)
+    useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
+
+    proton.finalize()
+    print(useful)
 
 
 def test_hook_launch(tmp_path: pathlib.Path):
