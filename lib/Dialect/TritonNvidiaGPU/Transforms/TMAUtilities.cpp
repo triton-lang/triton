@@ -31,7 +31,7 @@ ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
     for (int i = 0; i < rankDiff; ++i) {
       ll = removeStandardDim(ll, 0);
     }
-    return ttg::CGAEncodingAttr::get(ctx, ll);
+    return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - cgaLayout.getRank();
@@ -51,7 +51,7 @@ ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
     dimSizes[i].first = dim;
   }
   ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CGAEncodingAttr::get(ctx, ll);
+  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
 ttg::SharedEncodingTrait
