@@ -207,14 +207,14 @@ def test_get_data(tmp_path: pathlib.Path):
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     @triton.jit
-    def foo(x, size: tl.constexpr, y):
+    def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("test"):
         x = torch.ones((2, 2), device="cuda")
-        foo[(1, )](x, 4)
-        foo[(1, )](x, 4)
+        foo[(1, )](x, x, 4)
+        foo[(1, )](x, x, 4)
 
     proton.deactivate(session)
 
