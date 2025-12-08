@@ -216,14 +216,23 @@ def test_get_data(tmp_path: pathlib.Path):
         foo[(1, )](x, x, 4)
         foo[(1, )](x, x, 4)
 
+    try:
+        _ = proton.get_data(session)
+    except RuntimeError as e:
+        assert "Cannot get data while the session is active" in str(e)
+
     proton.deactivate(session)
 
     database = proton.get_data(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
-    useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
+    foo_frame = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
+    ones_frame = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
 
     proton.finalize()
-    print(useful)
+    assert len(foo_frame) == 1
+    assert int(foo_frame["count"].values[0]) == 2
+    assert len(ones_frame) == 1
+    assert int(ones_frame["count"].values[0]) == 1
 
 
 def test_hook_launch(tmp_path: pathlib.Path):
