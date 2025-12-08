@@ -407,9 +407,9 @@ public:
   void reserve() { getOrCreateBuffer(); }
 
   template <typename Func> void flush(Func callback, bool flushAll = false) {
-    std::lock_guard<std::mutex> lock(bufferMutex);
     std::vector<DeviceBuffer> buffersToFlush;
     if (flushAll) {
+      std::lock_guard<std::mutex> lock(bufferMutex);
       for (auto &[device, buffer] : deviceBuffers) {
         buffersToFlush.push_back(buffer);
       }
