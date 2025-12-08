@@ -658,11 +658,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
               metricNodeCount, metricBufferCapacity);
           if (drained.first != 0) { // Reached capacity
-            pImpl->metricBuffer->flush(
-                [&](void * /*bufferDevice*/, uint8_t *data, size_t dataSize) {
-                  auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-                  pImpl->emitMetricRecords(recordPtr, drained.second);
-                });
+            pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
+              auto *recordPtr = reinterpret_cast<uint64_t *>(data);
+              pImpl->emitMetricRecords(recordPtr, drained.second);
+            });
           }
           pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                         metricNodeCount);
