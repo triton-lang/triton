@@ -16,7 +16,6 @@ def get_key():
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
-
 # Keep custom pipeline stages in a seperate file from kernels as any change to the file
 # will trigger a recompile.
 

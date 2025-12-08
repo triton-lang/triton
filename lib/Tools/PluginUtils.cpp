@@ -63,13 +63,9 @@ llvm::Error TritonPlugin::loadPlugin() {
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
   if (auto Err = enumeratePassesAPIOrErr.takeError())
     return Err;
-  if (auto Err = enumerateDialectsAPIOrErr.takeError())
-    return Err;
   if (auto Err = addPassAPIOrErr.takeError())
     return Err;
   if (auto Err = registerPassAPIOrErr.takeError())
-    return Err;
-  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
     return Err;
 
   addPassAPI = *addPassAPIOrErr;
