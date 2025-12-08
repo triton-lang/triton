@@ -691,11 +691,11 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
     def run_on_device(device_id):
         with proton.scope(f"scope_a_{device_id}", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2))
+            a = torch.ones((2, 2), device="cuda")
         with proton.metadata_state():
             a_sum = a.sum()
         with proton.scope(f"scope_b_{device_id}", metrics={"sum": a_sum}):
-            b = torch.ones((2, 2))
+            b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
 
