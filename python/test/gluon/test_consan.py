@@ -1777,7 +1777,8 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
         result = run_in_process(test_aliasing_tensor_visibility_outstanding_read, (FAILURE, device, False, monkeypatch))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
-            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+            # outstanding reads or writes depends on the timing of the operations.
+            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
