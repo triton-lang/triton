@@ -3,7 +3,6 @@
 
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 
-#include <cstdint>
 #include <string>
 #include <variant>
 

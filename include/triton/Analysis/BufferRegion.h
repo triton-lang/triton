@@ -163,7 +163,7 @@ private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
 
-  static void vaerifyOpIsSupported(Operation *op);
+  static void verifyOpIsSupported(Operation *op);
 };
 
 } // namespace mlir::triton

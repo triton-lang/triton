@@ -326,8 +326,8 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
     if (isa<FuncOp>(region->getParentOp())) {
       ModuleOp module = op->getParentOfType<ModuleOp>();
       assert(getEntryPoint(module) == region->getParentOp() &&
-             "For now we support"
-             " only one function in the module");
+             "Concurrency sanitizer supports only one instrumented "
+             "function in the module");
       return region;
     }
     region = region->getParentRegion();

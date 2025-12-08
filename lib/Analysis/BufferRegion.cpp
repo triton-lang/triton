@@ -5,10 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/MathExtras.h"
-
-#include <limits>
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -296,7 +292,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
     return success();
   }
-  vaerifyOpIsSupported(op);
+  verifyOpIsSupported(op);
   return success();
 }
 
@@ -369,7 +365,7 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   return false;
 }
 
-void BufferRegionAnalysis::vaerifyOpIsSupported(Operation *op) {
+void BufferRegionAnalysis::verifyOpIsSupported(Operation *op) {
   bool hasMemoryOperands = llvm::any_of(op->getOperands(), [](Value v) {
     return isUsedAsSharedMemory(v) || isUsedAsTensorMemory(v);
   });

@@ -967,15 +967,6 @@ def is_blackwell():
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
-
-    triton.knobs.compilation.instrumentation_mode = "consan"
-
-    # ConSan requires a global memory allocation
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
-
     device = "cuda"
 
     torch.manual_seed(42)
