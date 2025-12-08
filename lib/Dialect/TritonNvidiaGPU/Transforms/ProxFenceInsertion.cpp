@@ -126,18 +126,17 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto viewChain =
-                  ViewChain::getFineGrainAccess(value, bufferId, interval);
+              auto slice = AllocationSlice(value, bufferId, interval);
 
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
-                  proxyBlockInfo.syncWriteViewChains[op].push_back(viewChain);
+                  proxyBlockInfo.syncWriteSlices[op].insert(slice);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
-                curBlockInfo.syncWriteViewChains[op].push_back(viewChain);
+                curBlockInfo.syncWriteSlices[op].insert(slice);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadViewChains[op].push_back(viewChain);
+                curBlockInfo.syncReadSlices[op].insert(slice);
               }
             }
           }
@@ -151,9 +150,9 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // starting from a shared memory write, followed by a series of shared memory
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
-        scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
-    curBlockInfo.syncReadViewChains[op].push_back(scratchViewChain);
+    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto scratchSlice = AllocationSlice(scratchBufferId, interval);
+    curBlockInfo.syncReadSlices[op].insert(scratchSlice);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {

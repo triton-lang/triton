@@ -9,73 +9,53 @@
 
 namespace mlir {
 
-// Check if a ViewChain intersects with another other.
+// Check if a AllocationSlice intersects with another other.
 // This happens if their subslice regions intersect in all dimensions.
-// Returns true if it can't prove the ViewChains are disjoint.
-bool ViewChain::intersects(const ViewChain &other) const {
+// Returns true if it can't prove the AllocationSlices are disjoint.
+bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // If two view chains have the same buffer ID and both have operation access
-  // type, we can do precise intersection detection
+  // If two allocation slices have the same buffer ID and both have operation
+  // access type, we can do precise intersection detection
   bool sameBuffer = bufferId != Allocation::InvalidBufferId &&
                     other.bufferId != Allocation::InvalidBufferId &&
                     bufferId == other.bufferId;
-  if (sameBuffer && allocationAccessTy && other.allocationAccessTy) {
-    // If offsets are unknown for either ViewChain, conservatively assume
-    // overlap
-    if (!subsliceOffsets || !other.subsliceOffsets)
-      return true;
-
-    auto shapeA = allocationAccessTy.getShape();
-    auto shapeB = other.allocationAccessTy.getShape();
-    // Chek if all subslice region dimensions have some intersection
-    // [offsetA, offsetA + shapeA) and [offsetB, offsetB + shapeB)
-    // If any dimension doesn't intersect, we are looking at disjoint subslices
-    for (size_t i = 0; i < subsliceOffsets->size(); ++i) {
-      int64_t startA = (*subsliceOffsets)[i];
-      int64_t endA = startA + shapeA[i];
-      int64_t startB = (*other.subsliceOffsets)[i];
-      int64_t endB = startB + shapeB[i];
-
-      // Is A completely before B? Is B completely before A? If so, disjoint
-      if (endA <= startB || endB <= startA)
-        return false;
-    }
-
-    // All dimensions of subslices have some intersection
+  // If not the same buffer (or invalid buffer), we assume intersection since
+  // allocation intervals overlap
+  if (!sameBuffer)
     return true;
+
+  // If shapes are unknown (like whole buffer access), assume intersection
+  if (shape.empty() || other.shape.empty())
+    return true;
+
+  // If offsets are unknown, conservatively assume overlap
+  if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
+    return true;
+
+  // If layouts differ, we assume intersection as we currently only work on
+  // logical elements
+  if (layout != other.layout)
+    return true;
+
+  // Chek if all subslice region dimensions have some intersection
+  // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
+  // If any dimension doesn't intersect, we are looking at disjoint subslices
+  for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
+    int64_t startA = subsliceOffsets[i];
+    int64_t endA = startA + shape[i];
+    int64_t startB = other.subsliceOffsets[i];
+    int64_t endB = startB + other.shape[i];
+
+    // Is A completely before B? Is B completely before A? If so, disjoint
+    if (endA <= startB || endB <= startA)
+      return false;
   }
 
-  // Cannot prove ViewChains are disjoint, assume they intersect
+  // All dimensions of subslices have some intersection
   return true;
-}
-
-// Parse view chain from a value, collecting subslice offsets. Loop-carried
-// values are resolved via backward slicing through scf.for iter_args
-ViewChain ViewChain::getFineGrainAccess(Value value,
-                                        Allocation::BufferId bufferId,
-                                        Interval<size_t> allocationInterval) {
-  assert(bufferId != Allocation::InvalidBufferId &&
-         "getFineGrainAccess must be called with a valid bufferId");
-  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
-
-  // Get the memdesc_subslice information if present
-  std::optional<SmallVector<int64_t>> subsliceOffsets;
-  if (auto op = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
-    // Only set subsliceOffsets if we know there aren't subslices before the one
-    if (accessTy.getAllocShape() == op.getSrc().getType().getShape()) {
-      subsliceOffsets = SmallVector<int64_t>(op.getOffsets());
-    }
-  }
-
-  ViewChain vc;
-  vc.subsliceOffsets = subsliceOffsets;
-  vc.allocationAccessTy = accessTy;
-  vc.bufferId = bufferId;
-  vc.allocationInterval = allocationInterval;
-  return vc;
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
@@ -269,33 +249,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         if (auto value = effectInstance.getValue()) {
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              // Check that all operations on a buffer use the same layout.
-              auto valTy = cast<triton::gpu::MemDescType>(value.getType());
-              auto currentLayout = valTy.getEncoding();
-              // Track the layout for this operation. If we've already seen
-              // this buffer in this operation, encodings must match
-              auto [it, inserted] =
-                  curBlockInfo.bufferLayouts.emplace(bufferId, currentLayout);
-              assert(inserted ||
-                     it->second == currentLayout &&
-                         "Same buffer used with multiple layouts in same op");
-              auto previousLayout = blockInfo->bufferLayouts.find(bufferId);
-              bool layoutChanged =
-                  (previousLayout != blockInfo->bufferLayouts.end() &&
-                   previousLayout->second != currentLayout);
-
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto viewChain =
-                  layoutChanged
-                      ? ViewChain::getWholeAllocAccess(bufferId, interval)
-                      : ViewChain::getFineGrainAccess(value, bufferId,
-                                                      interval);
+              auto slice = AllocationSlice(value, bufferId, interval);
 
-              if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
-                curBlockInfo.syncWriteViewChains[op].push_back(viewChain);
-              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadViewChains[op].push_back(viewChain);
-              }
+              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
+                curBlockInfo.syncWriteSlices[op].insert(slice);
+              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
+                curBlockInfo.syncReadSlices[op].insert(slice);
             }
           }
         }
@@ -305,10 +265,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      ViewChain allMemoryViewChain = ViewChain::getWholeAllocAccess(
-          Allocation::InvalidBufferId, allIntervals);
-      curBlockInfo.syncWriteViewChains[op] = {allMemoryViewChain};
-      curBlockInfo.syncReadViewChains[op] = {allMemoryViewChain};
+      AllocationSlice allMemorySlice =
+          AllocationSlice(Allocation::InvalidBufferId, allIntervals);
+      curBlockInfo.syncWriteSlices[op].insert(allMemorySlice);
+      curBlockInfo.syncReadSlices[op].insert(allMemorySlice);
     }
     scratchBufferId = allocation->getBufferId(op);
   }
@@ -331,16 +291,16 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     }
 
-    if (!curBlockInfo.syncReadViewChains.empty() ||
-        !curBlockInfo.syncWriteViewChains.empty()) {
+    if (!curBlockInfo.syncReadSlices.empty() ||
+        !curBlockInfo.syncWriteSlices.empty()) {
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    ViewChain scratchViewChain = ViewChain::getWholeAllocAccess(
-        scratchBufferId, allocation->getAllocatedInterval(scratchBufferId));
+    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    AllocationSlice scratchSlice = AllocationSlice(scratchBufferId, interval);
 
-    curBlockInfo.syncWriteViewChains[op] = {scratchViewChain};
+    curBlockInfo.syncWriteSlices[op].insert(scratchSlice);
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
@@ -350,7 +310,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // read/write on shared memory
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
-    curBlockInfo.syncReadViewChains[op] = {scratchViewChain};
+    curBlockInfo.syncReadSlices[op].insert(scratchSlice);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
@@ -358,7 +318,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   // Update the region info, even if barrier is inserted, we have to maintain
-  // the current op's read/write buffers and layout information.
+  // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
 }
 

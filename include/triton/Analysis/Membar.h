@@ -3,6 +3,7 @@
 
 #include "Allocation.h"
 #include "llvm/Support/raw_ostream.h"
+#include <set>
 
 namespace mlir {
 
@@ -13,162 +14,179 @@ class OpBuilder;
 /// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
-// Represents the complete view chain for an access operation
-struct ViewChain {
+// Represents the access to a slice of an allocation
+// It contains information both on physical memory (bufferId and interval) and
+// a logical view on it (layout, subslice offsets and shape for the access)
+struct AllocationSlice {
 public:
-  // Parse view chain from a value, collecting subslice offsets. This builder
-  // is loop-aware and provides fine-grained access information
-  static ViewChain getFineGrainAccess(Value value,
-                                      Allocation::BufferId bufferId,
-                                      Interval<size_t> allocationInterval);
+  // Create allocation slice from a value, collecting subslice offsets
+  AllocationSlice(Value value, Allocation::BufferId id,
+                  Interval<size_t> allocationInterval)
+      : bufferId(id), allocationInterval(allocationInterval) {
+    assert(id != Allocation::InvalidBufferId &&
+           "fromValue must be called with a valid bufferId");
+    auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
+    shape = SmallVector<int64_t>(accessTy.getShape());
+    layout = accessTy.getEncoding();
+
+    // Get the memdesc_subslice information if present. If no subslice is
+    // present then all 0s means we subslice from the origin
+    SmallVector<int64_t> offsets(shape.size(), 0);
+    if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
+      // We know there aren't subslices before the one because of subslice::fold
+      // Still need to check this for where a fold isn't possible (control flow)
+      // and when a subslice is carried in a loop
+      if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
+        offsets = SmallVector<int64_t>(subslice.getOffsets());
+      } else {
+        offsets.clear();
+      }
+    }
+    subsliceOffsets = offsets;
+  }
 
   // Builder for accesses that represent accesses to the whole
   // allocation (scratch buffers, ArriveBarrierOp, layout changes, ..)
-  static ViewChain getWholeAllocAccess(Allocation::BufferId id,
-                                       Interval<size_t> interval) {
-    ViewChain vc;
-    vc.bufferId = id;
-    vc.allocationInterval = interval;
-    return vc;
+  AllocationSlice(Allocation::BufferId id, Interval<size_t> interval,
+                  Attribute layout = Attribute())
+      : bufferId(id), allocationInterval(interval), layout(layout) {}
+
+  bool operator<(const AllocationSlice &other) const {
+    if (bufferId != other.bufferId)
+      return bufferId < other.bufferId;
+    if (allocationInterval != other.allocationInterval)
+      return allocationInterval < other.allocationInterval;
+    if (layout != other.layout)
+      return layout.getAsOpaquePointer() < other.layout.getAsOpaquePointer();
+    if (subsliceOffsets != other.subsliceOffsets) {
+      return subsliceOffsets < other.subsliceOffsets;
+    }
+    return shape < other.shape;
   }
 
-  bool operator==(const ViewChain &other) const {
-    return subsliceOffsets == other.subsliceOffsets &&
-           allocationAccessTy == other.allocationAccessTy &&
+  bool operator==(const AllocationSlice &other) const {
+    return subsliceOffsets == other.subsliceOffsets && shape == other.shape &&
            bufferId == other.bufferId &&
-           allocationInterval == other.allocationInterval;
+           allocationInterval == other.allocationInterval &&
+           layout == other.layout;
   }
 
-  bool intersects(const ViewChain &other) const;
+  bool intersects(const AllocationSlice &other) const;
 
   void print(raw_ostream &os) const {
-    os << "shape=";
-    if (allocationAccessTy) {
-      llvm::interleave(allocationAccessTy.getShape(), os, "x");
-    } else {
-      os << "?";
-    }
-    os << " offsets=[";
-    if (subsliceOffsets) {
-      llvm::interleaveComma(*subsliceOffsets, os);
-    } else {
-      os << "unknown";
-    }
-    os << "] bufferId=";
+    os << "bufferId=";
     if (bufferId != Allocation::InvalidBufferId)
       os << bufferId;
     else
       os << "invalid";
+
     os << " interval=[" << allocationInterval.start() << ","
        << allocationInterval.end() << ")";
+
+    os << " offsets=[";
+    if (!subsliceOffsets.empty()) {
+      llvm::interleaveComma(subsliceOffsets, os);
+    } else {
+      os << "unknown";
+    }
+    os << "]";
+
+    os << " shape=";
+    if (!shape.empty()) {
+      llvm::interleave(shape, os, "x");
+    } else {
+      os << "?";
+    }
+
+    if (layout)
+      os << " layout=" << layout;
+    else
+      os << " layout=unknown";
   }
 
 private:
-  // Only allow ViewChain construction through get*AllocAccess
-  ViewChain() = default;
-  // Offsets from subslice. nullopt if full offsets couldn't be determined
-  std::optional<SmallVector<int64_t>> subsliceOffsets;
-  // Type at the access point (load, store, ..)
-  triton::gpu::MemDescType allocationAccessTy;
+  // Offsets from subslice. Empty when offsets are unknown
+  SmallVector<int64_t> subsliceOffsets;
+  // Shape of the access (load, store, ..)
+  SmallVector<int64_t> shape;
   Allocation::BufferId bufferId = Allocation::InvalidBufferId;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
+  // Layout used for the access (load, store, ..)
+  Attribute layout;
 };
 
 struct BlockInfo {
-  using ViewChainListT = SmallVector<ViewChain, 2>;
-  using ViewChainMapT = std::map<Operation *, ViewChainListT>;
-  using BufferLayoutMapT = std::map<Allocation::BufferId, Attribute>;
+  using SliceMapT = std::map<Operation *, std::set<AllocationSlice>>;
 
-  ViewChainMapT syncReadViewChains;
-  ViewChainMapT syncWriteViewChains;
-  BufferLayoutMapT bufferLayouts;
+  SliceMapT syncReadSlices;
+  SliceMapT syncWriteSlices;
 
   BlockInfo() = default;
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    // Avoid inserting duplicate ViewChains, otherwise Membar
-    // cannot to reach a fixed point
-    for (auto &[op, chains] : other.syncReadViewChains) {
-      for (const auto &chain : chains)
-        if (!llvm::is_contained(syncReadViewChains[op], chain))
-          syncReadViewChains[op].push_back(chain);
-    }
-    for (auto &[op, chains] : other.syncWriteViewChains) {
-      for (const auto &chain : chains)
-        if (!llvm::is_contained(syncWriteViewChains[op], chain))
-          syncWriteViewChains[op].push_back(chain);
-    }
-    for (auto &[bufferId, layout] : other.bufferLayouts)
-      bufferLayouts.insert_or_assign(bufferId, layout);
+    for (auto &[op, slices] : other.syncReadSlices)
+      syncReadSlices[op].insert(slices.begin(), slices.end());
+
+    for (auto &[op, slices] : other.syncWriteSlices)
+      syncWriteSlices[op].insert(slices.begin(), slices.end());
     return *this;
   }
 
   void dump() {
     auto &os = llvm::errs();
-    os << "Block ViewChains:\n";
-    os << "  Read ViewChains:\n";
-    for (auto &[op, viewChains] : syncReadViewChains) {
-      for (auto &viewChain : viewChains) {
+    os << "Block Allocation Slices:\n";
+    os << "  Read Slices:\n";
+    for (auto &[op, slices] : syncReadSlices) {
+      for (auto &slice : slices) {
         os << "    " << op->getName() << ": ";
-        viewChain.print(os);
+        slice.print(os);
         os << "\n";
       }
     }
-    os << "  Write ViewChains:\n";
-    for (auto &[op, viewChains] : syncWriteViewChains) {
-      for (auto &viewChain : viewChains) {
+    os << "  Write Slices:\n";
+    for (auto &[op, slices] : syncWriteSlices) {
+      for (auto &slice : slices) {
         os << "    " << op->getName() << ": ";
-        viewChain.print(os);
+        slice.print(os);
         os << "\n";
       }
-    }
-    os << "  Buffer Layouts:\n";
-    for (auto &[bufferId, layout] : bufferLayouts) {
-      os << "    bufferId=" << bufferId << " layout=";
-      layout.print(os);
-      os << "\n";
     }
   }
 
-  /// Returns true if ViewChains in two BlockInfo objects are intersected.
+  /// Returns true if Slices in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
-    return /*RAW*/ isIntersected(syncWriteViewChains, other.syncReadViewChains,
+    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
                                  filter) ||
            /*WAR*/
-           isIntersected(syncReadViewChains, other.syncWriteViewChains,
-                         filter) ||
+           isIntersected(syncReadSlices, other.syncWriteSlices, filter) ||
            /*WAW*/
-           isIntersected(syncWriteViewChains, other.syncWriteViewChains,
-                         filter);
+           isIntersected(syncWriteSlices, other.syncWriteSlices, filter);
   }
 
-  /// Clears the ViewChains and layout tracking because a barrier is inserted.
+  /// Clears the slices because a barrier is inserted.
   void sync() {
-    syncReadViewChains.clear();
-    syncWriteViewChains.clear();
-    bufferLayouts.clear();
+    syncReadSlices.clear();
+    syncWriteSlices.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
-    return syncReadViewChains == other.syncReadViewChains &&
-           syncWriteViewChains == other.syncWriteViewChains &&
-           bufferLayouts == other.bufferLayouts;
+    return syncReadSlices == other.syncReadSlices &&
+           syncWriteSlices == other.syncWriteSlices;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  bool isIntersected(const ViewChainMapT &lhsViewChains,
-                     const ViewChainMapT &rhsViewChains,
+  bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
                      MembarFilterFn filter) const {
-    for (auto &[lhsOp, lhsViewChains] : lhsViewChains) {
-      for (auto &lhsViewChain : lhsViewChains) {
-        for (auto &[rhsOp, rhsViewChains] : rhsViewChains) {
-          for (auto &rhsViewChain : rhsViewChains) {
-            if (lhsViewChain.intersects(rhsViewChain)) {
+    for (auto &[lhsOp, lhsSliceList] : lhsSlices) {
+      for (auto &lhsSlice : lhsSliceList) {
+        for (auto &[rhsOp, rhsSliceList] : rhsSlices) {
+          for (auto &rhsSlice : rhsSliceList) {
+            if (lhsSlice.intersects(rhsSlice)) {
               if (!filter || !filter(lhsOp, rhsOp))
                 return true;
             }
