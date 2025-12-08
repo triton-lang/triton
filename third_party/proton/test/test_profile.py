@@ -689,13 +689,13 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 
-    def run_on_device(device: torch.device, stream: torch.cuda.Stream):
-        with proton.scope(f"scope_a_{device.index}", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2), device=device)
+    def run_on_device(device_id):
+        with proton.scope(f"scope_a_{device_id}", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2))
         with proton.metadata_state():
             a_sum = a.sum()
-        with proton.scope(f"scope_b_{device.index}", metrics={"sum": a_sum}):
-            b = torch.ones((2, 2), device=device)
+        with proton.scope(f"scope_b_{device_id}", metrics={"sum": a_sum}):
+            b = torch.ones((2, 2))
         c = a + b
         foo[(1, )](a, b, c)
 
@@ -707,12 +707,12 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         with torch.cuda.device(device):
             torch.cuda.set_stream(stream)
             # warmup
-            run_on_device(device, stream)
+            run_on_device(device.index)
             # graph capture
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
                 for _ in range(10):
-                    run_on_device(device, stream)
+                    run_on_device(device.index)
         graphs.append((device, stream, g))
 
     for device, stream, graph in graphs:
