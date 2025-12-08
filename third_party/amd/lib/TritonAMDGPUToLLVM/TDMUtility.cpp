@@ -3,6 +3,9 @@
 #include "triton/Tools/LayoutUtils.h"
 #include <optional>
 
+// Include shared C-compatible TDM utilities
+#include "../../backend/include/TDMCommon.h"
+
 namespace mlir::LLVM::AMD {
 namespace {
 
@@ -54,30 +57,16 @@ decodeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return {srcPtr, tensorShape, tensorStride};
 }
 
+// C++ wrapper for the shared tdmGetWarpDistribution function
 SmallVector<int> getWarpDistribution(ArrayRef<int64_t> blockShape,
                                      int numWarps) {
-  SmallVector<int> warps(blockShape.size(), 1);
-  int remainingWarps = numWarps;
-
-  // Distribute warps across dimensions, starting from the first dimension
-  for (size_t i = 0; i < blockShape.size() && remainingWarps > 1; ++i) {
-    // Try to assign as many warps as possible to this dimension
-    // without exceeding the block shape
-    while (remainingWarps > 1 && warps[i] * 2 <= blockShape[i]) {
-      warps[i] *= 2;
-      remainingWarps /= 2;
-    }
-  }
-
-  // If there are still remaining warps, assign them to the last dimension
-  // This ensures we use all available warps
-  if (remainingWarps > 1) {
-    warps[blockShape.size() - 1] *= remainingWarps;
-  }
+  int numDims = blockShape.size();
+  SmallVector<int> warps(numDims);
+  tdmGetWarpDistribution(blockShape.data(), numDims, numWarps, warps.data());
 
   // Verify the distribution is valid
   int totalWarps = 1;
-  for (size_t i = 0; i < warps.size(); ++i) {
+  for (int i = 0; i < numDims; ++i) {
     totalWarps *= warps[i];
     assert(blockShape[i] % warps[i] == 0 &&
            "Block shape must be divisible by warp distribution");
