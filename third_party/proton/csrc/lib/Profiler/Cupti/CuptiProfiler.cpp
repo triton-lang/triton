@@ -306,6 +306,9 @@ public:
 
   PopResult popAll() {
     std::lock_guard<std::mutex> lock(mutex);
+    if (deviceQueues.empty()) {
+      return {0, {}};
+    }
     auto device = runtime->getDevice();
     auto it = deviceQueues.find(device);
     if (it == deviceQueues.end()) {
@@ -635,8 +638,33 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             }
           }
+        }
+      }
+      profiler.correlation.correlate(callbackData->correlationId, numInstances);
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        pImpl->pcSampling.start(callbackData->context);
+      }
+    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
+      auto externId = profiler.correlation.externIdQueue.back();
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        // XXX: Conservatively stop every GPU kernel for now
+        pImpl->pcSampling.stop(
+            callbackData->context, externId,
+            profiler.correlation.apiExternIds.contain(externId));
+      }
+      if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
+          cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
+        // Cuda context can be lazily initialized, so we need to call device get
+        // here after the first kernel is launched
+        auto graphExec = static_cast<const cuGraphLaunch_params *>(
+                             callbackData->functionParams)
+                             ->hGraph;
+        uint32_t graphExecId = 0;
+        cupti::getGraphExecId<true>(graphExec, &graphExecId);
+        if (pImpl->graphStates.contain(graphExecId)) {
           std::map<Data *, std::vector<std::pair<bool, size_t>>>
               metricNodeScopes;
+          auto dataSet = profiler.getDataSet();
           for (auto *data : dataSet) {
             auto &nodeToScopeId =
                 profiler.correlation.externIdToGraphNodeScopeId[externId][data];
@@ -666,18 +694,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                         metricNodeCount);
         }
-      }
-      profiler.correlation.correlate(callbackData->correlationId, numInstances);
-      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
-        pImpl->pcSampling.start(callbackData->context);
-      }
-    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
-        // XXX: Conservatively stop every GPU kernel for now
-        auto scopeId = profiler.correlation.externIdQueue.back();
-        pImpl->pcSampling.stop(
-            callbackData->context, scopeId,
-            profiler.correlation.apiExternIds.contain(scopeId));
       }
       threadState.exitOp();
       profiler.correlation.submit(callbackData->correlationId);
