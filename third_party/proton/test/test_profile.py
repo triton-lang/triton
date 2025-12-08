@@ -218,8 +218,8 @@ def test_get_data(tmp_path: pathlib.Path):
 
     proton.deactivate(session)
 
-    json_str = proton.get_data(session)
-    gf, _, _, _ = viewer.get_raw_metrics(json_str)
+    database = proton.get_data(session)
+    gf, _, _, _ = viewer.get_raw_metrics(database)
     useful = gf.filter(f"MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
 
     proton.finalize()
