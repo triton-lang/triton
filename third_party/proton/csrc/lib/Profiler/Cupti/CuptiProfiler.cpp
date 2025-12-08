@@ -749,12 +749,14 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
   auto popResult = pendingGraphQueue.popAll();
-  metricBuffer->flush(
-      [&](uint8_t *data, size_t dataSize) {
-        auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-        emitMetricRecords(recordPtr, popResult.second);
-      },
-      /*flushAll=*/false);
+  if (popResult.first > 0) {
+    metricBuffer->flush(
+        [&](uint8_t *data, size_t dataSize) {
+          auto *recordPtr = reinterpret_cast<uint64_t *>(data);
+          emitMetricRecords(recordPtr, popResult.second);
+        },
+        /*flushAll=*/false);
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
