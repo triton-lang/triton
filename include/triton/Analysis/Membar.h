@@ -26,49 +26,41 @@ public:
     assert(id != Allocation::InvalidBufferId &&
            "fromValue must be called with a valid bufferId");
     auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
-    shape = SmallVector<int64_t>(accessTy.getShape());
-    layout = accessTy.getEncoding();
 
     // Get the memdesc_subslice information if present. If no subslice is
-    // present then all 0s means we subslice from the origin
-    SmallVector<int64_t> offsets(shape.size(), 0);
+    // present the whole interval is accessed
     if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
       // We know there aren't subslices before the one because of subslice::fold
       // Still need to check this for where a fold isn't possible (control flow)
       // and when a subslice is carried in a loop
       if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
-        offsets = SmallVector<int64_t>(subslice.getOffsets());
-      } else {
-        offsets.clear();
+        accessTy = accessTy;
+        subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
       }
     }
-    subsliceOffsets = offsets;
   }
 
   // Builder for accesses that represent accesses to the whole
   // allocation (scratch buffers, ArriveBarrierOp, layout changes, ..)
-  AllocationSlice(Allocation::BufferId id, Interval<size_t> interval,
-                  Attribute layout = Attribute())
-      : bufferId(id), allocationInterval(interval), layout(layout) {}
+  AllocationSlice(Allocation::BufferId id, Interval<size_t> interval)
+      : bufferId(id), allocationInterval(interval), accessTy(nullptr) {}
 
   bool operator<(const AllocationSlice &other) const {
     if (bufferId != other.bufferId)
       return bufferId < other.bufferId;
     if (allocationInterval != other.allocationInterval)
       return allocationInterval < other.allocationInterval;
-    if (layout != other.layout)
-      return layout.getAsOpaquePointer() < other.layout.getAsOpaquePointer();
-    if (subsliceOffsets != other.subsliceOffsets) {
-      return subsliceOffsets < other.subsliceOffsets;
-    }
-    return shape < other.shape;
+    if (accessTy != other.accessTy)
+      return accessTy.getAsOpaquePointer() <
+             other.accessTy.getAsOpaquePointer();
+    return subsliceOffsets < other.subsliceOffsets;
   }
 
   bool operator==(const AllocationSlice &other) const {
-    return subsliceOffsets == other.subsliceOffsets && shape == other.shape &&
+    return subsliceOffsets == other.subsliceOffsets &&
            bufferId == other.bufferId &&
            allocationInterval == other.allocationInterval &&
-           layout == other.layout;
+           accessTy == other.accessTy;
   }
 
   bool intersects(const AllocationSlice &other) const;
@@ -92,28 +84,22 @@ public:
     os << "]";
 
     os << " shape=";
-    if (!shape.empty()) {
-      llvm::interleave(shape, os, "x");
+    if (accessTy) {
+      llvm::interleave(accessTy.getShape(), os, "x");
+      os << " layout=" << accessTy.getEncoding();
     } else {
-      os << "?";
+      os << "? layout=unknown";
     }
-
-    if (layout)
-      os << " layout=" << layout;
-    else
-      os << " layout=unknown";
   }
 
 private:
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
-  // Shape of the access (load, store, ..)
-  SmallVector<int64_t> shape;
   Allocation::BufferId bufferId = Allocation::InvalidBufferId;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
-  // Layout used for the access (load, store, ..)
-  Attribute layout;
+  // Type of the memory descriptor for this access
+  triton::gpu::MemDescType accessTy;
 };
 
 struct BlockInfo {

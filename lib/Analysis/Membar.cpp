@@ -27,8 +27,8 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!sameBuffer)
     return true;
 
-  // If shapes are unknown (like whole buffer access), assume intersection
-  if (shape.empty() || other.shape.empty())
+  // If access types are unknown, assume intersection
+  if (!accessTy || !other.accessTy)
     return true;
 
   // If offsets are unknown, conservatively assume overlap
@@ -37,17 +37,19 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   // If layouts differ, we assume intersection as we currently only work on
   // logical elements
-  if (layout != other.layout)
+  if (accessTy.getEncoding() != other.accessTy.getEncoding())
     return true;
 
+  auto shapeA = SmallVector<int64_t>(accessTy.getShape());
+  auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
   // Chek if all subslice region dimensions have some intersection
   // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
   // If any dimension doesn't intersect, we are looking at disjoint subslices
   for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
     int64_t startA = subsliceOffsets[i];
-    int64_t endA = startA + shape[i];
+    int64_t endA = startA + shapeA[i];
     int64_t startB = other.subsliceOffsets[i];
-    int64_t endB = startB + other.shape[i];
+    int64_t endB = startB + shapeB[i];
 
     // Is A completely before B? Is B completely before A? If so, disjoint
     if (endA <= startB || endB <= startA)
