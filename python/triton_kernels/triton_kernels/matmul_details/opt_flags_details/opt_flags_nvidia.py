@@ -1,17 +1,21 @@
+import warnings
+
 import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, bitwidth, get_layout
-from triton_kernels.tensor import Tensor
+from triton_kernels.tensor import FP4, Tensor, bitwidth, get_layout
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 
 
 def is_x_scale_swizzled(precision_config):
-    return (precision_config is not None and precision_config.a_mx_scale is not None
-            and isinstance(precision_config.a_mx_scale, Tensor)
-            and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
+    return (
+        precision_config is not None
+        and precision_config.a_mx_scale is not None
+        and isinstance(precision_config.a_mx_scale, Tensor)
+        and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout)
+    )
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -98,7 +102,7 @@ def compute_num_stages(
     if precision_config.max_num_imprecise_acc is not None:
         return 3
     weight_size = bitwidth(rhs_dtype) / 8
-    if precision_config.weight_scale is not None and lhs_dtype in [torch.float16, torch.bfloat16]:
+    if precision_config.b_mx_scale is not None and lhs_dtype in [torch.float16, torch.bfloat16]:
         # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
         # smem_capacity accordingly.
         # w/o this, gets the following error:
@@ -140,5 +144,12 @@ def compute_num_stages(
     elif has_native_mxfp:
         # mx scales
         stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
-    num_stages = max(1, min(smem_capacity // int(stage_size), 4))
+    num_stages = min(smem_capacity // int(stage_size), 4)
+    if num_stages == 0:
+        warnings.warn(
+            f"num_stages computed is 0 with {stage_size=} and {smem_capacity=}, "
+            "bumping up to 1 but this may lead to out of shared memory errors, "
+            "and in that case consider reducing block sizes."
+        )
+        num_stages = 1
     return num_stages
