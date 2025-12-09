@@ -8,10 +8,15 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 
 
-def is_x_scale_swizzled(precision_config):
-    return (precision_config is not None and precision_config.a_mx_scale is not None
-            and isinstance(precision_config.a_mx_scale, Tensor)
-            and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
+def x_scale_can_be_swizzled(precision_config):
+    return (
+        precision_config is not None
+        and precision_config.a_mx_scale is not None
+        and (
+            (isinstance(precision_config.a_mx_scale, Tensor) and torch.cuda.get_device_capability()[0] >= 10) # already swizzled
+            or (torch.cuda.get_device_capability()[0] >= 10) # can possibly be swizzled
+        )
+    )
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -46,7 +51,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
-    elif is_persistent and is_x_scale_swizzled(precision_config):
+    elif is_persistent and x_scale_can_be_swizzled(precision_config):
         # x scale has been swizzled to BlackwellActMXScaleLayout, enforce block_k to be multiple of 128
         block_k = max(block_k, 128)
     elif k is not None:  # cover small k case

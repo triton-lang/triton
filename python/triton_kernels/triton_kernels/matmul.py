@@ -24,6 +24,8 @@ from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTen
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
+from triton_kernels.tensor_details import layout
+from .tensor import convert_layout
 
 @dataclass(frozen=True)
 class FusedActivation:
@@ -431,12 +433,15 @@ def matmul(a, b, bias,
         b_scale_tensor_or_tma = b_scale
     # create tma descriptor for x_scale
     a_scale_has_tma = False
-    if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
-        # check if we can use tma for x scale
-        assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
-        assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
+    if a_has_mx and a.dtype == torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] >= 10 and opt_flags.is_persistent and gather_indx is None and opt_flags.block_m == 128 and opt_flags.block_k >= 128:
         a_scale_has_tma = True
-    if a_scale_has_tma:
+        # this met the condition to swizzle, swizzle here if x scale is not swizzled yet
+        if not isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
+        # assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
+        # assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
+            a_scale_layout, a_scale_layout_opts = layout.make_default_matmul_mxfp8_act_scale_layout(ragged_metadata=a_ragged_metadata if not is_input_batched else None)
+            a_scale = convert_layout(a_scale, a_scale_layout, **a_scale_layout_opts)
+        
         a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
         a_scale.dtype = torch.uint8
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)

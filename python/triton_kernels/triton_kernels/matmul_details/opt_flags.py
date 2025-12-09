@@ -249,7 +249,7 @@ def make_default_opt_flags_nvidia(
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
     # adjust block_m based on is_persistent signal
-    if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
+    if is_persistent and opt_flags_nvidia.x_scale_can_be_swizzled(precision_config) and not constraints.get("block_m", None):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     # block k
