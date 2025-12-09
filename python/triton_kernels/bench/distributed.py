@@ -114,24 +114,24 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
 def reduce_scatter(
     input_tensor: torch.Tensor,
     n_expts_act: int,
-    metadata: ReduceScatterMetadata,
+    metadata: Optional[ReduceScatterMetadata] = None,
     expt_assignment: Optional[ExptAssignment] = None,
     dim: int = 0,
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
-    if _is_distributed_launch():
-        if metadata.mode and metadata.mode == "ep_sharding":
+    if metadata and _is_distributed_launch():
+        if metadata.mode == "ep_sharding":
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
             output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.combine_indx)
-            # weighted average of the output token from experts
-            output = output.view(-1, n_expts_act, output.shape[-1])
-            output, _ = reduce(output, dim=1)
-            return output
         else:
             raise NotImplementedError(f"Distributed reduce_scatter mode {metadata.mode} is not implemented yet.")
     else:
-        return input_tensor
+        output = input_tensor
+    # weighted average of the output token from experts
+    output = output.view(-1, n_expts_act, output.shape[-1])
+    output, _ = reduce(output, dim=1)
+    return output
 
 
 # TODO: support TP > 1
@@ -283,7 +283,8 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         else:
             rdata = gi = si = None
         x = matmul(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)
-        return matmul(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
+        x = matmul(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
+        return reduce_scatter(x, n_expts_act, metadata=None, expt_assignment=None)
 
     # distributed pass
     def distributed(x):
@@ -328,17 +329,17 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
     + [
         (128, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
-        (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 4),
+        (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 2),
     ] +
     # moe cases - test precision
     ([
         (128, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
-        (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 4),
+        (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 2),
     ] if has_native_mx4 else [
         (128, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
-        (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 4),
+        (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 2),
     ]),
 )
 def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, monkeypatch):
