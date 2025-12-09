@@ -551,13 +551,8 @@ public:
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
     // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
-    // consistent CTA mode, disabling 2CTA mode for now.
-    //
-    // When re-implementing 2CTA support:
-    // 1. Change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    // 2. Add back test cases in test/TritonGPU/accelerate-matmul.mlir:
-    //    - mmav5_multi_ctas (num-ctas = 1 with multi-CTA layout)
-    //    - mmav5_2ctas (num-ctas = 2 with {two_ctas} attribute)
+    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
+    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
     bool useTwoCTAs = false;
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
