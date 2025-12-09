@@ -1857,14 +1857,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @gluon.jit
 def amd_wmma_layout_kernel():
-    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
-                                                                          warps_per_cta=[1, 4]))
-    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
-                                                                          warps_per_cta=[2, 2]))
-    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
-                                                                          warps_per_cta=[1, 4]))
-    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
-                                                                          warps_per_cta=[2, 2]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, reg_bases=[], warp_bases=[[0, 1],
+                                                                                                               [0, 2]],
+                                                                          transposed=True))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True, reg_bases=[],
+                                                                          warp_bases=[[0, 1], [1, 0]]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False, reg_bases=[],
+                                                                          warp_bases=[[0, 1], [0, 2]]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False, reg_bases=[],
+                                                                          warp_bases=[[0, 1], [1, 0]]))
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_RDNA4])
@@ -1872,10 +1873,10 @@ def test_amd_wmma_layout(target):
     module = run_parser(amd_wmma_layout_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [1, 4]}>
-#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [2, 2]}>
-#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [1, 4]}>
-#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [2, 2]}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {kReg = [], kWarp = [[0, 1], [0, 2]]}}>
+#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {kReg = [], kWarp = [[0, 1], [1, 0]]}}>
+#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpLayout = {kReg = [], kWarp = [[0, 1], [0, 2]]}}>
+#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpLayout = {kReg = [], kWarp = [[0, 1], [1, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @amd_wmma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f16
@@ -1894,7 +1895,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @gluon.jit
 def infer_layout_for_amd_wmma_kernel():
-    layout: ttgl.constexpr = amd_layouts.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 1])
+    layout: ttgl.constexpr = amd_layouts.AMDWMMALayout(version=2, transposed=True, reg_bases=[], warp_bases=[[1, 0],
+                                                                                                             [2, 0]])
     a = ttgl.full([128, 32], 1, ttgl.float16, layout)
     b = ttgl.reduce(a, 1, add_int)
     ttgl.static_assert(b.type.layout == ttgl.SliceLayout(1, layout))
@@ -1905,7 +1907,7 @@ def test_infer_layout_for_amd_wmma(target):
     module = run_parser(infer_layout_for_amd_wmma_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [4, 1]}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_layout_for_amd_wmma_kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2382,7 +2384,8 @@ def test_amd_rdna3_wmma(target):
 
     @gluon.jit
     def kernel():
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 1])
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=1, transposed=True, reg_bases=[],
+                                                             warp_bases=[[1, 0], [2, 0]])
 
         a = ttgl.full([64, 64], 1.0, ttgl.float16, layout=ttgl.DotOperandLayout(0, wmma_layout, 16))
         b = ttgl.full([64, 64], 2.0, ttgl.float16, layout=ttgl.DotOperandLayout(1, wmma_layout, 16))
@@ -2396,7 +2399,7 @@ def test_amd_rdna3_wmma(target):
     module = run_parser(kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [4, 1]}>
+#mma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2418,7 +2421,8 @@ def test_amd_rdna4_wmma(target):
 
     @gluon.jit
     def kernel():
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 1])
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=2, transposed=True, reg_bases=[],
+                                                             warp_bases=[[1, 0], [2, 0]])
 
         a = ttgl.full([64, 64], 1.0, ttgl.float16, layout=ttgl.DotOperandLayout(0, wmma_layout, 8))
         b = ttgl.full([64, 64], 2.0, ttgl.float16, layout=ttgl.DotOperandLayout(1, wmma_layout, 8))
@@ -2432,7 +2436,7 @@ def test_amd_rdna4_wmma(target):
     module = run_parser(kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [4, 1]}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2608,10 +2612,11 @@ def test_amd_wmma_scaled(target):
 
     @gluon.jit
     def kernel():
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
-                                                             instr_shape=[16, 16, 128])
-        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
-                                                                    instr_shape=[16, 16, 64])
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, reg_bases=[],
+                                                             warp_bases=[[0, 1], [1, 0]], instr_shape=[16, 16, 128])
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, reg_bases=[],
+                                                                    warp_bases=[[0, 1], [1,
+                                                                                         0]], instr_shape=[16, 16, 64])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=wmma_layout_packed, k_width=16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=wmma_layout_packed, k_width=16)
         a_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(a_layout, [32, 4])
@@ -2656,8 +2661,8 @@ def test_amd_wmma_scaled_none(target):
 
     @gluon.jit
     def kernel():
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 128])
-        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 64])
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, [], [[0, 0]], True, [16, 16, 128])
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, [], [[0, 0]], True, [16, 16, 64])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, wmma_layout_packed, 16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, wmma_layout_packed, 16)
 
@@ -2698,8 +2703,8 @@ def test_amd_wmma_scaled_scalar(target):
 
     @gluon.jit
     def kernel():
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 128])
-        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 64])
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, [], [[0, 0]], True, [16, 16, 128])
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, [], [[0, 0]], True, [16, 16, 64])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, wmma_layout_packed, 16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, wmma_layout_packed, 16)
 
