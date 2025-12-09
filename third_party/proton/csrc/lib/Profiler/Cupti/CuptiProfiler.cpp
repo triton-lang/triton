@@ -312,12 +312,13 @@ public:
     if (deviceQueues.empty()) {
       return {0, {}};
     }
-    auto device = runtime->getDevice();
-    auto it = deviceQueues.find(device);
-    if (it == deviceQueues.end()) {
-      return {0, {}};
+    PopResult result{0, {}};
+    for (auto &[device, queue] : deviceQueues) {
+      result.first += queue.totalNumNodes;
+      auto [numNodes, items] = popAllLocked(queue);
+      result.second.insert(result.second.end(), items.begin(), items.end());
     }
-    return popAllLocked(it->second);
+    return result;
   }
 
 private:
