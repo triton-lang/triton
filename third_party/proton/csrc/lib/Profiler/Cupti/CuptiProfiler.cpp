@@ -307,18 +307,16 @@ public:
     return popAllLocked(queue);
   }
 
-  PopResult popAll() {
+  std::vector<PopResult> popAll() {
     std::lock_guard<std::mutex> lock(mutex);
     if (deviceQueues.empty()) {
-      return {0, {}};
+      return {{0, {}}};
     }
-    PopResult result{0, {}};
+    std::vector<PopResult> results;
     for (auto &[device, queue] : deviceQueues) {
-      result.first += queue.totalNumNodes;
-      auto [numNodes, items] = popAllLocked(queue);
-      result.second.insert(result.second.end(), items.begin(), items.end());
+      results.emplace_back(popAllLocked(queue));
     }
-    return result;
+    return results;
   }
 
 private:
@@ -750,11 +748,13 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
   auto popResult = pendingGraphQueue.popAll();
-  if (popResult.first > 0) {
+  if (!popResult.empty()) {
+    auto resultIdx = 0;
     metricBuffer->flush(
         [&](uint8_t *data, size_t dataSize) {
           auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-          emitMetricRecords(recordPtr, popResult.second);
+          emitMetricRecords(recordPtr, popResult[resultIdx].second);
+          resultIdx++;
         },
         /*flushAll=*/true);
   }
