@@ -10,12 +10,9 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import Blackwe
 
 
 def is_x_scale_swizzled(precision_config):
-    return (
-        precision_config is not None
-        and precision_config.a_mx_scale is not None
-        and isinstance(precision_config.a_mx_scale, Tensor)
-        and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout)
-    )
+    return (precision_config is not None and precision_config.a_mx_scale is not None
+            and isinstance(precision_config.a_mx_scale, Tensor)
+            and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -146,10 +143,8 @@ def compute_num_stages(
         stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
     num_stages = min(smem_capacity // int(stage_size), 4)
     if num_stages == 0:
-        warnings.warn(
-            f"num_stages computed is 0 with {stage_size=} and {smem_capacity=}, "
-            "bumping up to 1 but this may lead to out of shared memory errors, "
-            "and in that case consider reducing block sizes."
-        )
+        warnings.warn(f"num_stages computed is 0 with {stage_size=} and {smem_capacity=}, "
+                      "bumping up to 1 but this may lead to out of shared memory errors, "
+                      "and in that case consider reducing block sizes.")
         num_stages = 1
     return num_stages
