@@ -2,6 +2,8 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <set>
 
@@ -26,6 +28,7 @@ public:
     assert(id != Allocation::InvalidBufferId &&
            "fromValue must be called with a valid bufferId");
     auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
+    this->accessTy = accessTy;
 
     // Get the memdesc_subslice information if present. If no subslice is
     // present the whole interval is accessed
@@ -34,7 +37,6 @@ public:
       // Still need to check this for where a fold isn't possible (control flow)
       // and when a subslice is carried in a loop
       if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
-        accessTy = accessTy;
         subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
       }
     }
@@ -103,7 +105,7 @@ private:
 };
 
 struct BlockInfo {
-  using SliceMapT = std::map<Operation *, std::set<AllocationSlice>>;
+  using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
 
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;
@@ -112,32 +114,36 @@ struct BlockInfo {
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    for (auto &[op, slices] : other.syncReadSlices)
-      syncReadSlices[op].insert(slices.begin(), slices.end());
+    for (auto &slice : other.syncReadSlices)
+      syncReadSlices[slice.first].insert(slice.second.begin(),
+                                         slice.second.end());
 
-    for (auto &[op, slices] : other.syncWriteSlices)
-      syncWriteSlices[op].insert(slices.begin(), slices.end());
+    for (auto &slice : other.syncWriteSlices)
+      syncWriteSlices[slice.first].insert(slice.second.begin(),
+                                          slice.second.end());
     return *this;
   }
 
   void dump() {
-    auto &os = llvm::errs();
-    os << "Block Allocation Slices:\n";
-    os << "  Read Slices:\n";
-    for (auto &[op, slices] : syncReadSlices) {
-      for (auto &slice : slices) {
-        os << "    " << op->getName() << ": ";
-        slice.print(os);
-        os << "\n";
-      }
+    auto &err = llvm::errs();
+    err << "Block Interval:\n";
+    err << "  Read Intervals:\n";
+    for (auto &[slice, ops] : syncReadSlices) {
+      err << "    ";
+      slice.print(err);
+      err << " ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
     }
-    os << "  Write Slices:\n";
-    for (auto &[op, slices] : syncWriteSlices) {
-      for (auto &slice : slices) {
-        os << "    " << op->getName() << ": ";
-        slice.print(os);
-        os << "\n";
-      }
+    err << "  Write Intervals:\n";
+    for (auto &[slice, ops] : syncWriteSlices) {
+      err << "    ";
+      slice.print(err);
+      err << " ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
     }
   }
 
@@ -168,18 +174,13 @@ struct BlockInfo {
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
                      MembarFilterFn filter) const {
-    for (auto &[lhsOp, lhsSliceList] : lhsSlices) {
-      for (auto &lhsSlice : lhsSliceList) {
-        for (auto &[rhsOp, rhsSliceList] : rhsSlices) {
-          for (auto &rhsSlice : rhsSliceList) {
-            if (lhsSlice.intersects(rhsSlice)) {
+    for (auto &lhs : lhsSlices)
+      for (auto &rhs : rhsSlices)
+        if (lhs.first.intersects(rhs.first))
+          for (auto lhsOp : lhs.second)
+            for (auto rhsOp : rhs.second)
               if (!filter || !filter(lhsOp, rhsOp))
                 return true;
-            }
-          }
-        }
-      }
-    }
     return false;
   }
 };

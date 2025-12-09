@@ -255,9 +255,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
               auto slice = AllocationSlice(value, bufferId, interval);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteSlices[op].insert(slice);
+                curBlockInfo.syncWriteSlices[slice].insert(op);
               else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadSlices[op].insert(slice);
+                curBlockInfo.syncReadSlices[slice].insert(op);
             }
           }
         }
@@ -267,10 +267,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      AllocationSlice allMemorySlice =
+      auto allMemorySlice =
           AllocationSlice(Allocation::InvalidBufferId, allIntervals);
-      curBlockInfo.syncWriteSlices[op].insert(allMemorySlice);
-      curBlockInfo.syncReadSlices[op].insert(allMemorySlice);
+      curBlockInfo.syncWriteSlices[allMemorySlice].insert(op);
+      curBlockInfo.syncReadSlices[allMemorySlice].insert(op);
     }
     scratchBufferId = allocation->getBufferId(op);
   }
@@ -300,9 +300,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "dependencies");
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    AllocationSlice scratchSlice = AllocationSlice(scratchBufferId, interval);
-
-    curBlockInfo.syncWriteSlices[op].insert(scratchSlice);
+    auto scratchSlice = AllocationSlice(scratchBufferId, interval);
+    curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
@@ -312,7 +311,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // read/write on shared memory
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
-    curBlockInfo.syncReadSlices[op].insert(scratchSlice);
+    curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
