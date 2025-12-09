@@ -677,7 +677,10 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         pytest.skip("Requires at least two CUDA devices")
 
     devices = [torch.device(f"cuda:{i}") for i in range(2)]
-    streams = [torch.cuda.Stream(device=device) for device in devices]
+    streams = []
+    for device in devices:
+        torch.cuda.set_device(device)
+        streams.append(torch.cuda.Stream(device=device))
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
