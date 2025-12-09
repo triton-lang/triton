@@ -308,7 +308,7 @@ def _matmul(
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     # compute output
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
 
@@ -360,13 +360,10 @@ def _matmul(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(w_format == "e2m1")
-                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                tl.static_assert(w.dtype == tl.bfloat16)
-                acc = acc.trans()
-                x = x.trans()
-                # w = w.trans()
-                acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-                acc = acc.trans()
+                tl.static_assert(SWAP_XW)
+                wT = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
+                tl.static_assert(wT.dtype == tl.bfloat16)
+                acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
             else:
                 rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
                 acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
@@ -409,6 +406,8 @@ def _matmul(
         w_scale = load_scale(WScale + expt_id)
     else:
         w_scale = load_scale(WScale)
+    if SWAP_XW:
+        acc = acc.T
     acc *= x_scale * w_scale
     acc = acc + bias[None, :] * betas[:, None]
     if out_alpha is not None:
