@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -convert-warp-pipeline | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx1250" | FileCheck %s --check-prefixes CHECK,WAVE32
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx950" | FileCheck %s --check-prefixes CHECK,WAVE64
 
 // ---- 2-stage pipeline (basic) ----
 //
@@ -8,6 +9,7 @@ tt.func @two_stage_backend(%n: index, %ptr: !tt.ptr<f32>) {
   %c1  = arith.constant 1 : index
   %v0  = arith.constant 0.0 : f32
   %v1  = arith.constant 1.0 : f32
+
 
   scf.for %i = %c0 to %n step %c1 {
 
@@ -37,6 +39,8 @@ tt.func @two_stage_backend(%n: index, %ptr: !tt.ptr<f32>) {
 // === Pre-loop sync + role setup ===
 // CHECK: ttg.barrier local
 // CHECK: arith.divsi
+// WAVE64-SAME: %c256
+// WAVE32-SAME: %c128
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne
 // CHECK: amdg.cond_barrier %[[WARPHIGH]]

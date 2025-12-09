@@ -91,9 +91,11 @@ static void emitClusterBarrier(PatternRewriter &r, Location loc,
 
 class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
 public:
-  ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc)
+  ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc,
+                             int threadsPerPipelineGroup)
       : OpRewritePattern<scf::ForOp>(ctx, /*benefit=*/2),
-        moduleAllocation(moduleAlloc) {}
+        moduleAllocation(moduleAlloc),
+        threadsPerPipelineGroup(threadsPerPipelineGroup) {}
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const override {
@@ -108,7 +110,8 @@ public:
     if (!allocation)
       return rewriter.notifyMatchFailure(forOp, "no Allocation for function");
 
-    if (failed(emitPipelinedFor(rewriter, forOp.getLoc(), forOp, allocation)))
+    if (failed(emitPipelinedFor(rewriter, forOp.getLoc(), forOp, allocation,
+                                threadsPerPipelineGroup)))
       return failure();
 
     return success();
@@ -116,8 +119,8 @@ public:
 
 private:
   LogicalResult emitPipelinedFor(PatternRewriter &b, Location loc,
-                                 scf::ForOp forOp,
-                                 Allocation *allocation) const {
+                                 scf::ForOp forOp, Allocation *allocation,
+                                 int threadsPerPipelineGroup) const {
     // 1. Insert conditional branch first,
     b.setInsertionPoint(forOp);
     // Set barrier before starting the loop. This resolves any outstanding
@@ -131,7 +134,8 @@ private:
     auto i32ty = b.getIntegerType(32);
     auto workIDX = ROCDL::ThreadIdXOp::create(b, loc, i32ty);
     auto constZero = arith::ConstantIntOp::create(b, loc, 0, 32);
-    auto constWarpSize = arith::ConstantIntOp::create(b, loc, 256, 32);
+    auto constWarpSize =
+        arith::ConstantIntOp::create(b, loc, threadsPerPipelineGroup, 32);
     auto warpIDX = arith::DivSIOp::create(b, loc, workIDX, constWarpSize);
     auto warpLow = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
                                          warpIDX, constZero);
@@ -276,6 +280,7 @@ private:
   }
 
   ModuleAllocation &moduleAllocation;
+  int threadsPerPipelineGroup;
 };
 
 class InlineWarpPipelineExecuteRegionPattern
@@ -319,13 +324,30 @@ public:
 struct ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
+public:
+  ConvertWarpPipeline(StringRef arch)
+      : ConvertWarpPipelineBase<ConvertWarpPipeline>() {
+    this->arch = arch.str();
+  }
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     ModuleAllocation moduleAllocation(m);
+    mlir::triton::AMD::TargetInfo targetInfo(arch.getValue());
+    if (targetInfo.getISAFamily() == mlir::triton::AMD::ISAFamily::Unknown) {
+      m.emitError("unsupported target: '") << arch.getValue() << "'";
+      return signalPassFailure();
+    }
+    // Thread count of one warp-pipeline group.
+    // A block runs on 4 SIMDs with 2 warps per SIMD. Warp-pipelining splits
+    // these warps into two groups (one warp per SIMD) that execute different
+    // stages at different times.
+    int threadsPerPipelineGroup = targetInfo.getWarpSize() * 4;
 
     RewritePatternSet patternFor(&getContext());
     RewritePatternSet patternInline(&getContext());
-    patternFor.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation);
+    patternFor.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation,
+                                               threadsPerPipelineGroup);
     patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(m, std::move(patternFor))))
@@ -338,7 +360,8 @@ struct ConvertWarpPipeline
 } // namespace
 
 namespace mlir::triton::AMD {
-std::unique_ptr<OperationPass<ModuleOp>> createConvertWarpPipelinePass() {
-  return std::make_unique<ConvertWarpPipeline>();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertWarpPipelinePass(StringRef arch) {
+  return std::make_unique<ConvertWarpPipeline>(arch);
 }
 } // namespace mlir::triton::AMD
