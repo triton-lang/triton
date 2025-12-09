@@ -185,7 +185,7 @@ struct CoalesceAsyncCopyWrites
                     "component of the padded encoding");
       }
 
-      newDistEnc = ttg::LinearEncodingAttr::get(ctx, newRegLayout);
+      newDistEnc = ttg::LinearEncodingAttr::get(ctx, std::move(newRegLayout));
     } else {
       assert(false && "Unsupported layout");
     }

@@ -389,7 +389,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
           append(defaultEnc.getThreadsPerWarp(), 1),
           append(defaultEnc.getWarpsPerCTA(), 1),
           prepend(defaultEnc.getOrder(), rank - 1),
-          CGAEncodingAttr::get(getContext(), layout));
+          CGAEncodingAttr::get(getContext(), std::move(layout)));
       srcTy = srcTy.cloneWithEncoding(srcEnc);
       src = ConvertLayoutOp::create(rewriter, op.getLoc(), srcTy, src);
     }

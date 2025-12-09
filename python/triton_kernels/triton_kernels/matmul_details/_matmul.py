@@ -116,7 +116,6 @@ def _matmul(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
 
-        # TODO: refactor if/else when triton front end improves
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             tl.static_assert(not is_x_microscaled)
@@ -189,11 +188,11 @@ def _matmul(
 
     (
         expt_id, start_z, start_z_out,
-        start_m, off_m,
+        start_m, _, off_m,
         off_k_x, off_k_w
     ) = compute_offsets(
             pid_s, pid_m, pid_k,
-            XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
             WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
             RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K

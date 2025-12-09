@@ -555,7 +555,7 @@ private:
     auto *ctx = kBlocked.getContext();
     auto dim = standardOutDimNames(ctx, rank + 1)[rank];
     ctaLl *= LinearLayout::identity1D(1, kBlocked, dim);
-    auto ctaLayout3d = CGAEncodingAttr::get(ctx, ctaLl);
+    auto ctaLayout3d = CGAEncodingAttr::get(ctx, std::move(ctaLl));
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
         order3d, ctaLayout3d);

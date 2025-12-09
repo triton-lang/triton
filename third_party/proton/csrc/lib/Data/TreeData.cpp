@@ -244,7 +244,7 @@ void TreeData::dumpHatchet(std::ostream &os) const {
             kernelMetric->getValueName(KernelMetric::Duration));
         inclusiveValueNames.insert(
             kernelMetric->getValueName(KernelMetric::Invocations));
-        deviceIds.insert({deviceType, {deviceId}});
+        deviceIds[deviceType].insert(deviceId);
       } else if (metricKind == MetricKind::PCSampling) {
         auto pcSamplingMetric =
             std::dynamic_pointer_cast<PCSamplingMetric>(metric);
@@ -276,7 +276,7 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         (*jsonNode)["metrics"]
                    [cycleMetric->getValueName(CycleMetric::DeviceType)] =
                        std::to_string(deviceType);
-        deviceIds.insert({deviceType, {deviceId}});
+        deviceIds[deviceType].insert(deviceId);
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are handled in a different way
       } else {
@@ -313,12 +313,12 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   // problems
   output.push_back(json::object());
   auto &deviceJson = output.back();
-  for (auto [deviceType, deviceIds] : deviceIds) {
+  for (auto [deviceType, deviceIdSet] : deviceIds) {
     auto deviceTypeName =
         getDeviceTypeString(static_cast<DeviceType>(deviceType));
     if (!deviceJson.contains(deviceTypeName))
       deviceJson[deviceTypeName] = json::object();
-    for (auto deviceId : deviceIds) {
+    for (auto deviceId : deviceIdSet) {
       Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
       deviceJson[deviceTypeName][std::to_string(deviceId)] = {
           {"clock_rate", device.clockRate},
