@@ -268,10 +268,12 @@ struct GraphState {
   size_t numInstances{1};
 };
 
-// FIXME: it should be a per-stream queue in case we capture graphs from
-// different streams or different devices
+// Track pending graphs per device so flushing a single device won't drain
+// graphs from other devices.
 class PendingGraphQueue {
 public:
+  explicit PendingGraphQueue(Runtime *runtime) : runtime(runtime) {}
+
   struct PendingGraph {
     size_t externId;
     std::map<Data *, std::vector<std::pair<bool, size_t>>> dataToScopeIds;
@@ -279,42 +281,60 @@ public:
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  PendingGraphQueue() = default;
-
   void push(size_t externId,
             const std::map<Data *, std::vector<std::pair<bool, size_t>>>
                 &dataToScopeIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
-    pendingGraphs.push_back(PendingGraph{externId, dataToScopeIds, numNodes});
-    this->totalNumNodes += numNodes;
+    auto device = runtime->getDevice();
+    auto &queue = deviceQueues[device];
+    queue.pendingGraphs.push_back(
+        PendingGraph{externId, dataToScopeIds, numNodes});
+    queue.totalNumNodes += numNodes;
   }
 
-  PopResult popAllIfReachCapacity(size_t numNewNodes, size_t capacity) {
+  PopResult pop(size_t numNewNodes, size_t capacity) {
     std::lock_guard<std::mutex> lock(mutex);
-    if ((this->totalNumNodes + numNewNodes) * 2 * sizeof(uint64_t) <=
+    if (deviceQueues.empty()) {
+      return {0, {}};
+    }
+    auto device = runtime->getDevice();
+    auto &queue = deviceQueues[device];
+    if ((queue.totalNumNodes + numNewNodes) * 2 * sizeof(uint64_t) <=
         capacity) {
       return {0, {}};
     }
-    return popAllLocked();
+    return popLocked(queue);
   }
 
-  PopResult popAll() {
+  std::vector<PopResult> popAll() {
     std::lock_guard<std::mutex> lock(mutex);
-    return popAllLocked();
+    if (deviceQueues.empty()) {
+      return {{0, {}}};
+    }
+    std::vector<PopResult> results;
+    for (auto &[device, queue] : deviceQueues) {
+      results.emplace_back(popLocked(queue));
+    }
+    return results;
   }
 
 private:
-  PopResult popAllLocked() {
+  struct Queue {
+    size_t totalNumNodes{};
+    std::vector<PendingGraph> pendingGraphs;
+  };
+
+  PopResult popLocked(Queue &queue) {
     std::vector<PendingGraph> items;
-    items.swap(pendingGraphs);
-    size_t numNodes = totalNumNodes;
-    totalNumNodes = 0;
+    items.swap(queue.pendingGraphs);
+    size_t numNodes = queue.totalNumNodes;
+    queue.totalNumNodes = 0;
     return {numNodes, items};
   }
 
-  size_t totalNumNodes{};
-  std::vector<PendingGraph> pendingGraphs;
+  Runtime *runtime{};
+  std::map<void *, Queue> deviceQueues;
   mutable std::mutex mutex;
 };
 
@@ -323,7 +343,8 @@ private:
 struct CuptiProfiler::CuptiProfilerPimpl
     : public GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface {
   CuptiProfilerPimpl(CuptiProfiler &profiler)
-      : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {
+      : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler),
+        pendingGraphQueue(&CudaRuntime::instance()) {
     runtime = &CudaRuntime::instance();
     metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
   }
@@ -619,8 +640,33 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             }
           }
+        }
+      }
+      profiler.correlation.correlate(callbackData->correlationId, numInstances);
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        pImpl->pcSampling.start(callbackData->context);
+      }
+    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
+      auto externId = profiler.correlation.externIdQueue.back();
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        // XXX: Conservatively stop every GPU kernel for now
+        pImpl->pcSampling.stop(
+            callbackData->context, externId,
+            profiler.correlation.apiExternIds.contain(externId));
+      }
+      if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
+          cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
+        // Cuda context can be lazily initialized, so we need to call device get
+        // here after the first kernel is launched
+        auto graphExec = static_cast<const cuGraphLaunch_params *>(
+                             callbackData->functionParams)
+                             ->hGraph;
+        uint32_t graphExecId = 0;
+        cupti::getGraphExecId<true>(graphExec, &graphExecId);
+        if (pImpl->graphStates.contain(graphExecId)) {
           std::map<Data *, std::vector<std::pair<bool, size_t>>>
               metricNodeScopes;
+          auto dataSet = profiler.getDataSet();
           for (auto *data : dataSet) {
             auto &nodeToScopeId =
                 profiler.correlation.externIdToGraphNodeScopeId[externId][data];
@@ -639,8 +685,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->metricBuffer->getCapacity(); // bytes
           auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
-          auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
-              metricNodeCount, metricBufferCapacity);
+          auto drained = pImpl->pendingGraphQueue.pop(metricNodeCount,
+                                                      metricBufferCapacity);
           if (drained.first != 0) { // Reached capacity
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
               auto *recordPtr = reinterpret_cast<uint64_t *>(data);
@@ -650,18 +696,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
                                         metricNodeCount);
         }
-      }
-      profiler.correlation.correlate(callbackData->correlationId, numInstances);
-      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
-        pImpl->pcSampling.start(callbackData->context);
-      }
-    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
-        // XXX: Conservatively stop every GPU kernel for now
-        auto scopeId = profiler.correlation.externIdQueue.back();
-        pImpl->pcSampling.stop(
-            callbackData->context, scopeId,
-            profiler.correlation.apiExternIds.contain(scopeId));
       }
       threadState.exitOp();
       profiler.correlation.submit(callbackData->correlationId);
@@ -713,14 +747,17 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // new activities.
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
-  auto dataSet = profiler.getDataSet();
   auto popResult = pendingGraphQueue.popAll();
-  metricBuffer->flush(
-      [&](uint8_t *data, size_t dataSize) {
-        auto *recordPtr = reinterpret_cast<uint64_t *>(data);
-        emitMetricRecords(recordPtr, popResult.second);
-      },
-      /*flushAll=*/true);
+  if (!popResult.empty()) {
+    auto resultIdx = 0;
+    metricBuffer->flush(
+        [&](uint8_t *data, size_t dataSize) {
+          auto *recordPtr = reinterpret_cast<uint64_t *>(data);
+          emitMetricRecords(recordPtr, popResult[resultIdx].second);
+          resultIdx++;
+        },
+        /*flushAll=*/true);
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
