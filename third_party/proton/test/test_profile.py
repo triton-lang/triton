@@ -713,7 +713,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
             run_on_device(device.index)
             # graph capture
             g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g):
+            with torch.cuda.graph(g, stream=stream):
                 for _ in range(10):
                     run_on_device(device.index)
         graphs.append((device, stream, g))
