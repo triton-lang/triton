@@ -493,7 +493,7 @@ def fp4_to_fp(src, elem_type, axis, _semantic=None):
 
 
 @builtin
-def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
@@ -507,13 +507,15 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _sema
     Args:
         functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition. The first of which is the default partition.
         worker_num_warps (List[int]): Number of warps used for each worker partition.
-        worker_num_regs (List[int]): Number of registers for each worker partition.
+        worker_num_regs (List[int], optional): Number of registers for each worker partition.
+            If not None, will be used by backend for dynamic register reallocation.
 
     Returns:
         Tuple[Any, ...]: Results from the default partition.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
-    worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
+    if worker_num_regs is not None:
+        worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
     return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 

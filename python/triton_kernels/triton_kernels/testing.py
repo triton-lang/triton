@@ -325,6 +325,8 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
         if scale_hbm_swizzling is not None:
             # convert scales to swizzled hbm layout
+            if "ragged_metadata" in scale_hbm_swizzling_args:
+                scale_hbm_swizzling_args["ragged_metadata"] = ragged_metadata
             scale_layout, scale_layout_opts = scale_hbm_swizzling(**scale_hbm_swizzling_args)
             scales = convert_layout(scales, scale_layout, **scale_layout_opts)
     return buffer, scales, ragged_metadata

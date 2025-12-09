@@ -65,7 +65,9 @@ class HopperMXScaleLayout(Layout):
         return data[..., :self.M, :self.K]
 
     def swizzle_block_shape(self, block_shape):
-        return block_shape
+        N, K = block_shape[-2:]
+        assert N % 32 == 0
+        return [*block_shape[:-2], N // 32, K * 32]
 
 
 @triton.jit
