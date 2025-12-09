@@ -44,3 +44,7 @@ class AutotunerError(TritonError):
     def __str__(self) -> str:
         error_message = self.error_message or ""
         return f"Autotuner error: {error_message}"
+
+
+class IntelGPUError(TritonError):
+    pass
