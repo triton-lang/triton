@@ -25,7 +25,8 @@ RUN cmake -GNinja -Bbuild \
   -DCMAKE_ASM_COMPILER=clang \
   -DCMAKE_C_COMPILER_LAUNCHER=sccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-  -DCMAKE_CXX_FLAGS="-Wno-everything" \
+  -DCMAKE_C_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(gcc -dumpmachine)/8" \
+  -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(gcc -dumpmachine)/8 -Wno-everything" \
   -DCMAKE_LINKER=lld \
   -DCMAKE_INSTALL_PREFIX="/install" \
   -DPython3_EXECUTABLE="/usr/bin/python3.8" \
