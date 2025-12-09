@@ -304,7 +304,7 @@ public:
         capacity) {
       return {0, {}};
     }
-    return popAllLocked(queue);
+    return popLocked(queue);
   }
 
   std::vector<PopResult> popAll() {
@@ -314,7 +314,7 @@ public:
     }
     std::vector<PopResult> results;
     for (auto &[device, queue] : deviceQueues) {
-      results.emplace_back(popAllLocked(queue));
+      results.emplace_back(popLocked(queue));
     }
     return results;
   }
@@ -325,7 +325,7 @@ private:
     std::vector<PendingGraph> pendingGraphs;
   };
 
-  PopResult popAllLocked(Queue &queue) {
+  PopResult popLocked(Queue &queue) {
     std::vector<PendingGraph> items;
     items.swap(queue.pendingGraphs);
     size_t numNodes = queue.totalNumNodes;
