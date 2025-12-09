@@ -16,8 +16,10 @@ def get_key():
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
+
 # Keep custom pipeline stages in a seperate file from kernels as any change to the file
 # will trigger a recompile.
+
 
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
@@ -36,6 +38,7 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
 
     return get_key(), get_hash()
+
 
 def inspect_stages_hook_dialect(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
