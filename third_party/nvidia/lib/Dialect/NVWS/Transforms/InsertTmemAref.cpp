@@ -254,9 +254,9 @@ struct TmemAccessDag {
   }
 
   void collectPartitions(Node *node, bool &hasRootPartition,
-                         std::set<PartitionId> &partitions) {
+                         SmallVector<PartitionId> &partitions) {
     if (node->partitionId) {
-      partitions.insert(*node->partitionId);
+      partitions.push_back(*node->partitionId);
     } else {
       // root partition is considered a real owner only if there are already
       // other partitions owning tmem
@@ -272,15 +272,21 @@ struct TmemAccessDag {
     }
   };
 
-  std::pair<bool, std::set<PartitionId>> collectPartitions() {
-    std::set<PartitionId> partitions;
+  std::pair<bool, SmallVector<PartitionId>> collectPartitionsVec() {
+    SmallVector<PartitionId> partitions;
     bool hasRootPartition = false;
     auto node = getRootNode();
     auto allocOp = getAllocOp();
     if (allocOp.getSrc() && node->partitionId)
-      partitions.insert(*node->partitionId);
+      partitions.push_back(*node->partitionId);
     collectPartitions(getRootNode()->user.get(), hasRootPartition, partitions);
     return {hasRootPartition, partitions};
+  }
+
+  std::pair<bool, std::set<PartitionId>> collectPartitionsSet() {
+    auto [hasRootPartition, partitions] = collectPartitionsVec();
+    return {hasRootPartition,
+            std::set<PartitionId>(partitions.begin(), partitions.end())};
   }
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
@@ -302,7 +308,7 @@ struct TmemAccessDag {
         if (tmemAlloc.getSrc()) {
           os << " %src ";
         } else {
-          std::tie(hasRootPartition, partitions) = collectPartitions();
+          std::tie(hasRootPartition, partitions) = collectPartitionsSet();
         }
       }
       os << "  ";
@@ -565,11 +571,66 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   return node;
 }
 
-LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
+bool haveEnoughTmem(MMAv5OpInterface mmaOp, int numTmemBlocks) {
+  auto tmemDesc = mmaOp.getAccumulator().getType();
+  auto blockM = tmemDesc.getShape()[0];
+  auto blockN = tmemDesc.getShape()[1];
+  constexpr int numTMEMColumns = 512;
+  constexpr int numTMEMRows = 128;
+  if (numTmemBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {
+    return false;
+  }
+  if (isa<TCGen5MMAScaledOp>(mmaOp) && blockN == 256) {
+    return false;
+  }
+  return true;
+};
+
+bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
+  // TMEM partitioning follows producer-consumer pattern if it has this
+  // structure:
+  //
+  //      |alloc
+  //      |-- ops
+  //    loop (A) (tt.ws)
+  //      |----  ops (A)
+  //      |----  ops (B)
+  //      |----  possibly ops (A)
+  //      |----  yield (A)
+  //
+  // We have root operations, then enter a warp-specialized loop where:
+  // - First, partition A owns TMEM and performs operations
+  // - Then, partition B owns TMEM and performs operations
+  // - Possibly, partition A owns TMEM and performs operations
+  // - Loop repeats with partition A yielding
+  //
+  // This represents a producer-consumer relationship where partition A produces
+  // values and partition B consumes them. This is a necessary (but not
+  // sufficient) condition for enabling TMEM multi-buffering with arefs.
+  // Additional validation will verify sufficient conditions for
+  // multi-buffering.
+
+  auto [hasRootPartition, partitions] = accessDag.collectPartitionsVec();
+
+  // Count partition transitions: producer-consumer pattern has exactly two
+  // transitions (A->B followed by B->A). More than two transitions (e.g.,
+  // A-A-B-B-A-A-B-B-A-A) indicate a more complex pattern that doesn't fit the
+  // producer-consumer model.
+  int changePoints = 0;
+  for (size_t i = 0; i < partitions.size() - 1; ++i) {
+    if (partitions[i] != partitions[i + 1])
+      ++changePoints;
+  }
+
+  return changePoints == 2;
+}
+
+LogicalResult insertTmemAref(TmemAccessDag &accessDag, int &numTmemBlocks) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
   std::optional<bool> isMultiStaged;
+  int numTmemBlock = 0;
   for (auto user : allocOp.getResult().getUsers()) {
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
       if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
@@ -585,10 +646,27 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
             !getDisallowAccMultiBuffer(wsLoop);
         isMultiStaged = isMultiStaged ? *isMultiStaged && accIsMultiBuffered
                                       : accIsMultiBuffered;
+        if (*isMultiStaged) {
+          // if isMultiStaged: verify we have enough TMEM blocks for it
+          auto hasEnoughTmem = haveEnoughTmem(mmaOp, numTmemBlocks);
+          isMultiStaged = hasEnoughTmem;
+        }
       }
     }
   }
+  if (isMultiStaged && *isMultiStaged) {
+    // if isMultiStaged: verify that partitioner results in producer-consumer
+    // pattern for tmem accesses
+    auto flag = hasProducerConsumerPartitioning(accessDag);
+    isMultiStaged =
+        *isMultiStaged && hasProducerConsumerPartitioning(accessDag);
+  }
+
   auto numStages = isMultiStaged ? (1 + *isMultiStaged) : 1;
+
+  // update numTmemBlocks for the number of TMEM blocks used by the aref buffer
+  auto allocShape = allocOp.getType().getShape();
+  numTmemBlocks += numStages * allocShape[0] * allocShape[1] * numStages;
   auto arefBufType =
       getArefMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
@@ -661,7 +739,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
     // posting a matching GET operation for the PUT would cause the dead-lock.
-    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
+    auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     std::optional<PartitionId> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
     // get
@@ -788,13 +866,14 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
     tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
+  int numTmemBlocks = 0;
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
-    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
+    auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
     if (totalOwners > 1)
-      if (failed(insertTmemAref(accessDag)))
+      if (failed(insertTmemAref(accessDag, numTmemBlocks)))
         return failure();
   }
 
