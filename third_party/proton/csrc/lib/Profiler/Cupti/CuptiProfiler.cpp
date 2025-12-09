@@ -293,7 +293,7 @@ public:
     queue.totalNumNodes += numNodes;
   }
 
-  PopResult popAllIfReachCapacity(size_t numNewNodes, size_t capacity) {
+  PopResult pop(size_t numNewNodes, size_t capacity) {
     std::lock_guard<std::mutex> lock(mutex);
     if (deviceQueues.empty()) {
       return {0, {}};
@@ -687,8 +687,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->metricBuffer->getCapacity(); // bytes
           auto metricNodeCount =
               pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
-          auto drained = pImpl->pendingGraphQueue.popAllIfReachCapacity(
-              metricNodeCount, metricBufferCapacity);
+          auto drained = pImpl->pendingGraphQueue.pop(metricNodeCount,
+                                                      metricBufferCapacity);
           if (drained.first != 0) { // Reached capacity
             pImpl->metricBuffer->flush([&](uint8_t *data, size_t dataSize) {
               auto *recordPtr = reinterpret_cast<uint64_t *>(data);
@@ -756,7 +756,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
           auto *recordPtr = reinterpret_cast<uint64_t *>(data);
           emitMetricRecords(recordPtr, popResult.second);
         },
-        /*flushAll=*/false);
+        /*flushAll=*/true);
   }
 }
 
