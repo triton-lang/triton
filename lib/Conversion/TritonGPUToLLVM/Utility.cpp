@@ -357,12 +357,13 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
   Value laneId;
-  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
+  Value warpId;
   if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
     laneId = tid;
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
+    warpId = b.udiv(tid, warpSizeVal);
   }
 
   return {laneId, warpId};
@@ -1223,8 +1224,6 @@ delinearize(RewriterBase &rewriter, Location loc,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ll = triton::gpu::toLinearLayout(shape, layout);
-  auto linearLayout =
-      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
   int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
   auto isRepresentative = b.true_val();
@@ -1236,6 +1235,8 @@ delinearize(RewriterBase &rewriter, Location loc,
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
   }
 
+  auto linearLayout = triton::gpu::LinearEncodingAttr::get(
+      rewriter.getContext(), std::move(ll));
   auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
   auto shapeDim = linearLayout.basesPerDim(dimName);
   auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);

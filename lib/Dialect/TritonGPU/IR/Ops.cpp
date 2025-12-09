@@ -342,6 +342,16 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
+    // cvt(cat) -> cat
+    if (auto cat = dyn_cast<CatOp>(arg)) {
+      if (isExpensiveCat(cat, op.getType().getEncoding()))
+        return failure();
+
+      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
+                                         cat.getOperands());
+      return success();
+    }
+
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
@@ -601,7 +611,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
       intervalPads.emplace_back(interval, padding);
     }
-    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, dst);
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, std::move(dst));
     return success();
   }
 
@@ -609,7 +619,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
-  dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
+  dstEnc = SharedLinearEncodingAttr::get(ctx, std::move(dstLL),
+                                         sharedEnc.getAlignment());
   return success();
 }
 

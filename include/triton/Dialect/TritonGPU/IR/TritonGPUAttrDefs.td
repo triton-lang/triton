@@ -446,7 +446,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         if (shapePerCTA.size() < 2 || flattenOutterDim < 8) {
           swizzlingByteWidth = 0;
         }
-        bool transposed = order[0] == 0;
+        bool transposed = order.size() > 1 && order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];

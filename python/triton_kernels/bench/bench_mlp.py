@@ -1,17 +1,13 @@
 from itertools import chain
 from pathlib import Path
-from copy import deepcopy
 import triton.profiler as proton
 import torch
 import argparse
-import triton_kernels
 import triton_kernels.roofline as roofline
-import triton_kernels.swiglu
-from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul import matmul
 from triton_kernels.target_info import get_cdna_version
 import distributed as triton_dist
-from triton_kernels.tensor_details import layout
-from bench_utils import quantize_weight
+from bench_utils import prepare_mlp_numerics, resolve_x_dtype
 import tempfile
 
 
@@ -40,34 +36,12 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     b2 = triton_dist.broadcast(b2, src=ep_indx * TP, groups=groups, group_idx=ep_indx)
 
     # -- numerics --
-    opt1 = dict()
-    opt2 = dict()
-    if w_dtype == "mx4":
-        num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
-        opt1 = {
-            "value_layout": value_layout,
-            "value_layout_opts": value_layout_opts,
-            "scale_layout": scale_layout,
-            "scale_layout_opts": scale_layout_opts,
-        }
-        opt2 = deepcopy(opt1)
-    wg, wg_flex, wg_scale = quantize_weight(wg, "bf16")
-    w1, w1_flex, w1_scale = quantize_weight(w1, w_dtype, **opt1)
-    w2, w2_flex, w2_scale = quantize_weight(w2, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
-    act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
-                          (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
+    numerics = prepare_mlp_numerics(batch, w_dtype, wg, w1, w2)
+    wg, w1, w2 = numerics.wg, numerics.w1, numerics.w2
+    pcg, pc1, pc2, act = numerics.pcg, numerics.pc1, numerics.pc2, numerics.activation
 
     # -- benchmark --
-    x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
-    # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
-    if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
-        x_dtype = torch.float8_e4m3fnuz
+    x_dtype = resolve_x_dtype(x_dtype)
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     expt_assignment = triton_dist.create_expt_assignment(EP, n_expts_tot, torch.device(dev))
@@ -92,6 +66,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             x = matmul(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
         x = triton_dist.reduce_scatter(x, n_expts_act, metadata=metadata, expt_assignment=expt_assignment)
     proton.finalize()
+    triton_dist.cleanup_matmul()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
 

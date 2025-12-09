@@ -59,7 +59,7 @@ public:
   /// A unique identifier for shared memory buffers
   using BufferId = size_t;
   using BufferIdSetT = DenseSet<BufferId>;
-  using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
+  using FuncAllocMapT = triton::CallGraph<Allocation>::FuncDataMapT;
 
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
@@ -216,14 +216,14 @@ private:
 /// Each call op is treated like convert_layout that allocates a scratch buffer.
 /// At each call, we compute the start offset of the scratch buffer and pass it
 /// as an argument to the callee.
-class ModuleAllocation : public CallGraph<Allocation> {
+class ModuleAllocation : public triton::CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
   ModuleAllocation(ModuleOp moduleOp,
                    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter =
                        triton::defaultAllocationAnalysisScratchSizeFn)
-      : CallGraph<Allocation>(moduleOp) {
+      : triton::CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},

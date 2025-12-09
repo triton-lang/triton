@@ -469,6 +469,13 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
 
+    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool, layout) -> TensorTy:
+        _check(layout is not None, lambda: "cat requires a destination layout")
+        _check(can_reorder, lambda: "current implementation of `cat` always may reorder elements")
+        _check(len(lhs.shape) == 1, lambda: "cat requires a rank-1 input")
+        ret_type = ttgl.distributed_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]], layout)
+        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle, ret_type.to_ir(self.builder)), ret_type)
+
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
         _check(isinstance(index.type, ttgl.distributed_type),
@@ -511,9 +518,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
-        assert num_partitions == len(
-            worker_num_regs
-        ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
+
+        if worker_num_regs is not None:
+            assert num_partitions == len(
+                worker_num_regs
+            ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
 
         builder = self.builder
         insert_pt = builder.get_insertion_point()
@@ -532,7 +541,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         builder.restore_insertion_point(insert_pt)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
-        ws_op.set_requested_registers(worker_num_regs)
+
+        if worker_num_regs is not None:
+            ws_op.set_requested_registers(worker_num_regs)
 
         # Emit the partition regions.
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
