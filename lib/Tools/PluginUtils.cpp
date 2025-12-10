@@ -61,37 +61,29 @@ llvm::Error TritonPlugin::loadPlugin() {
   auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
   auto registerPassAPIOrErr =
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+  auto dialectPluginInfoAPIOrErr =
+      getAPI<dialectPluginInfoType, dialectPluginInfoCType>(DIALECT_PLUGININFO);
+  auto enumerateDialectsAPIOrErr =
+      getAPIOrNull<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+          ENUMERATE_DIALECTS);
+  auto enumeratePassesAPIOrErr =
+      getAPIOrNull<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+          ENUMERATE_PASSES);
+
   if (auto Err = enumeratePassesAPIOrErr.takeError())
     return Err;
   if (auto Err = addPassAPIOrErr.takeError())
     return Err;
   if (auto Err = registerPassAPIOrErr.takeError())
     return Err;
+  if (auto Err = enumerateDialectsAPIOrErr.takeError())
+    return Err;
+  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
+    return Err;
 
   addPassAPI = *addPassAPIOrErr;
   registerPassAPI = *registerPassAPIOrErr;
-
-  // We require at least the pass plugin symbols to be present
-  // if the pass plugin symbols are present but dialects are not just set it to
-  // a nullptr and trust the user to not try and call it. However for plugin
-  // dialects both sets of APIs must be implemented
-  llvm::Expected<enumeratePyBindHandlesType> enumerateDialectsAPIOrErr =
-      (isPassPluginSymbolPresent && !isDialectPluginSymbolPresent)
-          ? llvm::Expected<enumeratePyBindHandlesType>(nullptr)
-          : getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
-                ENUMERATE_DIALECTS);
-  if (auto Err = enumerateDialectsAPIOrErr.takeError())
-    return Err;
   enumerateDialectsAPI = *enumerateDialectsAPIOrErr;
-
-  llvm::Expected<dialectPluginInfoType> dialectPluginInfoAPIOrErr =
-      (isPassPluginSymbolPresent && !isDialectPluginSymbolPresent)
-          ? llvm::Expected<dialectPluginInfoType>(nullptr)
-          : getAPI<dialectPluginInfoType, dialectPluginInfoCType>(
-                DIALECT_PLUGININFO);
-
-  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
-    return Err;
   dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   enumeratePassesAPI = *enumeratePassesAPIOrErr;
   isLoaded = true;
@@ -125,11 +117,23 @@ llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
+  // Do a check to see if the enumerate-passes api symbol is present, bail as
+  // if there are 0 passes if not
+  intptr_t isPassPluginSymbolPresent =
+      (intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES.c_str());
+  if (!isPassPluginSymbolPresent)
+    return TP_SUCCESS;
   return enumeratePyBindHandles(enumeratePassesAPI, passNames);
 }
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
+  // Do a check to see if the enumerate-dialects api symbol is present, bail as
+  // if there are 0 dialects if not
+  intptr_t isDialectPluginSymbolPresent =
+      (intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS.c_str());
+  if (!isDialectPluginSymbolPresent)
+    return TP_SUCCESS;
   return enumeratePyBindHandles(enumerateDialectsAPI, dialectNames);
 }
 
