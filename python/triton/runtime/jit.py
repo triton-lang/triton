@@ -795,11 +795,10 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
 
-    def preload(self, specialization_data, device=None):
+    def preload(self, specialization_data):
         import json
         import triton.language as tl
-        if device is None:
-            device = driver.active.get_current_device()
+        device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
         if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
