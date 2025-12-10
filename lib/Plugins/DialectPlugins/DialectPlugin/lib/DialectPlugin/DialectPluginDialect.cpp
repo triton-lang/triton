@@ -95,7 +95,7 @@ tritonEnumeratePluginDialects(uint32_t *dialectCount,
   return TP_SUCCESS;
 }
 
-extern "C" __attribute__((visibility("default"))) DialectPluginLibraryInfo
+TRITON_PLUGIN_API_TYPE(DialectPluginLibraryInfo)
 tritonGetDialectPluginInfo(const char *name) {
   return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {

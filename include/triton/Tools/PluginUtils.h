@@ -15,6 +15,8 @@ enum TritonPluginResult {
 };
 #define TRITON_PLUGIN_API                                                      \
   extern "C" __attribute__((visibility("default"))) TritonPluginResult
+#define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
+  extern "C" __attribute__((visibility("default"))) _TYPE
 
 struct TritonPlugin {
   TritonPlugin() = delete;
