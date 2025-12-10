@@ -1837,8 +1837,7 @@ static bool isTriviallyRelayoutable(Operation *op) {
   if (op->getNumOperands() != 1 || op->getNumResults() != 1)
     return false;
   return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp,
-             arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp,
-             amdgpu::UpcastMXFPOp>(op);
+             arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp>(op);
 }
 
 static Operation *cloneWithNewEncoding(OpBuilder &builder, Operation *op,
@@ -1978,7 +1977,8 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       auto newTy = RankedTensorType::get(srcTy.getShape(),
                                          srcTy.getElementType(), newEnc);
 
-      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy, cvt.getSrc());
+      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy,
+                                                 cvt.getSrc());
       cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
