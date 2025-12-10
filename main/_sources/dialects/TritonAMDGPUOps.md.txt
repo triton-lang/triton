@@ -947,7 +947,7 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `input` | ranked tensor of 8-bit signless integer values |
-| `scale` | ranked tensor of bfloat16 type values |
+| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer values |
 
 #### Results:
 
@@ -982,7 +982,7 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `input` | ranked tensor of f8E4M3FN type or f8E5M2 type values |
-| `scale` | ranked tensor of bfloat16 type values |
+| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer values |
 
 #### Results:
 
