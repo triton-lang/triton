@@ -5,9 +5,111 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include <deque>
 
 namespace mlir {
+
+namespace {
+
+llvm::SmallDenseSet<Allocation::BufferId, 2>
+getSharedBufferIds(Operation *op, Allocation *allocation) {
+  auto opEffects = dyn_cast<MemoryEffectOpInterface>(op);
+  if (!opEffects)
+    return {};
+
+  llvm::SmallDenseSet<Allocation::BufferId, 2> bufferIds;
+  SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
+  opEffects.getEffects(effects);
+  for (auto &effect : effects) {
+    if (effect.getResource() != triton::gpu::SharedMemory::get())
+      continue;
+    Value value = effect.getValue();
+    auto memDescTy = cast<triton::gpu::MemDescType>(value.getType());
+    // Hacky way to skip barriers
+    if (memDescTy.getNumElements() == 1)
+      continue;
+    for (auto bufferId : allocation->getBufferIds(value)) {
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      bufferIds.insert(bufferId);
+    }
+  }
+  return bufferIds;
+}
+
+} // namespace
+
+static std::pair<BlockInfo::CTA_UFDS, BlockInfo::CTA_UFDS>
+getCTAEquivalenceSets(Operation *op) {
+  auto numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs == 1) {
+    return {BlockInfo::CTA_UFDS(1), BlockInfo::CTA_UFDS(1)};
+  }
+  auto *ctx = op->getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (isa<triton::gpu::ConvertLayoutOp, triton::ReduceOp>(op)) {
+    auto srcTy = cast<RankedTensorType>(op->getOperand(0).getType());
+    auto dstTy = cast<RankedTensorType>(op->getResult(0).getType());
+    auto srcCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
+    auto dstCTALayout = triton::gpu::getCTALayout(dstTy.getEncoding());
+    auto ctaLl = dstCTALayout.getLinearLayout().invertAndCompose(
+        srcCTALayout.getLinearLayout());
+    auto readsUFDS = BlockInfo::CTA_UFDS(numCTAs);
+    for (int i = 0; i < numCTAs; i++) {
+      auto res = ctaLl.apply({{kBlock, i}});
+      assert(res.size() == 1);
+      assert(res.front().first == kBlock);
+      readsUFDS.unite(i, res.front().second);
+    }
+    // The writes are just each writing to their own shmem
+    auto writesUFDS = BlockInfo::CTA_UFDS(numCTAs);
+    return {readsUFDS, writesUFDS};
+  } else if (auto tma =
+                 dyn_cast<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+                     op)) {
+    if (tma.getMulticast()) {
+      auto ctaLl =
+          triton::gpu::getCTALayout(tma.getResult().getType().getEncoding())
+              .getLinearLayout()
+              .flattenOuts();
+      // We build a map that's the identity on the non broadcasted blocks and
+      // zero in the broadcasted
+      auto ll = triton::LinearLayout::identity1D(numCTAs, kBlock, kBlock);
+      auto bases = ll.getBases();
+      auto &basesBlock = bases[kBlock];
+      auto outDim = *ctaLl.getOutDimNames().begin();
+      for (int i = 0; i < llvm::Log2_32(numCTAs); i++) {
+        if (ctaLl.getBasis(kBlock, i, outDim) == 0) {
+          basesBlock[i] = {0};
+        }
+      }
+      ll = triton::LinearLayout(bases, {{kBlock, numCTAs}}, false);
+      auto writesUFDS = BlockInfo::CTA_UFDS(numCTAs);
+      for (int i = 0; i < numCTAs; i++) {
+        auto res = ll.apply({{kBlock, i}});
+        assert(res.size() == 1);
+        assert(res.front().first == kBlock);
+        writesUFDS.unite(i, res.front().second);
+      }
+      // It's not going to be used so it's fine
+      auto defaultUFDS = BlockInfo::CTA_UFDS(numCTAs);
+      return {defaultUFDS, writesUFDS};
+    }
+  }
+  return {BlockInfo::CTA_UFDS(numCTAs), BlockInfo::CTA_UFDS(numCTAs)};
+}
+
+bool BlockInfo::haveSameAlloc(Operation *lhs, Operation *rhs,
+                              Allocation *allocation) {
+  auto lhsBuffers = getSharedBufferIds(lhs, allocation);
+  auto rhsBuffers = getSharedBufferIds(rhs, allocation);
+  return llvm::any_of(
+      lhsBuffers, [&](auto bufferId) { return rhsBuffers.contains(bufferId); });
+}
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
@@ -157,17 +259,27 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
+                                   const BlockInfo::CTA_UFDS &ctaClasses) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
+  if (ctaClasses.isDistributed()) {
+    // TODO Insert an membar when there is more than one CTA class to avoid
+    // synchronising the whole cluster
+    triton::nvidia_gpu::ClusterArriveOp::create(*builder, op->getLoc(),
+                                                /*relaxed=*/false);
+    triton::nvidia_gpu::ClusterWaitOp::create(*builder, op->getLoc());
+  } else {
+    triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
+  }
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op)) {
+  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
+          triton::nvidia_gpu::ClusterWaitOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
-    blockInfo->sync();
+    blockInfo->sync(isa<triton::nvidia_gpu::ClusterWaitOp>(op));
     return;
   }
 
@@ -176,10 +288,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
-    insertBarrier(op, builder);
-    blockInfo->sync();
+    auto nCTAs = triton::gpu::lookupNumCTAs(op);
+    insertBarrier(op, builder, BlockInfo::CTA_UFDS(nCTAs));
+    blockInfo->sync(false);
     return;
   }
+
+  auto [readCTAs, writeCTAs] = getCTAEquivalenceSets(op);
 
   BlockInfo curBlockInfo;
   auto scratchBufferId = Allocation::InvalidBufferId;
@@ -200,27 +315,23 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         if (auto value = effectInstance.getValue()) {
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
+              auto interval = allocation->getAllocatedInterval(bufferId);
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncWriteIntervals[{interval, writeCTAs}].insert(
+                    op);
               else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncReadIntervals[{interval, readCTAs}].insert(op);
             }
           }
         }
       }
     }
-    // If this op is may be signalling other threads asynchronously, make sure
+    // If this op may be signalling other threads asynchronously, make sure
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
-      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
+      curBlockInfo.syncWriteIntervals[{allIntervals, writeCTAs}].insert(op);
+      curBlockInfo.syncReadIntervals[{allIntervals, readCTAs}].insert(op);
     }
     scratchBufferId = allocation->getBufferId(op);
   }
@@ -250,21 +361,24 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "dependencies");
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncWriteIntervals[interval].insert(op);
-    auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
-    if (insertCTABarrier) {
+    curBlockInfo.syncWriteIntervals[{interval, writeCTAs}].insert(op);
+    auto insertCTABarrier =
+        blockInfo->isIntersected(curBlockInfo, filter, allocation);
+    if (insertCTABarrier.has_value()) {
       builder->setInsertionPoint(op);
-      insertBarrier(op, builder);
+      insertBarrier(op, builder, *insertCTABarrier);
+      blockInfo->sync(insertCTABarrier->isDistributed());
+    } else if (!isWarpSync) {
+      // Ops with a scratch buffer that don't use warp.sync internally sync
+      // read/write on shared memory at the CTA level.
+      blockInfo->sync(false);
     }
-    // Ops with a scratch buffer that don't use warp.sync internally sync
-    // read/write on shared memory
-    if (insertCTABarrier || !isWarpSync)
-      blockInfo->sync();
-    curBlockInfo.syncReadIntervals[interval].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
+    curBlockInfo.syncReadIntervals[{interval, readCTAs}].insert(op);
+  } else if (auto ctas =
+                 blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
     builder->setInsertionPoint(op);
-    insertBarrier(op, builder);
-    blockInfo->sync();
+    insertBarrier(op, builder, *ctas);
+    blockInfo->sync(ctas->isDistributed());
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.

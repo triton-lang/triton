@@ -131,10 +131,9 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  // TODO: Support reduce across CTAS
-  // Layout optimization passes such as PlanCTAPass and
-  // RemoveLayoutConversionPass should avoid cross-CTA reduction
-  return getCTASplitNum(srcEncoding)[axis] == 1;
+  // TODO: Implement.
+  // We allow them to be able to test them in the MembarPass
+  return true;
 }
 
 bool ReduceOpHelper::isAssociative() {
@@ -1133,5 +1132,4 @@ bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
          srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
          dstLayout.getFreeVariableMasks()[kWarp] == 0;
 }
-
 } // namespace mlir
