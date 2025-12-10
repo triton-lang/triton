@@ -23,7 +23,7 @@ public:
   using ScopeIdParent = std::vector<std::pair<ScopeId, ScopeId>>;
 
   ScopeIdAllocation() = default;
-  explicit ScopeIdAllocation(Operation *op) : funcOp(op) { run(); }
+  explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
     if (auto recordOp = dyn_cast<RecordOp>(op)) {
@@ -53,7 +53,7 @@ private:
   void dominance();
   void visitTerminator(Operation *op, SmallVector<VirtualBlock> &successors);
 
-  Operation *funcOp;
+  FunctionOpInterface funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
   llvm::DenseMap<Operation *, ScopeId> opToIdMap;
   ScopeIdParent scopeParentIds;
