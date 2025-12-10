@@ -1732,17 +1732,25 @@ public:
   }
 };
 
-static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned kDim) {
+static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim,
+                                                        unsigned kDim) {
   std::optional<unsigned> kBase = std::nullopt;
   switch (mDim) {
-    case 32: kBase = kDim / 2; break;
-    case 16: kBase = kDim / 4; break;
-    case 4:  kBase = kDim / 16; break;
+  case 32:
+    kBase = kDim / 2;
+    break;
+  case 16:
+    kBase = kDim / 4;
+    break;
+  case 4:
+    kBase = kDim / 16;
+    break;
   }
   return kBase;
 }
 
-static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
+static FailureOr<unsigned>
+getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
   auto shape = dotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
   unsigned mDim = shape[0];
   unsigned nDim = shape[1];
@@ -1780,7 +1788,10 @@ static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEnco
 //        can only consume kBase elements from each thread.
 //    Note that we cannot have larger kPack since kPack = 2 means
 //    ds_read_b128, which is the largest vector size for shared memory load.
-static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, unsigned kPack, StringRef arch) {
+static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp,
+                                                   unsigned kBase,
+                                                   unsigned kPack,
+                                                   StringRef arch) {
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
@@ -1799,17 +1810,17 @@ static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp, un
 static bool isTriviallyRelayoutable(Operation *op) {
   if (op->getNumOperands() != 1 || op->getNumResults() != 1)
     return false;
-  return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp, amdgpu::UpcastMXFPOp>(op);
+  return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp,
+             arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp,
+             amdgpu::UpcastMXFPOp>(op);
 }
 
-static Operation *cloneWithNewEncoding(OpBuilder &builder,
-                                       Operation *op,
+static Operation *cloneWithNewEncoding(OpBuilder &builder, Operation *op,
                                        Attribute newEncoding) {
   auto loc = op->getLoc();
   auto oldResTy = cast<RankedTensorType>(op->getResult(0).getType());
   auto newResTy = RankedTensorType::get(oldResTy.getShape(),
-                                        oldResTy.getElementType(),
-                                        newEncoding);
+                                        oldResTy.getElementType(), newEncoding);
 
   auto recreateSimple = [&](auto opTag) -> Operation * {
     using OpTy = decltype(opTag);
@@ -1819,27 +1830,31 @@ static Operation *cloneWithNewEncoding(OpBuilder &builder,
 
   return llvm::TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::FpToFpOp>([&](tt::FpToFpOp fp2fp) {
-        Value newVal = tt::FpToFpOp::create(builder, loc, newResTy,
-                                            op->getOperand(0),
-                                            fp2fp.getRoundingAttr());
+        Value newVal = tt::FpToFpOp::create(
+            builder, loc, newResTy, op->getOperand(0), fp2fp.getRoundingAttr());
         return newVal.getDefiningOp();
       })
-      .Case<mlir::arith::ExtFOp>([&](auto) { return recreateSimple(mlir::arith::ExtFOp{}); })
-      .Case<mlir::arith::TruncFOp>([&](auto) { return recreateSimple(mlir::arith::TruncFOp{}); })
-      .Case<mlir::arith::TruncIOp>([&](auto) { return recreateSimple(mlir::arith::TruncIOp{}); })
-      .Case<mlir::arith::ExtSIOp>([&](auto) { return recreateSimple(mlir::arith::ExtSIOp{}); })
-      .Case<mlir::arith::ExtUIOp>([&](auto) { return recreateSimple(mlir::arith::ExtUIOp{}); })
-      .Case<mlir::arith::BitcastOp>([&](auto) { return recreateSimple(mlir::arith::BitcastOp{}); })
+      .Case<mlir::arith::ExtFOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtFOp{}); })
+      .Case<mlir::arith::TruncFOp>(
+          [&](auto) { return recreateSimple(mlir::arith::TruncFOp{}); })
+      .Case<mlir::arith::TruncIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::TruncIOp{}); })
+      .Case<mlir::arith::ExtSIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtSIOp{}); })
+      .Case<mlir::arith::ExtUIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtUIOp{}); })
+      .Case<mlir::arith::BitcastOp>(
+          [&](auto) { return recreateSimple(mlir::arith::BitcastOp{}); })
       .Default([&](Operation *) -> Operation * {
         op->emitError("unsupported op kind in relayout path");
         return nullptr;
       });
 }
 
-
 static bool collectLinearPathToConvert(Value dotOperand,
                                        ttg::ConvertLayoutOp &cvtOpOut,
-                                       SmallVectorImpl<Operation*> &pathOut) {
+                                       SmallVectorImpl<Operation *> &pathOut) {
   Value cur = dotOperand;
   pathOut.clear();
 
@@ -1861,10 +1876,9 @@ static bool collectLinearPathToConvert(Value dotOperand,
   return false;
 }
 
-
 static Value propagateNewLayoutForward(OpBuilder &builder,
                                        ttg::ConvertLayoutOp newCvt,
-                                       llvm::ArrayRef<Operation*> path) {
+                                       llvm::ArrayRef<Operation *> path) {
   Value cur = newCvt.getResult();
   Attribute curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
 
@@ -1889,7 +1903,8 @@ static Value propagateNewLayoutForward(OpBuilder &builder,
 static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
   m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
-    auto mfmaEnc = dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cTy.getEncoding());
+    auto mfmaEnc =
+        dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cTy.getEncoding());
     if (!mfmaEnc)
       return;
 
@@ -1898,14 +1913,15 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       return;
 
     ttg::ConvertLayoutOp cvtA, cvtB;
-    SmallVector<Operation*, 8> pathA, pathB;
+    SmallVector<Operation *, 8> pathA, pathB;
     bool okA = collectLinearPathToConvert(dotOp.getA(), cvtA, pathA);
     bool okB = collectLinearPathToConvert(dotOp.getB(), cvtB, pathB);
     if (!okA || !okB)
       return;
 
     unsigned kBase = *kBaseCandidate;
-    std::optional<unsigned> candidateKWidth = chooseDesiredKWidth(dotOp, kBase, kPack, arch);
+    std::optional<unsigned> candidateKWidth =
+        chooseDesiredKWidth(dotOp, kBase, kPack, arch);
     if (!candidateKWidth.has_value())
       return;
     unsigned desiredKWidth = candidateKWidth.value();
@@ -1913,32 +1929,39 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
     for (int opIdx = 0; opIdx < 2; ++opIdx) {
       Value operand = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
       auto rTy = cast<RankedTensorType>(operand.getType());
-      auto dotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rTy.getEncoding());
-      if (!dotEnc) continue;
+      auto dotEnc =
+          dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rTy.getEncoding());
+      if (!dotEnc)
+        continue;
 
-      bool alreadyDesired =
-          dotEnc.getKWidth() == desiredKWidth &&
-          dotEnc.getParent() == mfmaEnc &&
-          dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
-      if (alreadyDesired) continue;
+      bool alreadyDesired = dotEnc.getKWidth() == desiredKWidth &&
+                            dotEnc.getParent() == mfmaEnc &&
+                            dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
+      if (alreadyDesired)
+        continue;
 
       ttg::ConvertLayoutOp cvt = (opIdx == 0) ? cvtA : cvtB;
-      SmallVector<Operation*, 8> &path = (opIdx == 0) ? pathA : pathB;
+      SmallVector<Operation *, 8> &path = (opIdx == 0) ? pathA : pathB;
 
       OpBuilder builder(cvt);
       builder.setInsertionPoint(cvt);
 
       auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
-      auto newEnc = ttg::DotOperandEncodingAttr::get(builder.getContext(), opIdx, mfmaEnc, desiredKWidth);
-      auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(), newEnc);
+      auto newEnc = ttg::DotOperandEncodingAttr::get(
+          builder.getContext(), opIdx, mfmaEnc, desiredKWidth);
+      auto newTy = RankedTensorType::get(srcTy.getShape(),
+                                         srcTy.getElementType(), newEnc);
 
-      auto newCvt = builder.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy, cvt.getSrc());
+      auto newCvt = builder.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy,
+                                                         cvt.getSrc());
       cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
       Value newLeaf = propagateNewLayoutForward(builder, newCvt, path);
-      if (opIdx == 0) dotOp.setOperand(0, newLeaf);
-      else            dotOp.setOperand(1, newLeaf);
+      if (opIdx == 0)
+        dotOp.setOperand(0, newLeaf);
+      else
+        dotOp.setOperand(1, newLeaf);
     }
   });
 }
