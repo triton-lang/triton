@@ -1780,7 +1780,7 @@ static FailureOr<unsigned> getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEnco
 //        can only consume kBase elements from each thread.
 //    Note that we cannot have larger kPack since kPack = 2 means
 //    ds_read_b128, which is the largest vector size for shared memory load.
-static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, StringRef arch) {
+static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, unsigned kPack, StringRef arch) {
   bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
   auto aElem = dotOp.getA().getType().getElementType();
   bool is16BitElem = aElem.isF16() || aElem.isBF16();
@@ -1790,8 +1790,10 @@ static unsigned chooseDesiredKWidth(mlir::triton::DotOp dotOp, unsigned kBase, S
       return 8;
     else
       return 4;
-  }
-  return kBase;
+  } else if (!tail)
+    return kBase * kPack;
+  else
+    return std::nullopt;
 }
 
 static bool isTriviallyRelayoutable(Operation *op) {
@@ -1828,10 +1830,6 @@ static Operation *cloneWithNewEncoding(OpBuilder &builder,
       .Case<mlir::arith::ExtSIOp>([&](auto) { return recreateSimple(mlir::arith::ExtSIOp{}); })
       .Case<mlir::arith::ExtUIOp>([&](auto) { return recreateSimple(mlir::arith::ExtUIOp{}); })
       .Case<mlir::arith::BitcastOp>([&](auto) { return recreateSimple(mlir::arith::BitcastOp{}); })
-      .Case<amdgpu::UpcastMXFPOp>([&](amdgpu::UpcastMXFPOp) {
-        Value newVal = amdgpu::UpcastMXFPOp::create(builder, loc, newResTy, op->getOperand(0));
-        return newVal.getDefiningOp();
-      })
       .Default([&](Operation *) -> Operation * {
         op->emitError("unsupported op kind in relayout path");
         return nullptr;
@@ -1888,8 +1886,7 @@ static Value propagateNewLayoutForward(OpBuilder &builder,
   return cur;
 }
 
-
-static void fixKWidthOfDotOperand(ModuleOp m, StringRef arch) {
+static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
   m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
     auto mfmaEnc = dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cTy.getEncoding());
@@ -1906,9 +1903,12 @@ static void fixKWidthOfDotOperand(ModuleOp m, StringRef arch) {
     bool okB = collectLinearPathToConvert(dotOp.getB(), cvtB, pathB);
     if (!okA || !okB)
       return;
-    
+
     unsigned kBase = *kBaseCandidate;
-    unsigned desiredKWidth = chooseDesiredKWidth(dotOp, kBase, arch);
+    std::optional<unsigned> candidateKWidth = chooseDesiredKWidth(dotOp, kBase, kPack, arch);
+    if (!candidateKWidth.has_value())
+      return;
+    unsigned desiredKWidth = candidateKWidth.value();
 
     for (int opIdx = 0; opIdx < 2; ++opIdx) {
       Value operand = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
@@ -1916,20 +1916,24 @@ static void fixKWidthOfDotOperand(ModuleOp m, StringRef arch) {
       auto dotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rTy.getEncoding());
       if (!dotEnc) continue;
 
-      unsigned curKWidth = dotEnc.getKWidth();
-      if (curKWidth == desiredKWidth) continue;
+      bool alreadyDesired =
+          dotEnc.getKWidth() == desiredKWidth &&
+          dotEnc.getParent() == mfmaEnc &&
+          dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
+      if (alreadyDesired) continue;
 
-      ttg::ConvertLayoutOp cvt; SmallVector<Operation*, 8> path;
-      cvt = (opIdx == 0) ? cvtA : cvtB;
-      path = (opIdx == 0) ? pathA : pathB;
+      ttg::ConvertLayoutOp cvt = (opIdx == 0) ? cvtA : cvtB;
+      SmallVector<Operation*, 8> &path = (opIdx == 0) ? pathA : pathB;
 
-      OpBuilder builder(dotOp);
+      OpBuilder builder(cvt);
+      builder.setInsertionPoint(cvt);
+
       auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
       auto newEnc = ttg::DotOperandEncodingAttr::get(builder.getContext(), opIdx, mfmaEnc, desiredKWidth);
       auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(), newEnc);
-      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy, cvt.getSrc());
 
-      cvt.getResult().replaceAllUsesWith(newCvt);
+      auto newCvt = builder.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy, cvt.getSrc());
+      cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
       Value newLeaf = propagateNewLayoutForward(builder, newCvt, path);
@@ -1985,7 +1989,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     if (applyPatternsGreedily(m, std::move(mfmaPatterns)).failed())
       signalPassFailure();
 
-    fixKWidthOfDotOperand(m, archGenerationName);
+    fixKWidthOfDotOperand(m, kPack, archGenerationName);
 
     RewritePatternSet patterns(context);
     patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
