@@ -571,7 +571,7 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   return node;
 }
 
-bool haveEnoughTmem(MMAv5OpInterface mmaOp, int numTmemBlocks) {
+bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
   auto tmemDesc = mmaOp.getAccumulator().getType();
   auto blockM = tmemDesc.getShape()[0];
   auto blockN = tmemDesc.getShape()[1];
@@ -625,11 +625,11 @@ bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   return changePoints == 2;
 }
 
-LogicalResult insertTmemAref(TmemAccessDag &accessDag, int &numTmemBlocks) {
+int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
-  std::optional<bool> isMultiStaged;
+  auto isMultiStaged = hasProducerConsumerPartitioning(accessDag);
   int numTmemBlock = 0;
   for (auto user : allocOp.getResult().getUsers()) {
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
@@ -643,30 +643,17 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag, int &numTmemBlocks) {
             // multibuffering.
             isAccMultibufferingPossible(mmaOp, loop) &&
             // The user didn't disable it with a flag.
-            !getDisallowAccMultiBuffer(wsLoop);
-        isMultiStaged = isMultiStaged ? *isMultiStaged && accIsMultiBuffered
-                                      : accIsMultiBuffered;
-        if (*isMultiStaged) {
-          // if isMultiStaged: verify we have enough TMEM blocks for it
-          auto hasEnoughTmem = haveEnoughTmem(mmaOp, numTmemBlocks);
-          isMultiStaged = hasEnoughTmem;
-        }
+            !getDisallowAccMultiBuffer(wsLoop) &&
+            canDoubleBufferAcc(mmaOp, numTmemBlocks);
+        isMultiStaged = isMultiStaged && accIsMultiBuffered;
       }
     }
   }
-  if (isMultiStaged && *isMultiStaged) {
-    // if isMultiStaged: verify that partitioner results in producer-consumer
-    // pattern for tmem accesses
-    auto flag = hasProducerConsumerPartitioning(accessDag);
-    isMultiStaged =
-        *isMultiStaged && hasProducerConsumerPartitioning(accessDag);
-  }
-
-  auto numStages = isMultiStaged ? (1 + *isMultiStaged) : 1;
+  auto numStages = 1 + isMultiStaged;
 
   // update numTmemBlocks for the number of TMEM blocks used by the aref buffer
   auto allocShape = allocOp.getType().getShape();
-  numTmemBlocks += numStages * allocShape[0] * allocShape[1] * numStages;
+  numTmemBlocks += allocShape[0] * allocShape[1] * numStages;
   auto arefBufType =
       getArefMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
@@ -753,7 +740,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag, int &numTmemBlocks) {
     state.release(b, node->op->getLoc());
   }
 
-  return success();
+  return numTmemBlocks;
 }
 
 void workaroundForLoopScheduler(triton::FuncOp funcOp) {
@@ -872,9 +859,9 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
     auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
-    if (totalOwners > 1)
-      if (failed(insertTmemAref(accessDag, numTmemBlocks)))
-        return failure();
+    if (totalOwners > 1) {
+      numTmemBlocks = insertTmemAref(accessDag, numTmemBlocks);
+    }
   }
 
   workaroundForLoopScheduler(funcOp);
