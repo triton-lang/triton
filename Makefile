@@ -45,7 +45,7 @@ test-unit: all
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	TRITON_ALWAYS_COMPILE=1 TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -s -vvv python/test/unit/plugins/test_dialect_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 
