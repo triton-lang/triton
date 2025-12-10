@@ -26,6 +26,7 @@ def parse_arguments():
     args = parser.parse_args()
     return args, args.target_args
 
+
 def is_pytest(script):
     return os.path.basename(script) == 'pytest'
 
