@@ -32,9 +32,6 @@ def min_dot_size(target: GPUTarget):
 
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
-    # If TRITON_PTXAS_PATH is set, use the standard ptxas to respect user override
-    if 'TRITON_PTXAS_PATH' in os.environ:
-        return knobs.nvidia.ptxas
     return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
 
 
