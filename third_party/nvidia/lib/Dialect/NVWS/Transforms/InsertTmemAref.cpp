@@ -253,10 +253,11 @@ struct TmemAccessDag {
     return accessDag;
   }
 
-  void collectPartitions(Node *node, bool &hasRootPartition,
-                         SmallVector<PartitionId> &partitions) {
+  void collectPartitions(
+      Node *node, bool &hasRootPartition,
+      SmallVector<std::pair<PartitionId, Operation *>> &partitions) {
     if (node->partitionId) {
-      partitions.push_back(*node->partitionId);
+      partitions.push_back(std::make_pair(*node->partitionId, node->op));
     } else {
       // root partition is considered a real owner only if there are already
       // other partitions owning tmem
@@ -272,21 +273,25 @@ struct TmemAccessDag {
     }
   };
 
-  std::pair<bool, SmallVector<PartitionId>> collectPartitionsVec() {
-    SmallVector<PartitionId> partitions;
+  std::pair<bool, SmallVector<std::pair<PartitionId, Operation *>>>
+  collectPartitionsVec() {
+    SmallVector<std::pair<PartitionId, Operation *>> partitions;
     bool hasRootPartition = false;
     auto node = getRootNode();
     auto allocOp = getAllocOp();
     if (allocOp.getSrc() && node->partitionId)
-      partitions.push_back(*node->partitionId);
+      partitions.push_back(std::make_pair(*node->partitionId, node->op));
     collectPartitions(getRootNode()->user.get(), hasRootPartition, partitions);
     return {hasRootPartition, partitions};
   }
 
   std::pair<bool, std::set<PartitionId>> collectPartitionsSet() {
     auto [hasRootPartition, partitions] = collectPartitionsVec();
-    return {hasRootPartition,
-            std::set<PartitionId>(partitions.begin(), partitions.end())};
+    std::set<PartitionId> partitionSet;
+    for (auto [partition, _] : partitions) {
+      partitionSet.insert(partition);
+    }
+    return {hasRootPartition, partitionSet};
   }
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
@@ -587,42 +592,70 @@ bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
 };
 
 bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
-  // TMEM partitioning follows producer-consumer pattern if it has this
+  // TMEM partitioning follows a producer-consumer pattern if it has this
   // structure:
   //
   //      |alloc
   //      |-- ops
-  //    loop (A) (tt.ws)
-  //      |----  ops (A)
-  //      |----  ops (B)
-  //      |----  possibly ops (A)
-  //      |----  yield (A)
+  //    loop (tt.ws)
+  //      |----  producer @A
+  //      |----  consumer @B
+  //      |----  producer @A
   //
   // We have root operations, then enter a warp-specialized loop where:
-  // - First, partition A owns TMEM and performs operations
-  // - Then, partition B owns TMEM and performs operations
-  // - Possibly, partition A owns TMEM and performs operations
+  // - First, partition A owns TMEM and performs producer operations
+  // - Then, partition B owns TMEM and performs consumer operations
+  // - Possibly, partition A owns TMEM and performs producer operations
   // - Loop repeats with partition A yielding
   //
-  // This represents a producer-consumer relationship where partition A produces
-  // values and partition B consumes them. This is a necessary (but not
-  // sufficient) condition for enabling TMEM multi-buffering with arefs.
-  // Additional validation will verify sufficient conditions for
-  // multi-buffering.
+  // Here is an example where the producer-consumer pattern is not present:
+  //   |alloc
+  //   |store
+  //   |for  (tt.ws)
+  //   |  |store @A
+  //   |  |for
+  //   |  |   mma @B
+  //   |  |load @A
+  // The partitions @A & @B are both producers.
+  //
+  // Compare to the following, where we change ownership of TMEM where partition
+  // B is the producer and partition A is the consumer:
+  //   |alloc
+  //   |store
+  //   |for  (tt.ws)
+  //   |  |store @B
+  //   |  |for
+  //   |  |   mma @B
+  //   |  |load @A
+  // Here, we may double-buffer the accumulator.
+  //
+  // This is a necessary (but not sufficient) condition for enabling TMEM
+  // multi-buffering with arefs. Additional validation will verify sufficient
+  // conditions for multi-buffering.
 
   auto [hasRootPartition, partitions] = accessDag.collectPartitionsVec();
+  bool expectProducer = true;
+  int changeGroup = 0;
+  bool valid = true;
 
   // Count partition transitions: producer-consumer pattern has exactly two
-  // transitions (A->B followed by B->A). More than two transitions (e.g.,
-  // A-A-B-B-A-A-B-B-A-A) indicate a more complex pattern that doesn't fit the
-  // producer-consumer model.
-  int changePoints = 0;
+  // transitions (A->B followed by B->A), where 'A' is producer and 'B' is
+  // consumer. More than two transitions (e.g., A-A-B-B-A-A-B-B-A-A) indicate a
+  // more complex pattern that doesn't fit the producer-consumer model.
   for (size_t i = 0; i < partitions.size() - 1; ++i) {
-    if (partitions[i] != partitions[i + 1])
-      ++changePoints;
+    auto op = partitions[i].second;
+    if (isa<TMEMLoadOp, TMEMStoreOp, MMAv5OpInterface>(op)) {
+      valid = valid && (expectProducer ? isa<TMEMStoreOp, MMAv5OpInterface>(op)
+                                       : isa<TMEMLoadOp>(op));
+    }
+    if (partitions[i].first != partitions[i + 1].first) {
+      expectProducer = !expectProducer;
+      ++changeGroup;
+    }
   }
+  valid = valid && changeGroup == 2;
 
-  return changePoints == 2;
+  return valid;
 }
 
 int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
