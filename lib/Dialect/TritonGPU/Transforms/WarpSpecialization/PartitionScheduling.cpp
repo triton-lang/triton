@@ -1400,7 +1400,6 @@ void mergePartitions(Graph *graph, std::string funcName,
 
         // remove edges that no longer cross partitions from the worklist
         if (!edge.crossesPartitions()) {
-          llvm::dbgs() << "\nedge no longer crossing; ignore\n";
           it = crossingEdges.erase(it);
           continue;
         }
