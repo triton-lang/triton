@@ -1847,12 +1847,14 @@ static Operation *cloneWithNewEncoding(OpBuilder &builder, Operation *op,
   auto newResTy = RankedTensorType::get(oldResTy.getShape(),
                                         oldResTy.getElementType(), newEncoding);
 
+  // Helper for single-operand ops that don't carry extra attributes.
   auto recreateSimple = [&](auto opTag) -> Operation * {
     using OpTy = decltype(opTag);
     Value newVal = OpTy::create(builder, loc, newResTy, op->getOperand(0));
     return newVal.getDefiningOp();
   };
 
+  // Dispatch on op type. Add cases here for any additional trivially relayoutable ops.
   return llvm::TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::FpToFpOp>([&](tt::FpToFpOp fp2fp) {
         Value newVal = tt::FpToFpOp::create(
@@ -1884,20 +1886,27 @@ static bool collectLinearPathToConvert(Value dotOperand,
   pathOut.clear();
 
   while (Operation *def = cur.getDefiningOp()) {
+    // Stop when we reach the convert_layout that produces the dot operand layout.
     if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(def)) {
       cvtOpOut = cvt;
       return true;
     }
+
+    // Only allow simple 1-operand/1-result ops that can be trivially rebuilt.
     if (!isTriviallyRelayoutable(def))
       return false;
 
-    if (!cur.hasOneUse() && !isa<tt::FpToFpOp>(def)) {
+    // Be conservative: only proceed if this value has a single use.
+    // This avoids duplicating ops and changing dominance/ordering unintentionally.
+    if (!cur.hasOneUse())
       return false;
-    }
 
+    // Record this op and continue walking to its input.
     pathOut.push_back(def);
     cur = def->getOperand(0);
   }
+
+  // Reached a block argument or non-linear chain without finding a convert.
   return false;
 }
 
@@ -1905,12 +1914,14 @@ static Value propagateNewLayoutForward(OpBuilder &builder,
                                        ttg::ConvertLayoutOp newCvt,
                                        llvm::ArrayRef<Operation *> path) {
   Value cur = newCvt.getResult();
-  Attribute curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
+  Attribute targetEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
 
   for (auto it = path.rbegin(), e = path.rend(); it != e; ++it) {
     Operation *op = *it;
+
+    // Clone the op at its original position to maintain IR order and dominance.
     builder.setInsertionPoint(op);
-    Operation *newOp = cloneWithNewEncoding(builder, op, curEnc);
+    Operation *newOp = cloneWithNewEncoding(builder, op, targetEnc);
     if (!newOp) {
       op->emitError("Failed to relayout: unsupported op kind encountered");
       return cur;
@@ -1918,13 +1929,19 @@ static Value propagateNewLayoutForward(OpBuilder &builder,
 
     op->getResult(0).replaceAllUsesWith(newOp->getResult(0));
     op->erase();
-
     cur = newOp->getResult(0);
-    curEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
   }
   return cur;
 }
 
+// Fix kWidth for dot operands that already use MFMA encodings but have
+// a suboptimal kWidth. This pass:
+// - Finds the nearest ConvertLayoutOp that produced the dot operand's layout,
+// - Replaces it with a new ConvertLayoutOp using the desired kWidth,
+// - Clones the intervening trivial ops so their result encodings match,
+// - Rewires the dot to consume the final rebuilt value.
+//
+// kPack (matrix-instruction-size) and arch influence desired kWidth.
 static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
   m.walk([&](mlir::triton::DotOp dotOp) {
     auto cTy = dotOp.getC().getType();
@@ -1937,6 +1954,7 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
     if (failed(kBaseCandidate))
       return;
 
+    // Find linear chains from A/B back to their nearest convert_layout.
     ttg::ConvertLayoutOp cvtA, cvtB;
     SmallVector<Operation *, 8> pathA, pathB;
     bool okA = collectLinearPathToConvert(dotOp.getA(), cvtA, pathA);
@@ -1959,6 +1977,7 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       if (!dotEnc)
         continue;
 
+      // Skip only if entire target encoding (parent/opIdx/kWidth) already matches.
       bool alreadyDesired = dotEnc.getKWidth() == desiredKWidth &&
                             dotEnc.getParent() == mfmaEnc &&
                             dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
@@ -1982,11 +2001,7 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
-      Value newLeaf = propagateNewLayoutForward(builder, newCvt, path);
-      if (opIdx == 0)
-        dotOp.setOperand(0, newLeaf);
-      else
-        dotOp.setOperand(1, newLeaf);
+      (void) propagateNewLayoutForward(builder, newCvt, path);
     }
   });
 }
