@@ -664,21 +664,23 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
 
   auto isMultiStaged = hasProducerConsumerPartitioning(accessDag);
   int numTmemBlock = 0;
-  for (auto user : allocOp.getResult().getUsers()) {
-    if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
-      if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
-        auto wsLoop = getOuterWSLoop(loop);
-        // Determine if the MMA accumulator can be multibuffered.
-        bool accIsMultiBuffered =
-            // MMAs in subsequent iterations can be overlapped.
-            !nvidia_gpu::hasAccReadModifyWrite(mmaOp, loop) &&
-            // The accumulator is reset at some point, thus allowing
-            // multibuffering.
-            isAccMultibufferingPossible(mmaOp, loop) &&
-            // The user didn't disable it with a flag.
-            !getDisallowAccMultiBuffer(wsLoop) &&
-            canDoubleBufferAcc(mmaOp, numTmemBlocks);
-        isMultiStaged = isMultiStaged && accIsMultiBuffered;
+  if (isMultiStaged) {
+    for (auto user : allocOp.getResult().getUsers()) {
+      if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
+        if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
+          auto wsLoop = getOuterWSLoop(loop);
+          // Determine if the MMA accumulator can be multibuffered.
+          bool accIsMultiBuffered =
+              // MMAs in subsequent iterations can be overlapped.
+              !nvidia_gpu::hasAccReadModifyWrite(mmaOp, loop) &&
+              // The accumulator is reset at some point, thus allowing
+              // multibuffering.
+              isAccMultibufferingPossible(mmaOp, loop) &&
+              // The user didn't disable it with a flag.
+              !getDisallowAccMultiBuffer(wsLoop) &&
+              canDoubleBufferAcc(mmaOp, numTmemBlocks);
+          isMultiStaged = isMultiStaged && accIsMultiBuffered;
+        }
       }
     }
   }
