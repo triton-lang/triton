@@ -1854,7 +1854,8 @@ static Operation *cloneWithNewEncoding(OpBuilder &builder, Operation *op,
     return newVal.getDefiningOp();
   };
 
-  // Dispatch on op type. Add cases here for any additional trivially relayoutable ops.
+  // Dispatch on op type. Add cases here for any additional trivially
+  // relayoutable ops.
   return llvm::TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::FpToFpOp>([&](tt::FpToFpOp fp2fp) {
         Value newVal = tt::FpToFpOp::create(
@@ -1886,7 +1887,8 @@ static bool collectLinearPathToConvert(Value dotOperand,
   pathOut.clear();
 
   while (Operation *def = cur.getDefiningOp()) {
-    // Stop when we reach the convert_layout that produces the dot operand layout.
+    // Stop when we reach the convert_layout that produces the dot operand
+    // layout.
     if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(def)) {
       cvtOpOut = cvt;
       return true;
@@ -1897,7 +1899,8 @@ static bool collectLinearPathToConvert(Value dotOperand,
       return false;
 
     // Be conservative: only proceed if this value has a single use.
-    // This avoids duplicating ops and changing dominance/ordering unintentionally.
+    // This avoids duplicating ops and changing dominance/ordering
+    // unintentionally.
     if (!cur.hasOneUse())
       return false;
 
@@ -1910,7 +1913,7 @@ static bool collectLinearPathToConvert(Value dotOperand,
   return false;
 }
 
-static Value propagateNewLayoutForward(OpBuilder &builder,
+void propagateNewLayoutForward(OpBuilder &builder,
                                        ttg::ConvertLayoutOp newCvt,
                                        llvm::ArrayRef<Operation *> path) {
   Value cur = newCvt.getResult();
@@ -1924,14 +1927,12 @@ static Value propagateNewLayoutForward(OpBuilder &builder,
     Operation *newOp = cloneWithNewEncoding(builder, op, targetEnc);
     if (!newOp) {
       op->emitError("Failed to relayout: unsupported op kind encountered");
-      return cur;
     }
 
     op->getResult(0).replaceAllUsesWith(newOp->getResult(0));
     op->erase();
     cur = newOp->getResult(0);
   }
-  return cur;
 }
 
 // Fix kWidth for dot operands that already use MFMA encodings but have
@@ -1977,7 +1978,8 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       if (!dotEnc)
         continue;
 
-      // Skip only if entire target encoding (parent/opIdx/kWidth) already matches.
+      // Skip only if entire target encoding (parent/opIdx/kWidth) already
+      // matches.
       bool alreadyDesired = dotEnc.getKWidth() == desiredKWidth &&
                             dotEnc.getParent() == mfmaEnc &&
                             dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
@@ -2001,7 +2003,7 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
-      (void) propagateNewLayoutForward(builder, newCvt, path);
+      (void)propagateNewLayoutForward(builder, newCvt, path);
     }
   });
 }
