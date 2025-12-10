@@ -41,6 +41,16 @@ class SymmetricMemoryPool:
         self.hdl = None
         self.regions = {}
 
+    def release(self):
+        if self._is_initialized:
+            self.hdl.barrier(channel=0)
+            self.hdl = None
+            self.buf = None
+            self.bufs = None
+            self._is_initialized = False
+            self.size = 0
+            self.regions = {}
+
     @staticmethod
     def align_up(value: int, alignment: int) -> int:
         if alignment <= 1:

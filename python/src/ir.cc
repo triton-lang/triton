@@ -635,6 +635,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_int_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<BoolAttr>(name);
@@ -1550,6 +1557,18 @@ void init_triton_ir(py::module &&m) {
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);
+           })
+      .def("create_cat",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
+             auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
+             if (!(lhsType.getShape().size() == 1 &&
+                   rhsType.getShape().size() == 1))
+               throw std::invalid_argument(
+                   "shape not supported by cat. Expecting rank-1 inputs");
+             std::vector<int64_t> shape{lhsType.getShape()[0] +
+                                        rhsType.getShape()[0]};
+             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {

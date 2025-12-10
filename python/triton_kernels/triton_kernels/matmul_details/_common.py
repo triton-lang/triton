@@ -77,6 +77,7 @@ def compute_offsets(
     pid_k,
     XBlockSchedule,
     XSliceOffs,
+    XBlockOffs,
     X_SLICE_SIZE_DIVISIBILITY: tl.constexpr,
     WBlockSchedule,
     WSliceOffs,
@@ -102,7 +103,7 @@ def compute_offsets(
         else:
             off_w_k = off_w_k // (BLOCK_K_X // PACKED_BLOCK_K_W)
         off_x_m = BLOCK_M * pid_m
-        off_w_z, off_x_z, off_x_slice = 0, 0, 0
+        off_w_z, off_x_z, off_x_slice, off_x_slice_tile = 0, 0, 0, 0
         off_y_z = pid_z
     elif RAGGED_DIMENSION == "M":
         off_x_k = pid_k * BLOCK_K_X
@@ -111,20 +112,22 @@ def compute_offsets(
         off_w_z = block_schedule & 0x0000FFFF
         block_id = block_schedule >> 16
         off_x_slice = tl.load(XSliceOffs + off_w_z)
+        off_x_slice_tile = tl.load(XBlockOffs + off_w_z)
         off_x_z, off_y_z = 0, 0
         off_x_m = BLOCK_M * block_id
     else:
         tl.static_assert(RAGGED_DIMENSION is None)
         off_x_k = pid_k * BLOCK_K_X
         off_w_k = pid_k * PACKED_BLOCK_K_W
-        off_w_z, off_x_z, off_y_z, off_x_slice = pid_z, pid_z, pid_z, 0
+        off_w_z, off_x_z, off_y_z, off_x_slice, off_x_slice_tile = pid_z, pid_z, pid_z, 0, 0
         off_x_m = BLOCK_M * pid_m
     return (
         off_w_z,
         off_x_z,
         off_y_z,
-        off_x_slice,
-        off_x_m,
+        off_x_slice,  # offset for the current slice vs 0
+        off_x_slice_tile,  # block offset for the current slice vs 0
+        off_x_m,  # offset for the current block vs slice start
         off_x_k,
         off_w_k,
     )

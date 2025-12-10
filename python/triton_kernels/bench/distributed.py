@@ -3,21 +3,17 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple, Optional
 
-import triton_kernels
-import triton_kernels.swiglu
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
-from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul import matmul
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
-from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import RaggedTensorMetadata, make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment, symm_mem_pool
 
-from bench_utils import quantize_weight
+from bench_utils import prepare_mlp_numerics, resolve_x_dtype
 
 
 @dataclass
@@ -62,6 +58,12 @@ def initialize_matmul(
         group=dist.group.WORLD,
         device=device,
     )
+
+
+def cleanup_matmul():
+    if not _is_distributed_launch():
+        return
+    symm_mem_pool.release()
 
 
 def setup() -> Tuple[int, int]:
@@ -112,24 +114,24 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
 def reduce_scatter(
     input_tensor: torch.Tensor,
     n_expts_act: int,
-    metadata: ReduceScatterMetadata,
+    metadata: Optional[ReduceScatterMetadata] = None,
     expt_assignment: Optional[ExptAssignment] = None,
     dim: int = 0,
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
-    if _is_distributed_launch():
-        if metadata.mode and metadata.mode == "ep_sharding":
+    if metadata and _is_distributed_launch():
+        if metadata.mode == "ep_sharding":
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
             output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.combine_indx)
-            # weighted average of the output token from experts
-            output = output.view(-1, n_expts_act, output.shape[-1])
-            output, _ = reduce(output, dim=1)
-            return output
         else:
             raise NotImplementedError(f"Distributed reduce_scatter mode {metadata.mode} is not implemented yet.")
     else:
-        return input_tensor
+        output = input_tensor
+    # weighted average of the output token from experts
+    output = output.view(-1, n_expts_act, output.shape[-1])
+    output, _ = reduce(output, dim=1)
+    return output
 
 
 # TODO: support TP > 1
@@ -244,49 +246,20 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     b1_full = gather_full(rank, world_size, b1, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
     b2_full = gather_ep(rank, world_size, b2, TP, EP)
 
-    # quantization
-    opt1 = dict()
-    opt2 = dict()
-    if w_dtype == "mx4" and not is_hip():
-        num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
-        opt1 = {
-            "value_layout": value_layout,
-            "value_layout_opts": value_layout_opts,
-            "scale_layout": scale_layout,
-            "scale_layout_opts": scale_layout_opts,
-        }
-        opt2 = deepcopy(opt1)
-    wg, wg_flex, wg_scale = quantize_weight(wg, "bf16")
-    w1, w1_flex, w1_scale = quantize_weight(w1, w_dtype, **opt1)
-    w2, w2_flex, w2_scale = quantize_weight(w2, w_dtype, **opt2)
+    wg_unquantized = wg
+    numerics = prepare_mlp_numerics(batch, w_dtype, wg_unquantized, w1, w2)
+    wg, w1, w2 = numerics.wg, numerics.w1, numerics.w2
+    pcg, pc1, pc2, act = numerics.pcg, numerics.pc1, numerics.pc2, numerics.activation
     if rank == 0:
-        w1_full, w1_flex_full, w1_scale_full = quantize_weight(w1_full, w_dtype, **opt1)
-        w2_full, w2_flex_full, w2_scale_full = quantize_weight(w2_full, w_dtype, **opt2)
-    else:
-        w1_full = w2_full = w1_flex_full = w2_flex_full = w1_scale_full = w2_scale_full = None
-
-    # precision configs
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
-    act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), reduction_n=2),
-                          (1.0, 1.0))
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
-    if rank == 0:
-        pc1_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex_full), b_mx_scale=w1_scale_full)
-        pc2_full = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex_full), b_mx_scale=w2_scale_full)
+        full_numerics = prepare_mlp_numerics(batch, w_dtype, wg_unquantized, w1_full, w2_full)
+        w1_full, w2_full = full_numerics.w1, full_numerics.w2
+        pc1_full, pc2_full = full_numerics.pc1, full_numerics.pc2
     else:
         pc1_full = pc2_full = None
 
     # inputs
-    dtype_map = {
-        "fp16": torch.float16,
-        "bf16": torch.bfloat16,
-        "fp8": torch.float8_e4m3fnuz if get_cdna_version() == 3 else torch.float8_e4m3fn,
-    }
-    xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
+    input_dtype = resolve_x_dtype(x_dtype)
+    xd = torch.randn((batch // world_size, dim1), device=dev).to(input_dtype)
     x0 = all_gather(xd, dim=0)
     expt_assignment = create_expt_assignment(EP, n_expts_tot, torch.device(dev))
     symm_mem_pool.initialize_matmul(
@@ -310,7 +283,8 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         else:
             rdata = gi = si = None
         x = matmul(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)
-        return matmul(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
+        x = matmul(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_full)
+        return reduce_scatter(x, n_expts_act, metadata=None, expt_assignment=None)
 
     # distributed pass
     def distributed(x):
@@ -335,6 +309,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
                                    atol=1.0, equal_nan=True)
 
     dist.barrier()
+    symm_mem_pool.release()
     dist.destroy_process_group()
 
 
@@ -344,19 +319,27 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
 @pytest.mark.parametrize(
     "batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP",
     # dense cases
-    [(1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)]
+    [
+        # small batch size
+        (128, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (128, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1),
+        # large batch size
+        (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)
+    ]
     # moe cases - test parallelism
     + [
+        (128, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
-        (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 4),
+        (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 2),
     ] +
     # moe cases - test precision
     ([
+        (128, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 1),
-        (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 4),
+        (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 2),
     ] if has_native_mx4 else [
+        (128, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
-        (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 4),
+        (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 2),
     ]),
 )
 def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, monkeypatch):

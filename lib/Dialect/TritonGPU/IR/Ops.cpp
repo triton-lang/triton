@@ -342,6 +342,16 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
+    // cvt(cat) -> cat
+    if (auto cat = dyn_cast<CatOp>(arg)) {
+      if (isExpensiveCat(cat, op.getType().getEncoding()))
+        return failure();
+
+      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
+                                         cat.getOperands());
+      return success();
+    }
+
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
@@ -601,7 +611,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
       intervalPads.emplace_back(interval, padding);
     }
-    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, dst);
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, std::move(dst));
     return success();
   }
 
@@ -609,7 +619,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
-  dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
+  dstEnc = SharedLinearEncodingAttr::get(ctx, std::move(dstLL),
+                                         sharedEnc.getAlignment());
   return success();
 }
 
@@ -913,15 +924,25 @@ RegionRange WarpSpecializeOp::getPartitionRegions() {
 
 void WarpSpecializeOp::getSuccessorRegions(
     RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
-  // The parent branches transparently into the default region.
+  // The parent branches into the default region and the partition regions.
   if (src.isParent()) {
     successors.emplace_back(&getDefaultRegion());
+    successors.emplace_back(&getPartitionOpHolder());
     return;
   }
   // And the default region branches transparently back to the parent.
-  assert(src.getTerminatorPredecessorOrNull()->getParentRegion() ==
-         &getDefaultRegion());
-  successors.push_back(RegionSuccessor(getOperation(), getResults()));
+  if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
+      &getDefaultRegion())
+    successors.push_back(RegionSuccessor(getOperation(), getResults()));
+}
+
+void WarpSpecializePartitionsOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  // The parent branches to each of the partition regions, but nothing flows out
+  // of the partition regions.
+  if (src.isParent())
+    for (Region &region : getPartitionRegions())
+      successors.emplace_back(&region);
 }
 
 LogicalResult WarpSpecializeOp::verify() {

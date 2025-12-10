@@ -14,7 +14,7 @@ from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
-from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
 T = TypeVar('T')
 
@@ -190,7 +190,11 @@ class constexpr_type(base_type):
         return hash(self.value)
 
     def mangle(self) -> str:
-        return repr(self)
+        if hasattr(self.value, "mangle"):
+            val = self.value.mangle()
+        else:
+            val = repr(self.value)
+        return f"c{val}"
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         return
@@ -349,9 +353,9 @@ def _unwrap_if_constexpr(o):
     if isinstance(o, list):
         return [_unwrap_if_constexpr(x) for x in o]
     if isinstance(o, builtins.tuple):
-        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+        return _tuple_create(o, [_unwrap_if_constexpr(x) for x in o])
     if isinstance(o, tuple):
-        return tuple(_unwrap_if_constexpr(x) for x in o)
+        return tuple([_unwrap_if_constexpr(x) for x in o], o.type)
     return o.value if isinstance(o, constexpr) else o
 
 
@@ -1791,7 +1795,7 @@ def permute(input, *dims, _semantic=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, dim=0, _semantic=None):
+def cat(input, other, can_reorder=False, _semantic=None):
     """
     Concatenate the given blocks
 
@@ -1799,30 +1803,12 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param can_reorder: Deprecated option. Elements are never reordered.
-    :type can_reorder: bool
-    :param dim: The dimension to concatenate along.
-    :type dim: int
+    :param reorder: Compiler hint. If true, the compiler is
+        allowed to reorder elements while concatenating inputs.  Only use if the
+        order does not matter (e.g., result is only used in reduction ops).
+        Current implementation of `cat` supports only can_reorder=True.
     """
-    rank = len(input.shape)
-    assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
-    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
-               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
-
-    order = list(builtins.range(rank))
-    order[dim], order[-1] = order[-1], order[dim]
-    inv_order = [order.index(i) for i in builtins.range(rank)]
-
-    a = permute(input, order, _semantic=_semantic)
-    b = permute(other, order, _semantic=_semantic)
-
-    leading = a.shape[:-1]
-    a = reshape(a, (math.prod(leading), a.shape[-1]), _semantic=_semantic)
-    b = reshape(b, (math.prod(leading), b.shape[-1]), _semantic=_semantic)
-
-    c = join(a, b, _semantic=_semantic)
-    c = reshape(c, leading + [a.shape[-1] + b.shape[-1]], _semantic=_semantic)
-    return permute(c, inv_order, _semantic=_semantic)
+    return _semantic.cat(input, other, can_reorder)
 
 
 @builtin
