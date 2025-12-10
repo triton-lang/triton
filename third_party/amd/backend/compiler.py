@@ -367,7 +367,6 @@ class HIPBackend(BaseBackend):
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
 
-        use_sgpr_preload = True
         # Set kernel attributes first given this may affect later optimizations.
         fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
         # The public kernel should be kernel 0.
@@ -375,11 +374,8 @@ class HIPBackend(BaseBackend):
         # warp-specialization mutates num_warps
         total_warps_num = options.num_warps
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
-        is_warp_specialized = (total_num_warps is not None and total_num_warps != options.num_warps)
-        if is_warp_specialized:
+        if total_num_warps is not None:
             total_warps_num = total_num_warps
-            # Disable kernel args preload into user SGPRS in case of warp specialization as it causes issues
-            use_sgpr_preload = False
         fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{total_warps_num*options.warp_size}")
         if "memory-bound-attention" in options.schedule_hint.split(','):
             fns[0].add_fn_attr("amdgpu-sched-strategy", "iterative-ilp")
@@ -403,8 +399,7 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        if use_sgpr_preload:
-            amd.set_all_fn_arg_inreg(fns[0])
+        amd.set_all_fn_arg_inreg(fns[0])
 
         if knobs.compilation.enable_asan:
             default_libdir = Path(__file__).parent / 'lib'
