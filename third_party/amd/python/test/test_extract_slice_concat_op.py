@@ -55,6 +55,7 @@ non_redundant_ll_gfx1250 = LinearLayout(regs2x2, lanes8x4, warps2x2_32, block=[]
 
 # list of pairs defining ExtractSliceOp input and output layouts
 
+
 def get_extract_layout():
     if not is_hip():
         return []
@@ -79,6 +80,7 @@ def get_extract_layout():
             (non_redundant_ll, redundant_ll),
         ]
 
+
 def get_blocked_layout():
     if not is_hip():
         return []
@@ -98,6 +100,7 @@ def get_blocked_layout():
             BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
             BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]),
         ]
+
 
 @pytest.mark.parametrize(
     "M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset",
@@ -164,9 +167,11 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
 
     assert test_result
 
+
 # -----------------------
 # test concat op
 # -----------------------
+
 
 def get_blocked_32x32():
     if not is_hip():
@@ -181,33 +186,34 @@ def get_broadcasted_32x32():
     if not is_hip():
         return []
     if is_hip_gfx1250():
-        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]],
-                            lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]],
+        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]],
                             warp=[[16, 0], [0, 8]], block=[])
     else:
-        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]],
-                            lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]],
+        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]],
                             warp=[[16, 0], [0, 16]], block=[])
+
 
 def get_src_layout():
     if not is_hip():
         return []
     if is_hip_gfx1250():
         return [
-            LinearLayout(register=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 64], [64, 0]], 
-                         lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[0,32], [32, 0]],
-                         block=[]),
+            LinearLayout(register=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0],
+                                                                                                     [4, 0], [8, 0],
+                                                                                                     [16, 0]],
+                         warp=[[0, 32], [32, 0]], block=[]),
             LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [8, 0], [16, 0]],
                          warp=[[0, 8], [0, 16]], block=[]),
         ]
     else:
         return [
-            LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], 
-                         lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]],
-                         block=[]),
+            LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0],
+                                                                                             [8, 0], [16, 0], [0, 4]],
+                         warp=[[0, 32], [32, 0]], block=[]),
             LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0], [16, 0]],
                          warp=[[0, 16], [0, 32]], block=[]),
         ]
+
 
 def get_dst_layout():
     if not is_hip():
@@ -216,23 +222,27 @@ def get_dst_layout():
         return [
             LinearLayout(register=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
                          lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 32], [32, 0]], block=[]),
-            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], 
-                         lane=[[0, 1], [0, 2], [0, 4], [8, 0], [16, 0]], warp=[[0, 8], [0, 16]],
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [8, 0],
+                                                                                    [16, 0]], warp=[[0, 8], [0, 16]],
                          block=[]),
-            ]
+        ]
     else:
         return [
             LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
                          lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]),
-            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], 
-                         lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0], [16, 0]], warp=[[0, 16], [0, 64]],
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [0, 8],
+                                                                                    [8, 0], [16, 0]], warp=[[0, 16],
+                                                                                                            [0, 64]],
                          block=[]),
-            ]
+        ]
+
 
 src_layout = get_src_layout()
 dst_layout = get_dst_layout()
 broadcasted_32x32 = get_broadcasted_32x32()
 blocked_32x32 = get_blocked_32x32()
+
+
 @pytest.mark.parametrize(
     "src_layout, dst_layout, M, N, M_tile_size, N_tile_size",
     [[src_layout[0], dst_layout[0], 128, 128, 256, 256], [src_layout[1], dst_layout[1], 32, 32, 64, 64],
