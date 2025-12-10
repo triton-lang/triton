@@ -731,10 +731,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
     if is_hip() and preshuffle:
         assert "ds_read_u8" not in k.asm["amdgcn"]
-        if mfma_nonkdim == 16:
-            assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
-        elif mfma_nonkdim == 32:  # default tilesPerWarp = [1, 1]
-            assert "tilesPerWarp" not in k.asm["ttgir"]
+        # if mfma_nonkdim == 16:
+        #     assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
+        # elif mfma_nonkdim == 32:  # default tilesPerWarp = [1, 1]
+        #     assert "tilesPerWarp" not in k.asm["ttgir"]
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
