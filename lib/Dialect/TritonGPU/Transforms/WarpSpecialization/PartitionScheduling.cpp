@@ -795,14 +795,7 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
       };
 
   auto graph = std::make_unique<Graph>(region);
-  if (auto m = dyn_cast<ModuleOp>(region)) {
-    // Special case for analyzing entire module
-    for (auto &block : m.getRegion())
-      for (auto &op : block)
-        visitOperation(graph->getRoot(), &op);
-  } else {
-    visitOperation(graph->getRoot(), region);
-  }
+  visitOperation(graph->getRoot(), region);
 
   for (auto [outputPort, value] : values) {
     for (auto &use : value.getUses()) {
@@ -2267,17 +2260,12 @@ struct PartitionScheduling
   using TritonGPUPartitionSchedulingBase::TritonGPUPartitionSchedulingBase;
 
   void runOnOperation() override {
-    // find ops to partition; either:
-    //   - all scf::For ops marked with "tt.warp_specialize"
-    //   - or entire module if marked with "tt.warp_specialize"
+    // find ops to partition
     SmallVector<Operation *> ops;
     getOperation().walk([&](scf::ForOp op) {
       if (op->hasAttr(kWarpSpecializeAttrName))
         ops.push_back(op);
     });
-    if (ops.empty() && getOperation()->hasAttr(kWarpSpecializeAttrName)) {
-      ops.push_back(getOperation());
-    }
 
     // run partitioner on each op
     size_t idx = 0;
@@ -2291,19 +2279,7 @@ struct PartitionScheduling
 private:
   void analyze(size_t idx, Operation *op) {
     auto duplicatedOps = duplicateViewOps(op);
-    tt::FuncOp func;
-    if (auto m = dyn_cast<ModuleOp>(op)) {
-      func = cast<tt::FuncOp>(m.getRegion().front().front());
-    } else {
-      func = op->getParentOfType<tt::FuncOp>();
-      assert(func);
-    }
-
-    auto toInt = [](int dflt, std::string value) {
-      if (value.size() == 0)
-        return dflt;
-      return std::stoi(value);
-    };
+    auto func = op->getParentOfType<tt::FuncOp>();
 
     auto graph = buildGraph(op);
     auto initValues = initialDataValues(graph.get());
