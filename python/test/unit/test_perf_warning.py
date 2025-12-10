@@ -94,6 +94,7 @@ def test_mma_remark(capfd, fresh_triton_cache):
     assert "note: see current operation:" in captured.err
 
 
+@pytest.mark.skip(reason="Hangs when running `make NUM_PROCS=24 test-unit`")
 def test_remark_vectorization(capfd, fresh_triton_cache):
     if is_hip():
         pytest.skip("currently failing on HIP")

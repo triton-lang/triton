@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
 from triton_kernels import target_info
-from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw, unswizzle_act_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import (
     float_to_flex,
     load_scale,
@@ -134,7 +134,7 @@ def _p_matmul(
     if is_x_microscaled:
         x_type: tl.constexpr = get_dtype(X)
         tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
-        tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        tl.static_assert(get_dtype(XMxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
@@ -226,7 +226,8 @@ def _p_matmul(
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
             offs_x_k = (off_k_x0.to(index_type) + tl.arange(0, BLOCK_K))[None, :] * stride_x_k
 
-        if is_x_microscaled:
+        XMxScalePtrs = None
+        if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
             offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
@@ -282,13 +283,18 @@ def _p_matmul(
             # --- load x_scale ---
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:
-                off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
-                if EVEN_K:
-                    mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
-                else:
-                    mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
-                x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                if XMxScalePtrs is not None: # not using TMA for x scale load
+                    off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
+                    if EVEN_K:
+                        mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+                    else:
+                        mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
+                    mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                else: # use TMA for x scale load - only cover batched case for now
+                    off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                    x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
+                    x_scales = unswizzle_act_mx_scale_bw(x_scales)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -326,7 +332,7 @@ def _p_matmul(
                 else:
                     acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
 
-            if is_x_microscaled:
+            if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
         # ------------------------------------------------------------
@@ -428,7 +434,6 @@ def _p_matmul(
 
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
-            N_MX_BLOCK = tl.cdiv(N, MXFP_BLOCK_SIZE)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -484,7 +489,7 @@ def _p_matmul(
                 out, out_scale = EPILOGUE_FN(out, mask_m[:, None] & mask_n[None, :], *epilogue_fn_args)
                 tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
                 offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MXFP_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
-                mask_n_scale = offs_y_n_scale < N_MX_BLOCK
+                mask_n_scale = offs_y_n_scale < tl.cdiv(yN, MXFP_BLOCK_SIZE)
                 offs_y_mx_k = 0
                 if USE_SCATTER_TMA:
                     # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
