@@ -1978,8 +1978,7 @@ static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
       auto newTy = RankedTensorType::get(srcTy.getShape(),
                                          srcTy.getElementType(), newEnc);
 
-      auto newCvt = builder.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy,
-                                                         cvt.getSrc());
+      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy, cvt.getSrc());
       cvt.getResult().replaceAllUsesWith(newCvt.getResult());
       cvt->erase();
 
