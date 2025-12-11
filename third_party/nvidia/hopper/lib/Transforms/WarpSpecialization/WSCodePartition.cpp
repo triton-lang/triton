@@ -555,7 +555,8 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
     Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
     Value barrierView = ttg::MemDescIndexOp::create(
         builder, loc, singleBarrierMemDescType, barrierAlloc, idx);
-    ttng::InitBarrierOp::create(builder, funcOp->getLoc(), barrierView, 1);
+    ttng::InitBarrierOp::create(builder, funcOp->getLoc(), barrierView, 1,
+                                DenseI32ArrayAttr({}));
   }
   return barrierAlloc;
 }

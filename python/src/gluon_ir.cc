@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -729,7 +730,8 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_mbarrier_init",
            [](GluonOpBuilder &self, Value memDesc, int count) {
-             self.create<ttng::InitBarrierOp>(memDesc, count);
+             self.create<ttng::InitBarrierOp>(memDesc, count,
+                                              mlir::DenseI32ArrayAttr({}));
            })
       .def("create_mbarrier_inval",
            [](GluonOpBuilder &self, Value memDesc) {
@@ -746,7 +748,8 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_mbarrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
-             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
+             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred,
+                                                mlir::UnitAttr());
            })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,

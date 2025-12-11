@@ -17,6 +17,7 @@ using ttn::OperandsAndConstraints;
 
 namespace mlir {
 namespace triton {
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
 #include "NVGPUToLLVM/Passes.h.inc"
@@ -224,6 +225,53 @@ public:
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
     return success();
+  }
+};
+
+class InitBarrierOpPattern
+    : public OpRewritePattern<mlir::triton::nvidia_gpu::InitBarrierOp> {
+public:
+  using OpRewritePattern<
+      mlir::triton::nvidia_gpu::InitBarrierOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mlir::triton::nvidia_gpu::InitBarrierOp op,
+                                PatternRewriter &rewriter) const override {
+    int count = op.getCount();
+
+    // If dependentPartitionIds is specified, we need to look up the warp count
+    // for each partition and sum them up to get the total number of warps.
+    if (auto partitionAttr = op.getDependentPartitionIds()) {
+      int numWarps = 0;
+      for (auto partitionId : *partitionAttr) {
+        // Find the enclosing WarpSpecializeOp
+        auto warpSpecOp =
+            op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>();
+        if (!warpSpecOp) {
+          op->emitError("ttng.init_barrier with dependentPartitionId must be "
+                        "inside a warp_specialize op");
+          return failure();
+        }
+
+        // Get the partition warp counts.
+        auto partitionNumWarps = warpSpecOp.getPartitionNumWarps();
+        if (partitionId >= static_cast<int>(partitionNumWarps.size())) {
+          op->emitError("dependentPartitionId ")
+              << partitionId
+              << " is out of range (max: " << partitionNumWarps.size() - 1
+              << ")";
+          return failure();
+        }
+
+        numWarps += partitionNumWarps[partitionId];
+      }
+
+      if (op.getCount() != numWarps * 32) {
+        op.setCount(numWarps * 32);
+        return success();
+      }
+    }
+
+    return failure();
   }
 };
 
@@ -649,8 +697,10 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
-                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+    patterns
+        .add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+             WGMMAWaitGroupOpPattern, WarpIdOpPattern, InitBarrierOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

@@ -217,9 +217,12 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If this op is may be signalling other threads asynchronously, make sure
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
-      Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
-      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
+      if (!(dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(op))
+               .getMultiThreaded()) {
+        Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
+        curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
+        curBlockInfo.syncReadIntervals[allIntervals].insert(op);
+      }
     }
     scratchBufferId = allocation->getBufferId(op);
   }
