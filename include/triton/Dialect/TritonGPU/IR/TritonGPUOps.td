@@ -2,6 +2,7 @@
 #define TRITONGPU_OPS
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUEnums.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
@@ -613,6 +614,63 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
     A `local_barrier` operation does not provide syncronization guarantees on global memory.
   }];
   let assemblyFormat = "attr-dict";
+}
+
+def TTG_BarrierOp : TTG_Op<"barrier"> {
+  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the specified scope.";
+  let description = [{
+    The `barrier` op synchronises the execution and all operations between the selected address spaces for all
+    threads in the specified scope. It is used to coordinate communication between threads in the scope.
+
+    This operation waits until all threads in the scope have reached a `barrier` (for syncronisation) and operations
+    between the selected address spaces made by these threads prior to the op are visible to all threads in the specified scope.
+
+    Data hazards between threads accessing the same memory can be avoided by synchronising the
+    specified scope in-between these accesses with a `barrier`.
+
+    A `barrier` operation only provides syncronisation and memory guarantees on the selected address spaces and scope.
+
+    The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
+
+    * `none`         control-only syncronisation (no memory ordering).
+    * `local`        shared-memory operations are complete and visible scope-wide.
+    * `global_read`  global memory reads are complete and visible scope-wide.
+    * `global_write` global memory writes are complete and visible scope-wide.
+    * `tensor`       tensor memory operations are complete and visible scope-wide.
+    * `all`          convenience alias for `["local", "global_read", "global_write", "tensor"]`.
+
+    Multiple address spaces can be combined (e.g. `local|tensor`). `none` cannot be combined with other address spaces.
+
+    The mandatory `scope` attribute describes at which scope the operations will be visible when `barrier` completes:
+
+    * `cta`        syncronisation and memory ordering (if selected) within the CTA.
+    * `cga`        syncronisation and memory ordering (if selected) within all the CTAs in the CGA.
+
+    Only a single scope can be specified.
+
+    Example:
+
+    ```mlir
+    ttg.barrier local cta
+    ttg.barrier local|global_read|global_write cga
+    ```
+  }];
+
+  let arguments = (ins TTG_AddrSpace:$addrSpace, TTG_BarrierScope:$scope);
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    /// Returns true if the barrier includes all of the given address spaces.
+    /// For example, hasAddrSpaces(Local | GlobalRead) returns true only if
+    /// both Local and GlobalRead are set.
+    bool hasAddrSpace(AddrSpace space) {
+      return bitEnumContainsAll(getAddrSpace(), space);
+    }
+    bool hasLocal() { return hasAddrSpace(AddrSpace::Local); }
+    bool hasGlobalRead() { return hasAddrSpace(AddrSpace::GlobalRead); }
+    bool hasGlobalWrite() { return hasAddrSpace(AddrSpace::GlobalWrite); }
+    bool hasTensor() { return hasAddrSpace(AddrSpace::Tensor); }
+  }];
 }
 
 def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {

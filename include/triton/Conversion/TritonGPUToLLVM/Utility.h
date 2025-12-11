@@ -240,6 +240,12 @@ struct TritonLLVMOpBuilder {
   mlir::gpu::BarrierOp barrier() {
     return mlir::gpu::BarrierOp::create(*builder, loc);
   }
+  mlir::triton::gpu::BarrierOp
+  barrier(triton::gpu::AddrSpace addrspace,
+          triton::gpu::BarrierScope scope = triton::gpu::BarrierScope::CTA) {
+    return mlir::triton::gpu::BarrierOp::create(*builder, loc, addrspace,
+                                                scope);
+  }
   template <typename... Args> LLVM::UndefOp undef(Args &&...args) {
     return LLVM::UndefOp::create(*builder, loc, std::forward<Args>(args)...);
   }
