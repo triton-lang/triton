@@ -134,6 +134,27 @@ static void sinkDotConversion(triton::FuncOp funcOp) {
     kv.first->moveBefore(kv.second);
 }
 
+// float dealloc to the top of block, but below any shared memory operation
+static void moveUpDealloc(triton::FuncOp funcOp) {
+  funcOp.walk([&](triton::gpu::LocalDeallocOp op) {
+    auto curr = mlir::Block::reverse_iterator(op);
+    auto begin = op->getBlock()->rend();
+    // Traverse list of operations from bottom to top. Stop if operation
+    // operates on shared memory. This is a conservative strategy to prevent
+    // free of live buffer and do not perform data flow analysis.
+    for (; curr != begin; curr++) {
+      auto isMemDesc = [](Type ty) {
+        return isa<triton::gpu::MemDescType>(ty);
+      };
+      bool sharedMemOp = llvm::any_of(curr->getOperandTypes(), isMemDesc) ||
+                         llvm::any_of(curr->getResultTypes(), isMemDesc);
+      if (sharedMemOp && !isa<triton::gpu::LocalDeallocOp>(*curr))
+        break;
+    }
+    op->moveAfter(&*curr);
+  });
+}
+
 // Sink conversion after the last dealloc but before the first use in its block.
 // This helps to avoid unnecessary shared memory allocation.
 static void moveDownCoversion(triton::FuncOp funcOp) {
@@ -308,6 +329,7 @@ struct TritonAMDGPUReorderInstructionsPass
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<triton::FuncOp>()) {
       sinkDotConversion(funcOp);
+      moveUpDealloc(funcOp);
       moveDownCoversion(funcOp);
 
       moveUpTranspose(funcOp);
