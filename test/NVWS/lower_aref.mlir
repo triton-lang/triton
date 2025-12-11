@@ -14,18 +14,18 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // CHECK: [[BUF:%.*]] = ttg.local_alloc
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc
     // CHECK: [[EMPTYSLICE1:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE1]], 2
+    // CHECK: ttng.init_barrier [[EMPTYSLICE1]], 2 {dependentPartitionIds = array<i32: 2, 1>}
     // CHECK: [[EMPTYSLICE2:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE2]], 2
+    // CHECK: ttng.init_barrier [[EMPTYSLICE2]], 2 {dependentPartitionIds = array<i32: 2, 1>}
     // CHECK: [[EMPTYSLICE3:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE3]], 2
+    // CHECK: ttng.init_barrier [[EMPTYSLICE3]], 2 {dependentPartitionIds = array<i32: 2, 1>}
     // CHECK: [[FULL:%.*]] = ttg.local_alloc
     // CHECK: [[FULLSLICE1:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE1]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE1]], 1 {dependentPartitionIds = array<i32: 0>}
     // CHECK: [[FULLSLICE2:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE2]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE2]], 1 {dependentPartitionIds = array<i32: 0>}
     // CHECK: [[FULLSLICE3:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE3]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE3]], 1 {dependentPartitionIds = array<i32: 0>}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<3x1xi32, #shared, #smem, mutable>
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<3x1xi32, #shared, #smem, mutable>]>
     scf.for %arg3 = %arg0 to %arg1 step %arg2 : i32 {
@@ -102,10 +102,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // CHECK: [[BUF:%.*]] = ttg.local_alloc
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc
     // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 3
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 3 {dependentPartitionIds = array<i32: 3, 2, 1>}
     // CHECK: [[FULL:%.*]] = ttg.local_alloc
     // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE]], 1 {dependentPartitionIds = array<i32: 0>}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<3x1xi32, #shared, #smem, mutable>
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<3x1xi32, #shared, #smem, mutable>]>
     scf.for %arg3 = %arg0 to %arg1 step %arg2 : i32 {
@@ -280,10 +280,10 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %c0_i32 = arith.constant 0 : i32
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 2
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 2 {dependentPartitionIds = array<i32: 0, 1>}
     // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE]], 1 {dependentPartitionIds = array<i32: 2>}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>]>
     scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
@@ -320,10 +320,10 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %c0_i32 = arith.constant 0 : i32
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 1
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 1 {dependentPartitionIds = array<i32: 0>}
     // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
-    // CHECK: ttng.init_barrier [[FULLSLICE]], 1
+    // CHECK: ttng.init_barrier [[FULLSLICE]], 1 {dependentPartitionIds = array<i32: 1>}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>
     %1 = nvws.aref.create %0 : <[!ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>]>
     scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
