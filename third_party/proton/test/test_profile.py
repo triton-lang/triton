@@ -233,6 +233,25 @@ def test_get_data(tmp_path: pathlib.Path):
     assert len(ones_frame) == 1
     assert int(ones_frame["count"].values[0]) == 1
 
+def test_clear_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_clear_data.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    with proton.scope("test0"):
+        x = torch.ones((2, 2), device="cuda")
+        z = x + x
+
+    proton.deactivate(session)
+    proton.clear_data(session)
+    database = proton.get_data(session)
+    assert database["ROOT"]["children"] == []
+
+    proton.activate(session)
+    with proton.scope("test1"):
+        y = x * x
+    proton.deactivate(session)
+    database = proton.get_data(session)
+
 
 def test_hook_launch(tmp_path: pathlib.Path):
 

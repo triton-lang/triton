@@ -26,6 +26,8 @@ public:
 
   void clear() override;
 
+  void clearCache() override;
+
   class Trace;
 
 protected:
