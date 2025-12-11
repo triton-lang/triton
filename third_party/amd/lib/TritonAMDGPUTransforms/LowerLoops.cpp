@@ -118,9 +118,12 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
     auto operandType = cast<RankedTensorType>(inputValue.getType());
-    // use the dot prefered vector size
-    *vecSize = cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding())
-                   .getKWidth();
+    if (*opIdx < 2)
+      // use the dot a/b prefered vector size
+      *vecSize = cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding())
+                     .getKWidth();
+    else
+      *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
@@ -221,6 +224,10 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         unsigned opIdx;
         unsigned vecSize;
         if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
+          if (opIdx >= 2) {
+            LDBG("skip async_copy for scale operand");
+            continue;
+          }
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,

@@ -359,17 +359,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // Main loop
 //         COMMON: scf.for
 //          ASYNC: ttg.async_wait
-// COMMON-COUNT-3:   ttg.local_load
+// COMMON-COUNT-2:   ttg.local_load
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
 
 // Epilogue
 //          ASYNC: ttg.async_wait
-// COMMON-COUNT-3: ttg.local_load
+// COMMON-COUNT-2: ttg.local_load
 //         COMMON: scf.if
 //         COMMON:   tt.dot_scaled
 // COMMON-COUNT-2:   scf.yield
-// COMMON-COUNT-3: ttg.local_dealloc
+// COMMON-COUNT-2: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
