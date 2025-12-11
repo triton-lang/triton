@@ -2094,21 +2094,6 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
   region->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
-bool hasFlattenedEpilogue(Operation *op) {
-  SmallVector<ttng::TMEMLoadOp> tmemLoadOps;
-  op->walk([&](ttng::TMEMLoadOp op) { tmemLoadOps.push_back(op); });
-  for (auto tmemLoadOp : tmemLoadOps)
-    if (auto tok = tmemLoadOp.getDep())
-      if (auto op = tok.getDefiningOp())
-        if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-          auto mmaLoop = mmaOp->getParentOfType<scf::ForOp>();
-          auto loadIfOp = tmemLoadOp->getParentOfType<scf::IfOp>();
-          if (mmaLoop && loadIfOp && mmaLoop.getBody() == loadIfOp->getBlock())
-            return true;
-        }
-  return false;
-}
-
 SmallVector<SmallVector<mlir::Operation *>>
 duplicateViewOps(Operation *region) {
   // Ensure all view ops/broadcast/expand dims have a single user, by
