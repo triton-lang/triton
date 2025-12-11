@@ -785,13 +785,13 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK: scf.for
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   ttg.local_load
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
@@ -853,13 +853,13 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: scf.for
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:      ttng.warp_group_dot
+    // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_copy_global_to_local
