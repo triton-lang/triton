@@ -175,9 +175,7 @@ static void initProton(pybind11::module &&m) {
 
   m.def(
       "clear_data",
-      [](size_t sessionId) {
-        SessionManager::instance().clearData(sessionId);
-      },
+      [](size_t sessionId) { SessionManager::instance().clearData(sessionId); },
       pybind11::arg("sessionId"));
 }
 
