@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TDMUtility.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -7,6 +8,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
 namespace {
 struct MakeTensorDescOpConversion
@@ -17,21 +19,48 @@ struct MakeTensorDescOpConversion
   LogicalResult
   matchAndRewrite(triton::MakeTensorDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     auto loc = op.getLoc();
+    auto basePtr = adaptor.getBase();
     auto tensorShape = adaptor.getShape();
     auto tensorStride = adaptor.getStrides();
-    auto basePtr = adaptor.getBase();
     auto result = op.getResult();
 
-    SmallVector<Value> elems;
-    elems.push_back(basePtr);
-    llvm::append_range(elems, tensorShape);
-    llvm::append_range(elems, tensorStride);
+    auto tensorDescTy = result.getType();
+    auto blockTy = tensorDescTy.getBlockType();
+    auto sharedEnc = blockTy.getEncoding();
+    if (!sharedEnc) {
+      return rewriter.notifyMatchFailure(op, "Descriptor has no layout.");
+    }
+    auto paddedEnc = llvm::dyn_cast<PaddedSharedEncodingAttr>(sharedEnc);
 
-    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
-                                   rewriter, result.getType());
-    rewriter.replaceOp(op, newValue);
+    unsigned padInterval = 0;
+    unsigned padAmount = 0;
+    if (paddedEnc) {
+      if (paddedEnc.getIntervals().size() != 1 ||
+          paddedEnc.getPaddings().size() != 1)
+        return rewriter.notifyMatchFailure(
+            op, "NYI: Multiple interval-padding pairs in TDM.");
+      padInterval = paddedEnc.getIntervals()[0];
+      padAmount = paddedEnc.getPaddings()[0];
+    }
+
+    Type elementType =
+        getTypeConverter()->convertType(blockTy.getElementType());
+    SmallVector<int64_t> blockShape = to_vector(blockTy.getShape());
+    int numWarps = lookupNumWarps(op);
+    auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
+
+    // Create TDM descriptor for 2D-5D tensors
+    auto tdmDesc = LLVM::AMD::createTDMDescriptor(
+        rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
+        padInterval, padAmount, tensorShape, tensorStride, basePtr);
+
+    SmallVector<Value> groups = tdmDesc.getAllGroups();
+
+    auto desc =
+        packLLElements(loc, getTypeConverter(), groups, rewriter, tensorDescTy);
+
+    rewriter.replaceOp(op, desc);
     return success();
   }
 };

@@ -43,8 +43,16 @@ public:
   /// Clear all caching data.
   virtual void clear() = 0;
 
+  /// To Json
+  virtual std::string toJsonString() const = 0;
+
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);
+
+  /// Get the contexts associated with the data.
+  std::vector<Context> getContexts() const {
+    return contextSource->getContexts();
+  }
 
 protected:
   /// The actual implementation of the dump operation.

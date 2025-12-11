@@ -26,10 +26,10 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     Value condition = b.int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
-        condition = b.or_(
-            condition,
-            b.icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
-                                loc, elemTy, rewriter.getZeroAttr(elemTy))));
+        condition = b.or_(condition,
+                          b.icmp_eq(elem, LLVM::ConstantOp::create(
+                                              rewriter, loc, elemTy,
+                                              rewriter.getZeroAttr(elemTy))));
       } else {
         assert(false && "Unsupported type for assert");
         return failure();
@@ -87,9 +87,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<LLVM::BrOp>(loc, thenBlock);
+    LLVM::BrOp::create(rewriter, loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
+    LLVM::CondBrOp::create(rewriter, loc, condition, ifBlock, thenBlock);
     rewriter.setInsertionPointToStart(thenBlock);
   }
 

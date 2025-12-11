@@ -45,8 +45,8 @@ public:
         return WalkResult::advance();
 
       OpBuilder builder(dotOp);
-      auto fence = builder.create<FenceAsyncSharedOp>(dotOp.getLoc(),
-                                                      /*bCluster=*/false);
+      auto fence = FenceAsyncSharedOp::create(builder, dotOp.getLoc(),
+                                              /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {

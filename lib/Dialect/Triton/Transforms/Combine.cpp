@@ -167,10 +167,10 @@ public:
         {broadcastLhsShape[0], broadcastRhsShape[2]},
         cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
-    auto newAcc = rewriter.create<SplatOp>(
-        op->getLoc(), newAccType,
-        rewriter.create<arith::ConstantOp>(op->getLoc(),
-                                           rewriter.getF32FloatAttr(0)));
+    auto newAcc =
+        SplatOp::create(rewriter, op->getLoc(), newAccType,
+                        arith::ConstantOp::create(rewriter, op->getLoc(),
+                                                  rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
                                        expandRhsOp.getSrc(), newAcc,
                                        InputPrecision::TF32, 0);

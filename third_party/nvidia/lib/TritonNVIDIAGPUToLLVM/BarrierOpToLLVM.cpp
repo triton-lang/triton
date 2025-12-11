@@ -71,7 +71,7 @@ struct InitBarrierOpConversion
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
-    auto &barSyncOp = *ptxBuilder.create<>(ptx);
+    auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
               /*onlyAttachMLIRArgs=*/true);
@@ -100,7 +100,7 @@ struct InvalBarrierOpConversion
     Value pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
-    auto &barSyncOp = *ptxBuilder.create<>(ptx);
+    auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
               /*onlyAttachMLIRArgs=*/true);
@@ -130,9 +130,9 @@ struct BarrierExpectConversion
     pred = b.and_(pred, adaptor.getPred());
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx =
-        "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], " +
+        "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], " +
         std::to_string(op.getSize()) + ";";
-    auto &barSyncOp = *ptxBuilder.create<>(ptx);
+    auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
               /*onlyAttachMLIRArgs=*/true);
@@ -169,7 +169,7 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 }
@@ -180,7 +180,7 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 	skipWait:
@@ -193,7 +193,7 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 }
 )";
@@ -203,7 +203,7 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }
@@ -211,7 +211,7 @@ struct WaitBarrierOpConversion
       }
     }
     ::mlir::triton::PTXBuilder ptxBuilder;
-    auto &waitLoop = *ptxBuilder.create<>(ptx);
+    auto &waitLoop = *ptxBuilder.create(ptx);
     SmallVector<::mlir::triton::PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(smemObj.getBase(), "r"),
         ptxBuilder.newOperand(adaptor.getPhase(), "r")};
@@ -252,7 +252,7 @@ struct ArriveBarrierOpConversion
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
 
-    auto arriveOp = *ptxBuilder.create<>(ptxAsm.str());
+    auto arriveOp = *ptxBuilder.create(ptxAsm.str());
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(getContext());
     ptxBuilder.launch(rewriter, op.getLoc(), voidTy);

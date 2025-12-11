@@ -26,7 +26,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
     // CHECK-COUNT-64: %{{[0-9]*}} = llvm.insertvalue %{{.*}} : !llvm.struct
 
-    %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6, %arg7:
+    %1 = amdg.concat %arg0, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6, %arg7:
     tensor<32x64xf32, #blocked1>,tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
     tt.return
   }
@@ -50,7 +50,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-COUNT-64: %{{.*}} = llvm.extractvalue %arg3[{{.*}}] : !llvm.struct
     // CHECK-COUNT-256: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
 
-    %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3:
+    %1 = amdg.concat %arg0, %arg1, %arg2, %arg3:
     tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout>, tensor<128x128xf32, #src_layout> -> tensor<256x256xf32, #dst_layout>
     tt.return
   }
@@ -74,7 +74,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue %arg3[{{.*}}] : !llvm.struct
     // CHECK-COUNT-32: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
 
-    %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3:
+    %1 = amdg.concat %arg0, %arg1, %arg2, %arg3:
     tensor<32x32xf32, #src_layout>, tensor<32x32xf32, #src_layout>, tensor<32x32xf32, #src_layout>, tensor<32x32xf32, #src_layout> -> tensor<64x64xf32, #dst_layout>
     tt.return
   }
@@ -98,7 +98,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-COUNT-2: %{{.*}} = llvm.extractvalue %arg3[{{.*}}] : !llvm.struct
     // CHECK-COUNT-8: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
 
-    %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3:
+    %1 = amdg.concat %arg0, %arg1, %arg2, %arg3:
     tensor<256xf32, #src_layout>, tensor<256xf32, #src_layout>, tensor<256xf32, #src_layout>, tensor<256xf32, #src_layout> -> tensor<1024xf32, #dst_layout>
     tt.return
   }
@@ -117,7 +117,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
     // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
     // CHECK-COUNT-8: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %1 = amdgpu.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
+    %1 = amdg.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
     tt.return
   }
 }
@@ -135,7 +135,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
     // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
     // CHECK-COUNT-32: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %1 = amdgpu.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
+    %1 = amdg.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
     tt.return
   }
 }

@@ -34,6 +34,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -211,19 +212,42 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-    auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
-    auto elemType = ttng::getTMAElementType(nullptr, descTy);
-    assert(swizzle.has_value());
-    assert(elemType.has_value());
-    auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+
     py::dict metadata;
-    metadata["swizzle"] = *swizzle;
-    metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
-    metadata["elem_type"] = *elemType;
-    metadata["block_size"] =
-        std::vector<int>(blockSize.begin(), blockSize.end());
-    metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
+      auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+      auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
+      auto elemType = ttng::getTMAElementType(nullptr, descTy);
+      assert(swizzle.has_value());
+      assert(elemType.has_value());
+      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+      metadata["swizzle"] = *swizzle;
+      metadata["elem_size"] =
+          descTy.getBlockType().getElementTypeBitWidth() / 8;
+      metadata["elem_type"] = *elemType;
+      metadata["block_size"] =
+          std::vector<int>(blockSize.begin(), blockSize.end());
+      metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    } else {
+      auto blockShape = blockType.getShape();
+      metadata["block_size"] =
+          std::vector<int>(blockShape.begin(), blockShape.end());
+      metadata["elem_bits"] = blockType.getElementTypeBitWidth();
+
+      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+        py::list intervalPaddingPairs;
+        for (auto [interval, padding] : llvm::zip_equal(
+                 paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
+          py::list pair;
+          pair.append(interval);
+          pair.append(padding);
+          intervalPaddingPairs.append(pair);
+        }
+        metadata["interval_padding_pairs"] = intervalPaddingPairs;
+
+        auto blockShape = blockType.getShape();
+      }
+    }
     result.append(std::move(metadata));
   }
   return result;
@@ -308,6 +332,8 @@ void init_triton_ir(py::module &&m) {
       .value("TF32", InputPrecision::TF32)
       .value("TF32x3", InputPrecision::TF32x3)
       .value("IEEE", InputPrecision::IEEE)
+      .value("BF16x3", InputPrecision::BF16x3)
+      .value("BF16x6", InputPrecision::BF16x6)
       .export_values();
 
   py::enum_<ScaleDotElemType>(m, "ScaleDotElemTypeTY", py::module_local())
@@ -338,6 +364,7 @@ void init_triton_ir(py::module &&m) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     ::mlir::triton::instrument::TritonInstrumentDialect,
+                    ::mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     LLVM::LLVMDialect, mlir::ub::UBDialect,
@@ -608,6 +635,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_int_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<BoolAttr>(name);
@@ -762,7 +796,6 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       //  .def("has_attr", &::FuncOp::hasAttr)
-      .def("finalize", [](FuncOp &self) -> void {})
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 

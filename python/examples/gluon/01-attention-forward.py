@@ -1,4 +1,5 @@
 import copy
+import math
 import torch
 import triton
 import pytest
@@ -13,7 +14,7 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
+    get_tmem_reg_layout,
     tensor_memory_descriptor,
     tma,
     mbarrier,
@@ -21,6 +22,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_commit,
     float2,
 )
+from triton.experimental.gluon.language.nvidia.blackwell.float2 import Float2Tensor
 
 # ===-----------------------------------------------------------------------===#
 # Layout Utilities
@@ -35,12 +37,6 @@ def get_mma_instr_shape(shape, element_ty):
     return (m, n, k)
 
 
-@gluon.constexpr_function
-def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
-    instr_shape = get_mma_instr_shape(shape, dtype)
-    return get_tmem_32x32b_reg_layout(*instr_shape[:2], shape, num_warps)
-
-
 # ===-----------------------------------------------------------------------===#
 # Data Abstractions
 # ===-----------------------------------------------------------------------===#
@@ -52,10 +48,11 @@ class BarrierCounter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, index, phase, num_barriers):
         self.index = index
         self.phase = phase
-        self.num_barriers = num_barriers
+        self.num_barriers = gl.constexpr(num_barriers)
 
     @gluon.must_use_result
     @gluon.jit
@@ -79,6 +76,7 @@ def Channel(T, alloc_fn):
         num_buffers: gl.constexpr
         num_consumers: gl.constexpr
 
+        @gluon.constexpr_function
         def __init__(self, mem, ready_bars, empty_bars, num_buffers, num_consumers):
             self.mem = mem
             self.ready_bars = ready_bars
@@ -143,6 +141,7 @@ def Channel(T, alloc_fn):
         channel: ChannelType
         counter: BarrierCounter
 
+        @gluon.constexpr_function
         def __init__(self, channel, counter):
             self.channel = channel
             self.counter = counter
@@ -158,6 +157,7 @@ def Channel(T, alloc_fn):
         channel: ChannelType
         counter: BarrierCounter
 
+        @gluon.constexpr_function
         def __init__(self, channel, counter):
             self.channel = channel
             self.counter = counter
@@ -227,13 +227,13 @@ class AttentionConfig:
     p_tmem_layout: gl.constexpr
 
     qk_layout: gl.constexpr
-    o_layout: gl.constexpr
     o_splitn_layout: gl.constexpr
     alpha_2d_layout: gl.constexpr
 
     num_kv_buffers: gl.constexpr
     use_exp2_turnstile: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
                  num_warps):
         self.qk_scale = qk_scale
@@ -250,7 +250,7 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        self.SPLIT_EXP_FACTOR = 256 // HEAD_DIM
+        self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
         self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
@@ -266,14 +266,15 @@ class AttentionConfig:
         self.qk_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
         self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), col_stride=1))
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
+        o_splitn_tmem_layout: gl.constexpr = TensorMemoryLayout(
+            (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1)
 
         self.qk_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(qk_instr_shape[0], qk_instr_shape[0], self.qk_shape, self.num_warps))
-        self.o_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1], self.o_shape, self.num_warps))
+            get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps,
+                                instr_variant="32x32b_splitn"))
         self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR,
-                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
+            get_tmem_reg_layout(gl.float32, (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
+                                o_splitn_tmem_layout, self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
@@ -305,6 +306,7 @@ class ProgramScheduler:
     num_pid_in_group: gl.tensor
     num_tiles: gl.tensor
 
+    @gluon.constexpr_function
     def __init__(self, config, start_pid, num_pid_n, num_pid_in_group, num_tiles):
         self.config = config
         self.start_pid = start_pid
@@ -339,6 +341,7 @@ class AttentionProgram:
     offset_y: gl.tensor
     qo_offset_y: gl.tensor
 
+    @gluon.constexpr_function
     def __init__(self, config, start_m, off_hz, offset_y, qo_offset_y):
         self.config = config
         self.start_m = start_m
@@ -399,10 +402,28 @@ def _borrow_s_for_epilogue(config, s_tmem):
 
 
 @gluon.constexpr_function
-def _get_split_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
-    layout = copy.deepcopy(layout)
-    layout.size_per_thread[1] //= SPLIT_FACTOR
-    return layout
+def _get_split_n_layout(layout: gl.constexpr, SPLIT_FACTOR: gl.constexpr = 2):
+    assert isinstance(layout, gl.DistributedLinearLayout), "split_n requires a distributed layout"
+    assert SPLIT_FACTOR == 1 or SPLIT_FACTOR == 2, "split_n requires a split factor of 1 or 2"
+    if SPLIT_FACTOR == 1:
+        return layout
+    else:
+        target = [0, layout.shape[1] // 2]  # [0, 2^{m-1}]
+        last_reg_idx = len(layout.reg_bases) - 1
+        reg_last = layout.reg_bases[last_reg_idx]
+
+        if reg_last == target:
+            return layout
+
+        ret = copy.deepcopy(layout)
+
+        # Find [0, 2^{m-1}] across lists and swap it with last reg
+        for L in (ret.reg_bases, ret.lane_bases, ret.warp_bases, ret.block_bases):
+            for i, b in enumerate(L):
+                if b == target:
+                    L[i], ret.reg_bases[last_reg_idx] = reg_last, target
+                    return ret
+        assert False, f"split_n requires having a basis {target}. Got\n{layout}"
 
 
 @gluon.jit
@@ -419,9 +440,17 @@ def _split_n(x, SPLIT_FACTOR: gl.constexpr = 2):
 
 @gluon.constexpr_function
 def _get_join_n_layout(layout, SPLIT_FACTOR: gl.constexpr = 2):
-    layout = copy.deepcopy(layout)
-    layout.size_per_thread[1] *= SPLIT_FACTOR
-    return layout
+    assert isinstance(layout, gl.DistributedLinearLayout), "join_n requires a Linear layout"
+    shape = list(layout.shape)
+    regs = [[0, shape[1] * (1 << i)] for i in range(int(math.log2(SPLIT_FACTOR)))]
+    shape[1] *= SPLIT_FACTOR
+    return gl.DistributedLinearLayout(
+        layout.reg_bases + regs,
+        layout.lane_bases,
+        layout.warp_bases,
+        layout.block_bases,
+        shape,
+    )
 
 
 @gluon.jit
@@ -572,7 +601,8 @@ def _compute_and_store_exp2(config, qk, p_tmem):
 @gluon.jit
 def _subtiled_qk_load(config, s_tmem):
     SIZE: gl.constexpr = s_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
-    layout: gl.constexpr = _get_split_n_layout(config.qk_layout, config.SPLIT_QK_LOAD_FACTOR)
+    s = s_tmem.slice(0, SIZE)
+    layout: gl.constexpr = get_tmem_reg_layout(gl.float32, s.shape, s.layout, config.num_warps)
     qks = ()
     for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
         qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(layout), )
@@ -623,6 +653,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
             mbarrier.arrive(exp_bar, count=1)
 
         l_ij = float2.pack2(*_split_n(p)).sum(axis=1)
+        l_ij = Float2Tensor(gl.convert_layout(l_ij.value, l_i.value.type.layout, assert_trivial=True))
         alpha = gl.convert_layout(alpha, l_i.value.type.layout, assert_trivial=True)
         l_i = float2.fma(l_i, float2.pack2(alpha, alpha), l_ij)
         m_i = m_ij
@@ -840,12 +871,13 @@ def attention_kernel(  #
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
-    gl.warp_specialize((config, chnls, descs, M, STAGE), _attn_fwd_correction, (config, chnls, descs, M, STAGE), [
-        _attn_fwd_softmax0,
-        _attn_fwd_softmax1,
-        _attn_fwd_mma,
-        _attn_fwd_load,
-        _attn_fwd_epilogue,
+    gl.warp_specialize([
+        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()

@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -18,24 +20,24 @@ namespace {
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int size,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/1);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{size},
                                   /*threadsPerWarp=*/{32},
                                   /*warpsPerCTA=*/{warps},
-                                  /*order=*/{0}, ctaLayout);
+                                  /*order=*/{0}, cgaLayout);
 }
 
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int buffers,
                                                   unsigned int barriers,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{buffers, barriers},
                                   /*threadsPerWarp=*/{1, 32},
                                   /*warpsPerCTA=*/{1, warps},
-                                  /*order=*/{0, 1}, ctaLayout);
+                                  /*order=*/{0, 1}, cgaLayout);
 }
 
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
@@ -56,14 +58,18 @@ RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
   return RankedTensorType::get(shape, elType, encoding);
 }
 
-Value createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
-                                 SmallVector<int32_t> values) {
+std::pair<Value, RankedTensorType>
+createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
+                           SmallVector<uint32_t> values) {
   int64_t size = values.size();
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
   auto tensorType =
       getIntTensorType(builder.getInsertionBlock()->getParent(), {size}, 64);
-  return builder.create<ExperimentalBufferPointersOp>(tensorType, values,
-                                                      memType);
+  auto valuesI32 = llvm::to_vector(llvm::map_range(
+      values, [](uint32_t v) { return static_cast<int32_t>(v); }));
+  return {ExperimentalBufferPointersOp::create(builder, tensorType, valuesI32,
+                                               memType),
+          tensorType};
 }
 
 Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
@@ -73,7 +79,7 @@ Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
   int numEls = product(tensor.getType().getShape());
   int64_t sizeInBytes = numEls * elSize;
   Type ptrType = triton::getPointerType(elType);
-  auto alloc = b.create<GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, elSize);
   createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
   return alloc;
 }
@@ -111,109 +117,24 @@ bool hasWGMMA(ModuleOp module) {
   return hasWGMMA;
 }
 
-bool canAllocBeInstrumented(Operation *op) {
-  if (llvm::any_of(op->getUsers(),
-                   [](Operation *user) { return isa<CallOp>(user); })) {
-    op->emitWarning("Allocation is used in a function call, cannot instrument");
-    return false;
-  }
-  if (llvm::all_of(op->getUsers(), [](Operation *user) {
-        return !isa<MemDescIndexOp>(user);
-      })) {
-    return true;
-  }
-  if (llvm::all_of(op->getUsers(), [](Operation *user) {
-        return isa<MemDescIndexOp>(user) || isa<LocalDeallocOp>(user) ||
-               isa<WarpSpecializeOp>(user);
-      })) {
-    return true;
-  }
-  op->emitWarning(
-      "Allocation is used in an inconsistent way, cannot instrument");
-  return false;
-}
-
-// Interpret local_allocs that are used in ttg.memdesc_index as multibuffered
-bool isMultiBuffered(Value v) {
-  for (auto &use : v.getUses()) {
-    if (isa<MemDescIndexOp>(use.getOwner())) {
-      return true;
+bool hasTMAStore(ModuleOp module) {
+  bool hasTMAStore = false;
+  module.walk([&](Operation *op) {
+    if (isa<AsyncTMACopyLocalToGlobalOp, TMAStoreWaitOp>(op)) {
+      hasTMAStore = true;
     }
-    if (auto wsOp = dyn_cast<WarpSpecializeOp>(use.getOwner())) {
-      int opNumber = use.getOperandNumber();
-      for (Region *region : wsOp.getPartitionRegions()) {
-        if (isMultiBuffered(region->getArguments()[opNumber])) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-uint64_t getAllocationOffset(LocalAllocOp op) {
-  auto offsetAttr = op->getAttr("allocation.offset");
-  if (!offsetAttr) {
-    llvm::report_fatal_error(
-        "ConcurrencySanitizer should run after AllocateSharedMemory pass.");
-  }
-  return cast<IntegerAttr>(offsetAttr).getInt();
-}
-
-uint64_t getAllocationOffset(TMEMAllocOp op) {
-  auto colOffsetAttr = op->getAttr("tensor_memory_col_offset");
-  auto rowOffsetAttr = op->getAttr("tensor_memory_row_offset");
-  if (!colOffsetAttr || !rowOffsetAttr) {
-    llvm::report_fatal_error(
-        "ConcurrencySanitizer should run after AllocateSharedMemory and "
-        "TensorMemoryAllocation pass.");
-  }
-  int colOffset = cast<IntegerAttr>(colOffsetAttr).getInt();
-  int rowOffset = cast<IntegerAttr>(rowOffsetAttr).getInt();
-  return colOffset | (rowOffset << 16);
-}
-
-bool isBarrier(triton::gpu::LocalAllocOp op) {
-  // Is there InitBarrierOp in the forward slice of the op?
-  bool foundInitBarrier = false;
-  SetVector<Operation *> forwardSlice;
-  ForwardSliceOptions options;
-  options.filter = [&](Operation *op) {
-    if (isa<InitBarrierOp>(op)) {
-      foundInitBarrier = true;
-      return false;
-    }
-    return true;
-  };
-  getForwardSlice(op.getOperation(), &forwardSlice, options);
-  return foundInitBarrier;
-}
-
-unsigned getNumBuffers(Operation *op) {
-  MemDescType ty = cast<MemDescType>(op->getResultTypes().front());
-  return ty.getShape()[0];
-}
-
-unsigned getSubBufferSize(LocalAllocOp op) {
-  MemDescType ty = op.getType();
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ty.getShape().drop_front()) * elSize;
-}
-
-unsigned getSubBufferSize(TMEMAllocOp op) {
-  int numCols = getTmemAllocSizes(op.getType()).numCols;
-  int numSubBuffers = getNumBuffers(op);
-  return numCols / numSubBuffers;
+  });
+  return hasTMAStore;
 }
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = b.create<GlobalScratchAllocOp>(ptrType, 4, 4);
-  Value zero = b.create<arith::ConstantOp>(b.getLoc(), b.getI32Type(),
-                                           b.getI32IntegerAttr(0));
-  b.create<triton::AtomicRMWOp>(b.getI32Type(), RMWOp::XCHG, alloc, zero,
-                                nullptr, MemSemantic::ACQUIRE_RELEASE,
-                                MemSyncScope::GPU);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, 4, 4);
+  Value zero = arith::ConstantOp::create(b, b.getLoc(), b.getI32Type(),
+                                         b.getI32IntegerAttr(0));
+  triton::AtomicRMWOp::create(b, b.getI32Type(), RMWOp::XCHG, alloc, zero,
+                              nullptr, MemSemantic::ACQUIRE_RELEASE,
+                              MemSyncScope::GPU);
   return alloc;
 }
 
@@ -229,7 +150,7 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
   auto denseAttr =
       DenseElementsAttr::get(tensorType, APInt(bitWidth, val, isSigned));
   return cast<TypedValue<RankedTensorType>>(
-      builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
+      arith::ConstantOp::create(builder, loc, tensorType, denseAttr)
           .getResult());
 }
 
@@ -257,7 +178,7 @@ Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
     newShape.insert(newShape.begin() + dim, 1);
     auto newType = RankedTensorType::get(newShape, type.getElementType(),
                                          sliceEncoding.getParent());
-    tensor = b.create<ExpandDimsOp>(loc, newType, tensor, dim);
+    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
   }
   return tensor;
 }
@@ -276,8 +197,8 @@ static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
                                  RankedTensorType tensorType) {
   auto encoding = cast<BlockedEncodingAttr>(tensorType.getEncoding());
-  Value ptrTensor = b.create<SplatOp>(
-      loc,
+  Value ptrTensor = SplatOp::create(
+      b, loc,
       RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
       base);
   auto offsetsType =
@@ -292,17 +213,17 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
     auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
                                             b.getI32Type(), partialEncoding);
     auto arange =
-        b.create<MakeRangeOp>(loc, arangeType, 0, arangeType.getShape()[0]);
+        MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
     auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
     auto arangeTimesStride =
-        b.create<arith::MulIOp>(loc, arangeType, arange, cstStride);
+        arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
     auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
     if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
         tensorType.getShape()) {
-      expandDims = b.create<BroadcastOp>(loc, offsetsType, expandDims);
+      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
     }
     ptrTensor =
-        b.create<AddPtrOp>(loc, ptrTensor.getType(), ptrTensor, expandDims);
+        AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
   }
   return ptrTensor;
 }
@@ -310,15 +231,15 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return b.create<StoreOp>(loc, ptrTensor, tensor, CacheModifier::NONE,
-                           EvictionPolicy::NORMAL);
+  return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
+                         EvictionPolicy::NORMAL);
 }
 
-Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                                   RankedTensorType tensorType) {
+Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
+                              RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return b.create<LoadOp>(loc, ptrTensor, CacheModifier::NONE,
-                          EvictionPolicy::NORMAL, false);
+  return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
+                        EvictionPolicy::NORMAL, false);
 }
 
 FuncOp getEntryPoint(ModuleOp module) {
@@ -356,8 +277,8 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
 }
 
 void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
-  SmallVector<SmallVector<int32_t>, 2> bufValues(numMemTypes);
-  SmallVector<int32_t> barrierValues;
+  SmallVector<SmallVector<uint32_t>, 2> bufValues(numMemTypes);
+  SmallVector<uint32_t> barrierValues;
   getBuffersAndBarriers(module, bufValues, barrierValues);
 
   FuncOp entryPoint = getEntryPoint(module);
@@ -372,47 +293,56 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     if (bufValues[iMemType].empty()) {
       continue;
     }
-    buffers[iMemType][entryRegion] = {
-        createBufferPointersTensor(b, memType, bufValues[iMemType])};
+
+    buffers[iMemType].insert(
+        entryRegion,
+        {createBufferPointersTensor(b, memType, bufValues[iMemType])});
+    // Buffer pointers are rematerialized in the warp specialize region,
+    // not passed as an argument.
     createInWarpSpecialize(
         entryPoint, buffers[iMemType], [&](ImplicitLocOpBuilder &b) {
-          return AuxDataMap::RegionToValueMap::ValueType{
+          return ValueType{
               createBufferPointersTensor(b, memType, bufValues[iMemType])};
         });
     int numBufs = bufValues[iMemType].size();
 
-    writeVisibility[iMemType][entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, 0, 64),
-        getIntTensorType(entryRegion, {numBufs}, 64)};
-    passToWarpSpecialize(entryPoint, writeVisibility[iMemType][entryRegion],
+    writeVisibility[iMemType].insert(
+        entryRegion, {createZeroInitStateTensor(b, numBufs, 0, 64),
+                      getIntTensorType(entryRegion, {numBufs}, 64)});
+    passToWarpSpecialize(entryPoint, writeVisibility[iMemType].at(entryRegion),
                          writeVisibility[iMemType]);
-    readVisibility[iMemType][entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64),
-        getIntTensorType(entryRegion, {numBufs, THREADS_BITMASK_SIZE}, 64)};
-    passToWarpSpecialize(entryPoint, readVisibility[iMemType][entryRegion],
+    readVisibility[iMemType].insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64),
+         getIntTensorType(entryRegion, {numBufs, THREADS_BITMASK_SIZE}, 64)});
+    passToWarpSpecialize(entryPoint, readVisibility[iMemType].at(entryRegion),
                          readVisibility[iMemType]);
   }
 
   if (!barrierValues.empty()) {
     // Barriers allocations are in shared memory
-    barriers[entryRegion] = {
-        createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
+    barriers.insert(entryRegion, {createBufferPointersTensor(
+                                     b, MemType::SHARED_MEM, barrierValues)});
+    // Barriers allocations are rematerialized in the warp specialize region,
+    // not passed as an argument.
     createInWarpSpecialize(entryPoint, barriers, [&](ImplicitLocOpBuilder &b) {
-      return AuxDataMap::RegionToValueMap::ValueType{
+      return ValueType{
           createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     });
 
     int numBarriers = barrierValues.size();
-    barrierStates[entryRegion] = {
-        createZeroInitStateTensor(b, numBarriers, 0, 32),
-        getIntTensorType(entryRegion, {numBarriers}, 32)};
-    passToWarpSpecialize(entryPoint, barrierStates[entryRegion], barrierStates);
+    barrierStates.insert(entryRegion,
+                         {createZeroInitStateTensor(b, numBarriers, 0, 32),
+                          getIntTensorType(entryRegion, {numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
+                         barrierStates);
 
     // Deadlock detection aux data: waiting (i32[K]) storing waiting flag and
     // phase bits per thread (two bits per thread).
-    waiting[entryRegion] = {createZeroInitStateTensor(b, numBarriers, 0, 32),
-                            getIntTensorType(entryRegion, {numBarriers}, 32)};
-    passToWarpSpecialize(entryPoint, waiting[entryRegion], waiting);
+    waiting.insert(entryRegion,
+                   {createZeroInitStateTensor(b, numBarriers, 0, 32),
+                    getIntTensorType(entryRegion, {numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
@@ -420,15 +350,18 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       int numBufs = bufValues[iMemType].size();
       int numBarriers = barrierValues.size();
       if (numBufs > 0) {
-        writeTracking[iMemType][entryRegion] = {
-            createZeroInitStateTensor(b, numBufs, numBarriers, 8),
-            getIntTensorType(entryRegion, {numBufs, numBarriers}, 8)};
-        passToWarpSpecialize(entryPoint, writeTracking[iMemType][entryRegion],
+        writeTracking[iMemType].insert(
+            entryRegion,
+            {createZeroInitStateTensor(b, numBufs, numBarriers, 8),
+             getIntTensorType(entryRegion, {numBufs, numBarriers}, 8)});
+        passToWarpSpecialize(entryPoint,
+                             writeTracking[iMemType].at(entryRegion),
                              writeTracking[iMemType]);
-        readTracking[iMemType][entryRegion] = {
-            createZeroInitStateTensor(b, numBufs, numBarriers, 64),
-            getIntTensorType(entryRegion, {numBufs, numBarriers}, 64)};
-        passToWarpSpecialize(entryPoint, readTracking[iMemType][entryRegion],
+        readTracking[iMemType].insert(
+            entryRegion,
+            {createZeroInitStateTensor(b, numBufs, numBarriers, 64),
+             getIntTensorType(entryRegion, {numBufs, numBarriers}, 64)});
+        passToWarpSpecialize(entryPoint, readTracking[iMemType].at(entryRegion),
                              readTracking[iMemType]);
       }
     }
@@ -436,88 +369,68 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
-  lock[entryRegion] = {lockVal};
-  passToWarpSpecialize(entryPoint, lock[entryRegion], lock);
+  lock.insert(entryRegion, {lockVal, lockVal.getType()});
+  passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock);
+
+  auto createCommitTensor = [&](CommitKind::Kind commitKind) {
+    int numBufs = bufValues[(int)MemType::SHARED_MEM].size();
+    if (numBufs == 0)
+      return;
+    // NUM_THREADS instead of THREADS_BITMASK_SIZE as commit-count tracking
+    // operates on base threads.
+    commits[commitKind].insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
+         getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)});
+    passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
+                         commits[commitKind]);
+  };
 
   // Create write commits tensor for cp-async
   if (hasCpAsync(module)) {
-    int iMemType = (int)MemType::SHARED_MEM;
-    int numBufs = bufValues[iMemType].size();
-    assert(numBufs > 0);
-    // NUM_THREADS instead of THREADS_BITMASK_SIZE as cp_async can't work on the
-    // helper threads of TMA and TC
-    asyncCpCommits[entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
-        getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)};
-    passToWarpSpecialize(entryPoint, asyncCpCommits[entryRegion],
-                         asyncCpCommits);
+    createCommitTensor(CommitKind::AsyncCp);
   }
 
   // Create reads commits tensor for wgmma
   if (hasWGMMA(module)) {
-    int iMemType = (int)MemType::SHARED_MEM;
-    int numBufs = bufValues[iMemType].size();
-    assert(numBufs > 0);
-    // NUM_THREADS instead of THREADS_BITMASK_SIZE as wgmma can't work on the
-    // helper threads of TMA and TC
-    wgmmaCommits[entryRegion] = {
-        createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8),
-        getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)};
-    passToWarpSpecialize(entryPoint, wgmmaCommits[entryRegion], wgmmaCommits);
+    createCommitTensor(CommitKind::Wgmma);
+  }
+
+  if (hasTMAStore(module)) {
+    createCommitTensor(CommitKind::TmaStore);
   }
 }
 
 void AuxDataMap::getBuffersAndBarriers(
-    ModuleOp module, SmallVector<SmallVector<int32_t>, 2> &bufValues,
-    SmallVector<int32_t> &barrierValues) {
+    ModuleOp module, SmallVector<SmallVector<uint32_t>, 2> &bufValues,
+    SmallVector<uint32_t> &barrierValues) {
   // Collect shared memory buffers allocated in the module
-  llvm::SmallVector<llvm::SetVector<int32_t>> bufSets(numMemTypes);
-  llvm::SetVector<int32_t> barrierSet;
-  module.walk([&](LocalAllocOp op) {
-    if (!canAllocBeInstrumented(op)) {
-      return WalkResult::advance();
-    }
-    int32_t baseOffset = getAllocationOffset(op);
-    auto &setToAdd =
-        isBarrier(op) ? barrierSet : bufSets[(int)MemType::SHARED_MEM];
-    setToAdd.insert(baseOffset);
-    if (isMultiBuffered(op)) {
-      unsigned numBuffers = getNumBuffers(op);
-      assert(numBuffers > 0 && "Expected at least one buffer");
-      unsigned subBufferSize = getSubBufferSize(op);
-      for (unsigned i = 1; i < numBuffers; ++i) {
-        setToAdd.insert(baseOffset + i * subBufferSize);
-      }
-    }
-    return WalkResult::advance();
-  });
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  triton::BufferRegionAnalysis *analysis =
+      solver->load<triton::BufferRegionAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return;
 
-  module.walk([&](TMEMAllocOp op) {
-    if (!canAllocBeInstrumented(op)) {
-      return WalkResult::advance();
-    }
-    int32_t baseOffset = getAllocationOffset(op);
-    bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset);
-    if (isMultiBuffered(op)) {
-      unsigned numBuffers = getNumBuffers(op);
-      assert(numBuffers > 0 && "Expected at least one buffer");
-      unsigned subBufferSize = getSubBufferSize(op);
-      for (unsigned i = 1; i < numBuffers; ++i) {
-        bufSets[(int)MemType::TENSOR_MEM].insert(baseOffset +
-                                                 i * subBufferSize);
-      }
-    }
-    return WalkResult::advance();
-  });
+  analysis->calculateUsedBufferRegions(module);
+  bufValues[(int)MemType::SHARED_MEM] = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::SHARED_MEMORY),
+      [](const BufferRegion &region) { return region.baseOffset; }));
+  bufValues[(int)MemType::TENSOR_MEM] = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::TENSOR_MEMORY),
+      [](const BufferRegion &region) { return region.baseOffset; }));
+  barrierValues = llvm::to_vector(llvm::map_range(
+      analysis->getAllUsedBufferRegions(
+          BufferRegionAnalysis::RegionType::BARRIER),
+      [](const BufferRegion &region) { return region.baseOffset; }));
 
-  barrierValues = llvm::to_vector(barrierSet);
   if (!barrierValues.empty()) {
     barrierValues.resize(llvm::NextPowerOf2(barrierValues.size() - 1), 0);
   }
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    bufValues[iMemType] = llvm::to_vector(bufSets[iMemType]);
     if (bufValues[iMemType].empty()) {
       continue;
     }
@@ -526,37 +439,37 @@ void AuxDataMap::getBuffersAndBarriers(
   }
 }
 
-void AuxDataMap::passToWarpSpecialize(
-    FuncOp func, AuxDataMap::RegionToValueMap::ValueType valueType,
-    RegionToValueMap &map) {
+void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
+                                      RegionToValueMap &map) {
   func.walk([&](WarpSpecializeOp op) {
     op->insertOperands(op.getNumOperands(), {valueType.value});
     for (Region *region : op.getPartitionRegions()) {
-      // Pass the value as a pointer type (instead of the type of undelying
+      // Pass the value as a pointer type (instead of the type of underlying
       // memory)
       region->addArgument(valueType.value.getType(), op.getLoc());
       Type newType = valueType.type;
-      if (newType) {
-        auto tensorType = cast<RankedTensorType>(newType);
+      if (auto tensorType = dyn_cast<RankedTensorType>(newType)) {
+        // If this is a tensor, make sure the layout matches the region's warp
+        // count
         newType = getIntTensorType(
             region, tensorType.getShape(),
             tensorType.getElementType().getIntOrFloatBitWidth());
       }
-      map[region] = AuxDataMap::RegionToValueMap::ValueType{
-          region->getArgument(region->getNumArguments() - 1), newType};
+      map.insert(region,
+                 ValueType{region->getArgument(region->getNumArguments() - 1),
+                           newType});
     }
   });
 }
 
 void AuxDataMap::createInWarpSpecialize(
     FuncOp func, RegionToValueMap &map,
-    std::function<RegionToValueMap::ValueType(ImplicitLocOpBuilder &)>
-        createFn) {
+    std::function<ValueType(ImplicitLocOpBuilder &)> createFn) {
   func.walk([&](WarpSpecializeOp op) {
     for (Region *region : op.getPartitionRegions()) {
       ImplicitLocOpBuilder b(region->getLoc(), region);
       b.setInsertionPointToStart(&region->getBlocks().front());
-      map[region] = createFn(b);
+      map.insert(region, createFn(b));
     }
   });
 }

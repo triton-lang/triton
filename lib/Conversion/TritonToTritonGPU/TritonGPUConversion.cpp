@@ -56,7 +56,8 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   if (enableSourceRemat) {
     addSourceMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                                 ValueRange inputs, Location loc) -> Value {
-      return builder.create<UnrealizedConversionCastOp>(loc, tensorType, inputs)
+      return UnrealizedConversionCastOp::create(builder, loc, tensorType,
+                                                inputs)
           .getResult(0);
     });
   }
@@ -67,7 +68,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                               ValueRange inputs, Location loc) {
     auto cast =
-        builder.create<triton::gpu::ConvertLayoutOp>(loc, tensorType, inputs);
+        triton::gpu::ConvertLayoutOp::create(builder, loc, tensorType, inputs);
     return cast.getResult();
   });
 }
@@ -143,9 +144,9 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
   std::array<unsigned, 2> warpsPerCta = {1, numWarps};
 
   MLIRContext *ctx = type.getContext();
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
   auto parentEncoding = BlockedEncodingAttr::get(
-      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
+      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, cgaLayout);
   auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
   if (enc == newEncoding)
     return {};
@@ -163,7 +164,8 @@ static LogicalResult convertGatherScatterIndices(Operation *op,
       getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
   if (!newType)
     return failure();
-  Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
+  Value index =
+      ConvertLayoutOp::create(b, op->getLoc(), newType, indices.get());
   indices.set(index);
   return success();
 }

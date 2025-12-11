@@ -152,7 +152,8 @@ private:
       auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
       numElems = product<int64_t>(shapePerCTA);
     }
-    int64_t bytes = numElems * allocType.getElementTypeBitWidth() / 8;
+    int64_t bytes =
+        numElems * getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
 
     auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
@@ -231,15 +232,9 @@ private:
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    // Run the analysis rooted at every isolated from above operation, including
-    // the top-level function but also any nested regions.
-    operation->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
-          failed(solver->initializeAndRun(op))) {
-        // TODO: return error instead of bailing out..
-        llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
-      }
-    });
+    if (failed(solver->initializeAndRun(operation))) {
+      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+    }
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
         getValueAlias(operand, *aliasAnalysis);

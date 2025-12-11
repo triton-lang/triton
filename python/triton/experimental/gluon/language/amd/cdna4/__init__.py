@@ -1,13 +1,16 @@
-from triton.experimental.gluon.language import _core as ttgl
-from ..._core import builtin, float32
+from triton.runtime.jit import constexpr_function
+from triton._C.libtriton.gluon_ir import get_amd_mfma_scale_layout as _get_mfma_scale_layout
+
+from ..._core import builtin
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
+from .._ops import _mma_scaled
 from ..cdna3 import _buffer_atomic_rmw_impl
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled"]
+__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
 
 
 @builtin
@@ -26,11 +29,11 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 
     Args:
         a (tensor): The operand A to be multiplied.
-        a_scale (tensor): Scale factor for operand A.
+        a_scale (Optional[tensor]): Scale factor for operand A.
         a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
         b (tensor): The operand B to be multiplied.
-        b_scale (tensor): Scale factor for operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
-        b_format (str): Format of the operand B.
+        b_scale (Optional[tensor]): Scale factor for operand B.
+        b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
         acc (tensor): Accumulator tensor.
     """
     layout = acc.type.layout
@@ -43,12 +46,34 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
-    assert a_scale is not None and b_scale is not None, "Scales must not be None"
+    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
 
-    tensor = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, False, True, True, float32)
 
-    ret_ty = ttgl.distributed_type(tensor.dtype, tensor.shape, layout)
-    return ttgl.tensor(tensor.handle, ret_ty)
+def _get_mfma_scale_layout_impl(*args, **kwargs):
+    return _get_mfma_scale_layout(*args, **kwargs)
+
+
+_get_mfma_scale_layout_impl.__triton_builtin__ = True
+
+
+@constexpr_function
+def get_mfma_scale_layout(dot_operand_layout, shape):
+    """ Get the scale layout for MFMA scaled operands.
+
+    Args:
+        dot_operand_layout (DotOperandLayout): The dot operand layout.
+        shape (List[int]): The shape of the scale tensor.
+
+    Return:
+        layout (DistributedLinearLayout): The scale layout.
+    """
+    op_idx = dot_operand_layout.operand_index
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    mdim = parent.instr_shape[0]
+    tiles_per_warp = parent.tiles_per_warp
+    warps_per_cta = parent.warps_per_cta
+    return _get_mfma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 """

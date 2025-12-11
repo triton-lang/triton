@@ -204,8 +204,8 @@ maybeGetOrCreateScalarConstant(RewriterBase &rewriter, Location loc, Value expr,
   if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(op)) {
     Value val = constOp.getResult();
     if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
-      return rewriter.create<arith::ConstantOp>(
-          loc, constVal.getSplatValue<IntegerAttr>());
+      return arith::ConstantOp::create(rewriter, loc,
+                                       constVal.getSplatValue<IntegerAttr>());
   }
 
   // Check for block arguments
@@ -300,7 +300,7 @@ Value createAddUniformAndNonUniform(RewriterBase &rewriter, Location loc,
   auto castNonUniform = createCastOffset(rewriter, loc, nonUniform, resultTy);
 
   Value uniformSplat =
-      rewriter.create<tt::SplatOp>(loc, castNonUniform.getType(), castUniform);
+      tt::SplatOp::create(rewriter, loc, castNonUniform.getType(), castUniform);
 
   if (isTensorIntZero(nonUniform))
     return uniformSplat;
@@ -322,7 +322,7 @@ bool canNarrowOffset(Value baseOffset, Value addOffset) {
 Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type) {
   mlir::Attribute zeroAttr = rw.getZeroAttr(type.getElementType());
   auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
-  return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
+  return arith::ConstantOp::create(rw, loc, zeroDenseAttr);
 }
 
 std::pair<Value, Value>
@@ -361,22 +361,22 @@ createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
   auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
       rewriter, loc, mulOp.getRhs(), bitness, scalarToSplatMap);
   Value uniformMul =
-      rewriter.create<arith::MulIOp>(loc, uniformOffsetL, uniformOffsetR);
+      arith::MulIOp::create(rewriter, loc, uniformOffsetL, uniformOffsetR);
 
-  Value uniformOffsetLSplat = rewriter.create<tt::SplatOp>(
-      loc, nonUniformOffsetL.getType(), uniformOffsetL);
-  Value uniformOffsetRSplat = rewriter.create<tt::SplatOp>(
-      loc, nonUniformOffsetR.getType(), uniformOffsetR);
+  Value uniformOffsetLSplat = tt::SplatOp::create(
+      rewriter, loc, nonUniformOffsetL.getType(), uniformOffsetL);
+  Value uniformOffsetRSplat = tt::SplatOp::create(
+      rewriter, loc, nonUniformOffsetR.getType(), uniformOffsetR);
 
-  Value nonUNonU =
-      rewriter.create<arith::MulIOp>(loc, nonUniformOffsetL, nonUniformOffsetR);
-  Value nonUU = rewriter.create<arith::MulIOp>(loc, uniformOffsetLSplat,
-                                               nonUniformOffsetR);
-  Value uNonU = rewriter.create<arith::MulIOp>(loc, nonUniformOffsetL,
-                                               uniformOffsetRSplat);
+  Value nonUNonU = arith::MulIOp::create(rewriter, loc, nonUniformOffsetL,
+                                         nonUniformOffsetR);
+  Value nonUU = arith::MulIOp::create(rewriter, loc, uniformOffsetLSplat,
+                                      nonUniformOffsetR);
+  Value uNonU = arith::MulIOp::create(rewriter, loc, nonUniformOffsetL,
+                                      uniformOffsetRSplat);
 
-  Value tmp = rewriter.create<arith::AddIOp>(loc, nonUNonU, nonUU);
-  Value nonUniformMul = rewriter.create<arith::AddIOp>(loc, tmp, uNonU);
+  Value tmp = arith::AddIOp::create(rewriter, loc, nonUNonU, nonUU);
+  Value nonUniformMul = arith::AddIOp::create(rewriter, loc, tmp, uNonU);
   return {uniformMul, nonUniformMul};
 }
 
@@ -397,7 +397,8 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
   // a tensor. Note that this means we won't be able to decompose across loop
   // boundaries (TODO: giuseros).
   if (llvm::isa<BlockArgument>(expr)) {
-    Value scalarZero = rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+    Value scalarZero = arith::ConstantIntOp::create(
+        rewriter, loc, static_cast<int64_t>(0), static_cast<unsigned>(bitness));
     return {scalarZero, expr};
   }
 
@@ -407,15 +408,15 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
           .Case<tt::BroadcastOp>([&](auto broadcastOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, broadcastOp.getSrc(), bitness, scalarToSplatMap);
-            auto broadcastNonUniform = rewriter.create<tt::BroadcastOp>(
-                loc, broadcastOp.getType(), nonUniform);
+            auto broadcastNonUniform = tt::BroadcastOp::create(
+                rewriter, loc, broadcastOp.getType(), nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
           .Case<tt::ExpandDimsOp>([&](auto expandOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, expandOp.getSrc(), bitness, scalarToSplatMap);
-            auto expandNonUniform = rewriter.create<tt::ExpandDimsOp>(
-                loc, nonUniform, expandOp.getAxis());
+            auto expandNonUniform = tt::ExpandDimsOp::create(
+                rewriter, loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
           .Case<arith::AddIOp>([&](Operation *op) {
@@ -429,8 +430,9 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
           .Default([&](Operation *op) {
             // Base case 3: it is not a supported operation. We assume no
             // uniform part
-            Value scalarZero =
-                rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+            Value scalarZero = arith::ConstantIntOp::create(
+                rewriter, loc, static_cast<int64_t>(0),
+                static_cast<unsigned>(bitness));
             return std::make_pair(scalarZero, expr);
           });
 
@@ -477,19 +479,24 @@ struct FatPointers {
 
   using KeyT = std::pair<Value, Value>;
   using ValueT = FatPtrAttrs;
-  using DenseMapT = DenseMap<KeyT, ValueT>;
+  using ValuePtrT = std::unique_ptr<FatPtrAttrs>;
+  using DenseMapT = DenseMap<KeyT, ValuePtrT>;
 
   void collectFatPointerAttributes(const KeyT &k);
   ValueT &operator[](const KeyT &k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   ValueT &operator[](KeyT &&k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   template <typename T>
@@ -499,7 +506,7 @@ struct FatPointers {
     // have our own message
     assert(pointerAttrs.contains(k) &&
            "expected fatPtrs to contain remapped fat pointer");
-    return pointerAttrs.at(k);
+    return *pointerAttrs.at(k);
   }
 
   bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
@@ -529,7 +536,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
         continue;
 
       auto newAttrName = attrName.strref().drop_back(argSuffix.size());
-      pointerAttrs[k].attributes[newAttrName] = namedAttr.getValue();
+      pointerAttrs[k]->attributes[newAttrName] = namedAttr.getValue();
       // Propagate the argument to the offset if it is also a block
       // argument
       if (auto offsetArg = dyn_cast<BlockArgument>(offset))
@@ -543,7 +550,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
 
   // Otherwise add the attributes of the base to the fat pointer
   for (auto baseAttr : base.getDefiningOp()->getAttrs())
-    pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
+    pointerAttrs[k]->attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
@@ -554,7 +561,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
   // Scalar case: we only need to `tt.addptr %basePtr, %offset`
   if (!tensorType) {
     auto addPtrOp =
-        rewriter.create<tt::AddPtrOp>(loc, basePtr.getType(), basePtr, offset);
+        tt::AddPtrOp::create(rewriter, loc, basePtr.getType(), basePtr, offset);
     for (const auto &attribute : fatPtrAttrs.attributes)
       addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
     return addPtrOp.getResult();
@@ -573,9 +580,9 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
     offset = createTruncIOffset(rewriter, loc, offset, rewriter.getI32Type());
 
   tt::SplatOp tensorPtr =
-      rewriter.create<tt::SplatOp>(loc, tensorPtrType, basePtr);
+      tt::SplatOp::create(rewriter, loc, tensorPtrType, basePtr);
   tt::AddPtrOp addPtrOp =
-      rewriter.create<tt::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
+      tt::AddPtrOp::create(rewriter, loc, tensorPtrType, tensorPtr, offset);
 
   for (const auto &attribute : fatPtrAttrs.attributes)
     addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
@@ -659,8 +666,8 @@ public:
     RankedTensorType outType = splatOp.getResult().getType();
     auto newOffsetType = RankedTensorType::get(
         outType.getShape(), fatPtrOffset.getType(), outType.getEncoding());
-    tt::SplatOp offset = rewriter.create<tt::SplatOp>(
-        splatOp.getLoc(), newOffsetType, fatPtrOffset);
+    tt::SplatOp offset = tt::SplatOp::create(rewriter, splatOp.getLoc(),
+                                             newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(splatOp, {{fatPtrBase, offset}});
     fatPtrs[{fatPtrBase, offset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
@@ -699,8 +706,8 @@ public:
         dyn_cast<RankedTensorType>(broadcastOp.getResult().getType());
     auto newOffsetType = RankedTensorType::get(
         outType.getShape(), offsetType.getElementType(), outType.getEncoding());
-    tt::BroadcastOp newOffset = rewriter.create<tt::BroadcastOp>(
-        broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
+    tt::BroadcastOp newOffset = tt::BroadcastOp::create(
+        rewriter, broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(broadcastOp, {{fatPtrBase, newOffset}});
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
     return success();
@@ -759,8 +766,8 @@ public:
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
       assert(llvm::isa<IntegerType>(origOffset.getType()) &&
              "expected offset to be integer type");
-      auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
-          curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
+      auto newAddPtrOp = tt::AddPtrOp::create(
+          rewriter, curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
       doSetDiscardableAttrs(newAddPtrOp);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
@@ -775,8 +782,8 @@ public:
     // Early exit for the case of a constant tensor
     if (auto scalarConst =
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
-      tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
-          curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
+      tt::AddPtrOp newAddPtrOp = tt::AddPtrOp::create(
+          rewriter, curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
       doSetDiscardableAttrs(newAddPtrOp);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
@@ -792,8 +799,8 @@ public:
     auto [uniformOffset, nonUniformOffset] =
         createDecomposeOffsetFromExpr(rewriter, curLoc, origOffset, bitness);
 
-    auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
-        curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
+    auto newAddPtrOp = tt::AddPtrOp::create(
+        rewriter, curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
     doSetDiscardableAttrs(newAddPtrOp);
 
     // Vector offset update (if any): bump the tensor offset
@@ -1047,8 +1054,8 @@ public:
     auto slicedOffsetsTy = RankedTensorType::get(
         resultType.getShape(), fatPtrOffsetTy.getElementType(),
         resultType.getEncoding());
-    Value slicedOffsets = rewriter.create<tt::amdgpu::ExtractSliceOp>(
-        loc, Type{slicedOffsetsTy}, Value{fatPtrOffset},
+    Value slicedOffsets = tt::amdgpu::ExtractSliceOp::create(
+        rewriter, loc, Type{slicedOffsetsTy}, Value{fatPtrOffset},
         extractSliceOp.getStaticOffsetsAttr());
 
     rewriter.replaceOpWithMultiple(extractSliceOp,
@@ -1100,8 +1107,8 @@ public:
     }
 
     SmallVector<Value> initArgs = flattenValues(adaptor.getInitArgs());
-    auto newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), getSingleValue(adaptor.getLowerBound()),
+    auto newForOp = scf::ForOp::create(
+        rewriter, forOp.getLoc(), getSingleValue(adaptor.getLowerBound()),
         getSingleValue(adaptor.getUpperBound()),
         getSingleValue(adaptor.getStep()), initArgs);
 
@@ -1234,7 +1241,7 @@ public:
             initArgs, [](Value v) { return !v.getType().isInteger(1); }),
         [](Value v) { return v.getType(); });
     auto newWhileOp =
-        rewriter.create<scf::WhileOp>(whileOp.getLoc(), resultTypes, initArgs);
+        scf::WhileOp::create(rewriter, whileOp.getLoc(), resultTypes, initArgs);
 
     newWhileOp->setAttrs(whileOp->getAttrs());
     rewriter.inlineRegionBefore(whileOp.getBefore(), newWhileOp.getBefore(),
@@ -1302,9 +1309,10 @@ public:
     SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
     SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
-    auto newOp = rewriter.create<cf::CondBranchOp>(
-        branchOp.getLoc(), branchOp.getCondition(), branchOp.getTrueDest(),
-        trueOperands, branchOp.getFalseDest(), falseOperands);
+    auto newOp = cf::CondBranchOp::create(
+        rewriter, branchOp.getLoc(), branchOp.getCondition(),
+        branchOp.getTrueDest(), trueOperands, branchOp.getFalseDest(),
+        falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
                                 rewriter, fatPtrs);
@@ -1345,9 +1353,9 @@ public:
     ValueRange fatPtrTrue = adaptor.getTrueValue();
     // Simple case of a scalar select: update the base pointer
     if (!isa<RankedTensorType>(selectOp.getType())) {
-      auto newSelectOp = rewriter.create<arith::SelectOp>(
-          selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
-          fatPtrTrue[0], selectOp.getFalseValue());
+      auto newSelectOp = arith::SelectOp::create(
+          rewriter, selectOp.getLoc(), selectOp.getType(),
+          selectOp.getCondition(), fatPtrTrue[0], selectOp.getFalseValue());
       rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
       fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}] =
           fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
@@ -1355,12 +1363,12 @@ public:
     }
 
     // Rewrite to select(fatBaseT, fatBaseF) and select(fatOffsetT, fatOffsetF)
-    auto newBase = rewriter.create<arith::SelectOp>(
-        selectOp.getLoc(), selectOp.getCondition(), fatPtrTrue[0],
-        fatPtrFalse[0]);
-    auto newOffset = rewriter.create<arith::SelectOp>(
-        selectOp.getLoc(), selectOp.getCondition(), fatPtrTrue[1],
-        fatPtrFalse[1]);
+    auto newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(),
+                                           selectOp.getCondition(),
+                                           fatPtrTrue[0], fatPtrFalse[0]);
+    auto newOffset = arith::SelectOp::create(rewriter, selectOp.getLoc(),
+                                             selectOp.getCondition(),
+                                             fatPtrTrue[1], fatPtrFalse[1]);
 
     assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
             fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
@@ -1428,9 +1436,9 @@ public:
     }
 #endif
 
-    auto newIfOp = rewriter.create<scf::IfOp>(
-        ifOp.getLoc(), ifOp.thenYield().getOperandTypes(), ifOp.getCondition(),
-        withElseRegion);
+    auto newIfOp = scf::IfOp::create(rewriter, ifOp.getLoc(),
+                                     ifOp.thenYield().getOperandTypes(),
+                                     ifOp.getCondition(), withElseRegion);
     rewriter.inlineBlockBefore(ifOp.thenBlock(), newIfOp.thenBlock(),
                                newIfOp.thenBlock()->begin());
     if (withElseRegion)
@@ -1482,8 +1490,8 @@ public:
     ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
-    auto newOp = rewriter.create<cf::BranchOp>(
-        branchOp.getLoc(), branchOp.getDest(), trueOperands);
+    auto newOp = cf::BranchOp::create(rewriter, branchOp.getLoc(),
+                                      branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
                                 rewriter, fatPtrs);
     rewriter.replaceOp(branchOp, newOp);
@@ -1518,8 +1526,9 @@ public:
         result.getShape(),
         llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
         result.getEncoding());
-    auto newOffset = rewriter.create<tt::ExpandDimsOp>(
-        expandOp.getLoc(), newResult, fatPtrOffset, adaptor.getAxis());
+    auto newOffset =
+        tt::ExpandDimsOp::create(rewriter, expandOp.getLoc(), newResult,
+                                 fatPtrOffset, adaptor.getAxis());
     rewriter.replaceOpWithMultiple(expandOp, {{fatPtrBase, newOffset}});
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
@@ -1559,9 +1568,8 @@ public:
     auto newOffsetType = RankedTensorType::get(outType.getShape(),
                                                offsetTensorTy.getElementType(),
                                                outType.getEncoding());
-    tt::gpu::ConvertLayoutOp cvtOffset =
-        rewriter.create<tt::gpu::ConvertLayoutOp>(cvtOp.getLoc(), newOffsetType,
-                                                  fatPtrOffset);
+    tt::gpu::ConvertLayoutOp cvtOffset = tt::gpu::ConvertLayoutOp::create(
+        rewriter, cvtOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(cvtOp, {{fatPtrBase, cvtOffset}});
     fatPtrs[{fatPtrBase, cvtOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
@@ -1670,7 +1678,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
       if (!isa<tt::PointerType>(arg.getType()))
         continue;
 
-      int64_t bitness = 64;
+      unsigned bitness = 64;
       if (auto pointerRangeAttr =
               newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
         bitness = pointerRangeAttr.getInt();
@@ -1681,10 +1689,11 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
         continue;
       }
 
-      Value zeroOffset =
-          rewriter.create<arith::ConstantIntOp>(newOp.getLoc(), 0, bitness);
-      auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
-          arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg, zeroOffset});
+      Value zeroOffset = arith::ConstantIntOp::create(
+          rewriter, newOp.getLoc(), static_cast<int64_t>(0), bitness);
+      auto dummyCast = UnrealizedConversionCastOp::create(
+          rewriter, arg.getLoc(), TypeRange{arg.getType()},
+          ValueRange{arg, zeroOffset});
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
       fatPtrs[{arg, zeroOffset}].canNarrow = true;
       if (bitness != 64)

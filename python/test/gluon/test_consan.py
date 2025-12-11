@@ -279,6 +279,50 @@ def test_async_copy(FAILURE, device, run_wrapper, monkeypatch):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_tma_store(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tma_store, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(output_desc, FAILURE: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], smem_layout)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        val = ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, blocked_layout)
+        tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(0))
+        tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(1))
+        tma.store_wait(pendings=1)
+        smem.index(0).store(val)
+        if not FAILURE:
+            tma.store_wait(pendings=0)
+        smem.index(1).store(val)
+
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](output_desc, FAILURE=FAILURE, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
@@ -310,7 +354,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch):
 
     @gluon.jit
     def kernel(input_desc, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
-        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1, cta_split_num=[1, 1])
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1])
         smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
@@ -468,7 +512,7 @@ def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper, monkeypatch)
 
     @gluon.jit
     def kernel(input_desc, BUF_IDX: ttgl.constexpr, BAR_IDX: ttgl.constexpr):
-        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1, cta_split_num=[1, 1])
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1])
         smemA = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
@@ -530,7 +574,7 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch):
         num_buffers: ttgl.constexpr = 2 if FAILURE else 3
         num_mma_stages: ttgl.constexpr = 2
 
-        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1, cta_split_num=[1, 1])
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1])
         zero = ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, blocked_layout)
@@ -742,8 +786,10 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         for i in range(2):
             mbarrier.init(bar.index(i), count=1)
-        ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_default, (smem, bar, FAILURE, blocked_layout),
-                             [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, FAILURE, blocked_layout)),
+            (ws_1, (smem, bar, FAILURE, blocked_layout)),
+        ], [4], [32])
         mbarrier.wait(bar.index(1), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
@@ -796,8 +842,10 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         for i in range(2):
             mbarrier.init(bar.index(i), count=1)
-        ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_default, (smem, bar, FAILURE, blocked_layout),
-                             [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, FAILURE, blocked_layout)),
+            (ws_1, (smem, bar, FAILURE, blocked_layout)),
+        ], [4], [32])
         mbarrier.wait(bar.index(1), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
@@ -859,8 +907,11 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], mbarrier.MBarrierLayout())
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
-        ttgl.warp_specialize((smem, bar, MISSING_BAR, blocked_layout), ws_default,
-                             (smem, bar, MISSING_BAR, blocked_layout), [ws_1, ws_2], [4, 4], [32, 32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_1, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_2, (smem, bar, MISSING_BAR, blocked_layout)),
+        ], [4, 4], [32, 32])
         mbarrier.wait(bar.index(2), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
@@ -919,8 +970,11 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=2)
         mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_default, (smem, bar, FAILURE, blocked_layout),
-                             [ws_1, ws_2], [4, 4], [32, 32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, FAILURE, blocked_layout)),
+            (ws_1, (smem, bar, FAILURE, blocked_layout)),
+            (ws_2, (smem, bar, FAILURE, blocked_layout)),
+        ], [4, 4], [32, 32])
         mbarrier.wait(bar.index(1), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
@@ -1007,8 +1061,11 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
         mbarrier.arrive(bar.index(2), count=1)
         mbarrier.arrive(bar.index(3), count=1)
 
-        ttgl.warp_specialize((smem, bar, MISSING_BAR, blocked_layout), ws_default,
-                             (smem, bar, MISSING_BAR, blocked_layout), [ws_1, ws_2], [4, 4], [32, 32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_1, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_2, (smem, bar, MISSING_BAR, blocked_layout)),
+        ], [4, 4], [32, 32])
 
     output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
@@ -1072,8 +1129,10 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch):
 
         mbarrier.arrive(bar.index(2), count=1)
 
-        ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_default, (smem, bar, FAILURE, blocked_layout),
-                             [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, FAILURE, blocked_layout)),
+            (ws_1, (smem, bar, FAILURE, blocked_layout)),
+        ], [4], [32])
 
     output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
@@ -1160,8 +1219,12 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkey
         mbarrier.arrive(bar.index(2), count=2)
         mbarrier.arrive(bar.index(3), count=2)
 
-        ttgl.warp_specialize((smem, bar, MISSING_BAR, blocked_layout), ws_default,
-                             (smem, bar, MISSING_BAR, blocked_layout), [ws_1, ws_2, ws_3], [4, 4, 4], [32, 32, 32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_1, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_2, (smem, bar, MISSING_BAR, blocked_layout)),
+            (ws_3, (smem, bar, MISSING_BAR, blocked_layout)),
+        ], [4, 4, 4], [32, 32, 32])
 
     output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
@@ -1225,8 +1288,11 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], mbarrier.MBarrierLayout())
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
-        ttgl.warp_specialize((smem, bar, MISSING_BAR), ws_default, (smem, bar, MISSING_BAR), [ws_1, ws_2], [2, 8],
-                             [32, 32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, MISSING_BAR)),
+            (ws_1, (smem, bar, MISSING_BAR)),
+            (ws_2, (smem, bar, MISSING_BAR)),
+        ], [2, 8], [32, 32])
         mbarrier.wait(bar.index(2), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
@@ -1291,8 +1357,10 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch):
         smem = ttgl.allocate_shared_memory(ttgl.float16, [4, XBLOCK], smem_layout)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[XBLOCK], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
-        ttgl.warp_specialize((input, smem, FAILURE, blocked_layout, 0), ws_prog,
-                             (input, smem, FAILURE, blocked_layout, 2), [ws_prog], [4], [32])
+        ttgl.warp_specialize([
+            (ws_prog, (input, smem, FAILURE, blocked_layout, 0)),
+            (ws_prog, (input, smem, FAILURE, blocked_layout, 2)),
+        ], [4], [32])
 
     input = torch.randn((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
@@ -1346,8 +1414,10 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
-        ttgl.warp_specialize((input, smem, bar, FAILURE, blocked_layout), ws_default,
-                             (input, smem, bar, FAILURE, blocked_layout), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (input, smem, bar, FAILURE, blocked_layout)),
+            (ws_1, (input, smem, bar, FAILURE, blocked_layout)),
+        ], [4], [32])
 
     input = torch.randn((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
@@ -1402,8 +1472,10 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch):
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], smem_layout)
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
-        ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout, mma_layout), ws_default,
-                             (smem, bar, FAILURE, blocked_layout), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (smem, bar, FAILURE, blocked_layout, mma_layout)),
+            (ws_1, (smem, bar, FAILURE, blocked_layout)),
+        ], [4], [32])
 
     kernel[(1, )](FAILURE=FAILURE, num_warps=4)
 
@@ -1438,7 +1510,10 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (bar, )),
+            (ws_1, (bar, )),
+        ], [4], [32])
 
     kernel[(1, )](num_warps=4)
 
@@ -1505,7 +1580,10 @@ def test_deadlock_underarrival(device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=2)
         mbarrier.init(bar.index(1), count=2)
-        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (bar, )),
+            (ws_1, (bar, )),
+        ], [4], [32])
 
     kernel[(1, )](num_warps=4)
 
@@ -1541,7 +1619,10 @@ def test_deadlock_different_phases(device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         mbarrier.arrive(bar.index(0), count=1)
-        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (bar, )),
+            (ws_1, (bar, )),
+        ], [4], [32])
 
     kernel[(1, )](num_warps=4)
 
@@ -1582,7 +1663,10 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize((input_desc, smem, bar), ws_default, (input_desc, smem, bar), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (input_desc, smem, bar)),
+            (ws_1, (input_desc, smem, bar)),
+        ], [4], [32])
 
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
@@ -1621,6 +1705,9 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+        ttgl.warp_specialize([
+            (ws_default, (bar, )),
+            (ws_1, (bar, )),
+        ], [4], [32])
 
     kernel[(1, )](num_warps=4)

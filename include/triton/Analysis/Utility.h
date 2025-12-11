@@ -268,21 +268,10 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 
-/// Multi-root DAG topological sort.
-/// Performs a topological sort of the Operation in the `toSort` SetVector.
-/// Returns a topologically sorted SetVector.
-/// It is faster than mlir::topologicalSort because it prunes nodes that have
-/// been visited before.
-SetVector<Operation *>
-multiRootTopologicalSort(const SetVector<Operation *> &toSort);
-
-/// This uses the toplogicalSort above
-SetVector<Operation *>
-multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
-                  TransitiveFilter forwardFilter = nullptr);
-
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
+
+namespace triton {
 
 /// This class represents a call graph for a given ModuleOp and holds
 /// data of type T associated with each FunctionOpInterface.
@@ -422,6 +411,9 @@ protected:
   FuncDataMapT funcMap;
   SmallVector<FunctionOpInterface> roots;
 };
+
+} // namespace triton
+
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 

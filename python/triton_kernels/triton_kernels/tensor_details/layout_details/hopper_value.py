@@ -1,7 +1,11 @@
 import torch
 import triton
 import triton.language as tl
+from dataclasses import dataclass
 from .base import Layout
+
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.target_info import cuda_capability_geq
 
 
 def right_shift_unsigned(x, shift):
@@ -81,12 +85,17 @@ def _unpack_bits(x, mx_axis: int):
 # -----------------------------------------------------------------------
 
 
+@dataclass
 class HopperMXValueLayout(Layout):
+    mx_axis: int
+    mma_version: int
+    leading_shape: list[int]
     name: str = "HOPPER_VALUE"
 
     def __init__(self, shape, mx_axis, mma_version=3):
         super().__init__(shape)
-        assert mx_axis in range(len(shape))
+        if mx_axis < 0:
+            mx_axis += len(shape)
         self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape
@@ -119,6 +128,14 @@ class HopperMXValueLayout(Layout):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
+        # Pre-pad both matrix dims to multiples of 64
+        *_, M_in, K_in = data.shape
+        SWIZZLE_ALIGN_M = 64
+        SWIZZLE_ALIGN_K = 64
+        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+
         data = self._maybe_mT(data)
         init_shape = data.shape
 
@@ -196,7 +213,9 @@ class HopperMXValueLayout(Layout):
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
-        return block_shape
+        N, K = block_shape[-2:]
+        assert N % 4 == 0
+        return [*block_shape[:-2], N // 4, K * 4]
 
 
 @triton.jit
@@ -228,23 +247,25 @@ def _unshuffle_triton(x, mma_version: tl.constexpr):
 
 @triton.jit
 def _unpack_fp4_to_bf16_triton(x):
-    # For now we implement just H100 support (mul.bf16x2)
-    # A100 support is possible via fma
+    # Use fma on a100 as there is no mul.bf16x2.
+    use_mul: tl.constexpr = cuda_capability_geq(9)
+    op_instr: tl.constexpr = "mul.bf16x2" if use_mul else "fma.rn.bf16x2"
+    op_suffix: tl.constexpr = "" if use_mul else ", z"
     r0, r1 = tl.inline_asm_elementwise(
-        r"""
-        {
-            .reg .b32 b, c, d<7>, scale;
+        asm=f"""{{
+            .reg .b32 b, c, z, d<7>, scale;
             .reg .b32 bias;
+            mov.b32 z, 0;
             mov.b32 bias, 0x7e807e80; // 2 ** 126 == 2 ** (bias_bf16 - bias_fp2)
             // We add the missing bias to the scale directly
             and.b32 $0, $4, 0b10000001110000001000000111000000;
-            mul.bf16x2 $0, $0, bias;
+            {op_instr} $0, $0, bias{op_suffix};
             shl.b32 b, $4, 3;
             and.b32 $1, b,  0b10000001110000001000000111000000;
-            mul.bf16x2 $1, $1, bias;
+            {op_instr} $1, $1, bias{op_suffix};
             shl.b32 c, $4, 6;
             and.b32 $2, c,  0b10000001110000001000000111000000;
-            mul.bf16x2 $2, $2, bias;
+            {op_instr} $2, $2, bias{op_suffix};
             // Unpack last two elements
             shl.b32 d0, $4, 1;
             and.b32 d1, d0, 0b10000000000000001000000000000000;
@@ -254,9 +275,8 @@ def _unpack_fp4_to_bf16_triton(x):
             shr.b32 d5, $4, 7;
             and.b32 d6, d5, 0b00000000010000000000000001000000;
             or.b32 $3, d4, d6;
-            mul.bf16x2 $3, $3, bias;
-        }
-        """,
+            {op_instr} $3, $3, bias{op_suffix};
+        }}""",
         constraints="=r,=r,=r,=r,r",
         args=[x],
         dtype=(tl.bfloat16, tl.bfloat16),
@@ -313,9 +333,15 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
         is_pure=True,
         pack=4,
     )
+    # Sanity check shape
+    for axis in tl.static_range(len(x.shape)):
+        if axis == mx_axis:
+            tl.static_assert(x.shape[axis] == MXFP_BLOCK_SIZE * scale.shape[axis])
+        else:
+            tl.static_assert(x.shape[axis] == scale.shape[axis])
     # Broadcast scale
     scale = scale.expand_dims(mx_axis + 1)
-    scale = scale.broadcast_to(scale.shape[:mx_axis + 1] + [32] + scale.shape[mx_axis + 2:])
+    scale = scale.broadcast_to(scale.shape[:mx_axis + 1] + [MXFP_BLOCK_SIZE] + scale.shape[mx_axis + 2:])
     scale = scale.reshape(x.shape)
 
     # Combine scale and x

@@ -1,5 +1,6 @@
 add_subdirectory(Context)
 add_subdirectory(Data)
 add_subdirectory(Driver)
+add_subdirectory(Runtime)
 add_subdirectory(Profiler)
 add_subdirectory(Session)

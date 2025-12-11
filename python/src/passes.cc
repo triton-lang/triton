@@ -12,8 +12,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <string>
 
 namespace py = pybind11;
 
@@ -71,7 +74,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);
-  ADD_PASS_WRAPPER_0("add_f32_dot_tc", createTritonGPUF32DotTC);
+  ADD_PASS_OPTION_WRAPPER_1("add_f32_dot_tc", createTritonGPUF32DotTC, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_optimize_dot_operands",
                             createTritonGPUOptimizeDotOperands, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -92,6 +95,32 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
+  ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
+                     createTritonGPUOptimizePartitionWarps);
+}
+
+void init_plugin_passes(py::module &&m) {
+  std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+  if (filename.empty())
+    return;
+
+  TritonPlugin TP(filename);
+  std::vector<const char *> passNames;
+  if (auto result = TP.getPassHandles(passNames); !result)
+    throw TP.err2exp(result.takeError());
+
+  for (unsigned i = 0; i < passNames.size(); ++i) {
+    const char *passName = passNames.data()[i];
+
+    m.def(passName, [passName](mlir ::PassManager &pm) {
+      std::string filename =
+          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      TritonPlugin TP(filename);
+      if (auto result = TP.addPass(&pm, passName); !result)
+        throw TP.err2exp(result.takeError());
+    });
+  }
 }
 
 void init_triton_passes_convert(py::module &&m) {
@@ -116,6 +145,8 @@ void init_gluon_passes(py::module &&m) {
                      gluon::createGluonResolveAutoEncodingsPass);
   ADD_PASS_WRAPPER_0("add_canonicalizer", gluon::createGluonCanonicalize);
   ADD_PASS_WRAPPER_0("add_inliner", gluon::createGluonInline);
+  ADD_PASS_WRAPPER_0("add_infer_coalesced_encodings",
+                     gluon::createGluonInferCoalescedEncodingsPass);
 }
 
 void init_triton_passes(py::module &&m) {
@@ -126,4 +157,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
   init_gluon_passes(m.def_submodule("gluon"));
+  init_plugin_passes(m.def_submodule("plugin"));
 }

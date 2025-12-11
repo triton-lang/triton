@@ -8,6 +8,114 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+typedef struct {
+  uint32_t group0_0;
+  uint32_t group0_1;
+  uint32_t group0_2;
+  uint32_t group0_3;
+  uint32_t group1_0;
+  uint32_t group1_1;
+  uint32_t group1_2;
+  uint32_t group1_3;
+  uint32_t group1_4;
+  uint32_t group1_5;
+  uint32_t group1_6;
+  uint32_t group1_7;
+} TDMDescriptor;
+
+typedef struct {
+  PyObject_HEAD;
+  TDMDescriptor desc;
+} PyTDMDescriptorObject;
+
+static PyObject *PyTDMDescriptor_new(PyTypeObject *type, PyObject *args,
+                                     PyObject *kw) {
+  PyTDMDescriptorObject *self =
+      (PyTDMDescriptorObject *)type->tp_alloc(type, 0);
+  if (!self)
+    return NULL;
+
+  memset(&self->desc, 0, sizeof(self->desc));
+  return (PyObject *)self;
+}
+
+static void PyTDMDescriptor_dealloc(PyTDMDescriptorObject *self) {
+  Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyTypeObject PyTDMDescriptorType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.amd.PyTDMDescriptor",
+    .tp_basicsize = sizeof(PyTDMDescriptorObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "PyObject for TDMDescriptor",
+    .tp_new = PyTDMDescriptor_new,
+    .tp_dealloc = (destructor)PyTDMDescriptor_dealloc,
+};
+
+// TODO: Both host-side and device-side TDM descriptor follow the same encoding
+// format. Consider to add a common utility to remove duplicate code.
+static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
+                                uint32_t *blockSize, int numWarps,
+                                int padInterval, int padAmount, uint32_t *shape,
+                                uint32_t *strides, uint64_t globalAddress,
+                                int rank) {
+  // NYI: TDM > 2D cases
+  if (rank != 2)
+    return false;
+
+  // Get warp distribution
+  uint32_t numWarpsDim0 = numWarps;
+  for (; numWarpsDim0 > blockSize[0]; numWarpsDim0 /= 2)
+    ;
+  uint32_t numWarpsDim1 = numWarps / numWarpsDim0;
+  if (!(numWarpsDim0 > 0 && blockSize[1] % numWarpsDim1 == 0))
+    return false;
+
+  uint32_t blockSize0 = (blockSize[0] + numWarpsDim0 - 1) / numWarpsDim0;
+  uint32_t blockSize1 = (blockSize[1] + numWarpsDim1 - 1) / numWarpsDim1;
+
+  // group0 (128 bits / 4 dwords) effective bit encoding:
+  // [120:64]:  global address
+  // [127:126]: type - currently always set to 0x2
+  desc->group0_2 = (uint32_t)(globalAddress & 0xFFFFFFFF);
+  desc->group0_3 = (uint32_t)((globalAddress >> 32) & 0x01FFFFFF);
+  desc->group0_3 |= (0x1 << 31);
+
+  // group1 (256 bits / 8 dwords) effective bit encoding:
+  // [17:16]:   data size - log2(element size in bytes)
+  // [20]:      enable padding
+  // [24:22]:   pad interval - log2(pad interval in dwords) - 1
+  // [31:25]:   pad amount - pad amount in dwords - 1
+  // [79:48]:   tensor shape dim inner
+  // [111:80]:  tensor shape dim outer
+  // [127:112]: block shape dim inner
+  // [143:128]: block shape dim outer
+  // [207:160]: tensor stride dim outer (we only use 32 bits)
+  int elementSizeInBytes = elementBitWidth / 8;
+  int dataSize = log2(elementSizeInBytes);
+  desc->group1_0 = (dataSize << 16);
+  int dwordSize = 32;
+  int padIntervalInDwords = padInterval * elementBitWidth / dwordSize;
+  int padAmountInDwords = padAmount * elementBitWidth / dwordSize;
+  if (padIntervalInDwords > 0 && padAmountInDwords > 0) {
+    int log2PadInterval = log2(padIntervalInDwords);
+    desc->group1_0 |= (1 << 20);
+    desc->group1_0 |= ((log2PadInterval - 1) << 22);
+    desc->group1_0 |= ((padAmountInDwords - 1) << 25);
+  }
+  desc->group1_1 = (shape[1] << 16);
+  desc->group1_2 = (shape[1] >> 16);
+  desc->group1_2 |= (shape[0] << 16);
+  desc->group1_3 = (shape[0] >> 16);
+  desc->group1_3 |= (blockSize1 << 16);
+  desc->group1_4 = (blockSize0 & 0xFFFF);
+  desc->group1_5 = strides[0];
+
+  return true;
+}
+
 // The list of paths to search for the HIP runtime library. The caller Python
 // code should substitute the search path placeholder.
 static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
@@ -33,7 +141,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 #define TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                       \
   (((version) % 10000000) / 100000)
 #define TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
-#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (6)
 
 // #define TRITON_HIP_DRIVER_DBG_VERSION
 #ifdef TRITON_HIP_DRIVER_DBG_VERSION
@@ -255,11 +363,119 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                        n_spills, n_max_threads);
 }
 
+static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
+  int elementBitWidth;
+  PyObject *blockSize;
+  int numWarps;
+  int padInterval;
+  int padAmount;
+  PyObject *shape;
+  PyObject *strides;
+  unsigned long long globalAddress;
+
+  if (!PyArg_ParseTuple(args, "iOiiiOOK", &elementBitWidth, &blockSize,
+                        &numWarps, &padInterval, &padAmount, &shape, &strides,
+                        &globalAddress)) {
+    return NULL;
+  }
+
+  PyTDMDescriptorObject *descObj = (PyTDMDescriptorObject *)PyObject_CallObject(
+      (PyObject *)&PyTDMDescriptorType, NULL);
+  if (!descObj)
+    return NULL;
+
+  PyObject *blockSizeFast = NULL;
+  PyObject *shapeFast = NULL;
+  PyObject *stridesFast = NULL;
+
+  uint32_t blockSizeInt[2];
+  uint32_t shapeInt[2];
+  uint32_t stridesInt[2];
+
+  blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
+  if (!blockSizeFast)
+    goto cleanup;
+  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  if (rank != 2) {
+    PyErr_SetString(PyExc_RuntimeError, "rank must be 2");
+    goto cleanup;
+  }
+
+  for (int i = 0; i < rank; ++i) {
+    PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
+    if (!PyLong_Check(item)) {
+      PyErr_SetString(PyExc_TypeError, "block size must be an int");
+      goto cleanup;
+    }
+    blockSizeInt[i] = PyLong_AsLong(item);
+  }
+
+  shapeFast = PySequence_Fast(shape, "shape must be a sequence");
+  if (!shapeFast)
+    goto cleanup;
+
+  if (rank != PySequence_Fast_GET_SIZE(shapeFast)) {
+    PyErr_SetString(PyExc_RuntimeError, "rank mismatch");
+    goto cleanup;
+  }
+  for (int i = 0; i < rank; ++i) {
+    PyObject *item = PySequence_Fast_GET_ITEM(shapeFast, i);
+    if (!PyLong_Check(item)) {
+      PyErr_SetString(PyExc_TypeError, "shape must be an int");
+      goto cleanup;
+    }
+    shapeInt[i] = PyLong_AsLong(item);
+  }
+
+  stridesFast = PySequence_Fast(strides, "strides must be a sequence");
+  if (!stridesFast)
+    goto cleanup;
+
+  if (rank != PySequence_Fast_GET_SIZE(stridesFast)) {
+    PyErr_SetString(PyExc_RuntimeError, "rank mismatch");
+    goto cleanup;
+  }
+  for (int i = 0; i < rank; ++i) {
+    PyObject *item = PySequence_Fast_GET_ITEM(stridesFast, i);
+    if (!PyLong_Check(item)) {
+      PyErr_SetString(PyExc_TypeError, "shape must be an int");
+      goto cleanup;
+    }
+    stridesInt[i] = PyLong_AsLong(item);
+  }
+
+  Py_DECREF(blockSizeFast);
+  blockSizeFast = NULL;
+  Py_DECREF(shapeFast);
+  shapeFast = NULL;
+  Py_DECREF(stridesFast);
+  stridesFast = NULL;
+
+  bool success = encodeTDMDescriptor(
+      &descObj->desc, elementBitWidth, blockSizeInt, numWarps, padInterval,
+      padAmount, shapeInt, stridesInt, globalAddress, rank);
+  if (!success) {
+    PyErr_SetString(PyExc_RuntimeError, "Failed to encode TDM descriptor");
+    goto cleanup;
+  }
+
+  return (PyObject *)descObj;
+
+cleanup:
+  Py_XDECREF(blockSizeFast);
+  Py_XDECREF(shapeFast);
+  Py_XDECREF(stridesFast);
+  Py_XDECREF(descObj);
+  return NULL;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided hsaco into HIP driver"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
+    {"create_tdm_descriptor", createTDMDescriptor, METH_VARARGS,
+     "create a host-side TDM descriptor"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
@@ -278,6 +494,11 @@ PyMODINIT_FUNC PyInit_hip_utils(void) {
     return NULL;
   }
   PyModule_AddFunctions(m, ModuleMethods);
+
+  if (PyType_Ready(&PyTDMDescriptorType) < 0)
+    return NULL;
+  Py_INCREF(&PyTDMDescriptorType);
+  PyModule_AddObject(m, "PyTDMDescriptor", (PyObject *)&PyTDMDescriptorType);
 
   return m;
 }

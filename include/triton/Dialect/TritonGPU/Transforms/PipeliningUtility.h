@@ -77,8 +77,7 @@ Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
 
 // Utilize high level predication abstraction to perform optimizations before
 // lowering to predicated operations
-void resolveMaskOp(ModuleOp moduleOp,
-                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+void resolveMaskOp(ModuleOp moduleOp);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.

@@ -272,7 +272,7 @@ def inspect_stages(_self, stages, options, language, capability):
     # inspect or modify add_stages here
 triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
 ```
-
+Examples of how to use this for out of tree plugin passes is [here](lib/Plugins/README.md)
 # Changelog
 
 Version 2.0 is out! New features include:

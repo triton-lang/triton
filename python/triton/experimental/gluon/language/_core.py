@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
@@ -8,7 +9,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -74,6 +75,7 @@ __all__ = [
     "static_range",
     "tuple",
     "tuple_type",
+    "num_ctas",
 ]
 
 T = TypeVar("T")
@@ -94,11 +96,13 @@ def builtin(fn: T) -> T:
         return fn(*args, **kwargs)
 
     setattr(wrapper, GLUON_BUILTIN, True)
+    wrapper.signature = inspect.signature(fn)
 
     return wrapper
 
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
+add = builtin(tl_core.add)
 associative_scan = builtin(tl_core.associative_scan)
 assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
@@ -110,8 +114,11 @@ atomic_or = builtin(tl_core.atomic_or)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
+cast = builtin(tl_core.cast)
 device_assert = builtin(tl_core.device_assert)
+device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
+gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
 load = builtin(tl_core.load)
@@ -120,6 +127,7 @@ max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
 maximum = builtin(tl_core.maximum)
 minimum = builtin(tl_core.minimum)
+mul = builtin(tl_core.mul)
 multiple_of = builtin(tl_core.multiple_of)
 num_programs = builtin(tl_core.num_programs)
 permute = builtin(tl_core.permute)
@@ -130,6 +138,7 @@ split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
+sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 where = builtin(tl_core.where)
 
@@ -143,7 +152,7 @@ class distributed_type(block_type):
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
         assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
-        if not isinstance(layout, AutoLayout):
+        if not isinstance(layout, (AutoLayout, CoalescedLayout)):
             assert len(
                 shape
             ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
@@ -207,7 +216,8 @@ class shared_memory_descriptor_type(base_type):
 
     def mangle(self) -> str:
         shape_str = "_".join([str(s) for s in self.shape])
-        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
+        alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
+        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
 
 
 class shared_memory_descriptor(base_value):
@@ -436,25 +446,6 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
-def gather(src, index, axis, _semantic=None):
-    """
-    Gather values from a tensor along a specified axis using an index tensor.
-
-    Args:
-        src (tensor): The source tensor to gather values from.
-        index (tensor): The index tensor specifying which values to gather.
-        axis (int): The axis along which to gather values.
-
-    Returns:
-        tensor: The gathered tensor.
-    """
-    src = _unwrap_if_constexpr(src)
-    index = _unwrap_if_constexpr(index)
-    axis = _unwrap_if_constexpr(axis)
-    return _semantic.gather(src, index, axis)
-
-
-@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
@@ -492,26 +483,40 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
-                    _semantic=None, _generator=None):
+def fp4_to_fp(src, elem_type, axis, _semantic=None):
+    """
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    return _semantic.fp4_to_fp(src, elem_type, axis)
+
+
+@builtin
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
+    This forks the current execution into a "default partition" and an arbitrary number of
+    "worker partitons". The default partition is executed in the same :code:`num_warps` warps as
+    the parent region, and may accept tensor arguments and return tensors. Worker partitions are
+    executed in additional warps, which sit idle while executing the parent region.
+
+    Note that calling warp_specialize recursively is not supported.
+
     Args:
-        default_args (List[Any]): Arguments for the default region.
-        default_partition (callable): Function to build the default execution region.
-        worker_args (List[Any]): Arguments for each warp partition.
-        worker_partitions (List[callable]): Functions for each warp partition.
-        worker_num_warps (List[int]): Number of warps per partition.
-        worker_num_regs (List[int]): Number of registers per partition.
+        functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition. The first of which is the default partition.
+        worker_num_warps (List[int]): Number of warps used for each worker partition.
+        worker_num_regs (List[int], optional): Number of registers for each worker partition.
+            If not None, will be used by backend for dynamic register reallocation.
 
     Returns:
-        Tuple[Any, ...]: Results from the default region.
+        Tuple[Any, ...]: Results from the default partition.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
-    worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
-                                     worker_num_regs, _generator)
+    if worker_num_regs is not None:
+        worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
+    return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 
 @builtin
@@ -520,6 +525,14 @@ def num_warps(_semantic=None, _generator=None):
     Returns the number of warps that execute the current context, including in warp-specialized regions.
     """
     return _semantic.num_warps(_generator)
+
+
+@builtin
+def num_ctas(_semantic=None):
+    """
+    Returns the number of CTAs in the current kernel
+    """
+    return _semantic.num_ctas()
 
 
 @builtin
