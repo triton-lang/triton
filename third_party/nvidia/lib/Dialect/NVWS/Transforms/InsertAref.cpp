@@ -172,6 +172,19 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
 }
 
 StageCluster getStageClusterForProducer(Value producedValue) {
+  if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
+    Value prevProducedValue;
+    do {
+      prevProducedValue = producedValue;
+      auto terminator = arg.getOwner()->getTerminator();
+      if (!isa<scf::YieldOp>(terminator)) {
+        return {};
+      }
+      producedValue = terminator->getOperand(arg.getArgNumber() - 1);
+      arg = dyn_cast<BlockArgument>(producedValue);
+    } while (arg && prevProducedValue != producedValue);
+  }
+
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
   } else if (auto opt = isGlobalLoadAndAlloc<LocalAllocOp>(producedValue)) {
