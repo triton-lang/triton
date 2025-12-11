@@ -240,7 +240,7 @@ def test_clear_data(tmp_path: pathlib.Path):
 
     with proton.scope("test0"):
         x = torch.ones((2, 2), device="cuda")
-        z = x + x
+        z = x + x # type: ignore
 
     proton.deactivate(session)
     proton.clear_data(session)
@@ -250,7 +250,7 @@ def test_clear_data(tmp_path: pathlib.Path):
 
     proton.activate(session)
     with proton.scope("test1"):
-        y = x * x
+        y = x * x # type: ignore
     proton.deactivate(session)
     database = proton.get_data(session)
 
