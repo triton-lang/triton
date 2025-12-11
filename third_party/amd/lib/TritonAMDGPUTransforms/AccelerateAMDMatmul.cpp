@@ -1913,9 +1913,8 @@ static bool collectLinearPathToConvert(Value dotOperand,
   return false;
 }
 
-void propagateNewLayoutForward(OpBuilder &builder,
-                                       ttg::ConvertLayoutOp newCvt,
-                                       llvm::ArrayRef<Operation *> path) {
+void propagateNewLayoutForward(OpBuilder &builder, ttg::ConvertLayoutOp newCvt,
+                               llvm::ArrayRef<Operation *> path) {
   Value cur = newCvt.getResult();
   Attribute targetEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
 
