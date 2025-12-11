@@ -469,6 +469,10 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // -----------------------------------------------------------------------
 
 // If an operation is contained within a warp specialize region, this returns
+// the warp ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartWarpId(Block *block);
+
+// If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
 std::optional<int> getWarpGroupStartThreadId(Block *block);
 

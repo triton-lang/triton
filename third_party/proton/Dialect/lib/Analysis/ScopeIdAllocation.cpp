@@ -162,13 +162,7 @@ void ScopeIdAllocation::reachability() {
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
 
   std::deque<VirtualBlock> virtualBlockList;
-  funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Seed the worklist with entry blocks of regions that are
-    // isolated-from-above.
-    if (block->isEntryBlock() &&
-        !isa<RegionBranchOpInterface>(block->getParentOp()))
-      virtualBlockList.emplace_back(block, Block::iterator());
-  });
+  virtualBlockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
 
   while (!virtualBlockList.empty()) {
     VirtualBlock virtualBlock = virtualBlockList.front();
