@@ -6,6 +6,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <set>
+#include <tuple>
 
 namespace mlir {
 
@@ -26,7 +27,7 @@ public:
                   Interval<size_t> allocationInterval)
       : bufferId(id), allocationInterval(allocationInterval) {
     assert(id != Allocation::InvalidBufferId &&
-           "fromValue must be called with a valid bufferId");
+           "must be called with a valid bufferId");
     auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
     this->accessTy = accessTy;
 
@@ -48,21 +49,11 @@ public:
       : bufferId(id), allocationInterval(interval), accessTy(nullptr) {}
 
   bool operator<(const AllocationSlice &other) const {
-    if (bufferId != other.bufferId)
-      return bufferId < other.bufferId;
-    if (allocationInterval != other.allocationInterval)
-      return allocationInterval < other.allocationInterval;
-    if (accessTy != other.accessTy)
-      return accessTy.getAsOpaquePointer() <
-             other.accessTy.getAsOpaquePointer();
-    return subsliceOffsets < other.subsliceOffsets;
+    return asTuple() < other.asTuple();
   }
 
   bool operator==(const AllocationSlice &other) const {
-    return subsliceOffsets == other.subsliceOffsets &&
-           bufferId == other.bufferId &&
-           allocationInterval == other.allocationInterval &&
-           accessTy == other.accessTy;
+    return asTuple() == other.asTuple();
   }
 
   bool intersects(const AllocationSlice &other) const;
@@ -95,6 +86,12 @@ public:
   }
 
 private:
+  std::tuple<Allocation::BufferId, Interval<size_t>, const void *,
+             llvm::ArrayRef<int64_t>>
+  asTuple() const {
+    return std::make_tuple(bufferId, allocationInterval,
+                           accessTy.getAsOpaquePointer(), subsliceOffsets);
+  }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
   Allocation::BufferId bufferId = Allocation::InvalidBufferId;
