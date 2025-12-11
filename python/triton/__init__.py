@@ -44,6 +44,7 @@ __all__ = [
     "JITFunction",
     "KernelInterface",
     "language",
+    "max_shared_mem",
     "MockTensor",
     "must_use_result",
     "next_power_of_2",
