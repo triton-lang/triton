@@ -754,7 +754,7 @@ contains the actual isolated from above regions of `ttg.warp_specialize`.
 
 Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`
+Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
 
 ### `ttg.warp_yield` (triton::gpu::WarpYieldOp)

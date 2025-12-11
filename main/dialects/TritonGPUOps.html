@@ -1174,7 +1174,7 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 <p>Because MLIR requires entire operations be isolated from above, this op
 contains the actual isolated from above regions of <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchOpInterface</span></code></p>
 </section>
 <section id="ttg-warp-yield-triton-gpu-warpyieldop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.warp_yield</span></code> (triton::gpu::WarpYieldOp)<a class="headerlink" href="#ttg-warp-yield-triton-gpu-warpyieldop" title="Link to this heading">¶</a></h2>
