@@ -1410,11 +1410,12 @@ void mergePartitions(Graph *graph, std::string funcName,
   LLVM_DEBUG({ llvm::errs() << "#### applying heuristics...\n"; });
 
   // initial worklist is list of all edges that cross partitions
-  auto crossingEdges = getCrossingEdges(graph);
   bool changed = false;
   do {
     changed = false;
 
+    // FIXME: should be able to move this out of the loop
+    auto crossingEdges = getCrossingEdges(graph);
     LLVM_DEBUG({
       llvm::errs() << "\n"
                    << crossingEdges.size() << " crossing edges remaining\n";
