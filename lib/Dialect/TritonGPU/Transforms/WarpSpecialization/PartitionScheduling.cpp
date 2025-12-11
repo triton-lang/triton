@@ -221,6 +221,9 @@ public:
   Edge() = default;
   Edge(OutputPort from, InputPort to) : from(from), to(to) {}
 
+  OutputPort getFrom() const;
+  InputPort getTo() const;
+
   Node *getFromNode() const;
   size_t getFromIdx() const;
   Node *getToNode() const;
@@ -277,6 +280,11 @@ public:
     to.getNode()->addInputEdge(to.getIdx(), from);
   }
 
+  static void removeEdge(Edge edge) {
+    edge.getFromNode()->removeOutputEdge(edge.getFromIdx(), edge.getTo());
+    edge.getToNode()->removeInputEdge(edge.getToIdx(), edge.getFrom());
+  }
+
   void addDefines(Node *node) { defines.push_back(node); }
 
   void addInputEdge(size_t idx, OutputPort port) {
@@ -284,9 +292,24 @@ public:
     inputs[idx] = port;
   }
 
+  void removeInputEdge(size_t idx, OutputPort port) {
+    assert(idx < inputs.size());
+    inputs[idx] = {};
+  }
+
   void addOutputEdge(size_t idx, InputPort port) {
     assert(idx < outputs.size());
     outputs[idx].push_back(port);
+  }
+
+  void removeOutputEdge(size_t idx, InputPort port) {
+    assert(idx < outputs.size());
+    for (auto it = outputs[idx].begin(); it != outputs[idx].end(); it++) {
+      if (*it == port) {
+        outputs[idx].erase(it);
+        break;
+      }
+    }
   }
 
   Node *getParent() const { return parent; }
@@ -595,6 +618,9 @@ void Partition::merge(Partition *lhs, Partition *rhs) {
   // remove the now empty partition
   lhs->graph->erasePartition(lhs);
 }
+
+OutputPort Edge::getFrom() const { return from; }
+InputPort Edge::getTo() const { return to; }
 
 Node *Edge::getFromNode() const { return from.getNode(); }
 size_t Edge::getFromIdx() const { return from.getIdx(); }
@@ -1985,6 +2011,9 @@ bool isSimpleMMA(Partition *partition) {
 }
 
 void serialize(size_t idx, Operation *region, Graph *graph) {
+
+  SetVector<Operation *> alreadyWritten;
+
   auto context = graph->getRoot()->getOp()->getContext();
   Builder b(context);
 
@@ -1995,12 +2024,23 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
     // not for func op
     if (isa<tt::FuncOp>(op))
       return;
-    SmallVector<int> partitions;
+
+    // Note: we may have multiple nodes per op, so we merge the partition
+    // ids for all nodes of the op
+    SetVector<int> partitionIds;
+    if (alreadyWritten.contains(op)) {
+      // if we already serialized a node to this op, merge those partition ids
+      // with the node being serialized
+      partitionIds = getPartitionIds(op);
+    }
+    alreadyWritten.insert(op);
     for (auto partition : node->getPartitions())
-      partitions.push_back(*partition->id);
-    std::sort(partitions.begin(), partitions.end());
-    auto partitionsAttr = b.getDenseI32ArrayAttr(partitions);
+      partitionIds.insert(*partition->id);
+    auto partitionIdsList = partitionIds.takeVector();
+    std::sort(partitionIdsList.begin(), partitionIdsList.end());
+    auto partitionsAttr = b.getDenseI32ArrayAttr(partitionIdsList);
     op->setAttr(kPartitionAttrName, partitionsAttr);
+
     // set same paritions in yield ops
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cast<scf::YieldOp>(forOp.getBody()->getTerminator())
@@ -2094,70 +2134,53 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
   region->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
-SmallVector<SmallVector<mlir::Operation *>>
-duplicateViewOps(Operation *region) {
-  // Ensure all view ops/broadcast/expand dims have a single user, by
-  // duplicating them where necessary. Ensures these ops do not span more
-  // than one partition
-  // Note: Duplicated ops within a single partition are deduplicated after
-  // analysis
+void duplicateViewOps(Graph *graph) {
+  // Ensure all view ops (e.g. broadcast/expand dims) have a single user,
+  // by duplicating nodes where necessary
 
-  SmallVector<SmallVector<mlir::Operation *>> duplicatedViewOps;
-  SmallVector<mlir::Operation *> viewOps;
+  SmallVector<Node *> viewOps;
 
-  region->walk([&](mlir::Operation *op) {
-    if (isViewOp(op))
-      viewOps.push_back(op);
+  graph->walk([&](Node *node) {
+    if (node->isData() && node->isOp() && isViewOp(node->getOp()))
+      viewOps.push_back(node);
   });
 
   while (!viewOps.empty()) {
-    auto op = viewOps.pop_back_val();
+    auto node = viewOps.pop_back_val();
+    auto op = node->getOp();
 
     assert(op->getResults().size() == 1);
-    auto result = op->getResult(0);
+
+    auto outEdges = node->getOutEdges();
 
     bool first = true;
-    for (auto &use : result.getUses()) {
-      if (first) {
-        duplicatedViewOps.push_back({op});
-      } else {
-        auto newOp = OpBuilder(op).clone(*op);
-        use.set(newOp->getResult(0));
-        duplicatedViewOps.back().push_back(newOp);
+    for (auto edge : outEdges) {
+      if (!first) {
+        auto newNode = node->getParent()->addNode(op, op->getNumOperands(),
+                                                  op->getNumResults());
+
+        // remove old edge
+        Node::removeEdge(edge);
+
+        // add new edge
+        OutputPort outputPort(newNode, 0);
+        OutputPort inputPort(edge.getToNode(), edge.getToIdx());
+        Node::addEdge(outputPort, inputPort);
+
+        // add operands of new node
+        for (auto inEdge : node->getInEdges()) {
+          Node::addEdge(inEdge.getFrom(),
+                        InputPort(newNode, inEdge.getToIdx()));
+        }
+
+        // copy data values
+        for (auto idx = 0; idx < op->getNumResults(); idx++) {
+          if (node->isDataValue(idx)) {
+            newNode->setDataValue(idx);
+          }
+        }
       }
       first = false;
-    }
-  }
-  return duplicatedViewOps;
-}
-
-void deduplicateViewOps(
-    Operation *region,
-    SmallVector<SmallVector<mlir::Operation *>> duplicatedViewOps) {
-
-  // get partition assignments for the duplicated ops, and
-  // re-merge those that have the same partition assignment
-  for (auto ops : duplicatedViewOps) {
-    std::map<SmallVector<int>, SmallVector<mlir::Operation *>> partitionedOps;
-    for (auto op : ops) {
-      assert(op->hasAttr(kPartitionAttrName));
-      auto partitionsRef =
-          cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName)).asArrayRef();
-      SmallVector<int> partitions(partitionsRef.begin(), partitionsRef.end());
-      if (partitionedOps.find(partitions) == partitionedOps.end())
-        partitionedOps[partitions] = {};
-      partitionedOps[partitions].push_back(op);
-    }
-    for (auto partition : partitionedOps) {
-      auto &sameOps = partition.second;
-      if (sameOps.size() <= 1)
-        continue;
-      auto op = sameOps.front();
-      for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
-        // merge the two ops
-        (*it)->replaceAllUsesWith(op->getResults());
-        (*it)->erase();
-      }
     }
   }
 }
@@ -2262,17 +2285,21 @@ struct PartitionScheduling
 
 private:
   void analyze(size_t idx, Operation *op) {
-    auto duplicatedOps = duplicateViewOps(op);
     auto func = op->getParentOfType<tt::FuncOp>();
-
-    auto graph = buildGraph(op);
-    auto initValues = initialDataValues(graph.get());
-    propagateDataValues(initValues);
-    deserializeManualPartitions(op, graph.get());
 
     VisualizationInfo vis_info;
     auto key = func.getSymName().str() + "_" + std::to_string(idx);
+
+    auto graph = buildGraph(op);
     visualize(key, "input", "input", graph.get(), vis_info);
+    auto initValues = initialDataValues(graph.get());
+    propagateDataValues(initValues);
+    visualize(key, "input", "after data values", graph.get(), vis_info);
+    duplicateViewOps(graph.get());
+    visualize(key, "input", "after duplicate view ops", graph.get(), vis_info);
+    deserializeManualPartitions(op, graph.get());
+    visualize(key, "input", "final", graph.get(), vis_info);
+
     initialPartitionAssignment(graph.get());
     visualize(key, "initial", "initial partitions", graph.get(), vis_info);
     mergePartitions(graph.get(), key, vis_info);
@@ -2303,7 +2330,6 @@ private:
     });
 
     serialize(idx, op, graph.get());
-    deduplicateViewOps(op, duplicatedOps);
   }
 
   void cloneMultiPartitionDataOps(Operation *region) {
