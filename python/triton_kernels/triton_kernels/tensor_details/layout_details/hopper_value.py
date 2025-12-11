@@ -292,6 +292,22 @@ def _unpack_fp4_to_bf16_triton(x):
 
 
 @triton.jit
+def mul_bf16x2(a, b):
+    use_mul: tl.constexpr = cuda_capability_geq(9)
+    op_instr: tl.constexpr = "mul.bf16x2" if use_mul else "fma.rn.bf16x2"
+    op_suffix: tl.constexpr = "" if use_mul else ", z"
+
+    return tl.inline_asm_elementwise(
+        asm=f"{op_instr} $0, $1, $2{op_suffix};",
+        constraints="=r,r,r",
+        args=[a, b],
+        dtype=tl.bfloat16,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@triton.jit
 def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     """
     Implements the bit-untwiddling of a 32-bit integer (8 mxfp4 elements):
@@ -345,5 +361,5 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     scale = scale.reshape(x.shape)
 
     # Combine scale and x
-    x = x * scale
+    x = mul_bf16x2(x, scale)
     return x
