@@ -126,7 +126,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, bufferId, interval);
+              auto slice = AllocationSlice(value, interval);
 
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
@@ -151,7 +151,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    auto scratchSlice = AllocationSlice(scratchBufferId, interval);
+    auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {

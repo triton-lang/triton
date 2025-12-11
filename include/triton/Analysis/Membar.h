@@ -18,16 +18,13 @@ class OpBuilder;
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 // Represents the access to a slice of an allocation
-// It contains information both on physical memory (bufferId and interval) and
-// a logical view on it (layout, subslice offsets and shape for the access)
+// It contains information both on physical memory (the interval) and a
+// logical view on it (layout, subslice offsets and shape for the access)
 struct AllocationSlice {
 public:
   // Create allocation slice from a value, collecting subslice offsets
-  AllocationSlice(Value value, Allocation::BufferId id,
-                  Interval<size_t> allocationInterval)
-      : bufferId(id), allocationInterval(allocationInterval) {
-    assert(id != Allocation::InvalidBufferId &&
-           "must be called with a valid bufferId");
+  AllocationSlice(Value value, Interval<size_t> allocationInterval)
+      : allocationInterval(allocationInterval) {
     auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
     this->accessTy = accessTy;
 
@@ -45,8 +42,8 @@ public:
 
   // Builder for accesses that represent accesses to the whole
   // allocation (scratch buffers, ArriveBarrierOp, layout changes, ..)
-  AllocationSlice(Allocation::BufferId id, Interval<size_t> interval)
-      : bufferId(id), allocationInterval(interval), accessTy(nullptr) {}
+  AllocationSlice(Interval<size_t> interval)
+      : allocationInterval(interval), accessTy(nullptr) {}
 
   bool operator<(const AllocationSlice &other) const {
     return asTuple() < other.asTuple();
@@ -59,13 +56,7 @@ public:
   bool intersects(const AllocationSlice &other) const;
 
   void print(raw_ostream &os) const {
-    os << "bufferId=";
-    if (bufferId != Allocation::InvalidBufferId)
-      os << bufferId;
-    else
-      os << "invalid";
-
-    os << " interval=[" << allocationInterval.start() << ","
+    os << "interval=[" << allocationInterval.start() << ","
        << allocationInterval.end() << ")";
 
     os << " offsets=[";
@@ -86,15 +77,13 @@ public:
   }
 
 private:
-  std::tuple<Allocation::BufferId, Interval<size_t>, const void *,
-             llvm::ArrayRef<int64_t>>
+  std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>>
   asTuple() const {
-    return std::make_tuple(bufferId, allocationInterval,
-                           accessTy.getAsOpaquePointer(), subsliceOffsets);
+    return std::make_tuple(allocationInterval, accessTy.getAsOpaquePointer(),
+                           subsliceOffsets);
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
-  Allocation::BufferId bufferId = Allocation::InvalidBufferId;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access

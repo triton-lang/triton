@@ -17,16 +17,6 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // If two allocation slices have the same buffer ID and both have operation
-  // access type, we can do precise intersection detection
-  bool sameBuffer = bufferId != Allocation::InvalidBufferId &&
-                    other.bufferId != Allocation::InvalidBufferId &&
-                    bufferId == other.bufferId;
-  // If not the same buffer (or invalid buffer), we assume intersection since
-  // allocation intervals overlap
-  if (!sameBuffer)
-    return true;
-
   // If access types are unknown, assume intersection
   if (!accessTy || !other.accessTy)
     return true;
@@ -251,7 +241,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, bufferId, interval);
+              auto slice = AllocationSlice(value, interval);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);
@@ -266,8 +256,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      auto allMemorySlice =
-          AllocationSlice(Allocation::InvalidBufferId, allIntervals);
+      auto allMemorySlice = AllocationSlice(allIntervals);
       curBlockInfo.syncWriteSlices[allMemorySlice].insert(op);
       curBlockInfo.syncReadSlices[allMemorySlice].insert(op);
     }
@@ -299,7 +288,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "dependencies");
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    auto scratchSlice = AllocationSlice(scratchBufferId, interval);
+    auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
