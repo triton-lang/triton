@@ -22,6 +22,8 @@ public:
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
+  std::string toJsonString() const override;
+
   void clear() override;
 
   class Trace;

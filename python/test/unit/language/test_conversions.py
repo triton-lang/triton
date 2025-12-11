@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_gfx12
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna4
 
 
 def matching_int(dtype):
@@ -290,7 +290,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
-        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
             pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
@@ -343,7 +343,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
             pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
@@ -373,7 +373,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
-    if mode in ('inf', '-inf') and is_hip_gfx12():
+    if mode in ('inf', '-inf') and is_hip_rdna4():
         pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
 
     converter = {

@@ -32,8 +32,8 @@ from triton._internal_testing import (
     is_hip_cdna2,
     is_hip_cdna3,
     is_hip_cdna4,
-    is_hip_gfx11,
-    is_hip_gfx12,
+    is_hip_rdna3,
+    is_hip_rdna4,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -76,7 +76,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_gfx11() or is_hip_gfx12():
+    elif is_hip_rdna3() or is_hip_rdna4():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -3255,8 +3255,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
-                pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4()):
+                pytest.skip(f"{in_dtype} only supported on CDNA4 and RDNA4")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
             if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
@@ -3509,12 +3509,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
         is_SM120 = cc >= (12, 0)
     if is_hip():
-        if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
-            pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
+        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4()):
+            pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx11() or is_hip_gfx12()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx11, gfx12")
-        if mma == 16 and K == 64 and not (is_hip_gfx12() or is_hip_gfx11()):
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4")
+        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -3743,8 +3743,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     # to zero. Detailed info is at:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     large_tolerance = is_hip_cdna2()
-    # For e4m3, gfx11 can slightly exceed the default tolerances in isolated cases
-    if is_hip_gfx11() and mxfp_type == "e4m3" and normal_type == "fp16":
+    # For e4m3, RDNA3 can slightly exceed the default tolerances in isolated cases
+    if is_hip_rdna3() and mxfp_type == "e4m3" and normal_type == "fp16":
         large_tolerance = True
     if is_SM120:
         large_tolerance = True
@@ -5696,8 +5696,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         num_stages = 2
         if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
-        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
-            pytest.skip(f"{in_type_str} only supported on CDNA4 or gfx12")
+        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4()):
+            pytest.skip(f"{in_type_str} only supported on CDNA4 or RDNA4")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)

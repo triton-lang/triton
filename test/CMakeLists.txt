@@ -2,6 +2,7 @@ add_subdirectory(lib)
 
 llvm_canonicalize_cmake_booleans(
   MLIR_ENABLE_BINDINGS_PYTHON
+  LLVM_BUILD_SHARED_LIBS
 )
 
 configure_lit_site_cfg(

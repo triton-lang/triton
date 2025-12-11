@@ -946,15 +946,25 @@ RegionRange WarpSpecializeOp::getPartitionRegions() {
 
 void WarpSpecializeOp::getSuccessorRegions(
     RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
-  // The parent branches transparently into the default region.
+  // The parent branches into the default region and the partition regions.
   if (src.isParent()) {
     successors.emplace_back(&getDefaultRegion());
+    successors.emplace_back(&getPartitionOpHolder());
     return;
   }
   // And the default region branches transparently back to the parent.
-  assert(src.getTerminatorPredecessorOrNull()->getParentRegion() ==
-         &getDefaultRegion());
-  successors.push_back(RegionSuccessor(getOperation(), getResults()));
+  if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
+      &getDefaultRegion())
+    successors.push_back(RegionSuccessor(getOperation(), getResults()));
+}
+
+void WarpSpecializePartitionsOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  // The parent branches to each of the partition regions, but nothing flows out
+  // of the partition regions.
+  if (src.isParent())
+    for (Region &region : getPartitionRegions())
+      successors.emplace_back(&region);
 }
 
 LogicalResult WarpSpecializeOp::verify() {
