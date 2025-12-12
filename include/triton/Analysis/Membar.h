@@ -23,25 +23,10 @@ using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 struct AllocationSlice {
 public:
   // Create allocation slice from a value, collecting subslice offsets
-  AllocationSlice(Value value, Interval<size_t> allocationInterval)
-      : allocationInterval(allocationInterval) {
-    auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
-    this->accessTy = accessTy;
-
-    // Get the memdesc_subslice information if present. If no subslice is
-    // present the whole interval is accessed
-    if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
-      // We know there aren't subslices before the one because of subslice::fold
-      // Still need to check this for where a fold isn't possible (control flow)
-      // and when a subslice is carried in a loop
-      if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
-        subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
-      }
-    }
-  }
+  AllocationSlice(Value value, Interval<size_t> allocationInterval);
 
   // Builder for accesses that represent accesses to the whole
-  // allocation (scratch buffers, ArriveBarrierOp, layout changes, ..)
+  // allocation (scratch buffers, ArriveBarrierOp, ..)
   AllocationSlice(Interval<size_t> interval)
       : allocationInterval(interval), accessTy(nullptr) {}
 
@@ -53,28 +38,12 @@ public:
     return asTuple() == other.asTuple();
   }
 
+  // Check if a AllocationSlice intersects with another other.
+  // This happens if their subslice regions intersect in all dimensions.
+  // Returns true if it can't prove the AllocationSlices are disjoint.
   bool intersects(const AllocationSlice &other) const;
 
-  void print(raw_ostream &os) const {
-    os << "interval=[" << allocationInterval.start() << ","
-       << allocationInterval.end() << ")";
-
-    os << " offsets=[";
-    if (!subsliceOffsets.empty()) {
-      llvm::interleaveComma(subsliceOffsets, os);
-    } else {
-      os << "unknown";
-    }
-    os << "]";
-
-    os << " shape=";
-    if (accessTy) {
-      llvm::interleave(accessTy.getShape(), os, "x");
-      os << " layout=" << accessTy.getEncoding();
-    } else {
-      os << "? layout=unknown";
-    }
-  }
+  void print(raw_ostream &os) const;
 
 private:
   std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>>

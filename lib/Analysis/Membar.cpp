@@ -9,9 +9,24 @@
 
 namespace mlir {
 
-// Check if a AllocationSlice intersects with another other.
-// This happens if their subslice regions intersect in all dimensions.
-// Returns true if it can't prove the AllocationSlices are disjoint.
+AllocationSlice::AllocationSlice(Value value,
+                                 Interval<size_t> allocationInterval)
+    : allocationInterval(allocationInterval) {
+  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
+  this->accessTy = accessTy;
+
+  // Get the memdesc_subslice information if present. If no subslice is
+  // present the whole interval is accessed
+  if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
+    // We know there aren't subslices before the one because of subslice::fold
+    // Still need to check this for where a fold isn't possible (control flow)
+    // and when a subslice is carried in a loop
+    if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
+      subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
+    }
+  }
+}
+
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
@@ -48,6 +63,27 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   // All dimensions of subslices have some intersection
   return true;
+}
+
+void AllocationSlice::print(raw_ostream &os) const {
+  os << "interval=[" << allocationInterval.start() << ","
+     << allocationInterval.end() << ")";
+
+  os << " offsets=[";
+  if (!subsliceOffsets.empty()) {
+    llvm::interleaveComma(subsliceOffsets, os);
+  } else {
+    os << "unknown";
+  }
+  os << "]";
+
+  os << " shape=";
+  if (accessTy) {
+    llvm::interleave(accessTy.getShape(), os, "x");
+    os << " layout=" << accessTy.getEncoding();
+  } else {
+    os << "? layout=unknown";
+  }
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
