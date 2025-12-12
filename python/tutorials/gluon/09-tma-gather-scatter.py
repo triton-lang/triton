@@ -44,8 +44,7 @@ import triton.experimental.gluon.language as gl
 from triton._C.libtriton import ir, gluon_ir
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.blackwell import (tma, mbarrier, fence_async_shared, TensorMemoryLayout,
-                                                                 allocate_tensor_memory)
+from triton.experimental.gluon.language.nvidia.blackwell import (tma, mbarrier, fence_async_shared)
 
 # Re-use utilities from the previous tutorials.
 t7 = importlib.import_module("07-persistence")
