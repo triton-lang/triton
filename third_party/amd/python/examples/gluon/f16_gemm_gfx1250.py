@@ -566,6 +566,38 @@ class PartitionArgs:
         self.c_dtype = ttgl.constexpr(c_dtype)
 
 
+@aggregate
+class PhaseCounter:
+    """Tracks iteration count and computes 3-bit decrementing wrap-around phase."""
+    iteration: ttgl.tensor
+    num_barriers: ttgl.constexpr
+    MAX_PHASE: ttgl.constexpr
+
+    @gluon.constexpr_function
+    def __init__(self, iteration, num_barriers):
+        self.iteration = iteration
+        self.num_barriers = ttgl.constexpr(num_barriers)
+        # AMD mbarrier phase is 3 bits and decrements in a wrap-around manner.
+        self.MAX_PHASE = ttgl.constexpr(7)
+
+    @gluon.jit
+    def create(iteration, num_barriers: ttgl.constexpr):
+        """Creates a counter starting at a specific iteration."""
+        return PhaseCounter(ttgl.to_tensor(iteration), num_barriers)
+
+    @gluon.jit
+    def phase(self):
+        """Computes 3-bit decrementing wrap-around phase."""
+        phase_count = self.iteration // self.num_barriers
+        return (-phase_count) & self.MAX_PHASE
+
+    @gluon.must_use_result
+    @gluon.jit
+    def next(self):
+        """Advances to next iteration."""
+        return PhaseCounter(self.iteration + 1, self.num_barriers)
+
+
 @gluon.jit
 def producer_partition(args):
     """Producer partition: Issues TDM async loads for A and B matrices."""
@@ -576,17 +608,17 @@ def producer_partition(args):
     off_am = 0
     off_bn = 0
 
+    # Assume phase 0 is already completed as the buffers are initially empty; start from phase 1
+    empty_phase_counter = PhaseCounter.create(args.NUM_BUFFERS, args.NUM_BUFFERS)
+
     for k_tile_idx in range(num_k_tiles):
         k_offset = k_tile_idx * args.BLOCK_K
         buffer_idx = k_tile_idx % args.NUM_BUFFERS
 
-        phase_count = k_tile_idx // args.NUM_BUFFERS
-        empty_phase = (-phase_count) & args.MAX_PHASE
-
         empty_bar = args.empty_bars.index(buffer_idx)
         ready_bar = args.ready_bars.index(buffer_idx)
         # Wait for the buffers to be consumed before loading
-        ttgl.amd.gfx1250.mbarrier.wait(empty_bar, empty_phase)
+        ttgl.amd.gfx1250.mbarrier.wait(empty_bar, empty_phase_counter.phase())
 
         # Only attach mbarrier to the last load so we signal once after both loads complete
         ttgl.amd.gfx1250.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
@@ -596,6 +628,8 @@ def producer_partition(args):
         else:
             ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
                                             mbarrier=ready_bar)
+
+        empty_phase_counter = empty_phase_counter.next()
 
 
 @gluon.jit
@@ -612,16 +646,15 @@ def consumer_partition(args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n):
 
     num_k_tiles = ttgl.cdiv(K, args.BLOCK_K)
 
+    ready_phase_counter = PhaseCounter.create(0, args.NUM_BUFFERS)
+
     for k_tile_idx in range(num_k_tiles):
         buffer_idx = k_tile_idx % args.NUM_BUFFERS
         ready_bar = args.ready_bars.index(buffer_idx)
         empty_bar = args.empty_bars.index(buffer_idx)
 
-        phase_count = k_tile_idx // args.NUM_BUFFERS
-        ready_phase = (-phase_count) & args.MAX_PHASE
-
         # Wait for the buffers to be filled by the producer
-        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, ready_phase)
+        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, ready_phase_counter.phase())
 
         a = args.a_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_A)
         if args.TRANSPOSE_B:
@@ -633,6 +666,8 @@ def consumer_partition(args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n):
 
         # Signal that we're done with these buffers (producer can reuse them)
         ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+
+        ready_phase_counter = ready_phase_counter.next()
 
     offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, args.WMMA_LAYOUT))
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, args.WMMA_LAYOUT))
@@ -693,11 +728,6 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
         ttgl.amd.gfx1250.mbarrier.init(empty_bars.index(i), count=CONSUMER_WARPS * WARP_SIZE)
         # ready_bars: TDM arrives on barrier once per warp, so use producer warp count
         ttgl.amd.gfx1250.mbarrier.init(ready_bars.index(i), count=PRODUCER_WARPS)
-
-    # Pre-signal empty_bars to indicate buffers are initially empty and ready for producer
-    # This allows producer to start immediately without blocking indefinetely waiting for consumer on first iteration
-    for i in ttgl.static_range(NUM_BUFFERS):
-        ttgl.amd.gfx1250.mbarrier.arrive(empty_bars.index(i), count=1)
 
     args = PartitionArgs(a_desc, b_desc, a_buffer, b_buffer, empty_bars, ready_bars, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
                          MAX_PHASE, WMMA_LAYOUT, c_ptr.type.element_ty)
