@@ -37,8 +37,7 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
     BLOCK_N_PRESHUFFLED: gl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
     BLOCK_K_SCALE_PRESHUFFLED: gl.constexpr = BLOCK_K_SCALE * NON_K_PRESHUFFLE_BLOCK_SIZE
 
-    WMMA_LAYOUT: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
-                                                     instr_shape=[16, 16, 128], tiles_per_warp=tiles_per_warp)
+    WMMA_LAYOUT: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, reg_bases=[], warp_bases = [[0, 1], [1, 0]], instr_shape=[16, 16, 128])
     WMMA_LAYOUT_PACKED: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
                                                             instr_shape=[16, 16, 64], tiles_per_warp=tiles_per_warp)
 
