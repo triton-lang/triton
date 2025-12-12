@@ -345,5 +345,4 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
 }
-
 } // namespace mlir

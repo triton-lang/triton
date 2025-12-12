@@ -2,8 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
+
 #include "llvm/Support/raw_ostream.h"
 #include <set>
 #include <tuple>
