@@ -19,7 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -489,7 +489,11 @@ class JITCallable:
         self.__module__ = fn.__module__
 
     def get_capture_scope(self):
-        return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
+        fn = self.fn
+        if fn.__closure__ is None:
+            return self.__globals__
+        nonlocals = {name: cell.cell_contents for name, cell in zip(fn.__code__.co_freevars, fn.__closure__)}
+        return self.__globals__ | nonlocals
 
     @property
     def cache_key(self) -> str:
@@ -531,6 +535,9 @@ class JITCallable:
     def type(self):
         from triton.language.core import constexpr_type
         return constexpr_type(self)
+
+    def _flatten_ir(self, handles: list[ir.value]) -> None:
+        pass
 
     def _unsafe_update_src(self, new_src):
         """
@@ -743,8 +750,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
-            if hasattr(kernel, "result"):
-                kernel = kernel.result()
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,

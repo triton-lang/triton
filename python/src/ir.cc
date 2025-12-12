@@ -635,6 +635,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_int_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<BoolAttr>(name);
@@ -789,7 +796,6 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       //  .def("has_attr", &::FuncOp::hasAttr)
-      .def("finalize", [](FuncOp &self) -> void {})
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 

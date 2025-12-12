@@ -128,9 +128,10 @@ public:
       assert(maybeWarpToOffsetb128->getNumOutDims() == 2);
       bases[kWarp][0] = {0, 0};
       bases[kWarp][1] = {0, 0};
-      auto warpGroupToOffsetb128 = LinearLayout(
-          bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
-      Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+      auto warpGroupToOffsetb128 =
+          LinearLayout(std::move(bases), warpToOffset.getOutDims(),
+                       /*requireSurjective=*/false);
+      Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
@@ -157,8 +158,11 @@ public:
     assert(to_vector(ll.getOutDimNames()) ==
            llvm::to_vector(
                ArrayRef<StringAttr>{str_attr("offset"), str_attr("block")}));
-    int32_t totalOffElems = ll.apply({{dims[0], a}, {dims[1], b}})[0].second;
-    int32_t smemByteOffsetb8 = totalOffElems * desc.bitwidth / 8;
+    auto offsetBlock = ll.apply({{dims[0], a}, {dims[1], b}});
+    int32_t offsetElems = offsetBlock[0].second;
+    int32_t block = offsetBlock[1].second;
+    assert(block == 0);
+    int32_t smemByteOffsetb8 = offsetElems * desc.bitwidth / 8;
     auto currDesc = desc.descriptor;
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
@@ -191,8 +195,8 @@ private:
     auto ctx = dims[0].getContext();
     auto kOffset = str_attr("offset");
 
-    // Any CTALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CTALayout = triton::gpu::CTAEncodingAttr::getDefault(ctx, 2);
+    // Any CGALayout, it's not really used within getCoreMatrixLinearLayout
+    auto CGALayout = triton::gpu::CGAEncodingAttr::getDefault(ctx, 2);
 
     for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
                                          : SmallVector<bool>({false}))) {
@@ -201,7 +205,7 @@ private:
           // FIXME: getCoreMatrixLinearLayout does not accept bitwidth < 8
           auto shmemEnc = triton::gpu::NVMMASharedEncodingAttr::get(
               ctx, swizzling, transposed, std::max(8, bitwidth), fp4Padded,
-              CTALayout);
+              CGALayout);
           auto shmemTile =
               getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
           // Rename out dims to match the original layout (in case the dims were
@@ -275,9 +279,9 @@ private:
             }
           }
           // Multiply by 2 or round up to the next power of 2
-          shmemTileInv =
-              LinearLayout(bases, {{kOffset, llvm::NextPowerOf2(maxBasis)}},
-                           /*requireSurjective=*/false);
+          shmemTileInv = LinearLayout(std::move(bases),
+                                      {{kOffset, llvm::NextPowerOf2(maxBasis)}},
+                                      /*requireSurjective=*/false);
           // Add a trivial block dimension as getReps expects both layouts to
           // have the same outdims
           shmemTileInv *=

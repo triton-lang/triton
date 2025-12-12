@@ -16,29 +16,30 @@ class PostprocessFn:
 
 
 @triton.jit
-def _reduce(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x tensor (input)
-            XMx, stride_xmxr, stride_xmx0, stride_xmx1,  # x mx scale
-            Y, stride_y0: tl.int64, stride_y1,  # y tensor (output)
-            YMx, stride_ymx0, stride_ymx1,  # y mx scale
-            Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
-            Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
-            K, S0, X_S1, Y_S1,  # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
-            POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
-            POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
-            XFlex,  # x flex (global) scale
-            YFlexExpected, YFlexActual, YFlexChecksum, Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
-            IS_MASK_NONE: tl.constexpr,  #
-            BROADCAST_R: tl.constexpr,  #
-            BROADCAST_S0: tl.constexpr,  #
-            BROADCAST_S1: tl.constexpr,  #
-            IS_SCALE_NONE: tl.constexpr,  #
-            SCALE_BROADCAST_R: tl.constexpr,  #
-            SCALE_BROADCAST_S0: tl.constexpr,  #
-            SCALE_BROADCAST_S1: tl.constexpr,  #
-            BLOCK_S0: tl.constexpr,  #
-            BLOCK_X_S1: tl.constexpr,  #
-            BLOCK_Y_S1: tl.constexpr,  #
-            ):
+def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x tensor (input)
+                    XMx, stride_xmxr, stride_xmx0, stride_xmx1,  # x mx scale
+                    Y, stride_y0: tl.int64, stride_y1,  # y tensor (output)
+                    YMx, stride_ymx0, stride_ymx1,  # y mx scale
+                    Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
+                    Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
+                    K, S0, X_S1, Y_S1,  # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
+                    POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
+                    POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
+                    XFlex,  # x flex (global) scale
+                    YFlexExpected, YFlexActual, YFlexChecksum,
+                    Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
+                    IS_MASK_NONE: tl.constexpr,  #
+                    BROADCAST_R: tl.constexpr,  #
+                    BROADCAST_S0: tl.constexpr,  #
+                    BROADCAST_S1: tl.constexpr,  #
+                    IS_SCALE_NONE: tl.constexpr,  #
+                    SCALE_BROADCAST_R: tl.constexpr,  #
+                    SCALE_BROADCAST_S0: tl.constexpr,  #
+                    SCALE_BROADCAST_S1: tl.constexpr,  #
+                    BLOCK_S0: tl.constexpr,  #
+                    BLOCK_X_S1: tl.constexpr,  #
+                    BLOCK_Y_S1: tl.constexpr,  #
+                    ):
     pid_s0 = tl.program_id(0)
     pid_s1 = tl.program_id(1)
     tl.static_assert(BLOCK_X_S1 % 32 == 0)
@@ -95,9 +96,9 @@ def _reduce(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x tensor 
     tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
-specializations = SpecializationModule(
-    "reduce",
-    kernels=[("_reduce", _reduce)],
+forward_specializations = SpecializationModule(
+    "reduce_forward",
+    kernels=[("_reduce_forward", _reduce_forward)],
     closure_args={
         "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
         "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
@@ -105,7 +106,7 @@ specializations = SpecializationModule(
 )
 
 
-def reduce(
+def reduce_forward(
     x: torch.Tensor,
     dim: int,
     mask: Optional[torch.Tensor] = None,
@@ -216,8 +217,8 @@ def reduce(
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else None
     scale_arg = scale if scale is not None else None
-    reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
-                                        postprocess_fn2=postprocess_fn2.specs)._reduce
+    reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
+                                                postprocess_fn2=postprocess_fn2.specs)._reduce_forward
     reduce_kernel[grid](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
@@ -243,6 +244,311 @@ def reduce(
         num_warps=4  #
     )
     return y, y_mxscale
+
+
+# ------------------------------------------------------------
+
+
+@triton.jit
+def _reduce_backward(
+    dY,
+    stride_y0: tl.int64,
+    stride_y1,  # upstream grad (S0, Y_S1)
+    dX,
+    stride_xr: tl.int64,
+    stride_x0: tl.int64,
+    stride_x1,  # grad wrt X (K, S0, X_S1) in the chosen layout
+    XMx,
+    stride_xmxr,
+    stride_xmx0,
+    stride_xmx1,  # input micro-scales (optional)
+    Mask,
+    stride_mr,
+    stride_m0,
+    stride_m1,  # mask (optional)
+    Scale,
+    stride_sr,
+    stride_s0,
+    stride_s1,  # scale (optional)
+    K,
+    S0,
+    X_S1,
+    Y_S1,  # shapes
+    XFlex,  # global input flex scale (scalar device buffer)
+    IS_MASK_NONE: tl.constexpr,
+    BROADCAST_R: tl.constexpr,
+    BROADCAST_S0: tl.constexpr,
+    BROADCAST_S1: tl.constexpr,
+    IS_SCALE_NONE: tl.constexpr,
+    SCALE_BROADCAST_R: tl.constexpr,
+    SCALE_BROADCAST_S0: tl.constexpr,
+    SCALE_BROADCAST_S1: tl.constexpr,
+    REDUCTION_N: tl.constexpr,  # maps X_S1 -> Y_S1 (grouped sum in fwd)
+    BLOCK_S0: tl.constexpr,
+    BLOCK_X_S1: tl.constexpr,
+):
+    # Tile over (S0, X_S1). We loop over the reduction K dimension.
+    pid_s0 = tl.program_id(0)
+    pid_s1 = tl.program_id(1)
+
+    tl.static_assert(BLOCK_X_S1 % 32 == 0)
+    BLOCK_X_SMX1: tl.constexpr = BLOCK_X_S1 // 32
+
+    offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
+    offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
+    offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
+
+    valid_s0 = offs_s0 < S0
+    valid_x_s1 = offs_x_s1 < X_S1
+    valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
+
+    # Map X_S1 positions to their Y_S1 group index (grouped-sum fwd)
+    offs_y_from_x = offs_x_s1 // REDUCTION_N
+    valid_y_from_x = offs_y_from_x < Y_S1
+
+    # Load upstream grad; broadcasting over the REDUCTION_N group happens via indexing.
+    dy_ptrs = dY + offs_s0[:, None] * stride_y0 + offs_y_from_x[None, :] * stride_y1
+    dy = tl.load(dy_ptrs, mask=valid_s0[:, None] & valid_y_from_x[None, :], other=0.0).to(tl.float32)
+
+    # Global flex scale (scalar)
+    x_flex_scale = load_scale(XFlex)
+
+    # Loop over the reduced dimension
+    for k in tl.range(0, K, num_stages=2):
+        g = dy
+        # Multiply by input micro-scale per group of 32 lanes if present
+        if XMx is not None:
+            xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
+            xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0)
+            xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+            g = (g.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32]) * xmx[:, :, None]).reshape([BLOCK_S0, BLOCK_X_S1])
+        # Multiply by global input flex scale
+        g = g * x_flex_scale
+        # Multiply by per-element Scale if provided
+        if not IS_SCALE_NONE:
+            k_term_s = 0 if SCALE_BROADCAST_R else (k * stride_sr)
+            s0_term_s = 0 if SCALE_BROADCAST_S0 else (offs_s0[:, None] * stride_s0)
+            s1_term_s = 0 if SCALE_BROADCAST_S1 else (offs_x_s1[None, :] * stride_s1)
+            s_ptrs = Scale + k_term_s + s0_term_s + s1_term_s
+            s = tl.load(s_ptrs, mask=valid_s0[:, None] & valid_x_s1[None, :], other=1)
+            g = g * s
+        # Apply mask if provided
+        if not IS_MASK_NONE:
+            k_term = 0 if BROADCAST_R else (k * stride_mr)
+            s0_term = 0 if BROADCAST_S0 else (offs_s0[:, None] * stride_m0)
+            s1_term = 0 if BROADCAST_S1 else (offs_x_s1[None, :] * stride_m1)
+            m_ptrs = Mask + k_term + s0_term + s1_term
+            m = tl.load(m_ptrs, mask=valid_s0[:, None] & valid_x_s1[None, :], other=1)
+            g = tl.where(m != 0, g, 0.0)
+        #
+        dx_ptrs = dX + k * stride_xr + offs_s0[:, None] * stride_x0 + offs_x_s1[None, :] * stride_x1
+        tl.store(dx_ptrs, g, mask=valid_s0[:, None] & valid_x_s1[None, :])
+
+
+def reduce_backward(
+    dy: torch.Tensor,
+    x_shape: tuple[int, int, int],
+    dim: int,
+    *,
+    mask: Optional[torch.Tensor],
+    scale: Optional[torch.Tensor],
+    x_mxscale: Optional[torch.Tensor],
+    x_flex: Optional[InFlexData],
+    postprocess_fn1: Optional[PostprocessFn],
+    x_strides: tuple[int, int, int],
+    x_mx_strides: Optional[tuple[int, int, int]],
+    mask_strides: Optional[tuple[int, int, int]],
+    scale_strides: Optional[tuple[int, int, int]],
+    dx: torch.Tensor,
+):
+    # Shapes/axes handling mirrors `reduce(...)`
+    if dim < 0:
+        dim += 3
+    dims = (0, 1, 2)
+    nonred = tuple(d for d in dims if d != dim)
+
+    S0, X_S1 = x_shape[nonred[0]], x_shape[nonred[1]]
+    K = x_shape[dim]
+
+    # Postprocess grouping (grouped sum). Default is identity (1).
+    reduction_n = (postprocess_fn1.specs.reduction_n if postprocess_fn1 is not None else FnSpecs.default().reduction_n)
+    Y_S1 = X_S1 // reduction_n
+    assert dy.shape == (S0, Y_S1), f"dY shape {dy.shape} mismatch with (S0={S0}, Y_S1={Y_S1})"
+
+    # Strides for dX must match the element size of the tensor passed to the kernel.
+    # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.
+    dx_view = x_flex.reinterpret(dx)
+    dx_str0, dx_str1, dx_str2 = dx_view.stride()
+    stride_xr = (dx_str0 if dim == 0 else (dx_str1 if dim == 1 else dx_str2))
+    stride_x0 = (dx_str0 if nonred[0] == 0 else (dx_str1 if nonred[0] == 1 else dx_str2))
+    stride_x1 = (dx_str0 if nonred[1] == 0 else (dx_str1 if nonred[1] == 1 else dx_str2))
+    stride_xmxr = stride_xmx0 = stride_xmx1 = 0
+    if x_mxscale is not None:
+        stride_xmxr, stride_xmx0, stride_xmx1 = x_mx_strides
+
+    if mask is not None:
+        mstr0, mstr1, mstr2 = mask_strides
+        stride_mr = (mstr0 if dim == 0 else (mstr1 if dim == 1 else mstr2))
+        stride_m0 = (mstr0 if nonred[0] == 0 else (mstr1 if nonred[0] == 1 else mstr2))
+        stride_m1 = (mstr0 if nonred[1] == 0 else (mstr1 if nonred[1] == 1 else mstr2))
+    else:
+        stride_mr = stride_m0 = stride_m1 = 0
+
+    if scale is not None:
+        sstr0, sstr1, sstr2 = scale_strides
+        stride_sr = (sstr0 if dim == 0 else (sstr1 if dim == 1 else sstr2))
+        stride_s0 = (sstr0 if nonred[0] == 0 else (sstr1 if nonred[0] == 1 else sstr2))
+        stride_s1 = (sstr0 if nonred[1] == 0 else (sstr1 if nonred[1] == 1 else sstr2))
+    else:
+        stride_sr = stride_s0 = stride_s1 = 0
+
+    # Launch configuration mirrors forward (but we tile over X_S1, not Y_S1)
+    BLOCK_S0 = 64
+    BLOCK_X_S1 = 128
+    grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(X_S1, BLOCK_X_S1))
+
+    _reduce_backward[grid](
+        dy,
+        dy.stride(0),
+        dy.stride(1),
+        dx_view,
+        stride_xr,
+        stride_x0,
+        stride_x1,
+        x_mxscale,
+        stride_xmxr,
+        stride_xmx0,
+        stride_xmx1,
+        mask,
+        stride_mr,
+        stride_m0,
+        stride_m1,
+        scale,
+        stride_sr,
+        stride_s0,
+        stride_s1,
+        K,
+        S0,
+        X_S1,
+        Y_S1,
+        x_flex.scale,
+        IS_MASK_NONE=(mask is None),
+        BROADCAST_R=(stride_mr == 0),
+        BROADCAST_S0=(stride_m0 == 0),
+        BROADCAST_S1=(stride_m1 == 0),
+        IS_SCALE_NONE=(scale is None),
+        SCALE_BROADCAST_R=(stride_sr == 0),
+        SCALE_BROADCAST_S0=(stride_s0 == 0),
+        SCALE_BROADCAST_S1=(stride_s1 == 0),
+        REDUCTION_N=reduction_n,
+        BLOCK_S0=BLOCK_S0,
+        BLOCK_X_S1=BLOCK_X_S1,
+        num_warps=4,
+    )
+
+
+# ------------------------------------------------------------
+
+backward_specializations = SpecializationModule(
+    "reduce_backward",
+    kernels=[("_reduce_backward", _reduce_backward)],
+    closure_args={
+        "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
+        "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+    },
+)
+
+
+class _ReduceAutograd(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, dim: int, mask: Optional[torch.Tensor], scale: Optional[torch.Tensor],
+                x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], y_dtype: Optional[torch.dtype],
+                y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool, y_has_mx: Optional[bool],
+                y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
+                postprocess_fn2: Optional[PostprocessFn]):
+        # Run your existing Triton forward
+        y, y_mx = reduce_forward(
+            x=x,
+            dim=dim,
+            mask=mask,
+            scale=scale,
+            x_mxscale=x_mxscale,
+            x_flex=x_flex,
+            y_dtype=y_dtype,
+            y_flex=y_flex,
+            y_flex_saturate_inf=y_flex_saturate_inf,
+            y_has_mx=y_has_mx,
+            y=y,
+            postprocess_fn1=postprocess_fn1,
+            postprocess_fn2=postprocess_fn2,
+        )
+
+        # Save everything needed for backward (no tensors are modified)
+        ctx.dim = dim
+        ctx.x_shape = tuple(x.shape)
+        ctx.x_dtype = x.dtype
+        ctx.device = x.device
+        ctx.mask = mask
+        ctx.scale = scale
+        ctx.x_mxscale = x_mxscale
+        ctx.x_flex = x_flex if x_flex is not None else InFlexData()
+        ctx.postprocess_fn1 = postprocess_fn1 if postprocess_fn1 is not None else PostprocessFn()
+        ctx.x_strides = tuple(x.stride())
+        ctx.x_mx_strides = tuple(x_mxscale.stride()) if x_mxscale is not None else None
+        ctx.mask_strides = tuple(mask.stride()) if mask is not None else None
+        ctx.scale_strides = tuple(scale.stride()) if scale is not None else None
+        ctx.y_has_mx = bool(y_mx is not None)
+
+        return y, y_mx
+
+    @staticmethod
+    def backward(ctx, grad_y: torch.Tensor, grad_y_mxscale: Optional[torch.Tensor] = None):
+        # We do not support grads through MX-quantized outputs (no torch compute in bwd)
+        if ctx.y_has_mx:
+            raise NotImplementedError("Backward with y_mxscale (MX-quantized outputs) is not supported.")
+
+        # Allocate grad for x; (no torch compute)
+        dx = torch.empty(ctx.x_shape, dtype=ctx.x_dtype, device=grad_y.device)
+
+        reduce_backward(
+            dy=grad_y,
+            x_shape=ctx.x_shape,
+            dim=ctx.dim,
+            mask=ctx.mask,
+            scale=ctx.scale,
+            x_mxscale=ctx.x_mxscale,
+            x_flex=ctx.x_flex,
+            postprocess_fn1=ctx.postprocess_fn1,
+            x_strides=ctx.x_strides,
+            x_mx_strides=ctx.x_mx_strides,
+            mask_strides=ctx.mask_strides,
+            scale_strides=ctx.scale_strides,
+            dx=dx,
+        )
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None
+
+
+def reduce(
+    x: torch.Tensor,
+    dim: int,
+    mask: Optional[torch.Tensor] = None,
+    scale: Optional[torch.Tensor] = None,
+    x_mxscale: Optional[torch.Tensor] = None,
+    x_flex: Optional[InFlexData] = InFlexData(),
+    y: Optional[torch.Tensor] = None,
+    y_dtype: Optional[torch.dtype] = None,
+    y_flex: Optional[OutFlexData] = OutFlexData(),
+    y_flex_saturate_inf: bool = False,
+    y_has_mx: Optional[bool] = None,
+    postprocess_fn1: Optional[PostprocessFn] = None,
+    postprocess_fn2: Optional[PostprocessFn] = None,
+):
+    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, y_dtype, y_flex,  #
+                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2)
+
+
+# ------------------------------------------------------------
 
 
 def compute_actual_scale(x, dtype, per_batch_scale=False):

@@ -653,7 +653,7 @@ llvm.func @remat_subgraph(%arg0: i32, %arg1: i32) attributes {allocation.offset 
   %1 = llvm.getelementptr %0[%arg0] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
   %2 = llvm.add %arg0, %arg1 : i32
   %3 = llvm.mul %2, %arg1 : i32
-  %4 = llvm.udiv %2, %3 : i32
+  %4 = llvm.urem %2, %3 : i32
   ttg.warp_specialize(%1, %4) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
@@ -663,9 +663,9 @@ llvm.func @remat_subgraph(%arg0: i32, %arg1: i32) attributes {allocation.offset 
     // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
     // CHECK-NEXT: [[ADD:%.*]] = llvm.add %arg0, %arg1 : i32
     // CHECK-NEXT: [[MUL:%.*]] = llvm.mul [[ADD]], %arg1 : i32
-    // CHECK-NEXT: [[UDIV:%.*]] = llvm.udiv [[ADD]], [[MUL]] : i32
+    // CHECK-NEXT: [[UREM:%.*]] = llvm.urem [[ADD]], [[MUL]] : i32
     // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[ADDR]][%arg0]
-    // CHECK-NEXT: "use"([[PTR]], [[UDIV]])
+    // CHECK-NEXT: "use"([[PTR]], [[UREM]])
     "use"(%arg2, %arg3) : (!llvm.ptr<3>, i32) -> ()
     // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
     ttg.warp_return

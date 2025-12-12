@@ -542,8 +542,8 @@ unsigned getContiguity(Value ptr, Value offset,
   // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto llAttr =
-      triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
+  auto llAttr = triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(),
+                                                     std::move(linearLayout));
   auto order = triton::gpu::getOrder(tensorTy);
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&

@@ -4,6 +4,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
+#include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -60,34 +61,6 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
-  }
-};
-
-class TritonAMDGPUToLLVMTypeConverter : public TritonGPUToLLVMTypeConverter {
-public:
-  TritonAMDGPUToLLVMTypeConverter(MLIRContext *ctx,
-                                  const LowerToLLVMOptions &options,
-                                  const TargetInfoBase &targetInfo,
-                                  const DataLayoutAnalysis *analysis = nullptr)
-      : TritonGPUToLLVMTypeConverter(ctx, options, targetInfo, analysis) {
-    addConversion([&](TensorDescType type) -> std::optional<Type> {
-      return convertTensorDescType(type);
-    });
-  }
-
-  Type convertTensorDescType(triton::TensorDescType type) {
-    auto ctx = type.getContext();
-    auto blockType = type.getBlockType();
-    auto shape = blockType.getShape();
-
-    // Determine the number of dwords based on tensor dimensions
-    // 2D tensors: group0 (4) + group1 (8) = 12 dwords
-    // 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20
-    // dwords
-    int numDwords = (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
-
-    auto types = SmallVector<Type>(numDwords, IntegerType::get(ctx, 32));
-    return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 };
 
@@ -234,8 +207,8 @@ struct ConvertTritonAMDGPUToLLVM
                                               targetInfo, commonBenefit);
     AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
 
-    mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
-                                                          patterns, AMDBenefit);
+    mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(
+        typeConverter, patterns, targetInfo, AMDBenefit);
     mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, AMDBenefit);
     mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
@@ -245,6 +218,9 @@ struct ConvertTritonAMDGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+
+    mlir::triton::AMD::populateWarpIdOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
         mlir::amdgpu::Chipset::parse(this->arch);
