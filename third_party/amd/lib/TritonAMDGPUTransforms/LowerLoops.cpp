@@ -5,6 +5,7 @@
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
@@ -118,12 +119,11 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
     auto operandType = cast<RankedTensorType>(inputValue.getType());
-    if (*opIdx < 2)
-      // use the dot a/b prefered vector size
-      *vecSize = cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding())
-                     .getKWidth();
-    else
-      *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
+    auto ll = ttg::toLinearLayout(operandType);
+    auto order = ttg::toLinearEncoding(operandType).getOrder();
+    SmallVector<int> llOrder(order.begin(), order.end());
+    auto transLl = tt::transposeLinearLayout(ll, llOrder);
+    *vecSize = transLl.getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
