@@ -32,6 +32,10 @@ tensor_desc[x_offsets, y_offset:y_offset + BLOCK_Y] = src
 Where `src.shape` must be `(x_offsets.shape[0], BLOCK_Y)`. In other words,
 scatter writes `src` to the tensor descriptor starting at `y_offset` but to
 separately-indexed rows of size `BLOCK_Y`.
+
+Like `async_copy_global_to_shared` and `async_copy_shared_to_global`,
+`async_gather` and `async_scatter` access shared memory through the async
+proxy, so fences need to be inserted as appropriate.
 """
 
 import sys
