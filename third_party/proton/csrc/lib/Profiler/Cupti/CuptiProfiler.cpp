@@ -74,7 +74,10 @@ uint32_t processActivityKernel(
         // It's triggered by a CUDA op but not triton op
         scopeId = data->addOp(parentId, kernel->name);
       }
-      data->addMetric(scopeId, convertActivityToMetric(activity));
+      auto metric = convertActivityToMetric(activity);
+      if (metric) {
+        data->addMetric(scopeId, metric);
+      }
     }
   } else {
     // Graph kernels
@@ -108,7 +111,10 @@ uint32_t processActivityKernel(
       }
       if (isAPI)
         scopeId = data->addOp(scopeId, kernel->name);
-      data->addMetric(scopeId, convertActivityToMetric(activity));
+      auto metric = convertActivityToMetric(activity);
+      if (metric) {
+        data->addMetric(scopeId, metric);
+      }
     }
   }
   apiExternIds.erase(parentId);
