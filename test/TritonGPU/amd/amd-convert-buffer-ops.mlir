@@ -942,3 +942,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test that we don't generate buffer_load_to_local when the layout order is incompatible.
+// The blocked layout has order [2, 1, 0] but the shared layout has order [2, 0, 1],
+// which causes non-coalesced writes and cannot be lowered to direct-to-LDS.
+#blocked_3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 8, 8], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+#shared_3d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @incompatible_order_no_buffer_load_to_local
+  // Check that we don't generate buffer_load_to_local for incompatible layouts
+  // COMMON-NOT: amdg.buffer_load_to_local
+  // COMMON: ttg.async_copy_global_to_local
+  tt.func @incompatible_order_no_buffer_load_to_local(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                                      %arg1: !ttg.memdesc<1x128x64xf16, #shared_3d, #smem, mutable>) {
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x128x64x!tt.ptr<f16>, #blocked_3d>
+    %1 = ttg.async_copy_global_to_local %0, %arg1 : tensor<1x128x64x!tt.ptr<f16>, #blocked_3d> -> <1x128x64xf16, #shared_3d, #smem, mutable>
+    ttg.async_wait {num = 0 : i32}
+    tt.return
+  }
+}
