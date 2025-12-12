@@ -545,13 +545,12 @@ class PartitionArgs:
     BLOCK_K: ttgl.constexpr
     NUM_BUFFERS: ttgl.constexpr
     TRANSPOSE_B: ttgl.constexpr
-    MAX_PHASE: ttgl.constexpr
     WMMA_LAYOUT: ttgl.constexpr
     c_dtype: ttgl.constexpr  # TODO: Should be able to get this from c_ptr.type.element_ty in consumer_partition
 
     @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, a_buffer, b_buffer, empty_bars, ready_bars, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                 MAX_PHASE, WMMA_LAYOUT, c_dtype):
+                 WMMA_LAYOUT, c_dtype):
         self.a_desc = a_desc
         self.b_desc = b_desc
         self.a_buffer = a_buffer
@@ -561,24 +560,20 @@ class PartitionArgs:
         self.BLOCK_K = ttgl.constexpr(BLOCK_K)
         self.NUM_BUFFERS = ttgl.constexpr(NUM_BUFFERS)
         self.TRANSPOSE_B = ttgl.constexpr(TRANSPOSE_B)
-        self.MAX_PHASE = ttgl.constexpr(MAX_PHASE)
         self.WMMA_LAYOUT = ttgl.constexpr(WMMA_LAYOUT)
         self.c_dtype = ttgl.constexpr(c_dtype)
 
 
 @aggregate
 class PhaseCounter:
-    """Tracks iteration count and computes 3-bit decrementing wrap-around phase."""
+    """Tracks iteration count and computes phase."""
     iteration: ttgl.tensor
     num_barriers: ttgl.constexpr
-    MAX_PHASE: ttgl.constexpr
 
     @gluon.constexpr_function
     def __init__(self, iteration, num_barriers):
         self.iteration = iteration
         self.num_barriers = ttgl.constexpr(num_barriers)
-        # AMD mbarrier phase is 3 bits and decrements in a wrap-around manner.
-        self.MAX_PHASE = ttgl.constexpr(7)
 
     @gluon.jit
     def create(iteration, num_barriers: ttgl.constexpr):
@@ -587,9 +582,8 @@ class PhaseCounter:
 
     @gluon.jit
     def phase(self):
-        """Computes 3-bit decrementing wrap-around phase."""
-        phase_count = self.iteration // self.num_barriers
-        return (-phase_count) & self.MAX_PHASE
+        """Computes phase parity (0 for even, 1 for odd)."""
+        return (self.iteration // self.num_barriers) & 1
 
     @gluon.must_use_result
     @gluon.jit
@@ -697,9 +691,6 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     CONSUMER_WARPS: ttgl.constexpr = NUM_WARPS // 2
     WARP_SIZE: ttgl.constexpr = 32
 
-    # AMD mbarrier phase is 3 bits and decrements in a wrap-around manner
-    MAX_PHASE: ttgl.constexpr = 7
-
     WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [CONSUMER_WARPS // 2, 2], [16, 16, 32])
     shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
     SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
@@ -730,7 +721,7 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
         ttgl.amd.gfx1250.mbarrier.init(ready_bars.index(i), count=PRODUCER_WARPS)
 
     args = PartitionArgs(a_desc, b_desc, a_buffer, b_buffer, empty_bars, ready_bars, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                         MAX_PHASE, WMMA_LAYOUT, c_ptr.type.element_ty)
+                         WMMA_LAYOUT, c_ptr.type.element_ty)
 
     ttgl.warp_specialize([
         (consumer_partition, (args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n)),

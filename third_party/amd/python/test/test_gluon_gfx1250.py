@@ -2110,19 +2110,19 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
     - ws_producer (worker) partition: Waits for empty_bar, writes data, signals via ready_bar (loops NUM_ITERS times)
     - ws_consumer (default) partition: Waits for ready_bar, reads and accumulates data, signals via empty_bar (loops NUM_ITERS times)
 
-    Both partitions track phases that decrement in a wrap around manner (3-bit phase counter). After all iterations, the main kernel
+    Both partitions track phases (1-bit parity phase which toggles between 0 for even and 1 for odd). After all iterations, the main kernel
     (executed by default warps) waits for done_bar, loads the accumulated result, and stores it to global memory.
     The test verifies that the output equals the expected arange pattern.
     """
 
     @gluon.jit
     def ws_consumer(smem, ready_bar, done_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
-                    MAX_PHASE: ttgl.constexpr, layout: ttgl.constexpr):
+                    layout: ttgl.constexpr):
         acc = ttgl.zeros([XBLOCK], ttgl.float16, layout)
         phase = 0
         for _ in ttgl.static_range(NUM_ITERS):
             ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=phase)
-            phase = (phase - 1) & MAX_PHASE
+            phase = phase ^ 1
             val = smem.index(0).load(layout)
             acc += val
             ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
@@ -2132,20 +2132,18 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
 
     @gluon.jit
     def ws_producer(smem, ready_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
-                    MAX_PHASE: ttgl.constexpr, layout: ttgl.constexpr):
+                    layout: ttgl.constexpr):
         val = ttgl.arange(0, XBLOCK, layout).to(ttgl.float16)
         phase = 0
         for _ in ttgl.static_range(NUM_ITERS):
             ttgl.amd.gfx1250.mbarrier.wait(empty_bar, phase=phase)
-            phase = (phase - 1) & MAX_PHASE
+            phase = phase ^ 1
             smem.index(0).store(val)
             ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
 
     @gluon.jit
     def ws_kernel(output, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr):
         WARP_SIZE: ttgl.constexpr = 32
-        # NOTE: mbarrier phase is 3bits and decrements in a wrap-around manner
-        MAX_PHASE: ttgl.constexpr = 7
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
@@ -2161,8 +2159,8 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
         ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
         # NOTE: We have 8 warps in total. worker_num_warps = [4] (num warps for ws_producer partition) and num_warps = 4 (num warps for consumer partition)
         ttgl.warp_specialize([
-            (ws_consumer, (smem, ready_bar, done_bar, empty_bar, XBLOCK, NUM_ITERS, MAX_PHASE, blocked_layout)),
-            (ws_producer, (smem, ready_bar, empty_bar, XBLOCK, NUM_ITERS, MAX_PHASE, blocked_layout)),
+            (ws_consumer, (smem, ready_bar, done_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
+            (ws_producer, (smem, ready_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
         ], [4])
         ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
         val = smem.index(1).load(blocked_layout)
