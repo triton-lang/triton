@@ -97,19 +97,23 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
 // Returns true if we can perform coalesced write from the source encoding to
 // the destination encoding for a given vec size.
-bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
                                       unsigned threadsPerWarp,
                                       unsigned vecSize);
 
-// Returns true if the swizzling pattern does only swizzle the shared memory
-// offsets of a warp and does not exchange destination elements across warps
-bool doesSwizzleInsideWarp(RewriterBase &rewriter,
-                           const LinearLayout &srcToSharedLayout,
-                           unsigned threadsPerWarp);
-
-// Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
-bool isUsedByDotScaledOp(Operation *op);
+// Returns true if we load directly from global |srcTy| to shared memory
+// |dstEnc| for the given target.
+//
+// This function expects caller to pass in as |vectorSize| the vector size
+// reading from global memory, after factoring in axis information and alignment
+// hints. It will be updated to factor in shared memory |dstEnc| constraints.
+//
+// This is used by both the LLVM lowering and the conversion pattern to ensure
+// consistency.
+bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
+                        RankedTensorType srcTy, Attribute dstEnc,
+                        unsigned &vectorSize);
 
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region

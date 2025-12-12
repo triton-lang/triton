@@ -2,12 +2,14 @@
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
+#include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-pipeline-lower-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -273,13 +275,12 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   using tt::AMD::ISAFamily;
   if (sharedEnc && llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                                       targetInfo.getISAFamily())) {
-    // Compute the final vecSize we can use for the combination of
-    // sourceEncoding and sharedEncoding. We can only use AsyncCopy if the
-    // target supports the requested or a smaller vecSize because we cannot
-    // stride when loading directly to lds on GFX9
+    // Compute the final vecSize we can use for source to destination type and
+    // encoding. We can only use async copy if the target supports the requested
+    // or a smaller vecSize because we cannot stride when loading directly to
+    // lds on GFX9.
     auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
     auto regLayout = triton::gpu::toLinearLayout(srcTy);
-    // It's the allocation so we trim the multibuffer dimension
     auto srcShape = srcTy.getShape();
     triton::LinearLayout sharedLayout;
     auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
@@ -290,13 +291,19 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     }
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
-    unsigned elemBitWidth = tt::getPointeeBitWidth(srcTy);
     unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-    if (paddedEnc)
-      vecSize = std::min(vecSize, paddedEnc.getMinInterval());
-
-    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+    LDBG("init global to shared vector size: " << vecSize);
+    int elemBitWidth = tt::getPointeeBitWidth(srcTy);
+    vecSize = fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo);
+    LDBG("vector size after fitting arch direct to LDS: " << vecSize);
+    if (vecSize == 0) {
       return false;
+    }
+
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, sharedEnc, vecSize)) {
+      LDBG("cannot use direct to LDS due to arch constraints");
+      return false;
+    }
   }
 
   // Checks whether the global pointer's contiguity and mask alignment allows
