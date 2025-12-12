@@ -633,3 +633,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // Make sure there is no attribute attached to the function.
+  // CHECK-LABEL: func_attr({{.*}}) {
+  // CHECK-NEXT: llvm.return
+  tt.func @func_attr() {
+    tt.return
+  }
+}
