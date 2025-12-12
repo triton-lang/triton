@@ -344,6 +344,7 @@ find_package(Threads REQUIRED)
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
+add_subdirectory(Plugins)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
