@@ -280,7 +280,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %c0_i32 = arith.constant 0 : i32
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 2 {dependentPartitionIds = array<i32: 0, 1>}
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 2
     // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
     // CHECK: ttng.init_barrier [[FULLSLICE]], 1 {dependentPartitionIds = array<i32: 2>}
@@ -320,7 +320,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %c0_i32 = arith.constant 0 : i32
     // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
-    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 1 {dependentPartitionIds = array<i32: 0>}
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 1
     // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
     // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
     // CHECK: ttng.init_barrier [[FULLSLICE]], 1 {dependentPartitionIds = array<i32: 1>}
