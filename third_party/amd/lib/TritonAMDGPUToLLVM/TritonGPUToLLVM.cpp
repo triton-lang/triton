@@ -61,6 +61,10 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
+    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
+        [](triton::gpu::GlobalScratchAllocOp op) {
+          return op.getBackend() != "default";
+        });
   }
 };
 

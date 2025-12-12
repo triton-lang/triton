@@ -274,9 +274,9 @@ public:
            llvm::Twine(allocProfileScratchSize) + " bytes.");
     }
 
-    Value profileMem = gpu::GlobalScratchAllocOp::create(
+    Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
         builder, loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
+        allocProfileScratchSize, profileScratchAlignment, "proton");
     gpu::InitializeOp::create(builder, loc, profileMem);
 
     Value segment;
