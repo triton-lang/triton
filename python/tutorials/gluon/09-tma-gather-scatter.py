@@ -46,6 +46,15 @@ from triton._C.libtriton import ir, gluon_ir
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (tma, mbarrier, fence_async_shared)
 
+
+def is_blackwell():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
+
+
+if __name__ == "__main__" and not is_blackwell():
+    raise RuntimeError("This tutorial requires a Blackwell NVIDIA GPU")
+
 # Re-use utilities from the previous tutorials.
 t7 = importlib.import_module("07-persistence")
 
@@ -280,6 +289,7 @@ def async_gather(input, x_offsets, y_offset, BLOCK_X, BLOCK_Y):
 @pytest.mark.parametrize("BLOCK_X", [8, 128])
 @pytest.mark.parametrize("BLOCK_Y", [16, 128])
 @pytest.mark.parametrize("y_offset", [-16, 0, 48, 1000])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_async_gather(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX=1024, Y_MAX=1024):
     torch.manual_seed(0)
 
@@ -394,6 +404,7 @@ def async_scatter(input, x_offsets, y_offset, src, BLOCK_X, BLOCK_Y):
 @pytest.mark.parametrize("BLOCK_X", [8, 128])
 @pytest.mark.parametrize("BLOCK_Y", [16, 128])
 @pytest.mark.parametrize("y_offset", [0, 48, 1000])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_async_scatter(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX=1024, Y_MAX=1024):
     torch.manual_seed(0)
 
@@ -426,7 +437,7 @@ def test_async_scatter(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX=1024, Y_MAX=1024
 # that has a fused gather and fused scatter along the M dimension:
 # `out[out_scatter_indx, :] = X[X_gather_indx, :] @ W`.
 #
-# Recall in `06-tcgen05` that we demonstrated how to write matmul kernels
+# Recall in `06-tcgen05-mma` that we demonstrated how to write matmul kernels
 # with `tcgen05_mma`. This example performs pipelining of the TMA loads, including `async_gather`,
 # with `tcgen05_mma` and pipelining of the `async_scatter` with the persistent outer loop.
 #
@@ -554,6 +565,17 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
     tma.store_wait(pendings=0)
 
 
+# %%
+# We will pick reasonable defaults for the block sizes and number of load buffers.
+# Tuning and optimizing the performance of this kernel is left as an exercise for the reader,
+# as the primary objective of this tutorial is to demonstrate the use of async gather and scatter.
+#
+# One extra note: it is of course possible to use async gather and async scatter with
+# warp-specialized kernels. Just keep in mind that because the row offsets is a tensor, you may want
+# to give the load and epilogue partitions more than 1 warp to increase instruction issue throughput,
+# particularly for the loads as they are on the critical path.
+
+
 def matmul_fused_gather_scatter(X, X_gather_indx, W, out_scatter_indx, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64,
                                 GROUP_SIZE_M=8, num_buffers=3):
     M = X.shape[0]
@@ -584,6 +606,7 @@ def matmul_fused_gather_scatter(X, X_gather_indx, W, out_scatter_indx, BLOCK_M=1
 @pytest.mark.parametrize("M, N, K", [(1024, 1024, 2048), (4096, 4096, 4096)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N", [(128, 128), (128, 64)])
 @pytest.mark.parametrize("BLOCK_K, num_buffers", [(128, 2), (64, 3)])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_matmul_fused_gather_scatter(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers):
     torch.manual_seed(0)
 
