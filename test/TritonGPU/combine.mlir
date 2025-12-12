@@ -2270,6 +2270,39 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+// CHECK-DAG: [[$target_layout:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+// CHECK-DAG: [[$source_layout:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: rematerialize_ptr_type_through_loop
+  tt.func public @rematerialize_ptr_type_through_loop(%arg0: !tt.ptr<f16>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked1>
+    %cst_1 = arith.constant dense<64> : tensor<128x64xi32, #blocked1>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked1>
+    // CHECK: scf.for {{.*}} tensor<128x64x!tt.ptr<f16>, [[$target_layout]]
+    %1:2 = scf.for %arg1 = %c0_i32 to %c128_i32 step %c1_i32 iter_args(%arg2 = %0, %arg3 = %cst_0) -> (tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xf16, #blocked1>)  : i32 {
+      %4 = tt.addptr %arg2, %cst_1 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
+      %7 = arith.addf %arg3, %cst_0 : tensor<128x64xf16, #blocked1>
+      scf.yield %4, %7 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xf16, #blocked1>
+    }
+    // Check that we only have the ConvertLayout for the accumulator left in the epilogue
+    // CHECK: scf.yield
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: ttg.convert_layout {{.*}} : tensor<128x64xf16, [[$source_layout]]> -> tensor<128x64xf16, [[$target_layout]]>
+    // CHECK-NOT: ttg.convert_layout
+    %2 = ttg.convert_layout %1#0 : tensor<128x64x!tt.ptr<f16>, #blocked1> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %3 = ttg.convert_layout %1#1 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #blocked>
+    tt.store %2, %3 : tensor<128x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 

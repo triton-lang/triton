@@ -857,7 +857,7 @@ static bool isFreeConvert(Operation *op) {
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation,
+    std::function<TraversalAction(Operation *)> propagationAction,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
@@ -888,9 +888,7 @@ LogicalResult getConvertBackwardSlice(
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op/while op results for now.
-    // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>() ||
-        currentValue.getDefiningOp<scf::WhileOp>())
+    if (currentValue.getDefiningOp<scf::WhileOp>())
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
@@ -903,9 +901,29 @@ LogicalResult getConvertBackwardSlice(
       currentValue = existing;
     }
 
+    if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
+      if (propagationAction) {
+        auto action = propagationAction(forOp);
+        if (action == TraversalAction::AbortWithError)
+          return failure();
+        else if (action == TraversalAction::Stop)
+          continue;
+      }
+
+      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
+      enqueue(forOp.getBody()->getTerminator()->getOpOperand(argIdx), encoding);
+
+      continue;
+    }
+
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
-      if (stopPropagation && stopPropagation(ifOp))
-        continue;
+      if (propagationAction) {
+        auto action = propagationAction(ifOp);
+        if (action == TraversalAction::AbortWithError)
+          return failure();
+        else if (action == TraversalAction::Stop)
+          continue;
+      }
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
@@ -930,8 +948,13 @@ LogicalResult getConvertBackwardSlice(
       }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
-      if (stopPropagation && stopPropagation(definingOp))
-        continue;
+      if (propagationAction) {
+        auto action = propagationAction(definingOp);
+        if (action == TraversalAction::AbortWithError)
+          return failure();
+        else if (action == TraversalAction::Stop)
+          continue;
+      }
       if (isa<triton::CatOp>(definingOp))
         return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
