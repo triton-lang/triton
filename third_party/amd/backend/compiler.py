@@ -394,7 +394,7 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        if "gfx1250" not in options.arch:
+        if options.arch != "gfx1250":
             amd.set_all_fn_arg_inreg(fns[0])
 
         if knobs.compilation.enable_asan:
