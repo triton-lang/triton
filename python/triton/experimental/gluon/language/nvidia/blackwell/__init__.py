@@ -237,7 +237,7 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
+    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
 
@@ -269,7 +269,7 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic) -> None:
+    def slice(self, start, length, _semantic: GluonSemantic = None) -> None:
         """
         Create a slice of the tensor memory descriptor along the last dimension.
 

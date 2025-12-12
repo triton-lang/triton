@@ -304,4 +304,22 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   return sessions[sessionId]->getContextDepth();
 }
 
+std::string SessionManager::getData(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot get data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
+  }
+  return treeData->toJsonString();
+}
+
 } // namespace proton

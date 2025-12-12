@@ -58,11 +58,14 @@ def compute_swiglu(gelu, linear, scale, alpha, limit):
     linear = linear.to(tl.float32) * scale
     if limit is not None:
         linear = clip(linear, limit, clip_lower=True)
+    s = gelu / (1 + tl.exp(-alpha * gelu))
 
+    # TODO: Instead of using tl.exp(-alpha * gelu), there is potential way to reduce instructions:
+    # But we need to further understand its impact on model numerics.
     # exp(x) becomes exp2(log2(e) * x) in ptx. By expanding it early, we can factor
     # (-alpha * log2_e) into a single scalar factor.
-    log2_e: tl.constexpr = 1.4426950408889634
-    s = gelu / (1 + exp2_ftz((-alpha * log2_e) * gelu))
+    # log2_e: tl.constexpr = 1.4426950408889634
+    # s = gelu / (1 + exp2_ftz((-alpha * log2_e) * gelu))
     return tl.fma(s, linear, s)  # (s * (linear + 1))
 
 

@@ -38,13 +38,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
-  funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Start the analysis from the entry blocks of any nested isolated from
-    // above regions.
-    if (block->isEntryBlock() &&
-        !isa<RegionBranchOpInterface>(block->getParentOp()))
-      blockList.emplace_back(block, Block::iterator());
-  });
+  // Start the analysis from the entry block of the function.
+  blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
 
   // A fixed point algorithm
   while (!blockList.empty()) {
@@ -56,12 +51,15 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     Block::iterator startIt =
         block.second.isValid() ? std::next(block.second) : block.first->begin();
     for (Operation &op : llvm::make_range(startIt, block.first->end())) {
+      // Update inputBlockInfo based on the current operation. Note that we do
+      // this before we process terminators and branch-like ops, because some of
+      // them (e.g. WarpSpecializePartitionsOp) may have synchronizing effects.
+      update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
         visitTerminator(&op, successors);
         break;
       }
-      update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
     }
     // Get the reference because we want to update if it changed
     if (outputBlockInfoMap.count(block) &&
@@ -165,7 +163,8 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op)) {
+  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
+          triton::gpu::WarpSpecializePartitionsOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;

@@ -416,9 +416,14 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
   unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  // Checked in the verifier
+  assert(mmaSizeN <= 256 &&
+         "The maximum size of an MMA instruction is 128x256");
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
+  assert((!twoCTAs || numRepN == 1) &&
+         "grep for [Note: numRepN > 1 and two_ctas]");
   int numRepK = ceil<unsigned>(K, mmaSizeK);
 
   SmallVector<int64_t> shapeA = op.shapeA;
@@ -439,13 +444,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto isFp4b = op.numBitsPerElementB == 4;
   // [Instr shape twoCTAs]
-  // This division by 2 in 2CTA mode a bit subtle:
-  // The issue here is that in 2CTA you multiply in one instruction a tensor
-  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
-  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
-  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
-  // Something similar happens when we multiply by 2 the mmaSizeM when creating
-  // It's a massive code smell tho
+  // To compute a output tile of [mmaSizeM, mmaSizeN] in 2CTA mode, we load
+  // an A of size 2 * mmaSizeM x K and a B of size K x mmaSizeN.
+  // Now, since B is split amongs 2 CTAs along N, we need to divide by 2.
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
       loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
       1, 5, isFp4b);
@@ -486,7 +487,6 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  auto dLayout = cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
 
@@ -507,8 +507,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
       DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
-    return dLoader.tmemLoad(m * dLayout.getBlockM(), n * dLayout.getBlockN(),
-                            rewriter, loc);
+    return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,
+                            loc);
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,

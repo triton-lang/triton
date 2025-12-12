@@ -300,7 +300,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned paddingInterval = 1024 / elemByteWidth;
   unsigned paddingInElems = paddingBytes / elemByteWidth;
   return ttg::PaddedSharedEncodingAttr::get(
-      ctx, {{paddingInterval, paddingInElems}}, linearComponent);
+      ctx, {{paddingInterval, paddingInElems}}, std::move(linearComponent));
 }
 
 ttg::PaddedSharedEncodingAttr
