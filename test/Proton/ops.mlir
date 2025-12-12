@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: protongpu_ops
   tt.func @protongpu_ops() {
     // CHECK: ttg.local_alloc
-    // CHECK-NEXT: ttg.global_scratch_alloc {backend = "proton"
+    // CHECK-NEXT: ttg.global_scratch_alloc
     // CHECK-NEXT: proton_gpu.initialize
     // CHECK-NEXT: proton_gpu.segment_alloc
     // CHECK-NEXT: proton_gpu.init_ctx

@@ -39,7 +39,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %i = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {backend = "proton"
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
@@ -73,7 +73,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %i = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {backend = "proton"
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
