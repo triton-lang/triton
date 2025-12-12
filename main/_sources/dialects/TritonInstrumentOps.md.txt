@@ -34,17 +34,18 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `condition` | 1-bit signless integer or tensor of 1-bit signless integer values |
 
 
-### `tti.experimental_buffer_pointers` (triton::instrument::ExperimentalBufferPointersOp)
+### `tti.experimental_buffer_descriptors` (triton::instrument::ExperimentalBufferDescriptorsOp)
 
-_Definte an array of pointers to shared memory buffers_
+_Define an array of buffer descriptors_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_buffer_pointers` $offsets `,` $memType attr-dict `:` type($result)
+operation ::= `tti.experimental_buffer_descriptors` $offsets `,` $lengths `,` $memType attr-dict `:` type($result)
 ```
 
-Create a tensor of pointers to shared memory buffers.
+Create a tensor of buffer descriptors packing 32-bit pointer offsets and
+32-bit lengths into 64-bit elements.
 
 Traits: `AlwaysSpeculatableImplTrait`
 
@@ -57,6 +58,7 @@ Effects: `MemoryEffects::Effect{}`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>offsets</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>lengths</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 <tr><td><code>memType</code></td><td>::mlir::triton::instrument::MemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
 </table>
 
@@ -115,17 +117,17 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
-### `tti.experimental_memdesc_to_i64` (triton::instrument::ExperimentalMemDescToI64Op)
+### `tti.experimental_memdesc_to_i32` (triton::instrument::ExperimentalMemDescToI32Op)
 
-_Convert a memdesc into its base pointer as i64_
+_Convert a memdesc into its base pointer as i32_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_memdesc_to_i64` $memdesc attr-dict `:` type($memdesc)
+operation ::= `tti.experimental_memdesc_to_i32` $memdesc attr-dict `:` type($memdesc)
 ```
 
-Extract the base pointer from the given memdesc and return it as a 64-bit
+Extract the base pointer from the given memdesc and return it as a 32-bit
 integer. This can be used to compare the memdesc against tensors of barrier
 pointers maintained by the concurrency sanitizer.
 
@@ -145,5 +147,5 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | 64-bit signless integer |
+| `result` | 32-bit signless integer |
 

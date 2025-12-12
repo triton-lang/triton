@@ -77,7 +77,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#operands">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#tti-experimental-buffer-pointers-triton-instrument-experimentalbufferpointersop"><code class="docutils literal notranslate"><span class="pre">tti.experimental_buffer_pointers</span></code> (triton::instrument::ExperimentalBufferPointersOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#tti-experimental-buffer-descriptors-triton-instrument-experimentalbufferdescriptorsop"><code class="docutils literal notranslate"><span class="pre">tti.experimental_buffer_descriptors</span></code> (triton::instrument::ExperimentalBufferDescriptorsOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id1">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#results">Results:</a></li>
 </ul>
@@ -90,7 +90,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#id3">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#tti-experimental-memdesc-to-i64-triton-instrument-experimentalmemdesctoi64op"><code class="docutils literal notranslate"><span class="pre">tti.experimental_memdesc_to_i64</span></code> (triton::instrument::ExperimentalMemDescToI64Op)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#tti-experimental-memdesc-to-i32-triton-instrument-experimentalmemdesctoi32op"><code class="docutils literal notranslate"><span class="pre">tti.experimental_memdesc_to_i32</span></code> (triton::instrument::ExperimentalMemDescToI32Op)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id4">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id5">Results:</a></li>
 </ul>
@@ -180,14 +180,15 @@ values in the condition must be true.</p>
 </table>
 </section>
 </section>
-<section id="tti-experimental-buffer-pointers-triton-instrument-experimentalbufferpointersop">
-<h2><code class="docutils literal notranslate"><span class="pre">tti.experimental_buffer_pointers</span></code> (triton::instrument::ExperimentalBufferPointersOp)<a class="headerlink" href="#tti-experimental-buffer-pointers-triton-instrument-experimentalbufferpointersop" title="Link to this heading">¶</a></h2>
-<p><em>Definte an array of pointers to shared memory buffers</em></p>
+<section id="tti-experimental-buffer-descriptors-triton-instrument-experimentalbufferdescriptorsop">
+<h2><code class="docutils literal notranslate"><span class="pre">tti.experimental_buffer_descriptors</span></code> (triton::instrument::ExperimentalBufferDescriptorsOp)<a class="headerlink" href="#tti-experimental-buffer-descriptors-triton-instrument-experimentalbufferdescriptorsop" title="Link to this heading">¶</a></h2>
+<p><em>Define an array of buffer descriptors</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_buffer_pointers` $offsets `,` $memType attr-dict `:` type($result)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_buffer_descriptors` $offsets `,` $lengths `,` $memType attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Create a tensor of pointers to shared memory buffers.</p>
+<p>Create a tensor of buffer descriptors packing 32-bit pointer offsets and
+32-bit lengths into 64-bit elements.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -196,6 +197,7 @@ values in the condition must be true.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>offsets</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>lengths</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 <tr><td><code>memType</code></td><td>::mlir::triton::instrument::MemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
 </table>
 </section>
@@ -273,14 +275,14 @@ values in the condition must be true.</p>
 </table>
 </section>
 </section>
-<section id="tti-experimental-memdesc-to-i64-triton-instrument-experimentalmemdesctoi64op">
-<h2><code class="docutils literal notranslate"><span class="pre">tti.experimental_memdesc_to_i64</span></code> (triton::instrument::ExperimentalMemDescToI64Op)<a class="headerlink" href="#tti-experimental-memdesc-to-i64-triton-instrument-experimentalmemdesctoi64op" title="Link to this heading">¶</a></h2>
-<p><em>Convert a memdesc into its base pointer as i64</em></p>
+<section id="tti-experimental-memdesc-to-i32-triton-instrument-experimentalmemdesctoi32op">
+<h2><code class="docutils literal notranslate"><span class="pre">tti.experimental_memdesc_to_i32</span></code> (triton::instrument::ExperimentalMemDescToI32Op)<a class="headerlink" href="#tti-experimental-memdesc-to-i32-triton-instrument-experimentalmemdesctoi32op" title="Link to this heading">¶</a></h2>
+<p><em>Convert a memdesc into its base pointer as i32</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_memdesc_to_i64` $memdesc attr-dict `:` type($memdesc)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_memdesc_to_i32` $memdesc attr-dict `:` type($memdesc)
 </pre></div>
 </div>
-<p>Extract the base pointer from the given memdesc and return it as a 64-bit
+<p>Extract the base pointer from the given memdesc and return it as a 32-bit
 integer. This can be used to compare the memdesc against tensors of barrier
 pointers maintained by the concurrency sanitizer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
@@ -311,7 +313,7 @@ pointers maintained by the concurrency sanitizer.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>64-bit signless integer</p></td>
+<td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
