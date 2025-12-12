@@ -10,7 +10,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: #[[BUFS_BARS_L:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
   // CHECK: @single_local_alloc
   tt.func public @single_local_alloc() {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64, #[[BUFS_L]]>
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64, #[[BUFS_L]]>
     // CHECK: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1xi64, #[[BUFS_L]]>
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1x64xi64, #[[BUFS_THREADS_L]]>
@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @two_local_alloc
   tt.func public @two_local_alloc() {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0, 4096], shared_mem : tensor<2xi64,
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0, 4096], [{{.*}}], shared_mem : tensor<2xi64,
     // CHECK: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<2xi64,
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
     // CHECK: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<2x64xi64,
@@ -64,7 +64,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @three_local_alloc
   tt.func public @three_local_alloc() {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0, 4096, 8192, 0], shared_mem : tensor<4xi64,
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0, 4096, 8192, 0], [{{.*}}], shared_mem : tensor<4xi64,
     // CHECK: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<4xi64,
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 32 : i32} : !tt.ptr<i64>
     // CHECK: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<4x64xi64,
@@ -94,7 +94,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @three_sub_bufs
   tt.func public @three_sub_bufs() {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0, 4096, 8192, 0], shared_mem : tensor<4xi64,
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0, 4096, 8192, 0], [{{.*}}], shared_mem : tensor<4xi64,
     // CHECK: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<4xi64,
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 32 : i32} : !tt.ptr<i64>
     // CHECK: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<4x64xi64,
@@ -159,8 +159,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: #[[BUFS_L:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
   // CHECK: @tmem_alloc
   tt.func public @tmem_alloc() {
-    // CHECK-DAG: %[[TMEM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tensor_mem : tensor<1xi64, #[[BUFS_L]]>
-    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [4096], shared_mem : tensor<1xi64, #[[BUFS_L]]>
+    // CHECK-DAG: %[[TMEM_BUFS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], tensor_mem : tensor<1xi64, #[[BUFS_L]]>
+    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [4096], [{{.*}}], shared_mem : tensor<1xi64, #[[BUFS_L]]>
     %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -177,12 +177,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @async_tma_copy_global_to_local
   tt.func public @async_tma_copy_global_to_local(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64
     // CHECK-DAG: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1xi64,
     // CHECK-DAG: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1x64xi64,
     // CHECK-DAG: %[[READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 512 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64
     // CHECK-DAG: %[[WRITE_TRACKING:.*]] = arith.constant dense<0> : tensor<1x1xi8,
     // CHECK-DAG: %[[WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
     // CHECK-DAG: %[[READ_TRACKING:.*]] = arith.constant dense<0> : tensor<1x1xi64,
@@ -328,12 +328,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @wait_barrier
   tt.func public @wait_barrier(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64, #blocked>
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64, #blocked>
     // CHECK-DAG: %[[WRITE_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1xi64,
     // CHECK-DAG: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[READ_VISIBILITY:.*]] = arith.constant dense<0> : tensor<1x64xi64,
     // CHECK-DAG: %[[READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 512 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64, #blocked>
+    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64, #blocked>
     // CHECK-DAG: %[[WRITE_TRACKING:.*]] = arith.constant dense<0> : tensor<1x1xi8,
     // CHECK-DAG: %[[WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
     // CHECK-DAG: %[[READ_TRACKING:.*]] = arith.constant dense<0> : tensor<1x1xi64,
@@ -395,13 +395,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen5_mma
   tt.func public @tcgen5_mma(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 32768], shared_mem : tensor<2xi64
+    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_descriptors [0, 32768], [{{.*}}], shared_mem : tensor<2xi64
     // CHECK-DAG: %[[SM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[SM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 1024 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0], tensor_mem : tensor<1xi64
+    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], tensor_mem : tensor<1xi64
     // CHECK-DAG: %[[TM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[TM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 512 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64
 
     // CHECK-DAG: %[[SM_WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
     // CHECK-DAG: %[[SM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
@@ -409,43 +409,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[TM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
 
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i32 %[[B:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B]] :
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i32 %[[B]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR:.*]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
     // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
@@ -470,13 +470,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen5_mma_lhs_in_tmem
   tt.func public @tcgen5_mma_lhs_in_tmem(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [32768], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_descriptors [32768], [{{.*}}], shared_mem : tensor<1xi64
     // CHECK-DAG: %[[SM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[SM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 512 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 128], tensor_mem : tensor<2xi64
+    // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_descriptors [0, 128], [{{.*}}], tensor_mem : tensor<2xi64
     // CHECK-DAG: %[[TM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[TM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 1024 : i32} : !tt.ptr<i64>
-    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64
 
     // CHECK-DAG: %[[SM_WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
     // CHECK-DAG: %[[SM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
@@ -484,43 +484,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[TM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
 
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i32 %[[B:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B]] :
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i32 %[[B]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC:.*]] :
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
-    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i32 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], {{[^,]+}}, %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR:.*]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
     // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive
     // CHECK: tt.call @__triton_consan_update_barrier_state
@@ -577,18 +577,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @async_copy_global_to_local
   tt.func public @async_copy_global_to_local(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
-    // CHECK: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64
+    // CHECK: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64
     // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1x16xi8
     // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 16 : i32} : !tt.ptr<i8>
 
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A:.*]] :
     // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1{{.*}}(%[[A_I64]]
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
     // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
 
@@ -608,7 +608,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @async_copy_global_to_local_with_barriers
   tt.func public @async_copy_global_to_local_with_barriers(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
-    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64
+    // CHECK-DAG: %[[BUFFERS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64
     // CHECK-DAG: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 512 : i32} : !tt.ptr<i64>
     // CHECK-DAG: %[[WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
@@ -618,15 +618,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
     // CHECK: tt.call @__triton_consan_init_barrier_state
 
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A:.*]] :
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[A_I64]]
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[A_I64]]
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i32 %[[A]] :
     // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -700,7 +700,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @warp_group_dot
   tt.func public @warp_group_dot(%acc: tensor<128x128xf16, #mma>) {
-    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 32768], shared_mem : tensor<2xi64
+    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_descriptors [0, 32768], [{{.*}}], shared_mem : tensor<2xi64
     // CHECK-DAG: %[[SM_WGMMA_READS:.*]] = arith.constant dense<0> : tensor<2x16xi8
     // CHECK-DAG: %[[SM_WGMMA_WRITES_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 32 : i32} : !tt.ptr<i8>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
@@ -729,7 +729,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @warp_group_dot_sync
   tt.func public @warp_group_dot_sync(%acc: tensor<128x128xf16, #mma>) {
-    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_pointers [0, 32768], shared_mem : tensor<2xi64
+    // CHECK-DAG: %[[SM_BUFS:.*]] = tti.experimental_buffer_descriptors [0, 32768], [{{.*}}], shared_mem : tensor<2xi64
     // CHECK-DAG: %[[SM_WGMMA_READS:.*]] = arith.constant dense<0> : tensor<2x16xi8
     // CHECK-DAG: %[[SM_WGMMA_WRITES_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 32 : i32} : !tt.ptr<i8>
 
@@ -775,9 +775,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @local_alloc_with_src
   tt.func public @local_alloc_with_src(%acc: tensor<128x128xf16, #mma>) {
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
-    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BUF:.*]] :
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF_I64]]
-    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BUF:.*]] :
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF_I64]]
     %buf = ttg.local_alloc %acc {allocation.offset = 0 : i32} : (tensor<128x128xf16, #mma>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -798,9 +798,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tmem_alloc_with_src
   tt.func public @tmem_alloc_with_src(%acc: tensor<128x128xf16, #blocked>) {
     // CHECK: %[[BUF:.*]] = ttng.tmem_alloc
-    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BUF:.*]] :
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF_I64]]
-    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BUF:.*]] :
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF_I64]]
     %buf = ttng.tmem_alloc %acc { tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32 } : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -818,7 +818,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @local_load_barriers
   tt.func public @local_load_barriers() {
-    // CHECK: tti.experimental_buffer_pointers
+    // CHECK: tti.experimental_buffer_descriptors
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -840,7 +840,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @local_load_barriers
   tt.func public @local_load_barriers_cp_async(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
-    // CHECK: tti.experimental_buffer_pointers
+    // CHECK: tti.experimental_buffer_descriptors
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %shmem = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -870,7 +870,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @local_store_barriers_cp_async_wgmma
   tt.func public @local_store_barriers_cp_async_wgmma(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>, %acc: tensor<128x128xf16, #mma>) {
-    // CHECK: tti.experimental_buffer_pointers
+    // CHECK: tti.experimental_buffer_descriptors
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %shmem = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -904,8 +904,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // CHECK-LABEL: @ws_allocation
   tt.func public @ws_allocation(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64,
-    // CHECK-DAG: tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64
+    // CHECK-DAG: tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64,
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -927,8 +927,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     }
     partition0(%arg1: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
       // CHECK: partition0
-      // CHECK-DAG: tti.experimental_buffer_pointers [65536], shared_mem : tensor<1xi64,
-      // CHECK-DAG: tti.experimental_buffer_pointers [0], shared_mem : tensor<1xi64
+      // CHECK-DAG: tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64,
+      // CHECK-DAG: tti.experimental_buffer_descriptors [0], [{{.*}}], shared_mem : tensor<1xi64
       // CHECK: tti.experimental_lock_acquire
       // CHECK: tt.call @__triton_consan_verify_write_visibility
       // CHECK: tt.call @__triton_consan_set_read_visibility
@@ -949,8 +949,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // CHECK-LABEL: @ws_buf_ptrs_default
   tt.func public @ws_buf_ptrs_default(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: tti.experimental_buffer_pointers [0, 32768, 65536, 0], shared_mem
-    // CHECK-DAG: tti.experimental_buffer_pointers [65536], shared_mem
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 32768, 65536, 0], [{{.*}}], shared_mem
+    // CHECK-DAG: tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -985,8 +985,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // CHECK-LABEL: @ws_buf_ptrs_partition0
   tt.func public @ws_buf_ptrs_partition0(%arg0: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
-    // CHECK-DAG: tti.experimental_buffer_pointers [0, 32768, 65536, 0], shared_mem
-    // CHECK-DAG: tti.experimental_buffer_pointers [65536], shared_mem
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 32768, 65536, 0], [{{.*}}], shared_mem
+    // CHECK-DAG: tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -1048,6 +1048,152 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttng.wait_barrier %arg2, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       ttg.warp_return
     } : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @alias_matrix_shared
+  tt.func public @alias_matrix_shared() {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 16], [128, 128], shared_mem : tensor<2xi64
+    // CHECK-DAG: arith.constant dense<true> : tensor<2x2xi1
+    %buf0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %buf1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_load %buf0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    ttg.local_load %buf1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @alias_matrix_shared_indexed
+  tt.func public @alias_matrix_shared_indexed() {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 128], [128, 128], shared_mem : tensor<2xi64
+    // CHECK-DAG: arith.constant dense<{{\[\[true, false\], \[false, true\]\]}}> : tensor<2x2xi1
+    %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x32xf32, #shared, #smem, mutable>
+    %buf0 = ttg.memdesc_index %smem[%c0_i32] : !ttg.memdesc<2x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %buf1 = ttg.memdesc_index %smem[%c1_i32] : !ttg.memdesc<2x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_load %buf0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    ttg.local_load %buf1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @alias_matrix_shared_subslice
+  tt.func public @alias_matrix_shared_subslice() {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 128], [256, 128], shared_mem : tensor<2xi64
+    // CHECK-DAG: arith.constant dense<true> : tensor<2x2xi1
+    %buf0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64xf32, #shared, #smem, mutable>
+    %buf1 = ttg.memdesc_subslice %buf0 [32] : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_load %buf0 : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> tensor<64xf32>
+    ttg.local_load %buf1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+#tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @alias_matrix_tensor
+  tt.func public @alias_matrix_tensor() {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 32, 64, 0], [64, 32, 64, 0], tensor_mem : tensor<4xi64
+    // CHECK-DAG: arith.constant dense<{{\[\[true, true, false, false\], \[true, true, false, false\], \[false, false, true, false\], \[false, false, false, false\]\]}}> : tensor<4x4xi1
+    %buf0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %buf1 = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %buf3 = ttng.tmem_subslice %buf0 {N = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem2, #ttng.tensor_memory, mutable>
+    ttng.tmem_load %buf0 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
+    ttng.tmem_load %buf1 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
+    ttng.tmem_load %buf3 : !ttg.memdesc<64x32xf32, #tmem2, #ttng.tensor_memory, mutable> -> tensor<64x32xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @alias_matrix_mixed
+  tt.func public @alias_matrix_mixed() {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 16], [128, 128], shared_mem : tensor<2xi64
+    // CHECK-DAG: arith.constant dense<true> : tensor<2x2xi1
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0], [64], tensor_mem : tensor<1xi64
+    // CHECK-DAG: arith.constant dense<true> : tensor<1x1xi1
+    %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %smem1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %tmem0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_load %tmem0 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
+    ttg.local_load %smem0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    ttg.local_load %smem1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @ws_alias_matrix
+  tt.func public @ws_alias_matrix() {
+    // We expect the alias matrix constant to appear once for the default region
+    // and once for partition0 when we lower warp_specialize.
+    // CHECK-DAG: arith.constant dense<true> : tensor<2x2xi1
+    %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %smem1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+
+    ttg.warp_specialize(%smem0, %smem1, %bar) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 0 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 0>}
+    default {
+      %c0 = arith.constant 0 : i32
+      ttg.local_load %smem0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+      ttg.local_load %smem1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<32xf32, #shared, #smem, mutable>, %arg1: !ttg.memdesc<32xf32, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared, #smem, mutable>) num_warps(1) {
+      // CHECK: arith.constant dense<true> : tensor<2x2xi1
+      %c0 = arith.constant 0 : i32
+      ttg.local_load %arg0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+      ttg.local_load %arg1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+      ttg.warp_return
+    } : (!ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>) -> ()
     tt.return
   }
 }

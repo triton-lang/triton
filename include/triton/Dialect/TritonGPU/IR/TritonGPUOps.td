@@ -248,6 +248,7 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
 
   let results = (outs TTG_MemDescType:$result);
 
+  let hasFolder = 1;
   let hasVerifier = 1;
 }
 
@@ -527,10 +528,12 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let hasCanonicalizeMethod = 1;
 }
 
-def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
-  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
-  Terminator, HasParent<"WarpSpecializeOp">
-]> {
+def TTG_WarpSpecializePartitionsOp
+    : TTG_Op<"warp_specialize.partitions",
+             [IsolatedFromAbove, RecursiveMemoryEffects,
+              RecursivelySpeculatable, Terminator,
+              HasParent<"WarpSpecializeOp">,
+              DeclareOpInterfaceMethods<RegionBranchOpInterface>]> {
   let summary = "container op for `ttg.warp_specialize`";
   let description = [{
     Because MLIR requires entire operations be isolated from above, this op

@@ -95,6 +95,8 @@ public:
 
   std::string getData(size_t sessionId);
 
+  void clearData(size_t sessionId);
+
   void enterScope(const Scope &scope);
 
   void exitScope(const Scope &scope);

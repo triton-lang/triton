@@ -277,6 +277,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        amd.passes.ttgpuir.add_warp_pipeline(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -289,6 +290,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
@@ -451,11 +453,6 @@ class HIPBackend(BaseBackend):
                             dump_file_id)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
-        # TODO: Remove the following workaround once LLVM is bumped to include: https://github.com/llvm/llvm-project/pull/169851
-        # Workaround for LLVM ERROR: cannot evaluate equated symbol 'amdgcn.device.init.num_named_barrier'
-        if knobs.compilation.enable_asan and 'gfx1250' not in options.arch:
-            amdgcn = amdgcn.replace('.amdgpu_metadata',
-                                    '\t.set\tamdgcn.device.init.num_named_barrier, 0\n.amdgpu_metadata')
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
