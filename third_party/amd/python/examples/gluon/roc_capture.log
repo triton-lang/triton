@@ -1,0 +1,123 @@
+[2025-11-21 16:10:00  INFO] Initializing ROCm Capture library version 4.5.1, log level trace
+[2025-11-21 16:10:00 TRACE] Configuration: loglevel = trace
+[2025-11-21 16:10:00 TRACE] Configuration: logfile = roc_capture.log
+[2025-11-21 16:10:00 TRACE] Configuration: fileformat = tar
+[2025-11-21 16:10:00  INFO] Capturing all dispatches
+[2025-11-21 16:10:00 DEBUG] Writing v2.x tar archive: roc_capture_python3.cap
+[2025-11-21 16:10:00  INFO] Saving capture to roc_capture_python3.cap
+[2025-11-21 16:10:00  INFO] HSA devices:
+[2025-11-21 16:10:00  INFO] Node  Name                              Description
+[2025-11-21 16:10:00  INFO]    0  AMD EPYC 9575F 64-Core Processor  AMD EPYC 9575F 64-Core Processor
+[2025-11-21 16:10:00  INFO]    1  gfx1250                           AMD Instinct MI350X
+[2025-11-21 16:10:00 TRACE] Exiting OnLoad - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:00 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureObject - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureObject - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureSubmit - 0
+[2025-11-21 16:10:02 DEBUG] Snapshotting 13 MB.
+[2025-11-21 16:10:02 DEBUG] Copying 32 kB using hsa_amd_memory_async_copy from 0x7c0010000
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:02 DEBUG] Copying 2 MB using hsa_amd_memory_async_copy from 0x7c0c00000
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureSubmit - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:02 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:02 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureObject - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureObject - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureSubmit - 0
+[2025-11-21 16:10:03  INFO] Capturing dispatch 0: gemm_tdm_pipelined_kernel.kd
+[2025-11-21 16:10:03 DEBUG] Snapshotting 34 MB.
+[2025-11-21 16:10:03 DEBUG] Copying 28 kB using hsa_amd_memory_async_copy from 0x7c001d000
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:03 DEBUG] Copying 20 MB using hsa_amd_memory_async_copy from 0x7c1a00000
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:03 TRACE] Entering apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:03 TRACE] Exiting apiHookCaptureMemCpy - 0
+[2025-11-21 16:10:04 TRACE] Exiting apiHookCaptureSubmit - 0
+[2025-11-21 16:10:04 TRACE] Entering apiHookCaptureSubmit - 0
+[2025-11-21 16:10:04 DEBUG] Snapshotting 34 MB.
+[2025-11-21 16:10:04 TRACE] Exiting apiHookCaptureSubmit - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureObject - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureObject - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureAlloc - 0
+[2025-11-21 16:10:07 TRACE] Entering apiHookCaptureDevice - 0
+[2025-11-21 16:10:07 TRACE] Exiting apiHookCaptureDevice - 0
+[2025-11-21 16:10:07 TRACE] Entering destructor - 0
+[2025-11-21 16:10:07  INFO] Unloading ROCm Capture library.
+[2025-11-21 16:10:07 TRACE] Entering ~RocCapture - 0
+[2025-11-21 16:10:07  INFO] Wrote 1 dispatch packets to roc_capture_python3.cap
+[2025-11-21 16:10:07  INFO] Wrote 44 total packets to roc_capture_python3.cap
+[2025-11-21 16:10:07 TRACE] Exiting ~RocCapture - 0
+[2025-11-21 16:10:07 TRACE] Entering HsaRsrcFactory::Destroy - 0
+[2025-11-21 16:10:07 TRACE] Exiting HsaRsrcFactory::Destroy - 0
+[2025-11-21 16:10:07 TRACE] Exiting destructor - 0
