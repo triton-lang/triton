@@ -1,4 +1,3 @@
-set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
 include_directories(${PROJECT_SOURCE_DIR}/lib/Plugins/DialectPlugins/DialectPlugin/include)
 include_directories(${PROJECT_BINARY_DIR}/lib/Plugins/DialectPlugins/DialectPlugin/include)
 
