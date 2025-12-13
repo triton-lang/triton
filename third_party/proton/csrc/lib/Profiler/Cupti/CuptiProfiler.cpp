@@ -97,33 +97,28 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numKernels
     if (auto metric = convertActivityToMetric(activity)) {
-      auto scopeId = parentId;
-      bool isAPI = true;
-      bool hasGraphCapture = false;
-      if (externIdToState.contain(scopeId)) {
-        hasGraphCapture =
-            !externIdToState.at(scopeId).dataToGraphNodeScopeId.empty();
-      }
-      for (auto *data : dataSet) {
-        if (hasGraphCapture) {
-          // We have a graph creation captured
-          auto &dataToNodeScopes = externIdToState.at(scopeId).dataToGraphNodeScopeId;
-          auto dataIt = dataToNodeScopes.find(data);
-          if (dataIt == dataToNodeScopes.end()) {
-            // No captured context for this data
-            continue;
-          }
-          if (dataIt->second.find(kernel->graphNodeId) ==
-              dataIt->second.end()) {
-            // No captured context for this node
-            continue;
-          }
-          auto res = dataIt->second.at(kernel->graphNodeId);
-          isAPI = res.first;
-          scopeId = res.second;
-        }
-        data->addOpAndMetric(scopeId, kernel->name, metric, isAPI);
-      }
+      externIdToState.withRead(
+          parentId, [&](const CuptiProfiler::ExternIdState &state) {
+            bool hasGraphCapture = false;
+            for (auto *data : dataSet) {
+              if (state.dataToGraphNodeScopeId.empty()) {
+                data->addOpAndMetric(parentId, kernel->name, metric, isAPI);
+
+                return;
+              }
+              auto dataIt = state.dataToGraphNodeScopeId.find(data);
+              if (dataIt == state.dataToGraphNodeScopeId.end()) {
+                continue;
+              }
+              auto nodeIt = dataIt->second.find(kernel->graphNodeId);
+              if (nodeIt == dataIt->second.end()) {
+                continue;
+              }
+              auto res = dataIt->second.at(kernel->graphNodeId);
+              data->addOpAndMetric(res.second, kernel->name, metric,
+                                   /*addOp=*/res.first);
+            }
+          });
     }
   }
   return correlationId;
