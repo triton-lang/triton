@@ -28,6 +28,9 @@ public:
 
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
+  void addOpAndMetric(size_t scopeId, const std::string &opName,
+                      std::shared_ptr<Metric> metric, bool addOp) override;
+
   void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
@@ -56,6 +59,9 @@ private:
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
 
   void dumpHatchet(std::ostream &os) const;
+
+  size_t addOpLocked(size_t scopeId, const std::string &name);
+  void addMetricLocked(size_t scopeId, const std::shared_ptr<Metric> &metric);
 
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
 

@@ -81,13 +81,12 @@ uint32_t processActivityKernel(
           parentId, [&](const CuptiProfiler::ExternIdState &state) {
             isApiExternId = state.isApiExternId;
           });
+      std::string kernelName;
+      if (isApiExternId && kernel->name != nullptr) {
+        kernelName = kernel->name;
+      }
       for (auto *data : dataSet) {
-        auto scopeId = parentId;
-        if (isApiExternId) {
-          // It's triggered by a CUDA op but not triton op
-          scopeId = data->addOp(parentId, kernel->name);
-        }
-        data->addMetric(scopeId, metric);
+        data->addOpAndMetric(parentId, kernelName, metric, isApiExternId);
       }
     }
   } else {
@@ -102,6 +101,8 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numKernels
     if (auto metric = convertActivityToMetric(activity)) {
+      const std::string kernelName =
+          kernel->name != nullptr ? kernel->name : "";
       for (auto *data : dataSet) {
         auto scopeId = parentId;
         bool isAPI = true;
@@ -127,9 +128,7 @@ uint32_t processActivityKernel(
           isAPI = res.first;
           scopeId = res.second;
         }
-        if (isAPI)
-          scopeId = data->addOp(scopeId, kernel->name);
-        data->addMetric(scopeId, metric);
+        data->addOpAndMetric(scopeId, kernelName, metric, isAPI);
       }
     }
   }

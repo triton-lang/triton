@@ -103,11 +103,12 @@ void processActivityKernel(
     return;
   if (!isGraph) {
     if (auto metric = convertActivityToMetric(activity)) {
+      std::string kernelName;
+      if (isAPI && activity->kernel_name != nullptr) {
+        kernelName = activity->kernel_name;
+      }
       for (auto *data : dataSet) {
-        auto scopeId = parentId;
-        if (isAPI)
-          scopeId = data->addOp(parentId, activity->kernel_name);
-        data->addMetric(scopeId, metric);
+        data->addOpAndMetric(parentId, kernelName, metric, isAPI);
       }
     }
   } else {
@@ -120,9 +121,10 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numKernels
     if (auto metric = convertActivityToMetric(activity)) {
+      const std::string kernelName =
+          activity->kernel_name != nullptr ? activity->kernel_name : "";
       for (auto *data : dataSet) {
-        auto externId = data->addOp(parentId, activity->kernel_name);
-        data->addMetric(externId, metric);
+        data->addOpAndMetric(parentId, kernelName, metric, /*addOp=*/true);
       }
     }
   }
