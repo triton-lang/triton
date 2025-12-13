@@ -9,6 +9,7 @@
 #include <set>
 #include <stdexcept>
 #include <chrono>
+#include <unordered_map>
 #include <vector>
 #include <iostream>
 
@@ -46,7 +47,8 @@ public:
   };
 
   Tree() {
-    treeNodeMap.emplace_back(TreeNode::RootId, TreeNode::RootId, "ROOT");
+    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId,
+                            TreeNode::RootId, "ROOT");
   }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
@@ -62,8 +64,8 @@ public:
       return parent.getChild(context);
     }
     auto id = nextContextId++;
+    treeNodeMap.try_emplace(id, id, parentId, context.name);
     parent.addChild(context, id);
-    treeNodeMap.emplace_back(id, parentId, context.name);
     return id;
   }
 
@@ -101,12 +103,12 @@ public:
     fn(getNode(contextId));
   }
 
-  size_t size() const { return treeNodeMap.size(); }
+  size_t size() const { return nextContextId; }
 
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
-  std::vector<TreeNode> treeNodeMap;
+  std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
