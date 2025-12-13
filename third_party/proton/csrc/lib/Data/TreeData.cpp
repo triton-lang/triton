@@ -122,6 +122,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         json *jsonNode = jsonNodes[contextId];
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
+        auto &metricsJson = (*jsonNode)["metrics"];
         for (auto [metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             std::shared_ptr<KernelMetric> kernelMetric =
@@ -134,24 +135,25 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 kernelMetric->getValue(KernelMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceType));
-            std::string deviceTypeName =
+            const std::string deviceTypeName =
                 getDeviceTypeString(static_cast<DeviceType>(deviceType));
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::Duration)] =
-                           duration;
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::Invocations)] =
-                           invocations;
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::DeviceId)] =
-                           std::to_string(deviceId);
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::DeviceType)] =
-                           deviceTypeName;
-            inclusiveValueNames.insert(
-                kernelMetric->getValueName(KernelMetric::Duration));
-            inclusiveValueNames.insert(
-                kernelMetric->getValueName(KernelMetric::Invocations));
+            const auto durationName =
+                kernelMetric->getValueName(KernelMetric::Duration);
+            const auto invocationsName =
+                kernelMetric->getValueName(KernelMetric::Invocations);
+            const auto deviceIdName =
+                kernelMetric->getValueName(KernelMetric::DeviceId);
+            const auto deviceTypeNameKey =
+                kernelMetric->getValueName(KernelMetric::DeviceType);
+            const auto deviceIdStr = std::to_string(deviceId);
+
+            metricsJson[durationName] = duration;
+            metricsJson[invocationsName] = invocations;
+            metricsJson[deviceIdName] = deviceIdStr;
+            metricsJson[deviceTypeNameKey] = deviceTypeName;
+
+            inclusiveValueNames.insert(durationName);
+            inclusiveValueNames.insert(invocationsName);
             deviceIds[deviceType].insert(deviceId);
           } else if (metricKind == MetricKind::PCSampling) {
             auto pcSamplingMetric =
@@ -161,7 +163,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
               inclusiveValueNames.insert(valueName);
               std::visit(
                   [&](auto &&value) {
-                    (*jsonNode)["metrics"][valueName] = value;
+                    metricsJson[valueName] = value;
                   },
                   pcSamplingMetric->getValues()[i]);
             }
@@ -175,17 +177,21 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 cycleMetric->getValue(CycleMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::DeviceType));
-            (*jsonNode)["metrics"]
-                       [cycleMetric->getValueName(CycleMetric::Duration)] =
-                           duration;
-            (*jsonNode)["metrics"][cycleMetric->getValueName(
-                CycleMetric::NormalizedDuration)] = normalizedDuration;
-            (*jsonNode)["metrics"]
-                       [cycleMetric->getValueName(CycleMetric::DeviceId)] =
-                           std::to_string(deviceId);
-            (*jsonNode)["metrics"]
-                       [cycleMetric->getValueName(CycleMetric::DeviceType)] =
-                           std::to_string(deviceType);
+            const auto durationName =
+                cycleMetric->getValueName(CycleMetric::Duration);
+            const auto normalizedDurationName =
+                cycleMetric->getValueName(CycleMetric::NormalizedDuration);
+            const auto deviceIdName =
+                cycleMetric->getValueName(CycleMetric::DeviceId);
+            const auto deviceTypeName =
+                cycleMetric->getValueName(CycleMetric::DeviceType);
+            const auto deviceIdStr = std::to_string(deviceId);
+            const auto deviceTypeStr = std::to_string(deviceType);
+
+            metricsJson[durationName] = duration;
+            metricsJson[normalizedDurationName] = normalizedDuration;
+            metricsJson[deviceIdName] = deviceIdStr;
+            metricsJson[deviceTypeName] = deviceTypeStr;
             deviceIds[deviceType].insert(deviceId);
           } else if (metricKind == MetricKind::Flexible) {
             // Flexible metrics are handled in a different way
@@ -198,7 +204,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
           if (!flexibleMetric.isExclusive(0))
             inclusiveValueNames.insert(valueName);
           std::visit(
-              [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
+              [&](auto &&value) { metricsJson[valueName] = value; },
               flexibleMetric.getValues()[0]);
         }
         (*jsonNode)["children"] = json::array();

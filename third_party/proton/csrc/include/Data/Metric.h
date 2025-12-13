@@ -65,9 +65,9 @@ public:
 
   virtual ~Metric() = default;
 
-  virtual const std::string getName() const = 0;
+  virtual const std::string &getName() const = 0;
 
-  virtual const std::string getValueName(int valueId) const = 0;
+  virtual const std::string &getValueName(int valueId) const = 0;
 
   virtual bool isProperty(int valueId) const = 0;
 
@@ -125,7 +125,6 @@ public:
 
 private:
   const MetricKind kind;
-  const std::string name;
 
 protected:
   std::vector<MetricValueType> values;
@@ -153,9 +152,9 @@ public:
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
-  const std::string getName() const override { return "FlexibleMetric"; }
+  const std::string &getName() const override { return name; }
 
-  const std::string getValueName(int valueId) const override {
+  const std::string &getValueName(int valueId) const override {
     return valueName;
   }
 
@@ -166,6 +165,7 @@ public:
 private:
   bool property{};
   bool exclusive{};
+  const static inline std::string name = "FlexibleMetric";
   std::string valueName;
 };
 
@@ -196,9 +196,9 @@ public:
     this->values[StreamId] = streamId;
   }
 
-  virtual const std::string getName() const { return "KernelMetric"; }
+  virtual const std::string &getName() const { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  virtual const std::string &getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
@@ -215,6 +215,7 @@ private:
       "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
       "device_id",       "device_type",   "stream_id",
   };
+  const static inline std::string name = "KernelMetric";
 };
 
 class PCSamplingMetric : public Metric {
@@ -254,9 +255,9 @@ public:
     this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
   }
 
-  virtual const std::string getName() const { return "PCSamplingMetric"; }
+  virtual const std::string &getName() const { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  virtual const std::string &getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
@@ -287,6 +288,7 @@ private:
       "stalled_sleeping",
       "stalled_selected",
   };
+  const static inline std::string name = "PCSamplingMetric";
 };
 
 class CycleMetric : public Metric {
@@ -336,9 +338,9 @@ public:
     this->values[PostFinalTime] = postFinalTime;
   }
 
-  virtual const std::string getName() const { return "CycleMetric"; }
+  virtual const std::string &getName() const { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  virtual const std::string &getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
@@ -358,6 +360,7 @@ private:
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
       "init_time",   "pre_final_time", "post_final_time"};
+  const static inline std::string name = "CycleMetric";
 };
 
 /// Each TensorMetric represents a scalar metric stored in a device buffer.
