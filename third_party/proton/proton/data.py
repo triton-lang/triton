@@ -29,8 +29,8 @@ def get_data_msgpack(session: int, decode: bool = False):
     payload = libproton.get_data_msgpack(session)
     if not decode:
         return payload
-    import msgpack  # type: ignore
-    return msgpack.loads(payload)
+    import cbor2
+    return cbor2.loads(payload)
 
 
 def clear_data(session: int):
