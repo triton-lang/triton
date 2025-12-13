@@ -2,6 +2,7 @@
 #define TRITON_PLUGIN_UTILS_H
 
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -14,20 +15,24 @@ enum TritonPluginResult {
 };
 #define TRITON_PLUGIN_API                                                      \
   extern "C" __attribute__((visibility("default"))) TritonPluginResult
+#define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
+  extern "C" __attribute__((visibility("default"))) _TYPE
 
 struct TritonPlugin {
   TritonPlugin() = delete;
   TritonPlugin(std::string filename) : filename(filename) {}
+
+public:
+  llvm::Error checkLibraryValid(const std::string &error) const;
+  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
+  const std::string ENUMERATE_DIALECTS = "tritonEnumeratePluginDialects";
+  const std::string DIALECT_PLUGININFO = "tritonGetDialectPluginInfo";
 
 private:
   using enumeratePyBindHandlesType =
       std::function<TritonPluginResult(uint32_t *, const char **)>;
   using enumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
-
-  // Put enumerate API names here, these can be involved with
-  // enumeratePyBindHandles
-  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
 
   const std::string ADD_PASS = "tritonAddPluginPass";
   using addPassType =
@@ -39,7 +44,10 @@ private:
   using registerPassType = std::function<TritonPluginResult(const char *)>;
   using registerPassCType = TritonPluginResult (*)(const char *);
 
-  llvm::Error checkLibraryValid(const std::string &error) const;
+  using dialectPluginInfoType =
+      std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
+  using dialectPluginInfoCType =
+      ::mlir::DialectPluginLibraryInfo (*)(const char *);
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
 
@@ -51,6 +59,16 @@ private:
     }
     auto func = reinterpret_cast<U>(*getDetailsFn);
     return func;
+  }
+
+  // If the enumerate API is not implemented for either dialect or passes then
+  // our helpers should bail, leaving the std::vector empty and also implying
+  // the register/add-pass or dialect info apis are not to be used.
+  template <typename T, typename U>
+  llvm::Expected<T> getAPIOrNull(const std::string &symbol) const {
+    intptr_t isSymbolPresent =
+        (intptr_t)library.getAddressOfSymbol(symbol.c_str());
+    return !isSymbolPresent ? llvm::Expected<T>(nullptr) : getAPI<T, U>(symbol);
   }
 
   llvm::Expected<TritonPluginResult> checkAPIResult(TritonPluginResult result,
@@ -67,17 +85,25 @@ public:
   llvm::Expected<TritonPluginResult>
   getPassHandles(std::vector<const char *> &handles);
 
+  llvm::Expected<TritonPluginResult>
+  getDialectHandles(std::vector<const char *> &handles);
+
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
                                              const char *passHandle);
 
   llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
 
+  llvm::Expected<::mlir::DialectPluginLibraryInfo>
+  getDialectPluginInfo(const char *dialectName);
+
 private:
   std::string filename = "";
   mutable llvm::sys::DynamicLibrary library;
   enumeratePyBindHandlesType enumeratePassesAPI;
+  enumeratePyBindHandlesType enumerateDialectsAPI;
   addPassType addPassAPI;
   registerPassType registerPassAPI;
+  dialectPluginInfoType dialectPluginInfoAPI;
   bool isLoaded = false;
 };
 
