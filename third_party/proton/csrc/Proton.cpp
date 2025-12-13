@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <variant>
 
-#include "Utility/Json.h"
+#include "nlohmann/json.hpp"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -17,7 +17,7 @@ using namespace proton;
 // users to handle subtle type differences for the same metric name, which would
 // be confusing and error-prone.
 using PythonMetricValueType = std::variant<int64_t, double>;
-using json = proton::Json;
+using json = nlohmann::json;
 namespace {
 
 std::map<std::string, MetricValueType> convertPythonMetrics(
