@@ -101,8 +101,6 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numKernels
     if (auto metric = convertActivityToMetric(activity)) {
-      const std::string kernelName =
-          kernel->name != nullptr ? kernel->name : "";
       for (auto *data : dataSet) {
         auto scopeId = parentId;
         bool isAPI = true;
@@ -128,7 +126,7 @@ uint32_t processActivityKernel(
           isAPI = res.first;
           scopeId = res.second;
         }
-        data->addOpAndMetric(scopeId, kernelName, metric, isAPI);
+        data->addOpAndMetric(scopeId, kernel->name, metric, isAPI);
       }
     }
   }
