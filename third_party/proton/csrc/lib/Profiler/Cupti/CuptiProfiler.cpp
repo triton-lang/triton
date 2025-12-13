@@ -81,12 +81,8 @@ uint32_t processActivityKernel(
           parentId, [&](const CuptiProfiler::ExternIdState &state) {
             isApiExternId = state.isApiExternId;
           });
-      std::string kernelName;
-      if (isApiExternId && kernel->name != nullptr) {
-        kernelName = kernel->name;
-      }
       for (auto *data : dataSet) {
-        data->addOpAndMetric(parentId, kernelName, metric, isApiExternId);
+        data->addOpAndMetric(parentId, kernel->name, metric, isApiExternId);
       }
     }
   } else {
@@ -101,14 +97,14 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numKernels
     if (auto metric = convertActivityToMetric(activity)) {
+      auto scopeId = parentId;
+      bool isAPI = true;
+      bool hasGraphCapture = false;
+      if (externIdToState.contain(scopeId)) {
+        hasGraphCapture =
+            !externIdToState.at(scopeId).dataToGraphNodeScopeId.empty();
+      }
       for (auto *data : dataSet) {
-        auto scopeId = parentId;
-        bool isAPI = true;
-        bool hasGraphCapture = false;
-        if (externIdToState.contain(scopeId)) {
-          hasGraphCapture =
-              !externIdToState.at(scopeId).dataToGraphNodeScopeId.empty();
-        }
         if (hasGraphCapture) {
           // We have a graph creation captured
           auto &dataToNodeScopes = externIdToState.at(scopeId).dataToGraphNodeScopeId;

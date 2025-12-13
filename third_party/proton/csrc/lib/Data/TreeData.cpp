@@ -787,10 +787,21 @@ void TreeData::addMetricLocked(size_t scopeId,
 void TreeData::addOpAndMetric(size_t scopeId, const std::string &opName,
                               std::shared_ptr<Metric> metric, bool addOp) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  if (addOp) {
-    scopeId = addOpLocked(scopeId, opName);
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  // The profile data is deactivated, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end())
+    return;
+
+  auto contextId = scopeIdIt->second;
+  if (addOp && !opName.empty()) {
+    contextId = tree->addNode(Context(opName), contextId);
   }
-  addMetricLocked(scopeId, metric);
+
+  auto &node = tree->getNode(contextId);
+  if (node.metrics.find(metric->getKind()) == node.metrics.end())
+    node.metrics.emplace(metric->getKind(), metric);
+  else
+    node.metrics[metric->getKind()]->updateMetric(*metric);
 }
 
 void TreeData::addMetrics(
