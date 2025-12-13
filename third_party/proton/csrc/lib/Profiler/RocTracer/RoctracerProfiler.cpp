@@ -105,11 +105,13 @@ void processActivityKernel(
   auto correlationId = activity->correlation_id;
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
   if (!isGraph) {
-    for (auto *data : dataSet) {
-      auto scopeId = parentId;
-      if (isAPI)
-        scopeId = data->addOp(parentId, activity->kernel_name);
-      data->addMetric(scopeId, convertActivityToMetric(activity));
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
+        auto scopeId = parentId;
+        if (isAPI)
+          scopeId = data->addOp(parentId, activity->kernel_name);
+        data->addMetric(scopeId, metric);
+      }
     }
   } else {
     // Graph kernels
@@ -120,9 +122,11 @@ void processActivityKernel(
     // 2. GraphExec -> Graph
     // --- Roctracer thread ---
     // 3. corrId -> numKernels
-    for (auto *data : dataSet) {
-      auto externId = data->addOp(parentId, activity->kernel_name);
-      data->addMetric(externId, convertActivityToMetric(activity));
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
+        auto externId = data->addOp(parentId, activity->kernel_name);
+        data->addMetric(externId, metric);
+      }
     }
   }
   --numInstances;

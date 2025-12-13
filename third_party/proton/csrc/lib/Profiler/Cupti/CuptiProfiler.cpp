@@ -68,14 +68,13 @@ uint32_t processActivityKernel(
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
-    for (auto *data : dataSet) {
-      auto scopeId = parentId;
-      if (apiExternIds.contain(scopeId)) {
-        // It's triggered by a CUDA op but not triton op
-        scopeId = data->addOp(parentId, kernel->name);
-      }
-      auto metric = convertActivityToMetric(activity);
-      if (metric) {
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
+        auto scopeId = parentId;
+        if (apiExternIds.contain(scopeId)) {
+          // It's triggered by a CUDA op but not triton op
+          scopeId = data->addOp(parentId, kernel->name);
+        }
         data->addMetric(scopeId, metric);
       }
     }
@@ -90,29 +89,29 @@ uint32_t processActivityKernel(
     // - parentId -> launch context
     // --- CUPTI thread ---
     // - corrId -> numKernels
-    for (auto *data : dataSet) {
-      auto scopeId = parentId;
-      bool isAPI = true;
-      if (externIdToGraphNodeScopeId.contain(scopeId)) {
-        // We have a graph creation captured
-        auto &dataToNodeScopes = externIdToGraphNodeScopeId.at(scopeId);
-        auto dataIt = dataToNodeScopes.find(data);
-        if (dataIt == dataToNodeScopes.end()) {
-          // No captured context for this data
-          continue;
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
+        auto scopeId = parentId;
+        bool isAPI = true;
+        if (externIdToGraphNodeScopeId.contain(scopeId)) {
+          // We have a graph creation captured
+          auto &dataToNodeScopes = externIdToGraphNodeScopeId.at(scopeId);
+          auto dataIt = dataToNodeScopes.find(data);
+          if (dataIt == dataToNodeScopes.end()) {
+            // No captured context for this data
+            continue;
+          }
+          if (dataIt->second.find(kernel->graphNodeId) ==
+              dataIt->second.end()) {
+            // No captured context for this node
+            continue;
+          }
+          auto res = dataIt->second.at(kernel->graphNodeId);
+          isAPI = res.first;
+          scopeId = res.second;
         }
-        if (dataIt->second.find(kernel->graphNodeId) == dataIt->second.end()) {
-          // No captured context for this node
-          continue;
-        }
-        auto res = dataIt->second.at(kernel->graphNodeId);
-        isAPI = res.first;
-        scopeId = res.second;
-      }
-      if (isAPI)
-        scopeId = data->addOp(scopeId, kernel->name);
-      auto metric = convertActivityToMetric(activity);
-      if (metric) {
+        if (isAPI)
+          scopeId = data->addOp(scopeId, kernel->name);
         data->addMetric(scopeId, metric);
       }
     }
