@@ -210,16 +210,14 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
               [&](auto &&value) { metricsJson[valueName] = value; },
               flexibleMetric.getValues()[0]);
         }
-        (*jsonNode)["children"] = json::array();
+        auto &childrenArray = (*jsonNode)["children"];
+        childrenArray = json::array();
         auto &children = treeNode.children;
-        for (auto &_ : children) {
-          (*jsonNode)["children"].push_back(json::object());
-        }
-        auto idx = 0;
+        childrenArray.get_ref<json::array_t &>().reserve(children.size());
         for (auto &child : children) {
           auto &[index, childId] = child;
-          jsonNodes[childId] = &(*jsonNode)["children"][idx];
-          idx++;
+          childrenArray.push_back(json::object());
+          jsonNodes[childId] = &childrenArray.back();
         }
       });
   for (auto valueName : inclusiveValueNames) {
