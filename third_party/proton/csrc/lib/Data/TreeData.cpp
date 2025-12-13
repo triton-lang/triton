@@ -376,7 +376,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
 
 std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
   MsgPackWriter writer;
-  writer.reserve(1024);
+  writer.reserve(16 * 1024 * 1024); // 16 MB
 
   std::function<void(TreeData::Tree::TreeNode &)> packNode =
       [&](TreeData::Tree::TreeNode &treeNode) {
