@@ -1,7 +1,6 @@
 #ifndef PROTON_UTILITY_MAP_H_
 #define PROTON_UTILITY_MAP_H_
 
-#include <functional>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -15,21 +14,6 @@ template <typename Key, typename Value,
 class ThreadSafeMap {
 public:
   ThreadSafeMap() = default;
-
-  template <typename FnT> decltype(auto) withLock(FnT &&fn) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(map);
-  }
-
-  template <typename FnT> decltype(auto) withSharedLock(FnT &&fn) {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(map);
-  }
-
-  template <typename FnT> decltype(auto) withSharedLock(FnT &&fn) const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(map);
-  }
 
   Value &operator[](const Key &key) {
     std::unique_lock<std::shared_mutex> lock(mutex);

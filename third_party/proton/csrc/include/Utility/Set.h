@@ -1,7 +1,6 @@
 #ifndef PROTON_UTILITY_SET_H_
 #define PROTON_UTILITY_SET_H_
 
-#include <functional>
 #include <set>
 #include <shared_mutex>
 
@@ -12,21 +11,6 @@ template <typename Key, typename Container = std::set<Key>>
 class ThreadSafeSet {
 public:
   ThreadSafeSet() = default;
-
-  template <typename FnT> decltype(auto) withLock(FnT &&fn) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(set);
-  }
-
-  template <typename FnT> decltype(auto) withSharedLock(FnT &&fn) {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(set);
-  }
-
-  template <typename FnT> decltype(auto) withSharedLock(FnT &&fn) const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return std::forward<FnT>(fn)(set);
-  }
 
   void insert(const Key &key) {
     std::unique_lock<std::shared_mutex> lock(mutex);
