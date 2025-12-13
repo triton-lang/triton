@@ -21,6 +21,12 @@ public:
     inline static const size_t RootId = 0;
     inline static const size_t DummyId = std::numeric_limits<size_t>::max();
 
+    struct ContextHash {
+      size_t operator()(const Context &context) const noexcept {
+        return std::hash<std::string>{}(context.name);
+      }
+    };
+
     TreeNode() = default;
     explicit TreeNode(size_t id, const std::string &name)
         : id(id), Context(name) {}
@@ -40,7 +46,7 @@ public:
 
     size_t parentId = DummyId;
     size_t id = DummyId;
-    std::map<Context, size_t> children = {};
+    std::unordered_map<Context, size_t, ContextHash> children = {};
     std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
