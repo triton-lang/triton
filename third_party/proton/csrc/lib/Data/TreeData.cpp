@@ -123,7 +123,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
-        for (auto [metricKind, metric] : treeNode.metrics) {
+        for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             std::shared_ptr<KernelMetric> kernelMetric =
                 std::dynamic_pointer_cast<KernelMetric>(metric);
@@ -199,7 +199,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             throw std::runtime_error("MetricKind not supported");
           }
         }
-        for (auto [_, flexibleMetric] : treeNode.flexibleMetrics) {
+        for (auto &[_, flexibleMetric] : treeNode.flexibleMetrics) {
           auto valueName = flexibleMetric.getValueName(0);
           if (!flexibleMetric.isExclusive(0))
             inclusiveValueNames.insert(valueName);
@@ -208,13 +208,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
               flexibleMetric.getValues()[0]);
         }
         (*jsonNode)["children"] = json::array();
-        auto children = treeNode.children;
+        auto &children = treeNode.children;
         for (auto _ : children) {
           (*jsonNode)["children"].push_back(json::object());
         }
         auto idx = 0;
-        for (auto child : children) {
-          auto [index, childId] = child;
+        for (auto &child : children) {
+          auto &[index, childId] = child;
           jsonNodes[childId] = &(*jsonNode)["children"][idx];
           idx++;
         }
