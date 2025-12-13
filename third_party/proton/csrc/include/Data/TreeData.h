@@ -3,13 +3,13 @@
 
 #include "Context/Context.h"
 #include "Data.h"
-#include "nlohmann/json.hpp"
+#include "Utility/Json.h"
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-using json = nlohmann::json;
+using json = proton::Json;
 
 namespace proton {
 

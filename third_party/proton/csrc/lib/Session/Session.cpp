@@ -304,7 +304,7 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   return sessions[sessionId]->getContextDepth();
 }
 
-nlohmann::json SessionManager::getDataJson(size_t sessionId) {
+Json SessionManager::getDataJson(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
