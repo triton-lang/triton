@@ -363,7 +363,7 @@ json TreeData::toJson() const {
 
 std::vector<uint8_t> TreeData::toMsgPack() const {
   auto output = toJson();
-  return json::to_cbor(output);
+  return json::to_msgpack(output);
 }
 
 std::string TreeData::toJsonString() const {
