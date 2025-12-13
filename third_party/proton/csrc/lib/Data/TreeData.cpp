@@ -167,19 +167,23 @@ public:
         : id(id), parentId(parentId), Context(name) {}
     virtual ~TreeNode() = default;
 
-    void addChild(const Context &context, size_t id) { children[context] = id; }
+    void addChild(const Context &context, size_t id) {
+      children.emplace(context.name, id);
+      childIds.push_back(id);
+    }
 
     bool hasChild(const Context &context) const {
-      return children.find(context) != children.end();
+      return children.find(context.name) != children.end();
     }
 
     size_t getChild(const Context &context) const {
-      return children.at(context);
+      return children.at(context.name);
     }
 
     size_t parentId = DummyId;
     size_t id = DummyId;
-    std::map<Context, size_t> children = {};
+    std::unordered_map<std::string, size_t> children = {};
+    std::vector<size_t> childIds = {};
     std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
@@ -230,14 +234,14 @@ public:
 
   template <typename FnT> void walkPreOrder(size_t contextId, FnT &&fn) {
     fn(getNode(contextId));
-    for (auto &child : getNode(contextId).children) {
-      walkPreOrder(child.second, fn);
+    for (auto childId : getNode(contextId).childIds) {
+      walkPreOrder(childId, fn);
     }
   }
 
   template <typename FnT> void walkPostOrder(size_t contextId, FnT &&fn) {
-    for (auto &child : getNode(contextId).children) {
-      walkPostOrder(child.second, fn);
+    for (auto childId : getNode(contextId).childIds) {
+      walkPostOrder(childId, fn);
     }
     fn(getNode(contextId));
   }
@@ -341,10 +345,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         }
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
-        auto &children = treeNode.children;
-        childrenArray.get_ref<json::array_t &>().reserve(children.size());
-        for (auto &child : children) {
-          auto &[index, childId] = child;
+        childrenArray.get_ref<json::array_t &>().reserve(treeNode.childIds.size());
+        for (auto childId : treeNode.childIds) {
           childrenArray.push_back(json::object());
           jsonNodes[childId] = &childrenArray.back();
         }
@@ -487,10 +489,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         writer.packStr("children");
-        writer.packArray(static_cast<uint32_t>(treeNode.children.size()));
-        for (auto &child : treeNode.children) {
-          auto &childNode = tree->getNode(child.second);
-          packNode(childNode);
+        writer.packArray(static_cast<uint32_t>(treeNode.childIds.size()));
+        for (auto childId : treeNode.childIds) {
+          packNode(tree->getNode(childId));
         }
       };
 
