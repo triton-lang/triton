@@ -333,13 +333,17 @@ void TreeData::clearCache() {
 }
 
 void TreeData::dumpHatchet(std::ostream &os) const {
-  auto output = buildHatchetJson(tree.get());
+  auto output = toJson();
   os << std::endl << output.dump(4) << std::endl;
 }
 
-std::string TreeData::toJsonString() const {
+json TreeData::toJson() const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  auto output = buildHatchetJson(tree.get());
+  return buildHatchetJson(tree.get());
+}
+
+std::string TreeData::toJsonString() const {
+  auto output = toJson();
   return output.dump();
 }
 

@@ -304,7 +304,7 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   return sessions[sessionId]->getContextDepth();
 }
 
-std::string SessionManager::getData(size_t sessionId) {
+nlohmann::json SessionManager::getDataJson(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
@@ -319,7 +319,11 @@ std::string SessionManager::getData(size_t sessionId) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toJsonString();
+  return treeData->toJson();
+}
+
+std::string SessionManager::getData(size_t sessionId) {
+  return getDataJson(sessionId).dump();
 }
 
 void SessionManager::clearData(size_t sessionId) {

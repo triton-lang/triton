@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <variant>
 
+#include "nlohmann/json.hpp"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -16,6 +17,7 @@ using namespace proton;
 // users to handle subtle type differences for the same metric name, which would
 // be confusing and error-prone.
 using PythonMetricValueType = std::variant<int64_t, double>;
+using json = nlohmann::json;
 namespace {
 
 std::map<std::string, MetricValueType> convertPythonMetrics(
@@ -29,6 +31,42 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
                                 value));
   }
   return converted;
+}
+
+pybind11::object jsonToPy(const json &value) {
+  if (value.is_null()) {
+    return pybind11::none();
+  }
+  if (value.is_boolean()) {
+    return pybind11::bool_(value.get<bool>());
+  }
+  if (value.is_number_integer()) {
+    return pybind11::int_(value.get<int64_t>());
+  }
+  if (value.is_number_unsigned()) {
+    return pybind11::int_(value.get<uint64_t>());
+  }
+  if (value.is_number_float()) {
+    return pybind11::float_(value.get<double>());
+  }
+  if (value.is_string()) {
+    return pybind11::str(value.get_ref<const std::string &>());
+  }
+  if (value.is_array()) {
+    pybind11::list result(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+      result[i] = jsonToPy(value[i]);
+    }
+    return result;
+  }
+  if (value.is_object()) {
+    pybind11::dict result;
+    for (const auto &[key, val] : value.items()) {
+      result[pybind11::str(key)] = jsonToPy(val);
+    }
+    return result;
+  }
+  throw std::runtime_error("Unsupported JSON value type");
 }
 
 } // namespace
@@ -169,7 +207,8 @@ static void initProton(pybind11::module &&m) {
   m.def(
       "get_data",
       [](size_t sessionId) {
-        return SessionManager::instance().getData(sessionId);
+        auto data = SessionManager::instance().getDataJson(sessionId);
+        return jsonToPy(data);
       },
       pybind11::arg("sessionId"));
 

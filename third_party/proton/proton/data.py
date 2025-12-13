@@ -1,5 +1,4 @@
 from triton._C.libproton import proton as libproton  # type: ignore
-import json as json
 
 
 def get_data(session: int):
@@ -10,9 +9,9 @@ def get_data(session: int):
         session (int): The session ID of the profiling session.
 
     Returns:
-        str: The profiling data in JSON string format.
+        dict: The profiling data.
     """
-    return json.loads(libproton.get_data(session))
+    return libproton.get_data(session)
 
 
 def clear_data(session: int):
