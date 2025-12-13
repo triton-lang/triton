@@ -118,14 +118,14 @@ uint32_t processActivityKernel(
     }
   }
   // FIXME
-  //apiExternIds.erase(parentId);
-  //--numInstances;
-  //if (numInstances == 0) {
-  //  externIdToGraphNodeScopeId.erase(parentId);
-  //  corrIdToExternId.erase(correlationId);
-  //} else {
-  //  corrIdToExternId[correlationId].second = numInstances;
-  //}
+  apiExternIds.erase(parentId);
+  --numInstances;
+  if (numInstances == 0) {
+    externIdToGraphNodeScopeId.erase(parentId);
+    corrIdToExternId.erase(correlationId);
+  } else {
+    corrIdToExternId[correlationId].second = numInstances;
+  }
   return correlationId;
 }
 
