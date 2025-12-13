@@ -105,7 +105,7 @@ public:
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
-  std::map<size_t, TreeNode> treeNodeMap;
+  std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
@@ -224,7 +224,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
   }
   output.push_back(json::object());
   auto &deviceJson = output.back();
-  for (auto [deviceType, deviceIdSet] : deviceIds) {
+  for (auto &[deviceType, deviceIdSet] : deviceIds) {
     auto deviceTypeName =
         getDeviceTypeString(static_cast<DeviceType>(deviceType));
     if (!deviceJson.contains(deviceTypeName))
