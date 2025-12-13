@@ -143,13 +143,13 @@ protected:
     }
 
     template <typename FlushFnT>
-    void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
+    void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
       auto submittedId = maxSubmittedCorrelationId.load();
       auto completedId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
       while ((completedId < submittedId) && retries > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
+        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         flushFn();
         completedId = maxCompletedCorrelationId.load();
         --retries;

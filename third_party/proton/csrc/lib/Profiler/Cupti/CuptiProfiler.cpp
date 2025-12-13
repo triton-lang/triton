@@ -742,7 +742,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
     cuda::ctxSynchronize<true>();
   }
   profiler.correlation.flush(
-      /*maxRetries=*/100, /*sleepMs=*/10,
+      /*maxRetries=*/100, /*sleepUs=*/10,
       /*flush=*/[]() {
         cupti::activityFlushAll<true>(
             /*flag=*/0);

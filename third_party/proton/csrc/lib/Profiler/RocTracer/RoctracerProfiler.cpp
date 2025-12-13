@@ -406,7 +406,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
   // stops. Use a subsequent flush when the record has completed being written
   // to resume the flush.
   profiler.correlation.flush(
-      /*maxRetries=*/100, /*sleepMs=*/10, /*flush=*/
+      /*maxRetries=*/100, /*sleepUs=*/10, /*flush=*/
       []() { roctracer::flushActivity<true>(); });
 }
 
