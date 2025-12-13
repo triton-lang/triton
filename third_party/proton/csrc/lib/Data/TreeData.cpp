@@ -212,7 +212,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         }
         (*jsonNode)["children"] = json::array();
         auto &children = treeNode.children;
-        for (auto _ : children) {
+        for (auto &_ : children) {
           (*jsonNode)["children"].push_back(json::object());
         }
         auto idx = 0;
