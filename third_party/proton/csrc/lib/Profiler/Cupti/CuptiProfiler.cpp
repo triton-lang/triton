@@ -368,7 +368,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
                          CUpti_CallbackId cbId, const void *cbData);
 
   static constexpr size_t AlignSize = 8;
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
+  static constexpr size_t BufferSize = 128 * 1024 * 1024;
   static constexpr size_t AttributeSize = sizeof(size_t);
   static constexpr const char *CaptureTag = "<captured_at>";
 
