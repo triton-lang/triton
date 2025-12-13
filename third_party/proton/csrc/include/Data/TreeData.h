@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -30,6 +31,7 @@ public:
              const std::map<std::string, MetricValueType> &metrics) override;
 
   json toJson() const;
+  std::vector<uint8_t> toMsgPack() const;
 
   std::string toJsonString() const override;
 

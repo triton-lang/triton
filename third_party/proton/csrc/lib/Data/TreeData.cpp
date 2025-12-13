@@ -8,6 +8,7 @@
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <chrono>
 
 namespace proton {
 
@@ -339,7 +340,20 @@ void TreeData::dumpHatchet(std::ostream &os) const {
 
 json TreeData::toJson() const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetJson(tree.get());
+  auto startTime = std::chrono::steady_clock::now();
+  auto ret = buildHatchetJson(tree.get());
+  auto endTime = std::chrono::steady_clock::now();
+  std::cout << "[PROTON] TreeData toJson took "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                    endTime - startTime)
+                    .count()
+            << " ms" << std::endl;
+  return ret;
+}
+
+std::vector<uint8_t> TreeData::toMsgPack() const {
+  auto output = toJson();
+  return json::to_msgpack(output);
 }
 
 std::string TreeData::toJsonString() const {
