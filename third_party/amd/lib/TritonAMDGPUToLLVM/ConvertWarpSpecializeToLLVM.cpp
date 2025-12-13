@@ -169,7 +169,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   Block *switchLoop = b.createBlock(entry);
   b.setInsertionPointToStart(header);
 
-  // // This is the absolute warp ID.
+  // This is the absolute warp ID.
   auto warpIdOp = LLVM::createLLVMIntrinsicCallOp(
       b, b.getLoc(), "llvm.amdgcn.wave.id", {i32_ty}, ValueRange{});
   Value wid = warpIdOp.getResult(0);
