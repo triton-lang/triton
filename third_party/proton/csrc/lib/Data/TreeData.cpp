@@ -62,8 +62,8 @@ public:
       return parent.getChild(context);
     }
     auto id = nextContextId++;
-    treeNodeMap.emplace_back(id, parentId, context.name);
     parent.addChild(context, id);
+    treeNodeMap.emplace_back(id, parentId, context.name);
     return id;
   }
 
@@ -101,7 +101,7 @@ public:
     fn(getNode(contextId));
   }
 
-  size_t size() const { return nextContextId; }
+  size_t size() const { return treeNodeMap.size(); }
 
 private:
   size_t nextContextId = TreeNode::RootId + 1;
