@@ -4,6 +4,8 @@
 #include "Context/Context.h"
 #include "Data.h"
 #include "nlohmann/json.hpp"
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -64,6 +66,9 @@ private:
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
+  // Cached metadata for output generation.
+  std::set<std::string> inclusiveValueNamesCache;
+  std::map<uint64_t, std::set<uint64_t>> deviceIdsCache;
 };
 
 } // namespace proton
