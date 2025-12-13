@@ -97,13 +97,10 @@ convertActivityToMetric(const roctracer_record_t *activity) {
 }
 
 void processActivityKernel(
-    RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId, size_t externId,
-    std::set<Data *> &dataSet, const roctracer_record_t *activity, bool isAPI,
-    bool isGraph) {
-  if (externId == Scope::DummyScopeId)
+    size_t parentId, std::set<Data *> &dataSet,
+    const roctracer_record_t *activity, bool isAPI, bool isGraph) {
+  if (parentId == Scope::DummyScopeId)
     return;
-  auto correlationId = activity->correlation_id;
-  auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
   if (!isGraph) {
     if (auto metric = convertActivityToMetric(activity)) {
       for (auto *data : dataSet) {
@@ -129,25 +126,16 @@ void processActivityKernel(
       }
     }
   }
-  --numInstances;
-  if (numInstances == 0) {
-    corrIdToExternId.erase(correlationId);
-  } else {
-    corrIdToExternId[correlationId].second = numInstances;
-  }
   return;
 }
 
-void processActivity(RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
-                     RoctracerProfiler::ApiExternIdSet &apiExternIds,
-                     size_t externId, std::set<Data *> &dataSet,
+void processActivity(size_t parentId, std::set<Data *> &dataSet,
                      const roctracer_record_t *record, bool isAPI,
                      bool isGraph) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
-    processActivityKernel(corrIdToExternId, externId, dataSet, record, isAPI,
-                          isGraph);
+    processActivityKernel(parentId, dataSet, record, isAPI, isGraph);
     break;
   }
   default:
@@ -361,21 +349,15 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    bool hasCorrelation =
-        correlation.corrIdToExternId.contain(record->correlation_id);
-    auto externId =
-        hasCorrelation
-            ? correlation.corrIdToExternId.at(record->correlation_id).first
-            : Scope::DummyScopeId;
-    auto isAPI = correlation.apiExternIds.contain(externId);
+    auto externId = Scope::DummyScopeId;
+    bool hasCorrelation = correlation.corrIdToExternId.withRead(
+        record->correlation_id, [&](const std::pair<size_t, size_t> &value) {
+          externId = value.first;
+        });
+    auto isAPI = correlation.isApiExternId(externId);
     bool isGraph = pImpl->CorrIdToIsHipGraph.contain(record->correlation_id);
     if (hasCorrelation) {
-      processActivity(correlation.corrIdToExternId, correlation.apiExternIds,
-                      externId, dataSet, record, isAPI, isGraph);
-      // Track correlation ids from the same stream and erase those <
-      // correlationId
-    } else {
-      correlation.apiExternIds.erase(externId);
+      processActivity(externId, dataSet, record, isAPI, isGraph);
     }
     roctracer::getNextRecord<true>(record, &record);
   }

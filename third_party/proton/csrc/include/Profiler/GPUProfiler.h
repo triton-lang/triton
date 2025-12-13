@@ -31,18 +31,18 @@ public:
       ThreadSafeMap<uint64_t,
                     std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
+
+  struct ExternIdState {
+    bool isApiExternId{false};
+    std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
+        dataToGraphNodeScopeId;
+  };
+
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
   // issue.
-  using ExternIdToGraphNodeScopeIdMap = ThreadSafeMap<
-      size_t, /*extern_id*/
-      std::map<Data *,
-               std::unordered_map<uint64_t, std::pair<bool, size_t>>>, /*<data,
-                                                         node_id, <is_api,
-                                                         scope_id>>*/
-      std::unordered_map<
-          size_t, std::map<Data *, std::unordered_map<
-                                       uint64_t, std::pair<bool, size_t>>>>>;
-  using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
+  using ExternIdToStateMap =
+      ThreadSafeMap<size_t, /*extern_id*/ ExternIdState,
+                    std::unordered_map<size_t, ExternIdState>>;
 
 protected:
   // OpInterface
@@ -61,6 +61,12 @@ protected:
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
+  void clearCache() override {
+    if (!getDataSet().empty()) {
+      return;
+    }
+    correlation.clear();
+  }
   virtual void doAddMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
@@ -84,7 +90,8 @@ protected:
         return;
       opId = Scope::getNewScopeId();
       profiler.enterOp(Scope(opId));
-      profiler.correlation.apiExternIds.insert(opId);
+      profiler.correlation.externIdToState.upsert(
+          opId, [&](ExternIdState &state) { state.isApiExternId = true; });
     }
 
     void exitOp() {
@@ -113,15 +120,16 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from an external id to a mapping of graph node id to scope id.
-    ExternIdToGraphNodeScopeIdMap externIdToGraphNodeScopeId;
-    // A set of kernels triggered by GPU runtime APIs (e.g., torch
-    // kernels) other than Triton.
-    // It stores a subset of external ids in corrIdToExternId.
-    ApiExternIdSet apiExternIds;
+    // Mapping from an external id to graph-node scopes + API-extern-id flags.
+    ExternIdToStateMap externIdToState;
     static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
+
+    void clear() {
+      corrIdToExternId.clear();
+      externIdToState.clear();
+    }
 
     void submit(const uint64_t correlationId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
@@ -140,6 +148,39 @@ protected:
       if (externIdQueue.empty())
         return;
       corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
+    }
+
+    bool isApiExternId(size_t externId) const {
+      bool isApi = false;
+      externIdToState.withRead(
+          externId, [&](const ExternIdState &state) { isApi = state.isApiExternId; });
+      return isApi;
+    }
+
+    void setGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
+                           bool isApi, size_t scopeId) {
+      externIdToState.upsert(externId, [&](ExternIdState &state) {
+        state.dataToGraphNodeScopeId[data][nodeId] = {isApi, scopeId};
+      });
+    }
+
+    bool getGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
+                           bool &isApi, size_t &scopeId) const {
+      bool found = false;
+      externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        auto dataIt = state.dataToGraphNodeScopeId.find(data);
+        if (dataIt == state.dataToGraphNodeScopeId.end()) {
+          return;
+        }
+        auto nodeIt = dataIt->second.find(nodeId);
+        if (nodeIt == dataIt->second.end()) {
+          return;
+        }
+        isApi = nodeIt->second.first;
+        scopeId = nodeIt->second.second;
+        found = true;
+      });
+      return found;
     }
 
     template <typename FlushFnT>

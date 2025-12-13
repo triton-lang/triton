@@ -64,6 +64,7 @@ void Session::activate() {
 void Session::deactivate() {
   profiler->flush();
   profiler->unregisterData(data.get());
+  profiler->clearCache();
   data->clearCache();
 }
 
