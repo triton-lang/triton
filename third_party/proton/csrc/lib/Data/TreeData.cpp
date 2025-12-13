@@ -538,8 +538,7 @@ void TreeData::enterScope(const Scope &scope) {
 
 void TreeData::exitScope(const Scope &scope) {}
 
-size_t TreeData::addOp(size_t scopeId, const std::string &name) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+size_t TreeData::addOpLocked(size_t scopeId, const std::string &name) {
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end()) {
     // Obtain the current context
@@ -557,6 +556,30 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
         tree->addNode(Context(name), scopeIdIt->second);
   }
   return scopeId;
+}
+
+size_t TreeData::addOpLocked(size_t scopeId, const char *name) {
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    // Obtain the current context
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    // Add an op under the current context
+    if (name != nullptr && name[0] != '\0')
+      contexts.emplace_back(name);
+    scopeIdToContextId[scopeId] = tree->addNode(contexts);
+  } else {
+    // Add a new context under it and update the context
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] = tree->addNode(Context(name), scopeIdIt->second);
+  }
+  return scopeId;
+}
+
+size_t TreeData::addOp(size_t scopeId, const std::string &name) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  return addOpLocked(scopeId, name);
 }
 
 size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
@@ -580,19 +603,7 @@ size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
   return scopeId;
 }
 
-void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
-  auto &node = tree->getNode(contextId);
-  if (node.metrics.find(metric->getKind()) == node.metrics.end())
-    node.metrics.emplace(metric->getKind(), metric);
-  else
-    node.metrics[metric->getKind()]->updateMetric(*metric);
-
+void TreeData::updateOutputCacheLocked(const std::shared_ptr<Metric> &metric) {
   const auto kind = metric->getKind();
   if (kind == MetricKind::Kernel) {
     auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
@@ -620,6 +631,28 @@ void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   }
 }
 
+bool TreeData::addMetricLocked(size_t scopeId,
+                              const std::shared_ptr<Metric> &metric) {
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  // The profile data is deactivated, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end())
+    return false;
+  auto contextId = scopeIdIt->second;
+  auto &node = tree->getNode(contextId);
+  if (node.metrics.find(metric->getKind()) == node.metrics.end())
+    node.metrics.emplace(metric->getKind(), metric);
+  else
+    node.metrics[metric->getKind()]->updateMetric(*metric);
+
+  updateOutputCacheLocked(metric);
+  return true;
+}
+
+void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  (void)addMetricLocked(scopeId, metric);
+}
+
 void TreeData::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
@@ -644,6 +677,30 @@ void TreeData::addMetrics(
         inclusiveValueNamesCache.insert(flexibleMetric.getValueName(0));
       }
     }
+  }
+}
+
+size_t TreeData::addOpAndMetric(size_t scopeId, const std::string &name,
+                                std::shared_ptr<Metric> metric, bool addOp) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (addOp) {
+    scopeId = addOpLocked(scopeId, name);
+  }
+  (void)addMetricLocked(scopeId, metric);
+  return scopeId;
+}
+
+void TreeData::addOpAndMetricBatch(const OpMetricUpdate *updates, size_t count) {
+  if (updates == nullptr || count == 0) {
+    return;
+  }
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (size_t i = 0; i < count; ++i) {
+    auto scopeId = updates[i].scopeId;
+    if (updates[i].addOp) {
+      scopeId = addOpLocked(scopeId, updates[i].opName);
+    }
+    (void)addMetricLocked(scopeId, updates[i].metric);
   }
 }
 
