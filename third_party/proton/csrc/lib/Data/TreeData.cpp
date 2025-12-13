@@ -127,7 +127,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             std::shared_ptr<KernelMetric> kernelMetric =
-                std::dynamic_pointer_cast<KernelMetric>(metric);
+                std::static_pointer_cast<KernelMetric>(metric);
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
@@ -158,7 +158,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             deviceIds[deviceType].insert(deviceId);
           } else if (metricKind == MetricKind::PCSampling) {
             auto pcSamplingMetric =
-                std::dynamic_pointer_cast<PCSamplingMetric>(metric);
+                std::static_pointer_cast<PCSamplingMetric>(metric);
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               auto valueName = pcSamplingMetric->getValueName(i);
               inclusiveValueNames.insert(valueName);
@@ -169,7 +169,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                   pcSamplingMetric->getValues()[i]);
             }
           } else if (metricKind == MetricKind::Cycle) {
-            auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
+            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
             uint64_t duration = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(
