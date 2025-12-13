@@ -3973,6 +3973,48 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   return dst;
 }
 
+FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<InFlightDiagnostic()> emitError) {
+  SmallVector<int64_t> blockShape(shapePerCTA);
+  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
+  if (fp4Padded)
+    blockShape[contigDim] *= 2;
+  // All dimensions must be at most 256
+  constexpr int64_t dimMax = 256;
+  for (auto &size : blockShape)
+    size = std::min(size, dimMax);
+  // Last dim must equal the swizzle byte size
+  if (swizzleBytes != 0) {
+    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+    if (blockShape[contigDim] < contigDimSize) {
+      return emitError() << "block shape along the contiguous dimension "
+                         << contigDim
+                         << " is too small for the swizzle byte size "
+                         << swizzleBytes << " in an NVMMASharedLayout, got "
+                         << blockShape[contigDim] << " but expected at least "
+                         << contigDimSize;
+    }
+    blockShape[contigDim] = contigDimSize;
+  }
+  if (fp4Padded && packedSize) {
+    blockShape[contigDim] /= 2;
+  }
+  return blockShape;
+}
+SmallVector<int64_t> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize) {
+  return *getTMABlockShape(
+      shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded, isTransposed,
+      packedSize, []() -> InFlightDiagnostic {
+        llvm::report_fatal_error(
+            "Block shape is too small for the swizzle byte "
+            "size in NVMMA Shared Layout.");
+      });
+}
+
 SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
   auto attrs = op->getAttr(kPartitionAttrName);
   SmallVector<int> partitionIds;

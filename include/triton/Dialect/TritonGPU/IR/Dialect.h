@@ -294,6 +294,15 @@ bool isInnermostContiguous(MemDescType type, unsigned numElems);
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
+FailureOr<SmallVector<int64_t>>
+getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                 int swizzleBytes, bool fp4Padded, bool isTransposed,
+                 bool packedSize, function_ref<InFlightDiagnostic()> emitError);
+SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
+                                      int elementBitWidth, int swizzleBytes,
+                                      bool fp4Padded, bool isTransposed,
+                                      bool packedSize);
+
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
