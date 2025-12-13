@@ -46,7 +46,7 @@ public:
   };
 
   Tree() {
-    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId, "ROOT");
+    treeNodeMap.emplace_back(TreeNode::RootId, TreeNode::RootId, "ROOT");
   }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
@@ -57,12 +57,13 @@ public:
   }
 
   size_t addNode(const Context &context, size_t parentId) {
-    if (treeNodeMap[parentId].hasChild(context)) {
-      return treeNodeMap[parentId].getChild(context);
+    auto &parent = treeNodeMap.at(parentId);
+    if (parent.hasChild(context)) {
+      return parent.getChild(context);
     }
     auto id = nextContextId++;
-    treeNodeMap.try_emplace(id, id, parentId, context.name);
-    treeNodeMap[parentId].addChild(context, id);
+    treeNodeMap.emplace_back(id, parentId, context.name);
+    parent.addChild(context, id);
     return id;
   }
 
@@ -105,7 +106,7 @@ public:
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
-  std::unordered_map<size_t, TreeNode> treeNodeMap;
+  std::vector<TreeNode> treeNodeMap;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
