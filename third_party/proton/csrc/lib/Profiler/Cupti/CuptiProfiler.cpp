@@ -752,8 +752,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // new activities.
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
-  auto popResult = pendingGraphQueue.popAll();
-  if (!popResult.empty()) {
+  if (auto popResult = pendingGraphQueue.popAll(); !popResult.empty()) {
     auto resultIdx = 0;
     metricBuffer->flush(
         [&](uint8_t *data, size_t dataSize) {

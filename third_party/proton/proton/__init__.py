@@ -9,5 +9,5 @@ from .profile import (
     profile,
     DEFAULT_PROFILE_NAME,
 )
-from .data import get_data, clear_data
+from .data import get_data, clear_data, get_data_msgpack
 from . import context, specs, mode

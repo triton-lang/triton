@@ -9,6 +9,8 @@
 #include <set>
 #include <stdexcept>
 #include <chrono>
+#include <vector>
+#include <iostream>
 
 namespace proton {
 
