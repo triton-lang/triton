@@ -16,7 +16,6 @@ struct Context {
   std::string name{};
 
   Context() = default;
-  Context(const char *name) : name(name) {}
   Context(const std::string &name) : name(name) {}
   virtual ~Context() = default;
 

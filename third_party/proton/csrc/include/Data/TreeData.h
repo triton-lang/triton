@@ -32,18 +32,6 @@ public:
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
-  struct OpMetricUpdate {
-    size_t scopeId{};
-    const char *opName{}; // only used when addOp==true
-    std::shared_ptr<Metric> metric{};
-    bool addOp{};
-  };
-
-  void addOpAndMetricBatch(const OpMetricUpdate *updates, size_t count);
-
-  size_t addOpAndMetric(size_t scopeId, const std::string &name,
-                        std::shared_ptr<Metric> metric, bool addOp);
-
   json toJson() const;
   std::vector<uint8_t> toMsgPack() const;
 
@@ -66,11 +54,6 @@ private:
   class Tree;
   json buildHatchetJson(TreeData::Tree *tree) const;
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
-
-  size_t addOpLocked(size_t scopeId, const std::string &name);
-  size_t addOpLocked(size_t scopeId, const char *name);
-  bool addMetricLocked(size_t scopeId, const std::shared_ptr<Metric> &metric);
-  void updateOutputCacheLocked(const std::shared_ptr<Metric> &metric);
 
   void dumpHatchet(std::ostream &os) const;
 

@@ -1,7 +1,6 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Data/TreeData.h"
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
@@ -12,7 +11,6 @@
 #include "Utility/Map.h"
 #include "Utility/String.h"
 #include "Utility/Vector.h"
-#include "Data/TreeData.h"
 
 #include <algorithm>
 #include <array>
@@ -57,69 +55,61 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
-uint32_t processActivityKernelBatched(
+uint32_t processActivityKernel(
     CuptiProfiler::ExternIdToGraphNodeScopeIdMap &externIdToGraphNodeScopeId,
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    CuptiProfiler::ApiExternIdSet &apiExternIds,
-    const std::vector<TreeData *> &treeDataSet,
-    const std::vector<Data *> &otherDataSet,
-    std::vector<std::vector<TreeData::OpMetricUpdate>> &treeDataBatches,
+    CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
     CUpti_Activity *activity) {
+  // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId))
     return correlationId;
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
-
-  if (auto metric = convertActivityToMetric(activity)) {
-    if (kernel->graphId == 0) { // Non-graph kernels
-      const bool isApiExternId = apiExternIds.contain(parentId);
-      for (size_t i = 0; i < treeDataSet.size(); ++i) {
-        treeDataBatches[i].push_back(
-            {parentId, kernel->name, metric, isApiExternId});
-      }
-      for (auto *data : otherDataSet) {
+  if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
+                              // actually it refers to graphExecId
+    // Non-graph kernels
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
         auto scopeId = parentId;
-        if (isApiExternId) {
+        if (apiExternIds.contain(scopeId)) {
+          // It's triggered by a CUDA op but not triton op
           scopeId = data->addOp(parentId, kernel->name);
         }
         data->addMetric(scopeId, metric);
       }
-    } else { // Graph kernels
-      for (size_t i = 0; i < treeDataSet.size(); ++i) {
-        auto *data = treeDataSet[i];
+    }
+  } else {
+    // Graph kernels
+    // A single graph launch can trigger multiple kernels.
+    // Our solution is to construct the following maps:
+    // --- Application threads ---
+    // If graph creation has been captured:
+    // - parentId, nodeId -> launch context + capture context
+    // Otherwise:
+    // - parentId -> launch context
+    // --- CUPTI thread ---
+    // - corrId -> numKernels
+    if (auto metric = convertActivityToMetric(activity)) {
+      for (auto *data : dataSet) {
         auto scopeId = parentId;
         bool isAPI = true;
         if (externIdToGraphNodeScopeId.contain(scopeId)) {
+          // We have a graph creation captured
           auto &dataToNodeScopes = externIdToGraphNodeScopeId.at(scopeId);
           auto dataIt = dataToNodeScopes.find(data);
           if (dataIt == dataToNodeScopes.end()) {
+            // No captured context for this data
             continue;
           }
-          auto nodeIt = dataIt->second.find(kernel->graphNodeId);
-          if (nodeIt == dataIt->second.end()) {
+          if (dataIt->second.find(kernel->graphNodeId) ==
+              dataIt->second.end()) {
+            // No captured context for this node
             continue;
           }
-          isAPI = nodeIt->second.first;
-          scopeId = nodeIt->second.second;
-        }
-        treeDataBatches[i].push_back({scopeId, kernel->name, metric, isAPI});
-      }
-      for (auto *data : otherDataSet) {
-        auto scopeId = parentId;
-        bool isAPI = true;
-        if (externIdToGraphNodeScopeId.contain(scopeId)) {
-          auto &dataToNodeScopes = externIdToGraphNodeScopeId.at(scopeId);
-          auto dataIt = dataToNodeScopes.find(data);
-          if (dataIt == dataToNodeScopes.end()) {
-            continue;
-          }
-          auto nodeIt = dataIt->second.find(kernel->graphNodeId);
-          if (nodeIt == dataIt->second.end()) {
-            continue;
-          }
-          isAPI = nodeIt->second.first;
-          scopeId = nodeIt->second.second;
+          auto res = dataIt->second.at(kernel->graphNodeId);
+          isAPI = res.first;
+          scopeId = res.second;
         }
         if (isAPI)
           scopeId = data->addOp(scopeId, kernel->name);
@@ -127,7 +117,7 @@ uint32_t processActivityKernelBatched(
       }
     }
   }
-
+  // FIXME
   apiExternIds.erase(parentId);
   --numInstances;
   if (numInstances == 0) {
@@ -136,28 +126,27 @@ uint32_t processActivityKernelBatched(
   } else {
     corrIdToExternId[correlationId].second = numInstances;
   }
-
   return correlationId;
 }
 
-uint32_t processActivityBatched(
+uint32_t processActivity(
     CuptiProfiler::ExternIdToGraphNodeScopeIdMap &externIdToGraphNodeScopeId,
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    CuptiProfiler::ApiExternIdSet &apiExternIds,
-    const std::vector<TreeData *> &treeDataSet,
-    const std::vector<Data *> &otherDataSet,
-    std::vector<std::vector<TreeData::OpMetricUpdate>> &treeDataBatches,
+    CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
     CUpti_Activity *activity) {
+  auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
-  case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL:
-    return processActivityKernelBatched(externIdToGraphNodeScopeId,
-                                        corrIdToExternId, apiExternIds,
-                                        treeDataSet, otherDataSet,
-                                        treeDataBatches, activity);
-  default:
-    return 0;
+  case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
+    correlationId =
+        processActivityKernel(externIdToGraphNodeScopeId, corrIdToExternId,
+                              apiExternIds, dataSet, activity);
+    break;
   }
+  default:
+    break;
+  }
+  return correlationId;
 }
 
 constexpr std::array<CUpti_CallbackId, 22> kDriverApiLaunchCallbacks = {
@@ -414,38 +403,16 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   auto startTime = std::chrono::high_resolution_clock::now();
   CuptiProfiler &profiler = threadState.profiler;
   auto dataSet = profiler.getDataSet();
-
-  static thread_local std::vector<TreeData *> treeDataSet;
-  static thread_local std::vector<Data *> otherDataSet;
-  static thread_local std::vector<std::vector<TreeData::OpMetricUpdate>>
-      treeDataBatches;
-  treeDataSet.clear();
-  otherDataSet.clear();
-  for (auto *data : dataSet) {
-    if (auto *treeData = dynamic_cast<TreeData *>(data)) {
-      treeDataSet.push_back(treeData);
-    } else {
-      otherDataSet.push_back(data);
-    }
-  }
-  if (treeDataBatches.size() < treeDataSet.size()) {
-    treeDataBatches.resize(treeDataSet.size());
-  }
-  for (size_t i = 0; i < treeDataSet.size(); ++i) {
-    treeDataBatches[i].clear();
-  }
-
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      auto correlationId = processActivityBatched(
-          profiler.correlation.externIdToGraphNodeScopeId,
-          profiler.correlation.corrIdToExternId,
-          profiler.correlation.apiExternIds, treeDataSet, otherDataSet,
-          treeDataBatches, activity);
+      auto correlationId =
+          processActivity(profiler.correlation.externIdToGraphNodeScopeId,
+                          profiler.correlation.corrIdToExternId,
+                          profiler.correlation.apiExternIds, dataSet, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -453,11 +420,6 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
       throw std::runtime_error("[PROTON] cupti::activityGetNextRecord failed");
     }
   } while (true);
-
-  for (size_t i = 0; i < treeDataSet.size(); ++i) {
-    auto &batch = treeDataBatches[i];
-    treeDataSet[i]->addOpAndMetricBatch(batch.data(), batch.size());
-  }
 
   std::free(buffer);
 
