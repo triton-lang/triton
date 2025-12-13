@@ -192,6 +192,33 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
+  if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
+    auto blockShape =
+        llvm::to_vector(ArrayRef(shapePerCTA).take_back(enc.getRank()));
+    int contigDim = enc.getTransposed() ? 0 : blockShape.size() - 1;
+    if (enc.getFp4Padded())
+      blockShape[contigDim] *= 2;
+    // All dimensions must be at most 256
+    constexpr int64_t dimMax = 256;
+    for (auto &size : blockShape)
+      size = std::min(size, dimMax);
+    // Last dim must equal the swizzle byte size
+    if (enc.getSwizzlingByteWidth() != 0) {
+      auto contigDimSize =
+          (8 * enc.getSwizzlingByteWidth()) / enc.getElementBitWidth();
+      if (blockShape[contigDim] < contigDimSize) {
+        return emitError() << "block shape along the contiguous dimension "
+                           << contigDim
+                           << " is too small for the swizzle byte size "
+                           << enc.getSwizzlingByteWidth()
+                           << " in an NVMMASharedLayout, got "
+                           << blockShape[contigDim] << " but expected at least "
+                           << contigDimSize;
+      }
+    }
+  }
+
   return success();
 }
 
