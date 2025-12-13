@@ -18,8 +18,11 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <chrono>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace proton {
 
@@ -32,6 +35,51 @@ thread_local std::deque<size_t>
     GPUProfiler<CuptiProfiler>::Correlation::externIdQueue{};
 
 namespace {
+
+struct ActivityCleanupBatch {
+  std::unordered_map<uint64_t, size_t> corrIdToProcessedInstances;
+  std::unordered_set<size_t> apiExternIdsErasedInBuffer;
+};
+
+void applyActivityCleanupBatch(
+    ActivityCleanupBatch &batch,
+    CuptiProfiler::ExternIdToGraphNodeScopeIdMap &externIdToGraphNodeScopeId,
+    CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    CuptiProfiler::ApiExternIdSet &apiExternIds) {
+  std::vector<size_t> externIdsToErase;
+  corrIdToExternId.withLock([&](auto &map) {
+    for (const auto &[correlationId, processedInstances] :
+         batch.corrIdToProcessedInstances) {
+      auto it = map.find(correlationId);
+      if (it == map.end()) {
+        continue;
+      }
+      const auto parentId = it->second.first;
+      const auto numInstances = it->second.second;
+      const auto remainingInstances =
+          (processedInstances >= numInstances) ? 0
+                                               : (numInstances - processedInstances);
+      if (remainingInstances == 0) {
+        externIdsToErase.push_back(parentId);
+        map.erase(it);
+      } else {
+        it->second.second = remainingInstances;
+      }
+    }
+  });
+
+  externIdToGraphNodeScopeId.withLock([&](auto &map) {
+    for (auto externId : externIdsToErase) {
+      map.erase(externId);
+    }
+  });
+
+  apiExternIds.withLock([&](auto &set) {
+    for (auto externId : batch.apiExternIdsErasedInBuffer) {
+      set.erase(externId);
+    }
+  });
+}
 
 std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
@@ -59,20 +107,36 @@ uint32_t processActivityKernel(
     CuptiProfiler::ExternIdToGraphNodeScopeIdMap &externIdToGraphNodeScopeId,
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
-    CUpti_Activity *activity) {
+    CUpti_Activity *activity, ActivityCleanupBatch *cleanupBatch) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId))
+  const auto corrEntryOpt =
+      corrIdToExternId.withSharedLock([&](auto &map)
+                                          -> std::optional<std::pair<size_t, size_t>> {
+        auto it = map.find(correlationId);
+        if (it == map.end()) {
+          return std::nullopt;
+        }
+        return it->second;
+      });
+  if (!corrEntryOpt.has_value())
     return correlationId;
-  auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
+  const auto parentId = corrEntryOpt->first;
+  const bool treatAsApiExternId =
+      apiExternIds.withSharedLock([&](auto &set) {
+        return set.find(parentId) != set.end();
+      }) &&
+      !(cleanupBatch &&
+        cleanupBatch->apiExternIdsErasedInBuffer.find(parentId) !=
+            cleanupBatch->apiExternIdsErasedInBuffer.end());
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
     if (auto metric = convertActivityToMetric(activity)) {
       for (auto *data : dataSet) {
         auto scopeId = parentId;
-        if (apiExternIds.contain(scopeId)) {
+        if (treatAsApiExternId) {
           // It's triggered by a CUDA op but not triton op
           scopeId = data->addOp(parentId, kernel->name);
         }
@@ -117,15 +181,10 @@ uint32_t processActivityKernel(
       }
     }
   }
-  // FIXME
-  //apiExternIds.erase(parentId);
-  //--numInstances;
-  //if (numInstances == 0) {
-  //  externIdToGraphNodeScopeId.erase(parentId);
-  //  corrIdToExternId.erase(correlationId);
-  //} else {
-  //  corrIdToExternId[correlationId].second = numInstances;
-  //}
+  if (cleanupBatch) {
+    cleanupBatch->corrIdToProcessedInstances[correlationId] += 1;
+    cleanupBatch->apiExternIdsErasedInBuffer.insert(parentId);
+  }
   return correlationId;
 }
 
@@ -133,14 +192,14 @@ uint32_t processActivity(
     CuptiProfiler::ExternIdToGraphNodeScopeIdMap &externIdToGraphNodeScopeId,
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
-    CUpti_Activity *activity) {
+    CUpti_Activity *activity, ActivityCleanupBatch *cleanupBatch) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
     correlationId =
         processActivityKernel(externIdToGraphNodeScopeId, corrIdToExternId,
-                              apiExternIds, dataSet, activity);
+                              apiExternIds, dataSet, activity, cleanupBatch);
     break;
   }
   default:
@@ -403,6 +462,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   auto startTime = std::chrono::high_resolution_clock::now();
   CuptiProfiler &profiler = threadState.profiler;
   auto dataSet = profiler.getDataSet();
+  ActivityCleanupBatch cleanupBatch;
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
@@ -412,7 +472,8 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
       auto correlationId =
           processActivity(profiler.correlation.externIdToGraphNodeScopeId,
                           profiler.correlation.corrIdToExternId,
-                          profiler.correlation.apiExternIds, dataSet, activity);
+                          profiler.correlation.apiExternIds, dataSet, activity,
+                          &cleanupBatch);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -423,6 +484,10 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 
   std::free(buffer);
 
+  applyActivityCleanupBatch(cleanupBatch,
+                            profiler.correlation.externIdToGraphNodeScopeId,
+                            profiler.correlation.corrIdToExternId,
+                            profiler.correlation.apiExternIds);
   profiler.correlation.complete(maxCorrelationId);
   auto endTime = std::chrono::high_resolution_clock::now();
   std::cout << "[PROTON] CUPTI completeBuffer processing time: "
