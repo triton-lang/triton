@@ -233,7 +233,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
              << aTensorTy << " for WGMMA instruction shape [" << M << ", " << K
              << "]";
     }
-    return failure();
     aLoader = std::move(*loader);
     transA = aLoader.getDescriptor().transposed;
   } else {
