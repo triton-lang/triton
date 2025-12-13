@@ -100,6 +100,8 @@ public:
     fn(getNode(contextId));
   }
 
+  size_t size() const { return nextContextId; }
+
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
@@ -107,7 +109,7 @@ private:
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
-  std::map<size_t, json *> jsonNodes;
+  std::vector<json *> jsonNodes(tree->size(), nullptr);
   json output = json::array();
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
