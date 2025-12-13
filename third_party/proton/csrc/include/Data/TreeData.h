@@ -51,6 +51,7 @@ private:
   // protected by a (shared) mutex.
   class Tree;
   json buildHatchetJson(TreeData::Tree *tree) const;
+  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
 
   void dumpHatchet(std::ostream &os) const;
 

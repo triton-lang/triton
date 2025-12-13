@@ -4,6 +4,7 @@
 #include <map>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 #include "nlohmann/json.hpp"
 #include "pybind11/pybind11.h"
@@ -68,6 +69,10 @@ pybind11::object jsonToPy(const json &value) {
   }
   throw std::runtime_error("Unsupported JSON value type");
 }
+
+struct MsgPackBuffer {
+  std::vector<uint8_t> data;
+};
 
 } // namespace
 
@@ -218,6 +223,26 @@ static void initProton(pybind11::module &&m) {
         auto data = SessionManager::instance().getDataMsgPack(sessionId);
         return pybind11::bytes(reinterpret_cast<const char *>(data.data()),
                                data.size());
+      },
+      pybind11::arg("sessionId"));
+
+  pybind11::class_<MsgPackBuffer>(m, "MsgPackBuffer",
+                                 pybind11::buffer_protocol())
+      .def(pybind11::init<>())
+      .def_buffer([](MsgPackBuffer &buffer) -> pybind11::buffer_info {
+        return pybind11::buffer_info(
+            buffer.data.data(), sizeof(uint8_t),
+            pybind11::format_descriptor<uint8_t>::format(), 1,
+            {static_cast<pybind11::ssize_t>(buffer.data.size())},
+            {static_cast<pybind11::ssize_t>(sizeof(uint8_t))});
+      });
+
+  m.def(
+      "get_data_msgpack_buffer",
+      [](size_t sessionId) {
+        MsgPackBuffer buffer;
+        buffer.data = SessionManager::instance().getDataMsgPack(sessionId);
+        return buffer;
       },
       pybind11::arg("sessionId"));
 
