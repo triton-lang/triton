@@ -19,6 +19,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <chrono>
 
 namespace proton {
 
@@ -398,6 +399,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        uint8_t *buffer,
                                                        size_t size,
                                                        size_t validSize) {
+  auto startTime = std::chrono::high_resolution_clock::now();
   CuptiProfiler &profiler = threadState.profiler;
   auto dataSet = profiler.getDataSet();
   uint32_t maxCorrelationId = 0;
@@ -421,6 +423,12 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   std::free(buffer);
 
   profiler.correlation.complete(maxCorrelationId);
+  auto endTime = std::chrono::high_resolution_clock::now();
+  std::cout << "[PROTON] CUPTI completeBuffer processing time: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   endTime - startTime)
+                   .count()
+            << " ms" << std::endl;
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
