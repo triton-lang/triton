@@ -13,7 +13,7 @@ module {
 
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
-  // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+  // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 1152 : i32} : !tt.ptr<i32>
   // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
   // CHECK: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
@@ -39,7 +39,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %i = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
@@ -73,7 +73,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %i = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
@@ -115,7 +115,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK: #smem = #ttg.shared_memory
 // CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
 // CHECK:   tt.func @convert_warp_specialize() {
-// CHECK:     %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+// CHECK:     %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 1152 : i32} : !tt.ptr<i32>
 // CHECK:     %[[MEMDESC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
 // CHECK:     %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[MEMDESC]] : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
 // CHECK:     proton_gpu.init_ctx %[[SCRATCH]] : !tt.ptr<i32>
@@ -168,7 +168,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
 
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: global_mem_buffer
-  // CHECK-GMEM: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+// CHECK-GMEM: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 1152 : i32} : !tt.ptr<i32>
   // CHECK-GMEM: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
   // CHECK-GMEM: %[[PTR:.*]] = tt.addptr %[[SCRATCH]]
   // CHECK-GMEM: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[PTR]] : !tt.ptr<i32> -> <1024, #proton_gpu.global_memory, warp>

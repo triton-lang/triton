@@ -9,6 +9,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton {
 namespace proton::gpu {
@@ -537,21 +538,20 @@ protected:
 };
 
 struct GlobalScratchAllocOpConversion
-    : public ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp> {
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
   explicit GlobalScratchAllocOpConversion(
       LLVMTypeConverter &typeConverter,
       const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp>(
+      : mlir::ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp>(
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto *ctx = rewriter.getContext();
-    auto &tritonTargetInfo = targetInfo.getTritonTargetInfo();
 
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
     if (!funcOp) {
