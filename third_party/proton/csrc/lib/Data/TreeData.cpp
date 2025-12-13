@@ -154,9 +154,9 @@ void packMetricValue(MsgPackWriter &writer, const MetricValueType &value) {
 
 } // namespace
 
-	class TreeData::Tree {
-	public:
-	  struct TreeNode : public Context {
+class TreeData::Tree {
+public:
+  struct TreeNode : public Context {
     inline static const size_t RootId = 0;
     inline static const size_t DummyId = std::numeric_limits<size_t>::max();
 
@@ -187,11 +187,12 @@ void packMetricValue(MsgPackWriter &writer, const MetricValueType &value) {
     std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
-	  };
+  };
 
-	  Tree() {
-	    treeNodeMap.emplace_back(TreeNode::RootId, TreeNode::RootId, "ROOT");
-	  }
+  Tree() {
+    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId,
+                            TreeNode::RootId, "ROOT");
+  }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
     for (const auto &context : contexts) {
@@ -200,15 +201,16 @@ void packMetricValue(MsgPackWriter &writer, const MetricValueType &value) {
     return parentId;
   }
 
-	  size_t addNode(const Context &context, size_t parentId) {
-	    if (treeNodeMap.at(parentId).hasChild(context)) {
-	      return treeNodeMap.at(parentId).getChild(context);
-	    }
-	    auto id = treeNodeMap.size();
-	    treeNodeMap.at(parentId).addChild(context, id);
-	    treeNodeMap.emplace_back(id, parentId, context.name);
-	    return id;
-	  }
+  size_t addNode(const Context &context, size_t parentId) {
+    auto &parent = treeNodeMap.at(parentId);
+    if (parent.hasChild(context)) {
+      return parent.getChild(context);
+    }
+    auto id = nextContextId++;
+    treeNodeMap.try_emplace(id, id, parentId, context.name);
+    parent.addChild(context, id);
+    return id;
+  }
 
   size_t addNode(const std::vector<Context> &indices) {
     auto parentId = TreeNode::RootId;
@@ -244,12 +246,13 @@ void packMetricValue(MsgPackWriter &writer, const MetricValueType &value) {
     fn(getNode(contextId));
   }
 
-	  size_t size() const { return treeNodeMap.size(); }
+  size_t size() const { return nextContextId; }
 
-	private:
-	  // tree node id -> tree node
-	  std::vector<TreeNode> treeNodeMap;
-	};
+private:
+  size_t nextContextId = TreeNode::RootId + 1;
+  // tree node id -> tree node
+  std::unordered_map<size_t, TreeNode> treeNodeMap;
+};
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
   std::vector<json *> jsonNodes(tree->size(), nullptr);
