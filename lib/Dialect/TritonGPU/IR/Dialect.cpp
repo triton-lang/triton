@@ -2469,8 +2469,8 @@ CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
                               LinearLayout(std::move(bases), dims, true));
 }
 LogicalResult DotOperandEncodingAttr::verify(
-    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,
+    Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
