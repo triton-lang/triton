@@ -76,6 +76,7 @@ shared memory and tensor memory layouts, as `tcgen05_copy` only supports a
 limited set of instruction shapes for copy data from shared to tensor memory.
 """
 
+import itertools
 import pytest
 import triton
 import torch
@@ -166,21 +167,29 @@ def tcgen05_copy_example(M, N, smem_layout, tmem_layout, dtype):
 # - The layout must be swizzled (swizzle_byte_width > 0).
 # - The dtype must be 32-bit (e.g. gl.float32).
 # - `TensorMemoryLayout` blockM must be 128.
+# - The layout cannot be transposed.
+
+configs = []
+TMEM_BLOCK_M = 128
+for TMEM_BLOCK_N in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
+    for M, N in itertools.product([128, 256], [16, 32, 64, 128, 256]):
+        if M < TMEM_BLOCK_M or N < TMEM_BLOCK_N or M * N * 4 > 228 * 1024:
+            continue
+        configs.append((M, N, TMEM_BLOCK_N))
 
 
-@pytest.mark.parametrize("M", [128, 256])
-@pytest.mark.parametrize("N", [16, 32, 64, 128, 256])
-@pytest.mark.parametrize("TMEM_BLOCK_M", [128])
-@pytest.mark.parametrize("TMEM_BLOCK_N", [1, 2, 4, 8, 16, 32, 64, 128, 256])
+@pytest.mark.parametrize("M, N, TMEM_BLOCK_N", configs)
 @pytest.mark.parametrize("dtype", [torch.float32])
 @pytest.mark.parametrize("swizzle", [32, 64, 128])
-def test_tcgen05_copy_nvmma_shared(M, N, TMEM_BLOCK_M, TMEM_BLOCK_N, dtype, swizzle):
-    if M < TMEM_BLOCK_M or N < TMEM_BLOCK_N:
-        pytest.skip("allocation shape (M, N) is smaller than tensor memory block shape (TMEM_BLOCK_M, TMEM_BLOCK_N)")
-    if M == 256 and N == 256:
-        pytest.skip("not enough shared memory for (M, N) = (256, 256)")
+def test_tcgen05_copy_nvmma_shared(M, N, TMEM_BLOCK_N, dtype, swizzle):
+    bitwidth = dtype.itemsize * 8
+    # There are still some shared memory layouts for which an implementation does not exist.
     if M == 256 and swizzle // TMEM_BLOCK_N >= 8:
         pytest.skip("no tcgen05.copy atom exists for codegen")
+    # NVMMASharedLayout swizzle block shape has a minimum size.
+    if N < swizzle // dtype.itemsize:
+        pytest.skip("block shape along contiguous dimension is too small for the swizzle byte width")
+
     bitwidth = dtype.itemsize * 8
     smem_layout = gl.NVMMASharedLayout(swizzle_byte_width=swizzle, element_bitwidth=bitwidth, rank=2)
     tmem_layout = TensorMemoryLayout(block=(TMEM_BLOCK_M, TMEM_BLOCK_N), col_stride=32 // bitwidth)

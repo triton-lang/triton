@@ -62,7 +62,7 @@ public:
   AMDMfmaEncodingAttr mfma(unsigned version, ArrayRef<unsigned> warps,
                            ArrayRef<unsigned> instrShape, bool isTransposed,
                            ArrayRef<unsigned> tilesPerWarp = {},
-                           unsigned elementBitWidth = 0) {
+                           unsigned elementBitWidth = 16) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());

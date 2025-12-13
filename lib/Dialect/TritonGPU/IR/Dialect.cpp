@@ -2131,6 +2131,16 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
+LogicalResult
+NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                unsigned swizzlingByteWidth, bool transposed,
+                                unsigned elementBitWidth, bool fp4Padded,
+                                CGAEncodingAttr CGALayout) {
+  if (elementBitWidth == 0)
+    return emitError() << "elementBitWidth must be non-zero";
+  return success();
+}
+
 int NVMMASharedEncodingAttr::getVec() const {
   if (getSwizzlingByteWidth() == 0)
     return 1;
