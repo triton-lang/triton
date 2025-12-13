@@ -138,13 +138,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 kernelMetric->getValue(KernelMetric::DeviceType));
             const std::string deviceTypeName =
                 getDeviceTypeString(static_cast<DeviceType>(deviceType));
-            const auto durationName =
+            const auto &durationName =
                 kernelMetric->getValueName(KernelMetric::Duration);
-            const auto invocationsName =
+            const auto &invocationsName =
                 kernelMetric->getValueName(KernelMetric::Invocations);
-            const auto deviceIdName =
+            const auto &deviceIdName =
                 kernelMetric->getValueName(KernelMetric::DeviceId);
-            const auto deviceTypeNameKey =
+            const auto &deviceTypeNameKey =
                 kernelMetric->getValueName(KernelMetric::DeviceType);
             const auto deviceIdStr = std::to_string(deviceId);
 
@@ -178,13 +178,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 cycleMetric->getValue(CycleMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::DeviceType));
-            const auto durationName =
+            const auto &durationName =
                 cycleMetric->getValueName(CycleMetric::Duration);
-            const auto normalizedDurationName =
+            const auto &normalizedDurationName =
                 cycleMetric->getValueName(CycleMetric::NormalizedDuration);
-            const auto deviceIdName =
+            const auto &deviceIdName =
                 cycleMetric->getValueName(CycleMetric::DeviceId);
-            const auto deviceTypeName =
+            const auto &deviceTypeName =
                 cycleMetric->getValueName(CycleMetric::DeviceType);
             const auto deviceIdStr = std::to_string(deviceId);
             const auto deviceTypeStr = std::to_string(deviceType);
