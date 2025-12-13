@@ -1220,8 +1220,8 @@ def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
 
 
 @gluon.jit
-def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape, out_strides,
-                                           SHARED_LAYOUT: ttgl.constexpr):
+def tensor_descriptor_load_store_nd_kernel_device_tdm(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape,
+                                                      out_strides, SHARED_LAYOUT: ttgl.constexpr):
     ndim: ttgl.constexpr = len(BLOCK_SHAPE)
     desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
                                                        block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
@@ -1238,10 +1238,23 @@ def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
+@gluon.jit
+def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
+    ndim: ttgl.constexpr = len(inp_desc.block_shape)
+    offs = (0, ) * ndim
+    block_shared = ttgl.allocate_shared_memory(inp_desc.dtype, shape=inp_desc.block_shape, layout=inp_desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
 @pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
-def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
     SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
                                                               order=[ndim - 1 - i for i in range(ndim)])
 
@@ -1263,9 +1276,16 @@ def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
         inp = inp.cuda()
         out = out.cuda()
 
-    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
-    k = tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
-                                                      out.shape, out.stride(), SHARED_LAYOUT)
+    if TDM_TYPE == "DEVICE_TDM":
+        constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+        k = tensor_descriptor_load_store_nd_kernel_device_tdm[(1, )](out, inp, inp.shape,
+                                                                     inp.stride(), constexpr_block_shape, out.shape,
+                                                                     out.stride(), SHARED_LAYOUT)
+    else:
+        assert TDM_TYPE == "HOST_TDM"
+        inp_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        out_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(out, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        k = tensor_descriptor_load_store_nd_kernel_host_tdm[(1, )](out_desc, inp_desc)
 
     amdgcn = k.asm["amdgcn"]
     for pattern in ("tensor_load_to_lds", "tensor_store_from_lds", "s_wait_tensorcnt 0x0"):
@@ -1305,8 +1325,9 @@ def test_tensor_descriptor_load_store_invalid_blocksize():
 
     # Expect compilation to fail due to block size exceeding maximum
     try:
-        tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
-                                                      out.shape, out.stride(), SHARED_LAYOUT)
+        tensor_descriptor_load_store_nd_kernel_device_tdm[(1, )](out, inp, inp.shape,
+                                                                 inp.stride(), constexpr_block_shape, out.shape,
+                                                                 out.stride(), SHARED_LAYOUT)
         pytest.fail(
             f"Expected compilation to fail for block size {INNER_BLOCK} (2^17) > 65536 (2^16), but it succeeded")
     except Exception as e:

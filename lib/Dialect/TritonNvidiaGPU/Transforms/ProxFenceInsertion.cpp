@@ -125,24 +125,18 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // TODO: handle proxy read cases. Those are currently handled in
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
+              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto slice = AllocationSlice(value, interval);
+
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {
-                  proxyBlockInfo
-                      .syncWriteIntervals[allocation->getAllocatedInterval(
-                          bufferId)]
-                      .insert(op);
+                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
                 }
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
-                curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncWriteSlices[slice].insert(op);
               } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncReadSlices[slice].insert(op);
               }
             }
           }
@@ -157,7 +151,8 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncReadIntervals[interval].insert(op);
+    auto scratchSlice = AllocationSlice(interval);
+    curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
