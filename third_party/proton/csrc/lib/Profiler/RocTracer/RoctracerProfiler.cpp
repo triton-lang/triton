@@ -29,7 +29,7 @@ thread_local GPUProfiler<RoctracerProfiler>::ThreadState
     GPUProfiler<RoctracerProfiler>::threadState(RoctracerProfiler::instance());
 
 template <>
-thread_local std::deque<size_t>
+thread_local std::deque<GPUProfiler<RoctracerProfiler>::Correlation::ExternIdFrame>
     GPUProfiler<RoctracerProfiler>::Correlation::externIdQueue{};
 
 namespace {
@@ -352,11 +352,12 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
     auto externId = Scope::DummyScopeId;
+    bool isAPI = false;
     bool hasCorrelation = correlation.corrIdToExternId.withRead(
-        record->correlation_id, [&](const std::pair<size_t, size_t> &value) {
-          externId = value.first;
+        record->correlation_id, [&](const RoctracerProfiler::CorrIdState &value) {
+          externId = value.externId;
+          isAPI = value.isApiExternId;
         });
-    auto isAPI = correlation.isApiExternId(externId);
     bool isGraph = pImpl->CorrIdToIsHipGraph.contain(record->correlation_id);
     if (hasCorrelation) {
       processActivity(externId, dataSet, record, isAPI, isGraph);

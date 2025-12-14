@@ -27,13 +27,17 @@ public:
   GPUProfiler() = default;
   virtual ~GPUProfiler() = default;
 
+  struct CorrIdState {
+    size_t externId{Scope::DummyScopeId};
+    size_t numKernels{1};
+    bool isApiExternId{false};
+  };
+
   using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t,
-                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
-                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
+      ThreadSafeMap<uint64_t, CorrIdState,
+                    std::unordered_map<uint64_t, CorrIdState>>;
 
   struct ExternIdState {
-    bool isApiExternId{false};
     std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
         dataToGraphNodeScopeId;
   };
@@ -47,7 +51,7 @@ public:
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
-    this->correlation.pushExternId(scope.scopeId);
+    this->correlation.pushExternId(scope.scopeId, this->threadState.createdOp);
     this->threadState.scopeStack.push_back(scope);
     for (auto data : getDataSet())
       data->addOp(scope.scopeId, scope.name);
@@ -82,16 +86,19 @@ protected:
     size_t opId{Scope::DummyScopeId};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
+    bool createdOp{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp() {
-      if (profiler.isOpInProgress())
+      createdOp = false;
+      if (profiler.isOpInProgress()) {
         return;
+      }
       opId = Scope::getNewScopeId();
+      createdOp = true;
       profiler.enterOp(Scope(opId));
-      profiler.correlation.externIdToState.upsert(
-          opId, [&](ExternIdState &state) { state.isApiExternId = true; });
+      createdOp = false;
     }
 
     void exitOp() {
@@ -122,7 +129,11 @@ protected:
     CorrIdToExternIdMap corrIdToExternId;
     // Mapping from an external id to graph-node scopes + API-extern-id flags.
     ExternIdToStateMap externIdToState;
-    static thread_local std::deque<size_t> externIdQueue;
+    struct ExternIdFrame {
+      size_t externId;
+      bool isApiExternId;
+    };
+    static thread_local std::deque<ExternIdFrame> externIdQueue;
 
     Correlation() = default;
 
@@ -139,28 +150,39 @@ protected:
       atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
-    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
+    void pushExternId(size_t externId, bool isApiExternId) {
+      externIdQueue.push_back(ExternIdFrame{externId, isApiExternId});
+    }
 
-    void popExternId() { externIdQueue.pop_front(); }
+    void popExternId() {
+      externIdQueue.pop_front();
+    }
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t numInstances = 1) {
       if (externIdQueue.empty())
         return;
-      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
-    }
-
-    bool isApiExternId(size_t externId) const {
-      bool isApi = false;
-      externIdToState.withRead(
-          externId, [&](const ExternIdState &state) { isApi = state.isApiExternId; });
-      return isApi;
+      corrIdToExternId.insert(
+          correlationId, CorrIdState{externIdQueue.back().externId, numInstances,
+                                     externIdQueue.back().isApiExternId});
     }
 
     void setGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
                            bool isApi, size_t scopeId) {
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.dataToGraphNodeScopeId[data][nodeId] = {isApi, scopeId};
+      });
+    }
+
+    void mergeGraphNodeScopes(
+        size_t externId,
+        const std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
+            &scopes) {
+      externIdToState.upsert(externId, [&](ExternIdState &state) {
+        for (const auto &[data, nodeIdToScope] : scopes) {
+          auto &dst = state.dataToGraphNodeScopeId[data];
+          dst.insert(nodeIdToScope.begin(), nodeIdToScope.end());
+        }
       });
     }
 
