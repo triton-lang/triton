@@ -260,7 +260,7 @@
 <p>Performs the “arrive” operation on an mbarrier object in shared memory. The operation requires a <code class="docutils literal notranslate"><span class="pre">count</span></code> attribute
 of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
 zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
-of the mbarrier object prior to the “arrive” operation.</p>
+parity (0 for even, 1 for odd) of the mbarrier object prior to the “arrive” operation.</p>
 <p>Example:</p>
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttag.arrive_barrier %barrier, 2 : !ttg.memdesc&lt;1xi64, #shared, #smem, mutable&gt;
 </pre></div>

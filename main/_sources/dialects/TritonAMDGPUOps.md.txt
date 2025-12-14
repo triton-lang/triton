@@ -13,7 +13,7 @@ operation ::= `amdg.arrive_barrier` $alloc `,` $count attr-dict `:` qualified(ty
 Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
 of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
 zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
-of the mbarrier object prior to the "arrive" operation.
+parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive" operation.
 
 Example:
 
