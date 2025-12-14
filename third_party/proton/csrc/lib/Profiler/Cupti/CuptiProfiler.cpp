@@ -99,11 +99,11 @@ uint32_t processActivityKernel(
     if (auto metric = convertActivityToMetric(activity)) {
       auto scopeId = parentId;
       bool isAPI = true;
-      bool hasGraphCapture = externIdToState.contain(scopeId);
+      auto ref = externIdToState.find(scopeId);
       for (auto *data : dataSet) {
-        if (hasGraphCapture) {
+        if (ref.has_value()) {
           // We have a graph creation captured
-          auto &dataToNodeScopes = externIdToState.at(scopeId).dataToGraphNodeScopeId;
+          auto &dataToNodeScopes = ref.value().get().dataToGraphNodeScopeId;
           auto dataIt = dataToNodeScopes.find(data);
           if (dataIt == dataToNodeScopes.end()) {
             // No captured context for this data
