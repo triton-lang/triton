@@ -64,14 +64,11 @@ uint32_t processActivityKernel(
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   size_t parentId = 0;
-  size_t numInstances = 0;
   if (/*Not a valid context*/ !corrIdToExternId.withRead(
           correlationId, [&](const std::pair<size_t, size_t> &value) {
             parentId = value.first;
-            numInstances = value.second;
           }))
     return correlationId;
-  (void)numInstances;
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
