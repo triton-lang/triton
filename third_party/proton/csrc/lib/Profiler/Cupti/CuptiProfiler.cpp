@@ -58,7 +58,7 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, CuptiProfiler::ExternIdState &> &externIdToStateCache,
+    std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>> &externIdToStateCache,
     std::set<Data *> &dataSet, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
@@ -136,7 +136,7 @@ uint32_t processActivityKernel(
 uint32_t processActivity(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, CuptiProfiler::ExternIdState&> &externIdToStateCache,
+    std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>> &externIdToStateCache,
     std::set<Data *> &dataSet,
     CUpti_Activity *activity) {
   auto correlationId = 0;
@@ -411,7 +411,8 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
-  std::map<uint64_t, CuptiProfiler::ExternIdState&> externIdToStateCache; 
+  std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
+      externIdToStateCache;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
