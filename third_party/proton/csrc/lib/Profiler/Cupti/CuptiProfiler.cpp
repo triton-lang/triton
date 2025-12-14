@@ -103,7 +103,7 @@ uint32_t processActivityKernel(
         ref = externIdToState.find(scopeId);
         // Update the cache
         if (ref.has_value()) {
-          externIdToStateCache[scopeId] = ref.value().get();
+          externIdToStateCache[scopeId] = ref.value();
         }
       } else {
         ref = std::ref(iter->second);
