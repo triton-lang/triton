@@ -164,6 +164,18 @@ protected:
       });
     }
 
+    void mergeGraphNodeScopes(
+        size_t externId,
+        const std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
+            &scopes) {
+      externIdToState.upsert(externId, [&](ExternIdState &state) {
+        for (const auto &[data, nodeIdToScope] : scopes) {
+          auto &dst = state.dataToGraphNodeScopeId[data];
+          dst.insert(nodeIdToScope.begin(), nodeIdToScope.end());
+        }
+      });
+    }
+
     bool getGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
                            bool &isApi, size_t &scopeId) const {
       bool found = false;
