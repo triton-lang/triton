@@ -58,8 +58,8 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::set<Data *> &dataSet,
-    CUpti_Activity *activity) {
+    std::map<uint64_t, CuptiProfiler::ExternIdState &> &externIdToStateCache,
+    std::set<Data *> &dataSet, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
@@ -96,7 +96,18 @@ uint32_t processActivityKernel(
     if (auto metric = convertActivityToMetric(activity)) {
       auto scopeId = parentId;
       bool isAPI = true;
-      auto ref = externIdToState.find(scopeId);
+      auto iter = externIdToStateCache.find(scopeId);
+      std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
+      if (iter == externIdToStateCache.end()) {
+        // Cache miss, fetch from the main map
+        ref = externIdToState.find(scopeId);
+        // Update the cache
+        if (ref.has_value()) {
+          externIdToStateCache[scopeId] = ref.value().get();
+        }
+      } else {
+        ref = std::ref(iter->second);
+      }
       for (auto *data : dataSet) {
         if (ref.has_value()) {
           // We have a graph creation captured
@@ -125,6 +136,7 @@ uint32_t processActivityKernel(
 uint32_t processActivity(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
+    std::map<uint64_t, CuptiProfiler::ExternIdState&> &externIdToStateCache,
     std::set<Data *> &dataSet,
     CUpti_Activity *activity) {
   auto correlationId = 0;
@@ -132,7 +144,7 @@ uint32_t processActivity(
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
     correlationId =
-        processActivityKernel(corrIdToExternId, externIdToState, dataSet,
+        processActivityKernel(corrIdToExternId, externIdToState, externIdToStateCache, dataSet,
                               activity);
     break;
   }
@@ -399,13 +411,14 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
+  std::map<uint64_t, CuptiProfiler::ExternIdState&> externIdToStateCache; 
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
       auto correlationId =
           processActivity(profiler.correlation.corrIdToExternId,
-                          profiler.correlation.externIdToState, dataSet,
-                          activity);
+                          profiler.correlation.externIdToState,
+                          externIdToStateCache, dataSet, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
