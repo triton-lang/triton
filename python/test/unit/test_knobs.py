@@ -1,6 +1,8 @@
 import os
 import pytest
 import shutil
+from typing import TYPE_CHECKING
+
 import triton
 from triton._internal_testing import is_hip
 
@@ -237,6 +239,9 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     reason="PTXAS is not installed on AMD",
 )
 def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
+    if TYPE_CHECKING:
+        # Enables pyrefly to resolve fresh_knobs attributes
+        fresh_knobs = triton.knobs
     triton_root = Path(fresh_knobs.__file__).parent
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
