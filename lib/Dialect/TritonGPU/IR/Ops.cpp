@@ -779,6 +779,16 @@ LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   return success();
 }
 
+// AsyncCopyLocalToGlobalOp
+LogicalResult AsyncCopyLocalToGlobalOp::verify() {
+  // Verify the source is local memory (shared memory)
+  auto srcTy = getSrc().getType();
+  if (!isa<SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
+    return emitOpError("source must be in shared memory");
+
+  return success();
+}
+
 LogicalResult MemDescIndexOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
