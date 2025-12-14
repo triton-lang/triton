@@ -57,7 +57,14 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.median(times)
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench_cudagraph(
+    fn,
+    rep=20,
+    grad_to_none=None,
+    quantiles=None,
+    return_mode="mean",
+    clear_cache=False,
+):
     """
     Benchmark the runtime of the provided function.
 
@@ -69,12 +76,22 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param clear_cache: If True, zero the benchmarking cache tensor before each
+        invocation of `fn` to mimic the behaviour of `do_bench` with explicit L2
+        cache flushes. Default is False.
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
+    cache = (runtime.driver.active.get_empty_cache_for_benchmark() if clear_cache else None)
+
+    def maybe_clear_cache():
+        if cache is not None:
+            cache.zero_()
+
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
+        maybe_clear_cache()
         fn()
         if grad_to_none is not None:
             for x in grad_to_none:
@@ -91,6 +108,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
         for _ in range(5):
+            maybe_clear_cache()
             fn()
         end_event.record()
         torch.cuda.synchronize()
@@ -108,19 +126,51 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
                 if grad_to_none is not None:
                     for x in grad_to_none:
                         x.grad = None
+                maybe_clear_cache()
                 fn()
         torch.cuda.synchronize()
+
+        # step 3 - if cache clearing is enabled, create a separate graph to measure cache clearing overhead
+        cache_clear_graph = None
+        if clear_cache:
+            cache_clear_graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(cache_clear_graph):
+                for _ in range(n_repeat):
+                    maybe_clear_cache()
+            torch.cuda.synchronize()
+
         # measure time and return
-        ret = []
         n_retries = 10
+        cache_clear_times = []
+        total_times = []
         for _ in range(n_retries):
+            # measure cache clear time if applicable
+            if cache_clear_graph is not None:
+                cache_clear_start_event = torch.cuda.Event(enable_timing=True)
+                cache_clear_end_event = torch.cuda.Event(enable_timing=True)
+                cache_clear_start_event.record()
+                cache_clear_graph.replay()
+                cache_clear_end_event.record()
+                torch.cuda.synchronize()
+                cache_clear_times.append(cache_clear_start_event.elapsed_time(cache_clear_end_event) / n_repeat)
+
+            # measure total time
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
             g.replay()
             end_event.record()
             torch.cuda.synchronize()
-            ret += [start_event.elapsed_time(end_event) / n_repeat]
+            total_times.append(start_event.elapsed_time(end_event) / n_repeat)
+
+        # subtract cache clear overhead if applicable
+        if clear_cache:
+            ret = [
+                total_time - cache_clear_time for total_time, cache_clear_time in zip(total_times, cache_clear_times)
+            ]
+        else:
+            ret = total_times
+
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
