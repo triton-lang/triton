@@ -630,19 +630,19 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         } else if (findGraph) {
           auto dataSet = profiler.getDataSet();
           auto externId = profiler.correlation.externIdQueue.back();
-          for (auto &[nodeId, nodeState] :
-               pImpl->graphStates[graphExecId].nodeIdToState) {
-            for (auto *data : dataSet) {
+          for (auto *data : dataSet) {
+            auto scopeId = data->addOp(externId, GraphState::captureTag);
+            for (auto &[nodeId, nodeState] :
+                 pImpl->graphStates[graphExecId].nodeIdToState) {
               if (nodeState.captureContexts.find(data) !=
                   nodeState.captureContexts.end()) {
                 auto captureContexts = nodeState.captureContexts.at(data);
-                auto scopeId = data->addOp(externId, GraphState::captureTag);
-                scopeId = data->addOp(scopeId, captureContexts);
+                auto nodeScopeId = data->addOp(scopeId, captureContexts);
                 bool isAPI =
                     pImpl->graphStates[graphExecId].apiNodeIds.find(nodeId) !=
                     pImpl->graphStates[graphExecId].apiNodeIds.end();
                 profiler.correlation.setGraphNodeScope(externId, data, nodeId,
-                                                       isAPI, scopeId);
+                                                       isAPI, nodeScopeId);
               }
             }
           }
