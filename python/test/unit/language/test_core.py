@@ -5499,6 +5499,16 @@ def test_poison_return(device):
         assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
+def test_named_expr(device):
+
+    @triton.jit
+    def test():
+        x = (y := 0)
+        assert x == 0 and x == y
+
+    test[(1, )]()
+
+
 # -----------------------
 # test extra
 # -----------------------
