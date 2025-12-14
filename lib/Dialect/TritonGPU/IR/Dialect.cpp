@@ -2131,6 +2131,16 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
+LogicalResult
+NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                unsigned swizzlingByteWidth, bool transposed,
+                                unsigned elementBitWidth, bool fp4Padded,
+                                CGAEncodingAttr CGALayout) {
+  if (elementBitWidth == 0)
+    return emitError() << "elementBitWidth must be non-zero";
+  return success();
+}
+
 int NVMMASharedEncodingAttr::getVec() const {
   if (getSwizzlingByteWidth() == 0)
     return 1;
@@ -2469,8 +2479,8 @@ CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
                               LinearLayout(std::move(bases), dims, true));
 }
 LogicalResult DotOperandEncodingAttr::verify(
-    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,
+    Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
@@ -3961,6 +3971,48 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   assert(product(srcTy.getShape()) == product(dstShape));
   auto dst = reshapeLayout(ctx, src, dstShape);
   return dst;
+}
+
+FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<InFlightDiagnostic()> emitError) {
+  SmallVector<int64_t> blockShape(shapePerCTA);
+  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
+  if (fp4Padded)
+    blockShape[contigDim] *= 2;
+  // All dimensions must be at most 256
+  constexpr int64_t dimMax = 256;
+  for (auto &size : blockShape)
+    size = std::min(size, dimMax);
+  // Last dim must equal the swizzle byte size
+  if (swizzleBytes != 0) {
+    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+    if (blockShape[contigDim] < contigDimSize) {
+      return emitError() << "block shape along the contiguous dimension "
+                         << contigDim
+                         << " is too small for the swizzle byte size "
+                         << swizzleBytes << " in an NVMMASharedLayout, got "
+                         << blockShape[contigDim] << " but expected at least "
+                         << contigDimSize;
+    }
+    blockShape[contigDim] = contigDimSize;
+  }
+  if (fp4Padded && packedSize) {
+    blockShape[contigDim] /= 2;
+  }
+  return blockShape;
+}
+SmallVector<int64_t> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize) {
+  return *getTMABlockShape(
+      shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded, isTransposed,
+      packedSize, []() -> InFlightDiagnostic {
+        llvm::report_fatal_error(
+            "Block shape is too small for the swizzle byte "
+            "size in NVMMA Shared Layout.");
+      });
 }
 
 SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
