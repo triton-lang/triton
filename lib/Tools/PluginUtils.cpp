@@ -117,6 +117,8 @@ llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
+  if (auto Err = loadPlugin())
+    return Err;
   // Do a check to see if the enumerate-passes api symbol is present, bail as
   // if there are 0 passes if not
   intptr_t isPassPluginSymbolPresent =
@@ -128,6 +130,8 @@ TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
+  if (auto Err = loadPlugin())
+    return Err;
   // Do a check to see if the enumerate-dialects api symbol is present, bail as
   // if there are 0 dialects if not
   intptr_t isDialectPluginSymbolPresent =
