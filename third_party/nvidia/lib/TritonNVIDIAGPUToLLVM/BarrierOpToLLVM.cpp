@@ -60,6 +60,8 @@ calculateBarrierCount(triton::nvidia_gpu::InitBarrierOp op) {
 
   auto wsOp = findAssociatedWarpSpecializeOp(op.getAlloc());
   if (!wsOp) {
+    op.emitError(
+        "could not find associated warp_specialize op for mbarrier init");
     return std::nullopt;
   }
 
