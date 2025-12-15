@@ -40,8 +40,14 @@ public:
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Clear all caching data.
+  /// Clear all non-persistent data.
   virtual void clear() = 0;
+
+  /// Clear caching data only.
+  virtual void clearCache() = 0;
+
+  /// To Json
+  virtual std::string toJsonString() const = 0;
 
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);

@@ -87,6 +87,7 @@ class tensor_descriptor(base_value):
 
 @builtin
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, _semantic=None):
+    assert tensor_desc.layout == result.layout, f"tensor descriptor layout {tensor_desc.layout} does not match result shared memory layout {result.layout}"
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     _semantic.builder.create_async_tma_copy_global_to_local(tensor_desc.handle, coord, barrier.handle, result.handle,
@@ -95,6 +96,7 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
+    assert tensor_desc.layout == src.layout, f"tensor descriptor layout {tensor_desc.layout} does not match source shared memory layout {src.layout}"
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
@@ -124,7 +126,7 @@ def make_tensor_descriptor(
     if len(strides) != ndim:
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
-        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
+        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(block_shape)}")
     assert isinstance(base.dtype, ttgl.pointer_type)
     elem_size = base.dtype.element_ty.primitive_bitwidth // 8
     contig_dim_size = ttgl._unwrap_if_constexpr(block_shape[-1])

@@ -31,7 +31,7 @@ ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
     for (int i = 0; i < rankDiff; ++i) {
       ll = removeStandardDim(ll, 0);
     }
-    return ttg::CGAEncodingAttr::get(ctx, ll);
+    return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - cgaLayout.getRank();
@@ -51,7 +51,7 @@ ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
     dimSizes[i].first = dim;
   }
   ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CGAEncodingAttr::get(ctx, ll);
+  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
 ttg::SharedEncodingTrait
@@ -114,35 +114,6 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     return sharedEnc;
 
   return updateEncodingForShape(op, sharedEnc, tensorType);
-}
-
-SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
-                                      int elementBitWidth, int swizzleBytes,
-                                      bool fp4Padded, bool isTransposed,
-                                      bool packedSize) {
-  SmallVector<int64_t> blockShape(shapePerCTA);
-  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
-  if (fp4Padded) {
-    blockShape[contigDim] *= 2;
-  }
-  // All dimensions must be at most 256
-  constexpr int64_t dimMax = 256;
-  for (auto &size : blockShape) {
-    size = std::min(size, dimMax);
-  }
-  // Last dim must equal the swizzle byte size
-  if (swizzleBytes != 0) {
-    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
-    if (blockShape[contigDim] < contigDimSize) {
-      llvm::report_fatal_error("Block shape is too small for the swizzle byte "
-                               "size in NVMMA Shared Layout.");
-    }
-    blockShape[contigDim] = contigDimSize;
-  }
-  if (fp4Padded && packedSize) {
-    blockShape[contigDim] /= 2;
-  }
-  return blockShape;
 }
 
 std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {

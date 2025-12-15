@@ -604,7 +604,7 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
 
   let arguments = (ins
     RankedTensorOf<[I8]>:$input,
-    RankedTensorOf<[BF16]>:$scale,
+    RankedTensorOf<[BF16, I8]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
@@ -636,7 +636,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
-    RankedTensorOf<[BF16]>:$scale);
+    RankedTensorOf<[BF16, I8]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
   let assemblyFormat = [{
@@ -644,6 +644,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 }
+
 //===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
@@ -892,7 +893,7 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier"> {
     Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
     of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
     zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
-    of the mbarrier object prior to the "arrive" operation.
+    parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive" operation.
 
     Example:
 

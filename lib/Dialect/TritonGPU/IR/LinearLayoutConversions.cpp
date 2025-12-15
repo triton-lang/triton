@@ -1067,23 +1067,21 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
       blockM *= 2;
       splitM /= 2;
     }
-    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
         ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
         encoding.getCTASplitN(), encoding.getTwoCTAs());
     auto ret =
-        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
-        split;
-    // In this case, we swap the basis of the last row and last column as per
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding);
+    // In this case, we swap the basis of the last row and last column
     // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
-      auto &rowBases = bases[kRow];
-      auto &colBases = bases[kCol];
-      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
-      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+      std::swap(bases[kRow].back(), bases[kCol].back());
+      ret =
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective());
     }
-    return ret;
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
+    return ret * split;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 
@@ -1106,7 +1104,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
-    tile = LinearLayout(bases, dims);
+    tile = LinearLayout(std::move(bases), dims);
   } else {
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
             LinearLayout::identity1D(blockN, kCol, dims[1]);
@@ -1254,7 +1252,8 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(layout.hasInDim(kBlock));
   auto bases = layout.getBases();
   bases[kBlock] = {};
-  return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector<4>(layout.getOutDimNames()));
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,

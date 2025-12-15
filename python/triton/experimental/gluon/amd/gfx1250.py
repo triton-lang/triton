@@ -17,8 +17,7 @@ class TensorDescriptor:
 
     def __post_init__(self):
         ndim = len(self.shape)
-        # TODO: support 1D-5D tensor descriptors
-        assert ndim == 2, f"Expected 2 dimensions but got {ndim} dimensions"
+        assert 1 <= ndim <= 5, f"Expected 1-5 dimensions but got {ndim} dimensions"
         assert len(self.strides) == ndim, f"Expected {ndim} strides but got {len(self.strides)}"
         assert len(self.block_shape) == ndim, \
             f"Expected block_shape to have {ndim} dimensions but got {len(self.strides)}"
