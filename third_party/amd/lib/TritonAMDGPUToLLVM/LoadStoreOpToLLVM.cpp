@@ -1231,6 +1231,16 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
+    Value barrierPtr = nullptr;
+    if (op.getBarrier()) {
+      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+          loc, adaptor.getBarrier(),
+          typeConverter->convertType(
+              op.getBarrier().getType().getElementType()),
+          rewriter);
+      barrierPtr = smemObj.getBase();
+    }
+
     // Verifier ensures smem is not usind a PaddedSharedEncodingAttr
     auto sharedLayout = triton::gpu::toLinearLayout(smemTy);
     auto kBlock = rewriter.getStringAttr("block");
@@ -1243,8 +1253,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     mlir::LLVM::AMD::emitTDMOperation(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         /*padInterval=*/0, /*padAmount=*/0, offset, dstPtr, b.true_val(),
-        /*multicastMask=*/{}, elementType,
-        /*barrierPtr=*/nullptr,
+        /*multicastMask=*/{}, elementType, barrierPtr,
         /*isLoad=*/false, cgaLayout, ctaId);
 
     rewriter.eraseOp(op);

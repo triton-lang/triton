@@ -880,9 +880,9 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src) {
+              Value src, Value barrier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
-                                                            src);
+                                                            src, barrier);
            })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {
