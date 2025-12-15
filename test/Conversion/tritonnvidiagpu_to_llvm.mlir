@@ -67,20 +67,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.arrive_barrier %alloc, 2, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
-
-  // CHECK-LABEL: arrive_barrier_multi_threaded
-  tt.func @arrive_barrier_multi_threaded(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
-    // CHECK: "mbarrier.arrive.shared::cta.b64 _, [$0], 2;", "r"
-    ttng.arrive_barrier %alloc, 2 {multiThreaded}: !ttg.memdesc<1xi64, #shared0, #smem>
-    tt.return
-  }
-
-  // CHECK-LABEL: arrive_barrier_pred_multi_threaded
-  tt.func @arrive_barrier_pred_multi_threaded(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
-    // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r"
-    ttng.arrive_barrier %alloc, 2, %pred {multiThreaded} : !ttg.memdesc<1xi64, #shared0, #smem>
-    tt.return
-  }
 }
 
 

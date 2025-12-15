@@ -457,7 +457,13 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 }
 
 bool isMultiThreadedArriveBarrier(ArriveBarrierOp op) {
-  Value rootAlloc = op.getAlloc().getDefiningOp<gpu::MemDescIndexOp>().getSrc();
+  MemDescIndexOp definingOp =
+      op.getAlloc().getDefiningOp<gpu::MemDescIndexOp>();
+  if (!definingOp) {
+    return false;
+  }
+
+  Value rootAlloc = definingOp.getSrc();
   for (Operation *user : rootAlloc.getUsers()) {
     if (auto indexOp = dyn_cast<gpu::MemDescIndexOp>(user)) {
       for (Operation *memDescUser : indexOp.getResult().getUsers()) {
