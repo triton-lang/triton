@@ -33,6 +33,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+
 namespace {
 
 // Find the WarpSpecializeOp that uses the given allocation.

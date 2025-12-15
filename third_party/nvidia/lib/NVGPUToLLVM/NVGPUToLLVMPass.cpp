@@ -17,7 +17,6 @@ using ttn::OperandsAndConstraints;
 
 namespace mlir {
 namespace triton {
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
 #include "NVGPUToLLVM/Passes.h.inc"

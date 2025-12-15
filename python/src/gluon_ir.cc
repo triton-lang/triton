@@ -6,7 +6,6 @@
 #include <stdexcept>
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
