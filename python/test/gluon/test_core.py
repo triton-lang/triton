@@ -29,6 +29,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
+    cluster_sync,
     get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_mma_scaled,
@@ -251,6 +252,10 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
+        # Need to synchronise all the CTAs after the mbarrier initialisation
+        # so that they all see it
+        if two_ctas:
+            cluster_sync()
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
