@@ -106,7 +106,7 @@ def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
         return precision_config.b_mx_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
     elif target_info.cuda_capability_geq(9, 0):
-        return precision_config.b_mx_scale is not None and opt_flags.is_persistent
+        return precision_config.b_mx_scale is not None
 
     return False
 
