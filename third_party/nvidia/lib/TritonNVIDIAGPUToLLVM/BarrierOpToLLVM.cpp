@@ -76,7 +76,12 @@ calculateBarrierCount(triton::nvidia_gpu::InitBarrierOp op) {
           << " is out of range (max: " << partitionNumWarps.size() - 1 << ")";
       return std::nullopt;
     }
-    numWarps += partitionNumWarps[partitionId];
+    if (partitionId == 0) {
+      auto mod = op->getParentOfType<ModuleOp>();
+      numWarps += mlir::triton::gpu::lookupNumWarps(mod);
+    } else {
+      numWarps += partitionNumWarps[partitionId - 1];
+    }
   }
 
   return numWarps * 32;
