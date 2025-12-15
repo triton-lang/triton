@@ -151,14 +151,14 @@ def init_allocation(x, w, precision_config, fused_activation,
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         if output.ndim == 2:
             output = output[None, :, :]
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
-        k: torch.empty(v[0], device=allocation.device, dtype=v[1])
+        k: torch.zeros(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
     }
     return ret

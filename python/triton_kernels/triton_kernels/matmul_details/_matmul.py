@@ -475,13 +475,26 @@ def _matmul(
     else:
         tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
         if ScatterShardIndx is not None:
+            # dst_shard_idx = offs_y_m // 32
             dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
+            # msk = mask_m & (dst_shard_idx == 4)
+            # if tl.sum(msk, dtype=tl.int32) > 0:
+            #     print("offs_y_m", tl.where(msk[:, None], out, -1))
+            # if dst_shard_idx == 4:
+            # print("offs_y_m", tl.where(mask_m & (dst_shard_idx == 4), offs_y_m % 4, -1))
+            # dst_shard_idx = tl.zeros_like(offs_y_m)
+            mask = mask & (dst_shard_idx != -1)[:, None]
+            # mask = mask & (offs_y_m < 1)[:, None]
             for i in tl.static_range(n_reduce_shards):
                 peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
                 peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+                # if tl.sum(mask & (dst_shard_idx == 4)[:, None], dtype=tl.int32) > 0:
+                #     print("peer", tl.where(dst_shard_idx == 4, tl.load(pYPtrs + peer).to(tl.int64), -1))
+                    # print("offs_y_m", tl.where(mask, offs_y_m[:, None] % 4, -1))
                 tl.multiple_of(peer_Y_ptr, 16)
-                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                offs_y_mn = (offs_y_m % 4).to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
                 tl.store(peer_Y_ptr[:, None] + offs_y_mn, out, mask=mask)
+                # threadfence_system()
         else:
             # full all gather
             for i in tl.static_range(n_reduce_shards):
@@ -489,6 +502,7 @@ def _matmul(
                 peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
                 tl.multiple_of(peer_Y_ptr, 16)
                 offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                # offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
                 tl.store(peer_Y_ptr + offs_y_mn, out, mask=mask)
 
     if pYPtrs is not None:
