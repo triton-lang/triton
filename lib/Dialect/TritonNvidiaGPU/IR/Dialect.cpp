@@ -456,6 +456,23 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   return success();
 }
 
+bool isMultiThreadedArriveBarrier(ArriveBarrierOp op) {
+  Value rootAlloc = op.getAlloc().getDefiningOp<gpu::MemDescIndexOp>().getSrc();
+  for (Operation *user : rootAlloc.getUsers()) {
+    if (auto indexOp = dyn_cast<gpu::MemDescIndexOp>(user)) {
+      for (Operation *memDescUser : indexOp.getResult().getUsers()) {
+        if (auto initOp = dyn_cast<InitBarrierOp>(memDescUser)) {
+          if (initOp.getDependentPartitionIds()) {
+            return true;
+          }
+          return false;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

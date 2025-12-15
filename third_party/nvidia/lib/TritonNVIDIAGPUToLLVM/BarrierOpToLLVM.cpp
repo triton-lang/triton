@@ -27,28 +27,20 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
-namespace ttg = mlir::triton::gpu;
 namespace {
-
-// Given a barrier allocation value (which may be a view into a larger alloc),
-// find the root allocation by walking through MemDescIndexOp chains.
-static Value getRootAllocation(Value alloc) {
-  while (auto indexOp = alloc.getDefiningOp<triton::gpu::MemDescIndexOp>()) {
-    alloc = indexOp.getSrc();
-  }
-  return alloc;
-}
 
 // Find the WarpSpecializeOp that uses the given allocation.
 // The allocation is passed as an operand to the warp_specialize op.
 static triton::gpu::WarpSpecializeOp
 findAssociatedWarpSpecializeOp(Value barrierAlloc) {
-  Value rootAlloc = getRootAllocation(barrierAlloc);
+  Value rootAlloc =
+      barrierAlloc.getDefiningOp<triton::gpu::MemDescIndexOp>().getSrc();
 
   for (Operation *user : rootAlloc.getUsers()) {
     if (auto wsOp = dyn_cast<triton::gpu::WarpSpecializeOp>(user)) {
@@ -56,34 +48,6 @@ findAssociatedWarpSpecializeOp(Value barrierAlloc) {
     }
   }
   return nullptr;
-}
-
-bool isMultiThreadedArriveBarrier(triton::nvidia_gpu::ArriveBarrierOp op) {
-  Value alloc = op.getAlloc();
-
-  // Get the root allocation by walking through MemDescIndexOp chains.
-  // arrive_barrier uses a memdesc_index result, we need the underlying
-  // local_alloc.
-  Value rootAlloc = getRootAllocation(alloc);
-
-  // Iterate over all uses of the root allocation (the local_alloc).
-  // Each use could be a memdesc_index that is then used by an init_barrier.
-  for (Operation *user : rootAlloc.getUsers()) {
-    if (auto indexOp = dyn_cast<ttg::MemDescIndexOp>(user)) {
-      // Iterate over users of this memdesc_index to find init_barrier ops.
-      for (Operation *indexUser : indexOp.getResult().getUsers()) {
-        if (auto initOp =
-                dyn_cast<triton::nvidia_gpu::InitBarrierOp>(indexUser)) {
-          if (initOp.getDependentPartitionIds()) {
-            return true;
-          }
-          return false;
-        }
-      }
-    }
-  }
-
-  return false;
 }
 
 // Calculate the barrier count from dependentPartitionIds by summing
@@ -334,7 +298,7 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *> operands;
 
     std::optional<Value> pred;
-    if (!isMultiThreadedArriveBarrier(op)) {
+    if (!nvidia_gpu::isMultiThreadedArriveBarrier(op)) {
       TritonLLVMOpBuilder b(op.getLoc(), rewriter);
       Value id = getThreadId(rewriter, op.getLoc());
       pred = b.icmp_eq(id, b.i32_val(0));

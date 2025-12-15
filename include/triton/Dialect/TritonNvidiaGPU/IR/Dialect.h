@@ -137,6 +137,8 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps,
                                 gpu::CGAEncodingAttr cgaLayout);
 
+bool isMultiThreadedArriveBarrier(ArriveBarrierOp op);
+
 } // namespace mlir::triton::nvidia_gpu
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
