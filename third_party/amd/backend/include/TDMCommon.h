@@ -1,6 +1,10 @@
 #ifndef TRITON_THIRD_PARTY_AMD_BACKEND_INCLUDE_TDMCOMMON_H
 #define TRITON_THIRD_PARTY_AMD_BACKEND_INCLUDE_TDMCOMMON_H
 
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
 //===----------------------------------------------------------------------===//
 // C-compatible TDM utilities shared between host-side (driver.c) and
 // device-side (TDMUtility.cpp) code.
@@ -41,15 +45,16 @@ static inline void tdmGetAdjustedBlockShape(const int64_t *blockShape,
   tdmGetWarpDistribution(blockShape, numDims, numWarps, warps);
 
   if (numDims >= 2) {
-    adjustedOut[0] = (blockShape[0] + warps[0] - 1) / warps[0];
-    adjustedOut[1] = (blockShape[1] + warps[1] - 1) / warps[1];
+    for (int i = 0; i < numDims; i++) {
+      int warpDiv = warps[i];
+      adjustedOut[i] = (blockShape[i] + warpDiv - 1) / warpDiv;
+    }
   } else {
     adjustedOut[0] = (blockShape[0] + numWarps - 1) / numWarps;
   }
-
-  // Higher dimensions are not divided by warps
-  for (int i = 2; i < numDims; ++i)
-    adjustedOut[i] = blockShape[i];
 }
 
+#if defined(__cplusplus)
+}
+#endif
 #endif // TRITON_THIRD_PARTY_AMD_BACKEND_INCLUDE_TDMCOMMON_H
