@@ -186,11 +186,11 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
-          count.consumerPendingCount += 1;
+          count.producerPendingCount += 1;
           break;
         case AsyncOp::NONE:
-          count.consumerMultiThreaded = true;
-          count.consumerPendingCount += 1;
+          count.producerMultiThreaded = true;
+          count.producerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
@@ -205,12 +205,12 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
-          count.producerPendingCount += 1;
+          count.consumerPendingCount += 1;
           break;
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          count.producerMultiThreaded = true;
-          count.producerPendingCount += 1;
+          count.consumerMultiThreaded = true;
+          count.consumerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported consumer kind");

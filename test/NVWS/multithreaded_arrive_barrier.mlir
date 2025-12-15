@@ -20,17 +20,15 @@ tt.func @auto_simple(
   %true = arith.constant true
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
 
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
 
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
 
 // CHECK: "mbarrier.arrive.shared::cta.b64 _, [$0];", "r" %2954 : (!llvm.struct<(ptr<3>, i32)>) -> !llvm.void
-// CHECK: "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 32768;", "b,r" %663, %654 : (i1, !llvm.ptr<3>) -> !llvm.void
-
 
 
   // Single-tile loop so automatic warp specialization can form producer/consumer partitions.
@@ -51,16 +49,15 @@ tt.func @auto_simple(
   // Final sink after the loop prevents DCE and anchors partitioned outputs.
   "final_use"(%final) : (tensor<128x128xf32, #acc_layout>) -> ()
 
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
 
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+// CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
 
 // CHECK: "mbarrier.arrive.shared::cta.b64 _, [$0];", "r" %2954 : (!llvm.struct<(ptr<3>, i32)>) -> !llvm.void
-// CHECK: "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 32768;", "b,r" %663, %654 : (i1, !llvm.ptr<3>) -> !llvm.void
 
   // Single-tile loop so automatic warp specialization can form producer/consumer partitions.
   %final_2 = scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero) -> (tensor<128x128xf32, #acc_layout>) : i32 {
