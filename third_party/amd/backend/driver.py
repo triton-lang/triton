@@ -823,7 +823,8 @@ class HIPLauncher(object):
             assert isinstance(driver, HIPDriver)
             device = driver.get_current_device()
             device_properties = driver.utils.get_device_properties(device)
-            self.launch_cooperative_grid = device_properties['cooperativeLaunch']
+            assert device_properties['cooperativeLaunch'], \
+                "Cooperative launch requested but not supported by device"
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
 
