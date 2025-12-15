@@ -416,8 +416,7 @@ def _p_matmul(
                 tl.device_assert(stride_y_k // stride_y_m == tl.cdiv(stride_y_k, stride_y_m))
                 split_k_row_offs = pid_k1 * (stride_y_k // stride_y_m)
                 offs_y_m = tl.where(mask_m, offs_y_m + split_k_row_offs, offs_y_m)
-        elif Y_TMA_MODE is None and HAS_SCATTER: #  and pYPtrs is None:
-            # tl.static_assert(HAS_SCATTER)
+        elif Y_TMA_MODE is None and HAS_SCATTER:
             offs_y_m, mask_m = _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, start_m1 + offs_m, mask_m)
             MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
         else:
@@ -603,27 +602,14 @@ def _p_matmul(
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
                 mask = mask_m[:, None] & mask_n[None, :]
-                # offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_n[None, :] * stride_y_n +offs_y_m.to(index_type)[:, None] * stride_y_m
                 offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_n[None, :] * stride_y_n +(offs_y_m % 4).to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
                 if ScatterShardIndx is not None:
                     dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
-                    # msk = mask_m & (dst_shard_idx == 4)
-                    # if tl.sum(msk, dtype=tl.int32) > 0:
-                    #     print("offs_y_m", tl.where(msk[:, None]), out, -1)
-                        # print("mask_m", mask_m)
-                    # dst_shard_idx = tl.zeros_like(offs_y_m)
-                    mask = mask & (dst_shard_idx != -1)[:, None]
-                    # if tl.sum(mask & (dst_shard_idx == 4)[:, None], dtype=tl.int32) > 0:
-                    #     print("offs_y_m", tl.where(mask, offs_y_m[:, None] % 4, -1))
-                    # mask = mask & (offs_y_m < 1)[:, None]
                     for i in tl.static_range(n_reduce_shards):
                         peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
                         peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
-                        # if tl.sum(mask & (dst_shard_idx == 4)[:, None], dtype=tl.int32) > 0:
-                        #     print("peer", tl.where(dst_shard_idx == 4, tl.load(pYPtrs + peer).to(tl.int64), -1))
                         tl.multiple_of(peer_Y_ptr, 16)
                         tl.store(peer_Y_ptr[:, None] + offs_kzmn, out, mask=mask)
-                        # threadfence_system()
                 else:
                     # full all gather
                     for i in tl.static_range(n_reduce_shards):
