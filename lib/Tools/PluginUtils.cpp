@@ -49,43 +49,41 @@ llvm::Error TritonPlugin::loadPlugin() {
   if (auto isValid = checkLibraryValid(error))
     return isValid;
 
-  // Do a quick check to see if only plugin pass symbols are present
-  intptr_t isPassPluginSymbolPresent =
-      (intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES.c_str());
-  intptr_t isDialectPluginSymbolPresent =
-      (intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS.c_str());
-
-  auto enumeratePassesAPIOrErr =
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES.c_str())) {
+    auto enumeratePassesAPIOrErr =
       getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
           ENUMERATE_PASSES);
-  auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
-  auto registerPassAPIOrErr =
+    auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
+    auto registerPassAPIOrErr =
       getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
-  auto dialectPluginInfoAPIOrErr =
-      getAPI<dialectPluginInfoType, dialectPluginInfoCType>(DIALECT_PLUGININFO);
-  auto enumerateDialectsAPIOrErr =
-      getAPIOrNull<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+
+    if (auto Err = enumeratePassesAPIOrErr.takeError())
+      return Err;
+    if (auto Err = addPassAPIOrErr.takeError())
+      return Err;
+    if (auto Err = registerPassAPIOrErr.takeError())
+      return Err;
+
+    addPassAPI = *addPassAPIOrErr;
+    registerPassAPI = *registerPassAPIOrErr;
+    enumeratePassesAPI = *enumeratePassesAPIOrErr;
+  }
+
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS.c_str())) {
+    auto enumerateDialectsAPIOrErr =
+      getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
           ENUMERATE_DIALECTS);
-  auto enumeratePassesAPIOrErr =
-      getAPIOrNull<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
-          ENUMERATE_PASSES);
+    auto dialectPluginInfoAPIOrErr =
+      getAPI<dialectPluginInfoType, dialectPluginInfoCType>(DIALECT_PLUGININFO);
 
-  if (auto Err = enumeratePassesAPIOrErr.takeError())
-    return Err;
-  if (auto Err = addPassAPIOrErr.takeError())
-    return Err;
-  if (auto Err = registerPassAPIOrErr.takeError())
-    return Err;
-  if (auto Err = enumerateDialectsAPIOrErr.takeError())
-    return Err;
-  if (auto Err = dialectPluginInfoAPIOrErr.takeError())
-    return Err;
+    if (auto Err = enumerateDialectsAPIOrErr.takeError())
+      return Err;
+    if (auto Err = dialectPluginInfoAPIOrErr.takeError())
+      return Err;
+    enumerateDialectsAPI = *enumerateDialectsAPIOrErr;
+    dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
+  }
 
-  addPassAPI = *addPassAPIOrErr;
-  registerPassAPI = *registerPassAPIOrErr;
-  enumerateDialectsAPI = *enumerateDialectsAPIOrErr;
-  dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
-  enumeratePassesAPI = *enumeratePassesAPIOrErr;
   isLoaded = true;
   return llvm::Error::success();
 }

@@ -61,16 +61,6 @@ private:
     return func;
   }
 
-  // If the enumerate API is not implemented for either dialect or passes then
-  // our helpers should bail, leaving the std::vector empty and also implying
-  // the register/add-pass or dialect info apis are not to be used.
-  template <typename T, typename U>
-  llvm::Expected<T> getAPIOrNull(const std::string &symbol) const {
-    intptr_t isSymbolPresent =
-        (intptr_t)library.getAddressOfSymbol(symbol.c_str());
-    return !isSymbolPresent ? llvm::Expected<T>(nullptr) : getAPI<T, U>(symbol);
-  }
-
   llvm::Expected<TritonPluginResult> checkAPIResult(TritonPluginResult result,
                                                     const char *handle) const;
   llvm::Expected<TritonPluginResult>
