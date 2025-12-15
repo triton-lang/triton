@@ -731,8 +731,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_mbarrier_init",
            [](GluonOpBuilder &self, Value memDesc, int count) {
-             self.create<ttng::InitBarrierOp>(memDesc, count,
-                                              mlir::DenseI32ArrayAttr({}));
+             self.create<ttng::InitBarrierOp>(memDesc, count);
            })
       .def("create_mbarrier_inval",
            [](GluonOpBuilder &self, Value memDesc) {

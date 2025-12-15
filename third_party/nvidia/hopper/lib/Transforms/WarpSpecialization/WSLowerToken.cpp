@@ -133,13 +133,11 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
           builder, loc, singleBarrierMemDescType, bufferFullArray, idx);
       // EmptyView is used for ConsumerRelease and ProducerAcquire.
       // FullView is for ConsumerWait and ProducerCommit.
-      ttng::InitBarrierOp::create(builder, loc, barrierFullView, 1,
-                                  DenseI32ArrayAttr({}));
+      ttng::InitBarrierOp::create(builder, loc, barrierFullView, 1);
 
       Value barrierEmptyView = ttg::MemDescIndexOp::create(
           builder, loc, singleBarrierMemDescType, bufferEmptyArray, idx);
-      ttng::InitBarrierOp::create(builder, loc, barrierEmptyView, 1,
-                                  DenseI32ArrayAttr({}));
+      ttng::InitBarrierOp::create(builder, loc, barrierEmptyView, 1);
     }
 
     assert(numCTAs == 1 && "remote CTA is not supported yet");

@@ -45,7 +45,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
                             sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc =
       gpu::LocalAllocOp::create(rewriter, loc, barrierMemDescType);
-  InitBarrierOp::create(rewriter, loc, barrierAlloc, 1, DenseI32ArrayAttr({}));
+  InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;

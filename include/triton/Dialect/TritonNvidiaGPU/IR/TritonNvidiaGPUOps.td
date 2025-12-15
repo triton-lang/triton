@@ -146,6 +146,13 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
     OptionalAttr<DenseI32ArrayAttr>:$dependentPartitionIds
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "int32_t":$count), [{
+      build($_builder, $_state, alloc, count, /*dependentPartitionIds=*/nullptr);
+    }]>
+  ];
+
   let hasVerifier = 1;
 }
 

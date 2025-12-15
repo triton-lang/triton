@@ -235,7 +235,7 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
     if (dependentPartitionIds.empty() || !multiThreaded) {
-      InitBarrierOp::create(b1, barrierView, arrivalCount, DenseI32ArrayAttr());
+      InitBarrierOp::create(b1, barrierView, arrivalCount);
     } else {
       InitBarrierOp::create(
           b1, barrierView, arrivalCount,
