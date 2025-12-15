@@ -1220,8 +1220,8 @@ def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
 
 
 @gluon.jit
-def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape, out_strides,
-                                           SHARED_LAYOUT: ttgl.constexpr):
+def tensor_descriptor_load_store_nd_kernel_device_tdm(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape,
+                                                      out_strides, SHARED_LAYOUT: ttgl.constexpr):
     ndim: ttgl.constexpr = len(BLOCK_SHAPE)
     desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
                                                        block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
@@ -1238,10 +1238,23 @@ def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
+@gluon.jit
+def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
+    ndim: ttgl.constexpr = len(inp_desc.block_shape)
+    offs = (0, ) * ndim
+    block_shared = ttgl.allocate_shared_memory(inp_desc.dtype, shape=inp_desc.block_shape, layout=inp_desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
 @pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
-def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
     SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
                                                               order=[ndim - 1 - i for i in range(ndim)])
 
@@ -1263,9 +1276,16 @@ def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
         inp = inp.cuda()
         out = out.cuda()
 
-    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
-    k = tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
-                                                      out.shape, out.stride(), SHARED_LAYOUT)
+    if TDM_TYPE == "DEVICE_TDM":
+        constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+        k = tensor_descriptor_load_store_nd_kernel_device_tdm[(1, )](out, inp, inp.shape,
+                                                                     inp.stride(), constexpr_block_shape, out.shape,
+                                                                     out.stride(), SHARED_LAYOUT)
+    else:
+        assert TDM_TYPE == "HOST_TDM"
+        inp_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        out_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(out, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        k = tensor_descriptor_load_store_nd_kernel_host_tdm[(1, )](out_desc, inp_desc)
 
     amdgcn = k.asm["amdgcn"]
     for pattern in ("tensor_load_to_lds", "tensor_store_from_lds", "s_wait_tensorcnt 0x0"):
@@ -1305,8 +1325,9 @@ def test_tensor_descriptor_load_store_invalid_blocksize():
 
     # Expect compilation to fail due to block size exceeding maximum
     try:
-        tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
-                                                      out.shape, out.stride(), SHARED_LAYOUT)
+        tensor_descriptor_load_store_nd_kernel_device_tdm[(1, )](out, inp, inp.shape,
+                                                                 inp.stride(), constexpr_block_shape, out.shape,
+                                                                 out.stride(), SHARED_LAYOUT)
         pytest.fail(
             f"Expected compilation to fail for block size {INNER_BLOCK} (2^17) > 65536 (2^16), but it succeeded")
     except Exception as e:
@@ -2034,3 +2055,414 @@ def test_tdm_load_pred():
 
     b = b_device.cpu()
     assert torch.equal(a[:, 32:], b[:, 32:]) and not torch.equal(a[:, :32], b[:, :32])
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("XBLOCK", [128])
+def test_ws_store_wait_load(XBLOCK):
+    """
+    Tests warp specialization with mbarrier synchronization on GFX1250.
+
+    This test validates the mbarrier wait/arrive mechanism for synchronizing data flow
+    between two specialized warp groups using helper variables ready_bar and done_bar:
+    - ws_producer (worker) partition: Stores data to shared memory and signals completion via ready_bar
+    - ws_consumer (default) partition: Waits on ready_bar, loads the data, processes it, stores to
+      a different shared memory location, and signals completion via done_bar
+
+    The main kernel (executed by default warps) then waits for done_bar, loads the final result, and stores
+    it to global memory. The test verifies data integrity by comparing the output with an expected
+    arange pattern.
+    """
+
+    @gluon.jit
+    def ws_consumer(smem, ready_bar, done_bar, layout: ttgl.constexpr):
+        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=0)
+        val = smem.index(0).load(layout)
+        smem.index(1).store(val)
+        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+
+    @gluon.jit
+    def ws_producer(smem, ready_bar, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
+        smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
+        ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
+
+    @gluon.jit
+    def ws_kernel(output, XBLOCK: ttgl.constexpr):
+        WARP_SIZE: ttgl.constexpr = 32
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
+                                                            warps_per_cta=[4], order=[0])
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        for i in range(2):
+            # we have 4 default warps and 4 worker warps and arrive on barrier once per thread
+            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+        ready_bar = bar.index(0)
+        done_bar = bar.index(1)
+        # NOTE: We have 8 warps in total. worker_num_warps = [4] (num warps for ws_producer partition) and num_warps = 4 (num warps for consumer partition)
+        ttgl.warp_specialize([
+            (ws_consumer, (smem, ready_bar, done_bar, blocked_layout)),
+            (ws_producer, (smem, ready_bar, XBLOCK, blocked_layout)),
+        ], [4])
+        ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
+        val = smem.index(1).load(blocked_layout)
+        output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+        ttgl.store(output_ptrs, val)
+
+    output = torch.empty((XBLOCK, ), dtype=torch.float16).cuda()
+    ws_kernel[(1, )](output, XBLOCK=XBLOCK, num_warps=4)
+    torch_output = torch.arange(0, XBLOCK, dtype=torch.float16)
+    output_ref = output.cpu()
+    assert torch.equal(output_ref, torch_output)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("XBLOCK", [128])
+@pytest.mark.parametrize("NUM_ITERS", [10])
+def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
+    """
+    Tests warp specialization with mbarrier synchronization in a loop and phase tracking on GFX1250.
+
+    This test validates iterative producer-consumer synchronization using three mbarriers:
+    - ready_bar: Signals that the producer has written data to shared memory
+    - done_bar: Signals that the consumer has finished all iterations
+    - empty_bar: Signals that the consumer has consumed data and buffer is empty
+
+    - ws_producer (worker) partition: Waits for empty_bar, writes data, signals via ready_bar (loops NUM_ITERS times)
+    - ws_consumer (default) partition: Waits for ready_bar, reads and accumulates data, signals via empty_bar (loops NUM_ITERS times)
+
+    Both partitions track phases (1-bit parity phase which toggles between 0 for even and 1 for odd). After all iterations, the main kernel
+    (executed by default warps) waits for done_bar, loads the accumulated result, and stores it to global memory.
+    The test verifies that the output equals the expected arange pattern.
+    """
+
+    @gluon.jit
+    def ws_consumer(smem, ready_bar, done_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
+                    layout: ttgl.constexpr):
+        acc = ttgl.zeros([XBLOCK], ttgl.float16, layout)
+        phase = 0
+        for _ in ttgl.static_range(NUM_ITERS):
+            ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=phase)
+            phase = phase ^ 1
+            val = smem.index(0).load(layout)
+            acc += val
+            ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+
+        smem.index(1).store(acc)
+        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+
+    @gluon.jit
+    def ws_producer(smem, ready_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
+                    layout: ttgl.constexpr):
+        val = ttgl.arange(0, XBLOCK, layout).to(ttgl.float16)
+        phase = 0
+        for _ in ttgl.static_range(NUM_ITERS):
+            ttgl.amd.gfx1250.mbarrier.wait(empty_bar, phase=phase)
+            phase = phase ^ 1
+            smem.index(0).store(val)
+            ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
+
+    @gluon.jit
+    def ws_kernel(output, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr):
+        WARP_SIZE: ttgl.constexpr = 32
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
+                                                            warps_per_cta=[4], order=[0])
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        for i in ttgl.static_range(3):
+            # we have 4 default warps and 4 worker warps and arrive on barrier once per thread
+            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+        ready_bar = bar.index(0)
+        done_bar = bar.index(1)
+        empty_bar = bar.index(2)
+
+        ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+        # NOTE: We have 8 warps in total. worker_num_warps = [4] (num warps for ws_producer partition) and num_warps = 4 (num warps for consumer partition)
+        ttgl.warp_specialize([
+            (ws_consumer, (smem, ready_bar, done_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
+            (ws_producer, (smem, ready_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
+        ], [4])
+        ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
+        val = smem.index(1).load(blocked_layout)
+        output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+        ttgl.store(output_ptrs, val)
+
+    output = torch.empty((XBLOCK, ), dtype=torch.float16).cuda()
+    ws_kernel[(1, )](output, XBLOCK=XBLOCK, NUM_ITERS=NUM_ITERS, num_warps=4)
+    torch_output = NUM_ITERS * torch.arange(0, XBLOCK, dtype=torch.float16)
+    output_ref = output.cpu()
+    assert torch.equal(output_ref, torch_output)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("NUM_TOTAL_WARPS", [8, 16])
+@pytest.mark.parametrize("M,N", [(32, 32), (1024, 1024), (1008, 1008), (1000, 1000)])
+def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_TOTAL_WARPS):
+    """
+    Tests warp specialization with tensor descriptor async load/store operations coordinated by mbarriers on GFX1250.
+
+    This test validates the producer-consumer pattern using TDM async operations
+    with multiple buffers, where each buffer has its own dedicated mbarrier for synchronization:
+    - ws_producer (worker) partition: Asynchronously loads data from global memory to shared memory buffers
+      using TDM async_load, with each load operation automatically signaling its corresponding mbarrier
+    - ws_consumer (default) partition: Waits on each buffer's mbarrier, then asynchronously stores data
+      from shared memory to global memory using TDM async_store
+
+    The synchronization pattern uses one mbarrier per buffer (bars.index(i)), ensuring that the consumer
+    only accesses a buffer after the producer has completed loading into it.
+
+    The test verifies that the output matches the input, confirming that async load/store operations are correctly coordinated by mbarriers.
+    """
+
+    @gluon.jit
+    def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+            ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
+
+    @gluon.jit
+    def ws_consumer(b_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), 0)
+            idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+            ttgl.amd.gfx1250.tdm.async_store(b_desc, [idx_m, idx_n], a_buffer.index(i))
+
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    @gluon.jit
+    def ws_tensor_async_load_store_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
+                                                   BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                   NUM_BUFFERS: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+        PRODUCER_WARPS: ttgl.constexpr = NUM_WARPS // 2
+        pid = ttgl.program_id(axis=0)
+        num_pid_m = ttgl.cdiv(M, BLOCK_M)
+        pid_m = pid % num_pid_m
+        pid_n = pid // num_pid_m
+
+        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
+
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            ttgl.amd.gfx1250.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
+
+        idx_m = pid_m * BLOCK_M
+
+        ttgl.warp_specialize([
+            (ws_consumer, (b_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N, NUM_BUFFERS)),
+            (ws_producer, (a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N, NUM_BUFFERS)),
+        ], [PRODUCER_WARPS])
+
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
+
+    ws_tensor_async_load_store_mbarrier_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                                     NUM_BUFFERS=NUM_BUFFERS, NUM_WARPS=NUM_TOTAL_WARPS,
+                                                     num_warps=NUM_TOTAL_WARPS // 2)
+
+    b_triton = b_device.cpu()
+    assert torch.equal(b_triton, a)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("NUM_TOTAL_WARPS", [8, 16])
+@pytest.mark.parametrize("M,N", [(32, 32), (1024, 1024), (1008, 1008), (1000, 1000)])
+def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_TOTAL_WARPS):
+    """
+    Tests warp specialization with mixed async/sync operations coordinated by mbarriers on GFX1250.
+
+    This test validates the producer-consumer pattern using a combination of TDM async loads and
+    synchronous stores with multiple buffers, where each buffer has its own dedicated mbarrier:
+    - ws_producer (worker) partition: Asynchronously loads data from global memory to shared memory buffers
+      using TDM async_load, with each load operation automatically signaling its corresponding mbarrier
+    - ws_consumer (default) partition: Waits on each buffer's mbarrier, loads data from shared memory
+      into registers using regular loads, then stores to global memory using regular synchronous stores
+
+    The synchronization pattern uses one mbarrier per buffer (bars.index(i)), ensuring that the consumer
+    only accesses a buffer after the producer has completed loading into it.
+
+    NOTE: This test showcases that tensors (here: b_ptr) can be passed as arguments to the default partition
+    (here: ws_consumer), which is not supported for worker partitions.
+
+    The test verifies that the output matches the input, confirming correct synchronization.
+    """
+
+    @gluon.jit
+    def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+            ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
+
+    @gluon.jit
+    def ws_consumer(a_buffer, b_ptr, bars, pid_n, idx_m, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                    NUM_BUFFERS: ttgl.constexpr, BLOCKED_LAYOUT: ttgl.constexpr):
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), 0)
+            idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+            a = a_buffer.index(i).load(layout=BLOCKED_LAYOUT)
+            offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+            offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+            offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+            mask_b = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+            ttgl.store(b_ptr + offs_b, a, mask=mask_b)
+
+    @gluon.jit
+    def ws_tensor_async_copy_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
+                                             BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                             NUM_BUFFERS: ttgl.constexpr, BLOCKED_LAYOUT: ttgl.constexpr,
+                                             NUM_WARPS: ttgl.constexpr):
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+        PRODUCER_WARPS: ttgl.constexpr = NUM_WARPS // 2
+        pid = ttgl.program_id(axis=0)
+        num_pid_m = ttgl.cdiv(M, BLOCK_M)
+        pid_m = pid % num_pid_m
+        pid_n = pid // num_pid_m
+
+        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
+
+        for i in ttgl.static_range(0, NUM_BUFFERS):
+            # TDM arrives on barrier once per warp, so use producer warp count
+            ttgl.amd.gfx1250.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
+
+        idx_m = pid_m * BLOCK_M
+
+        ttgl.warp_specialize([
+            (ws_consumer, (a_buffer, b_ptr, bars, pid_n, idx_m, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, BLOCKED_LAYOUT)),
+            (ws_producer, (a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N, NUM_BUFFERS)),
+        ], [PRODUCER_WARPS])
+
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
+
+    blocked_layout = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_TOTAL_WARPS // 2, 1], [1, 0])
+
+    ws_tensor_async_copy_mbarrier_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                               NUM_BUFFERS=NUM_BUFFERS, BLOCKED_LAYOUT=blocked_layout,
+                                               NUM_WARPS=NUM_TOTAL_WARPS, num_warps=NUM_TOTAL_WARPS // 2)
+
+    b_triton = b_device.cpu()
+    assert torch.equal(b_triton, a)
+
+
+@pytest.mark.parametrize("M,N", [(128, 128), (1024, 1024)])
+@pytest.mark.parametrize("shared_layout", [
+    ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+    ttgl.SwizzledSharedLayout(16, 2, 4, [1, 0]),
+    ttgl.PaddedSharedLayout.with_identity_for([[4, 1]], [128, 128], [1, 0]),
+])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("NUM_TOTAL_WARPS", [8])
+def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WARPS):
+    """
+    Tests warp specialization with async_copy operations and mbarrier synchronization on GFX1250.
+
+    This test validates the producer-consumer pattern using async_copy with two mbarriers:
+    - ready_bar: Signals that ws_producer has completed copying data to the input buffer
+    - done_bar: Signals that ws_consumer has completed processing and writing to the output buffer
+
+    - ws_producer (default) partition: Copies data from global memory to shared memory
+      then signals completion via mbarrier_arrive on ready_bar.
+    - ws_consumer (worker) partition: Waits on ready_bar, loads data from the input shared memory buffer,
+      stores it to an output shared memory buffer, then signals done_bar.
+
+    The main kernel (executed by default warps) waits on done_bar, then loads data
+    from the output buffer and stores it to global memory.
+
+    NOTE: This test showcases that tensors (here: a_ptrs) can be passed as arguments to
+    the default partition (here: ws_producer), which is not supported for worker partitions.
+
+    The test verifies that the output matches the input, confirming correct synchronization.
+    """
+
+    @gluon.jit
+    def ws_producer(a_ptrs, buffer, ready_bar):
+        ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptrs)
+        ttgl.amd.gfx1250.async_copy.mbarrier_arrive(ready_bar)
+
+    @gluon.jit
+    def ws_consumer(in_buffer, out_buffer, ready_bar, done_bar, BLOCKED_LAYOUT: ttgl.constexpr):
+        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, 0)
+        val = in_buffer.load(BLOCKED_LAYOUT)
+        out_buffer.store(val)
+        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+
+    @gluon.jit
+    def ws_async_copy_mbarrier_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                      shared_layout: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
+        PARTITION_WARPS: ttgl.constexpr = NUM_WARPS // 2
+        ASYNC_LOAD_BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [PARTITION_WARPS, 1], [1, 0])
+        BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout(
+            [1, 8], [4, 8], [PARTITION_WARPS // 2, PARTITION_WARPS // (PARTITION_WARPS // 2)], [1, 0])
+        WARP_SIZE: ttgl.constexpr = 32
+
+        pid = ttgl.program_id(axis=0)
+        num_pid_m = ttgl.cdiv(M, BLOCK_M)
+        pid_m = pid % num_pid_m
+        pid_n = pid // num_pid_m
+
+        offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, ASYNC_LOAD_BLOCKED_LAYOUT))
+        offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, ASYNC_LOAD_BLOCKED_LAYOUT))
+
+        a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+
+        mbar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+        out_buffer = ttgl.allocate_shared_memory(out_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+
+        ready_bar = mbar.index(0)
+        done_bar = mbar.index(1)
+
+        # TDM arrives on barrier once per warp, so use partition warp count
+        ttgl.amd.gfx1250.mbarrier.init(ready_bar, count=PARTITION_WARPS * WARP_SIZE)
+        ttgl.amd.gfx1250.mbarrier.init(done_bar, count=PARTITION_WARPS * WARP_SIZE)
+
+        ttgl.warp_specialize([
+            (ws_producer, (a_ptrs, buffer, ready_bar)),
+            (ws_consumer, (buffer, out_buffer, ready_bar, done_bar, BLOCKED_LAYOUT)),
+        ], [PARTITION_WARPS])
+
+        out_offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        out_offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        mask = (out_offs_m[:, None] < M) & (out_offs_n[None, :] < N)
+        ttgl.amd.gfx1250.mbarrier.wait(done_bar, 0)
+        res = out_buffer.load(BLOCKED_LAYOUT)
+        out_ptrs = out_ptr + out_offs_m[:, None] * N + out_offs_n[None, :]
+        ttgl.store(out_ptrs, res, mask)
+
+    BLOCK_M = 128
+    BLOCK_N = 128
+
+    if dtype == torch.float8_e4m3fn:
+        # range from min normal (0 00001 00) to max normal (0 11110 11)
+        a = torch.randint(0x04, 0x7B, (M, N), dtype=torch.uint8).view(dtype)
+    else:
+        a = torch.rand((M, N), dtype=dtype)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out_handle = out.cuda()
+
+    ws_async_copy_mbarrier_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N, shared_layout,
+                                        NUM_WARPS=NUM_TOTAL_WARPS, num_warps=NUM_TOTAL_WARPS // 2)
+    out_tri = out_handle.cpu()
+    out_ref = a.cpu()
+    assert torch.equal(out_tri, out_ref)

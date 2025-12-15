@@ -220,10 +220,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   }
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
-  if (count.producerPendingCount == 0)
-    count.producerPendingCount = 1;
   if (count.consumerPendingCount == 0)
     count.consumerPendingCount = 1;
+  if (count.producerPendingCount == 0)
+    count.producerPendingCount = 1;
 
   return count;
 }
@@ -270,10 +270,10 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   b2.setInsertionPointAfter(op1);
 
   auto emptyMbars =
-      createBarriers(b1, b2, depth, count.producerPendingCount,
+      createBarriers(b1, b2, depth, count.consumerPendingCount,
                      count.consumerPartitionIds, count.consumerMultiThreaded);
   auto fullMbars =
-      createBarriers(b1, b2, depth, count.consumerPendingCount,
+      createBarriers(b1, b2, depth, count.producerPendingCount,
                      count.producerPartitionIds, count.producerMultiThreaded);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),

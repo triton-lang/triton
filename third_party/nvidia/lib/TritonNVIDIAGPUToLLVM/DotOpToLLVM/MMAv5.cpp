@@ -362,12 +362,13 @@ struct DotConversion {
   CreateMMAInstFn createMMAInst;
 };
 
-void convertDotImpl(const LLVMTypeConverter &typeConverter,
-                    ConversionPatternRewriter &rewriter, Location loc, Value a,
-                    Value b, Value loadedA, Value loadedB,
-                    MemDescType dTensorTy, Value useDFlag, Value pred,
-                    ValueRange barriers, ValueRange barrierPreds, bool twoCTAs,
-                    bool opKindIsMXFP4, const DotConversion &op) {
+LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
+                             ConversionPatternRewriter &rewriter, Location loc,
+                             Value a, Value b, Value loadedA, Value loadedB,
+                             MemDescType dTensorTy, Value useDFlag, Value pred,
+                             ValueRange barriers, ValueRange barrierPreds,
+                             bool twoCTAs, bool opKindIsMXFP4,
+                             const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -437,8 +438,15 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
         DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
   } else {
     auto isFp4a = op.numBitsPerElementA == 4;
-    aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
-        loc, rewriter, aTensorTy, baseA, aOperandShape, 0, 5, isFp4a));
+    auto loader = DotOpMmaSmemLoader::build(loc, rewriter, aTensorTy, baseA,
+                                            aOperandShape, 0, 5, isFp4a);
+    if (failed(loader)) {
+      return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
+                                  "operand A in shared memory ")
+             << aTensorTy << " for MMAv5 instruction shape [" << mmaSizeM
+             << ", " << mmaSizeK << "]";
+    }
+    aLoader = std::make_unique<DotOpMmaSmemLoader>(std::move(*loader));
     transA = ((DotOpMmaSmemLoader *)aLoader.get())->getDescriptor().transposed;
   }
 
@@ -447,10 +455,16 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   // To compute a output tile of [mmaSizeM, mmaSizeN] in 2CTA mode, we load
   // an A of size 2 * mmaSizeM x K and a B of size K x mmaSizeN.
   // Now, since B is split amongs 2 CTAs along N, we need to divide by 2.
-  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+  auto bLoader = DotOpMmaSmemLoader::build(
       loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
       1, 5, isFp4b);
-  bool transB = !bLoader.getDescriptor().transposed;
+  if (failed(bLoader)) {
+    return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
+                                "operand B in shared memory ")
+           << bTensorTy << " for MMAv5 instruction shape [" << mmaSizeK << ", "
+           << mmaSizeN << "]";
+  }
+  bool transB = !bLoader->getDescriptor().transposed;
 
   assert((!aTensorTy.getElementType().isF32() || !(transA || transB)) &&
          "Currently don't support transpose for F32.");
@@ -464,7 +478,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       for (int k = 0; k < numRepK; k++) {
         MemDescOperand a =
             aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
-        Value b = bLoader.smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
+        Value b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
@@ -479,11 +493,13 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
   }
   LLVM::BrOp::create(rewriter, loc, endBlock);
+  return success();
 }
 
-void convertDot(const LLVMTypeConverter &typeConverter,
-                ConversionPatternRewriter &rewriter, Location loc,
-                ttng::TCGen5MMAOp op, ttng::TCGen5MMAOpAdaptor &adaptor) {
+LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
+                         ConversionPatternRewriter &rewriter, Location loc,
+                         ttng::TCGen5MMAOp op,
+                         ttng::TCGen5MMAOpAdaptor &adaptor) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
@@ -525,11 +541,11 @@ void convertDot(const LLVMTypeConverter &typeConverter,
                   useInitAcc, desc.aInTmem, twoCTAs);
   };
 
-  convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
-                 adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), twoCTAs, /*opKindIsMXFP4=*/false,
-                 dot);
+  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
+                        adaptor.getA(), adaptor.getB(), dTensorTy,
+                        adaptor.getUseD(), adaptor.getPred(),
+                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
+                        twoCTAs, /*opKindIsMXFP4=*/false, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -562,10 +578,10 @@ int getScaleFactorColsPerSet(mxfpKind kind) {
   }
 };
 
-void convertScaledDot(const LLVMTypeConverter &typeConverter,
-                      ConversionPatternRewriter &rewriter, Location loc,
-                      ttng::TCGen5MMAScaledOp op,
-                      ttng::TCGen5MMAScaledOpAdaptor &adaptor) {
+LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
+                               ConversionPatternRewriter &rewriter,
+                               Location loc, ttng::TCGen5MMAScaledOp op,
+                               ttng::TCGen5MMAScaledOpAdaptor &adaptor) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
@@ -640,10 +656,11 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
                         mxfpInstKind, twoCTAs);
   };
 
-  convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
-                 adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), twoCTAs, opKindIsMXFP4, dot);
+  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
+                        adaptor.getA(), adaptor.getB(), dTensorTy,
+                        adaptor.getUseD(), adaptor.getPred(),
+                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
+                        twoCTAs, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -659,7 +676,9 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    if (failed(convertDot(*getTypeConverter(), rewriter, op.getLoc(), op,
+                          adaptor)))
+      return failure();
     rewriter.eraseOp(op);
     return success();
   }
@@ -672,7 +691,9 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    if (failed(convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op,
+                                adaptor)))
+      return failure();
     rewriter.eraseOp(op);
     return success();
   }

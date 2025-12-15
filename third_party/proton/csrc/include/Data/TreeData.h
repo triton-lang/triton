@@ -33,6 +33,8 @@ public:
 
   void clear() override;
 
+  void clearCache() override;
+
 protected:
   // ScopeInterface
   void enterScope(const Scope &scope) override;

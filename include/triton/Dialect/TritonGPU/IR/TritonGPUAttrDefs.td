@@ -457,6 +457,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     int getVec() const;
   }];
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 def AMDRotatingSharedEncodingAttr :

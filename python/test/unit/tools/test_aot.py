@@ -94,6 +94,9 @@ test_utils_src = """
 #include <assert.h>
 #include "kernel.h"
 
+// Forward declaration for backward compatibility with CUDA 12.x and 13.x
+CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
+
 static void write_buffer_to_csv(char *filename, int32_t *buffer, int size) {
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
@@ -151,7 +154,7 @@ int main(int argc, char **argv) {{
   CUresult err = 0;
   cuInit(0);
   cuDeviceGet(&dev, 0);
-  cuCtxCreate(&ctx, 0, dev);
+  cuCtxCreate_v2(&ctx, 0, dev);
   cuMemAlloc(&A, M * K * 2);
   cuMemAlloc(&B, K * N * 2);
   cuMemAlloc(&C, M * N * 4);

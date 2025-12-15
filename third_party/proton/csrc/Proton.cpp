@@ -172,6 +172,11 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().getData(sessionId);
       },
       pybind11::arg("sessionId"));
+
+  m.def(
+      "clear_data",
+      [](size_t sessionId) { SessionManager::instance().clearData(sessionId); },
+      pybind11::arg("sessionId"));
 }
 
 PYBIND11_MODULE(libproton, m) {

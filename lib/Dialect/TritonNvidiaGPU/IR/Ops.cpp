@@ -529,6 +529,11 @@ void TCGen5MMAOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
+ValueRange TCGen5MMAOp::getCompletionBarriers() { return getBarriers(); }
+ValueRange TCGen5MMAOp::getCompletionBarrierPreds() {
+  return getBarrierPreds();
+}
+
 void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarrierPredsMutable().append(pred);
   getBarriersMutable().append(barrier);
@@ -652,6 +657,11 @@ Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
 
 void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
+}
+
+ValueRange TCGen5MMAScaledOp::getCompletionBarriers() { return getBarriers(); }
+ValueRange TCGen5MMAScaledOp::getCompletionBarrierPreds() {
+  return getBarrierPreds();
 }
 
 void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
@@ -860,7 +870,7 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Incorrect tmem layout.");
     }
     if (tmemEnc.getBlockM() != 128) {
-      return emitOpError("Tmem layout ahouls have M=128.");
+      return emitOpError("Tmem layout must have blockM=128.");
     }
     if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");

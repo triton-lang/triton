@@ -359,3 +359,22 @@ tt.func @duplicate_warp_specialize_captures(%arg0: i32, %arg1: i32, %arg2: i32) 
   } : (i32, i32, i32, i32, i32) -> ()
   tt.return
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 16, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @fold_subslice_chain
+tt.func @fold_subslice_chain() {
+  // CHECK: %[[ALLOC:.*]] = ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x64xf8E5M2, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.memdesc_subslice %[[ALLOC]][16, 32]
+  %subslice = ttg.memdesc_subslice %alloc[16, 32] : !ttg.memdesc<32x64xf8E5M2, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf8E5M2, #shared, #smem, mutable, 32x64>
+  // CHECK: %[[SUBSLICE:.*]] = ttg.memdesc_subslice %[[ALLOC]][24, 48]
+  %subslice2 = ttg.memdesc_subslice %subslice[8, 16] : !ttg.memdesc<16x32xf8E5M2, #shared, #smem, mutable, 32x64> -> !ttg.memdesc<8x16xf8E5M2, #shared, #smem, mutable, 32x64>
+  %dummy_value = arith.constant dense<0.000000e+00> : tensor<8x16xf8E5M2>
+  // CHECK: ttg.local_store %{{.*}}, %[[SUBSLICE]]
+  ttg.local_store %dummy_value, %subslice2 : tensor<8x16xf8E5M2> -> !ttg.memdesc<8x16xf8E5M2, #shared, #smem, mutable, 32x64>
+  tt.return
+}

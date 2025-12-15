@@ -368,6 +368,14 @@ typedef struct {{
   uint32_t group1_5;
   uint32_t group1_6;
   uint32_t group1_7;
+  uint32_t group2_0;
+  uint32_t group2_1;
+  uint32_t group2_2;
+  uint32_t group2_3;
+  uint32_t group3_0;
+  uint32_t group3_1;
+  uint32_t group3_2;
+  uint32_t group3_3;
 }} TDMDescriptor;
 
 typedef struct {{
