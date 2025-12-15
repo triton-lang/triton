@@ -813,6 +813,11 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);
            })
+      .def("create_cluster_sync",
+           [](GluonOpBuilder &self) {
+             self.create<ttng::ClusterArriveOp>(/*relaxed=*/false);
+             self.create<ttng::ClusterWaitOp>();
+           })
 
       .def("create_broadcast",
            [](TritonOpBuilder &self, Value &arg, Type retTy) -> Value {
