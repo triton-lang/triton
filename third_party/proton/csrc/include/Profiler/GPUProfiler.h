@@ -28,12 +28,14 @@ public:
   virtual ~GPUProfiler() = default;
 
   using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t,
-                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
-                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
+      ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
+                    std::unordered_map<uint64_t, size_t>>;
 
   struct ExternIdState {
     bool isApiExternId{false};
+    // For graph launches, the launch correlation id fans out into multiple
+    // kernel activity records. We track the expected fanout here.
+    size_t numKernels{1};
     std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
         dataToGraphNodeScopeId;
   };
@@ -147,7 +149,13 @@ protected:
     void correlate(uint64_t correlationId, size_t numInstances = 1) {
       if (externIdQueue.empty())
         return;
-      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
+      const auto externId = externIdQueue.back();
+      corrIdToExternId.insert(correlationId, externId);
+      if (numInstances != 1) {
+        externIdToState.upsert(externId, [&](ExternIdState &state) {
+          state.numKernels = numInstances;
+        });
+      }
     }
 
     bool isApiExternId(size_t externId) const {

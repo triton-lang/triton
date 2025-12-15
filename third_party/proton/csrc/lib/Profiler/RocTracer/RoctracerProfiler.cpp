@@ -353,9 +353,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
     auto externId = Scope::DummyScopeId;
     bool hasCorrelation = correlation.corrIdToExternId.withRead(
-        record->correlation_id, [&](const std::pair<size_t, size_t> &value) {
-          externId = value.first;
-        });
+        record->correlation_id, [&](const size_t &value) { externId = value; });
     auto isAPI = correlation.isApiExternId(externId);
     bool isGraph = pImpl->CorrIdToIsHipGraph.contain(record->correlation_id);
     if (hasCorrelation) {
