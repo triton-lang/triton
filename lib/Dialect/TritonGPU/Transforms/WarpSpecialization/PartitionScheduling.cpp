@@ -1255,6 +1255,37 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return !isLoad(from) && !isLoad(to) && !isMMA(from) && !isMMA(to) &&
               edge.getSize() > 16384; // FIXME: seemingly arbitrary size...
      }},
+
+    // store group not used by an mma/dot op should be merged
+    {"load_epilog",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       if (!isLoad(from))
+         return false;
+
+       SmallVector<Node *> stack;
+       DenseSet<Node *> seen;
+       stack.push_back(from);
+       seen.insert(from);
+
+       while (!stack.empty()) {
+         auto node = stack.back();
+         stack.pop_back();
+         if (isMMA(node) || (node->isOp() && isa<tt::DotOp>(node->getOp()))) {
+           return false;
+         } else {
+           for (auto edge : node->getOutEdges()) {
+             if (!seen.contains(edge.getToNode())) {
+               stack.push_back(edge.getToNode());
+               seen.insert(edge.getToNode());
+             }
+           }
+         }
+       }
+
+       return true;
+     }},
 };
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
