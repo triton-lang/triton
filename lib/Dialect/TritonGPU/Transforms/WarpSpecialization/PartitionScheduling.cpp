@@ -917,17 +917,6 @@ SmallVector<Edge> getCrossingEdges(Graph *graph) {
   return edges;
 }
 
-SmallVector<Edge> getInCrossingEdges(Partition *partition) {
-  SmallVector<Edge> edges;
-  for (auto node : partition->getNodes())
-    for (auto edge : node->getInEdges()) {
-      if (!edge.crossesPartitions())
-        continue;
-      edges.push_back(edge);
-    }
-  return edges;
-}
-
 SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
   SmallVector<Edge> edges;
   for (auto node : partition->getNodes())
@@ -1293,47 +1282,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
        return !(node_isa<ttng::TMEMAllocOp>(from) && isMMA(to));
      }},
 };
-
-SetVector<Partition *> getConsumingPartitions(Partition *partition) {
-  SetVector<Partition *> result;
-  for (auto node : partition->getNodes()) {
-    for (auto edge : node->getOutEdges()) {
-      auto outPartition = edge.getToNode()->getPartition();
-      if (outPartition != partition)
-        result.insert(outPartition);
-    }
-  }
-  return result;
-}
-
-DenseSet<Partition *> getReachablePartitions(Partition *partition) {
-  // look for all partitions connected to this partition via data edges
-  DenseSet<Partition *> partitions;
-  SmallVector<Node *> stack;
-  DenseSet<Node *> seen;
-  auto addNode = [&](Node *node) {
-    if (!node)
-      return;
-    if (node->isData() && !seen.contains(node)) {
-      partitions.insert(node->getPartition());
-      stack.push_back(node);
-      seen.insert(node);
-    }
-  };
-  for (auto node : partition->getNodes())
-    addNode(node);
-
-  while (!stack.empty()) {
-    auto node = stack.back();
-    stack.pop_back();
-    for (auto input : node->getInputs())
-      addNode(input.getNode());
-    for (auto outputs : node->getOutputs())
-      for (auto output : outputs)
-        addNode(output.getNode());
-  }
-  return partitions;
-}
 
 DenseSet<Operation *> getTMEMAllocs(Partition *partition) {
   // look for all tmem allocs used by the partition
@@ -1985,30 +1933,6 @@ void visualize(std::string key, std::string filename, std::string title,
   visitEdges(graph->getRoot());
 
   dot << "}\n";
-}
-
-bool isSimpleLoad(Partition *partition) {
-  for (auto node : partition->getNodes()) {
-    if (!node->isData() || !node->isOp())
-      continue;
-    auto op = node->getOp();
-    // Note: we do not consider cp.async (tt.Load) a simple load,
-    // as it needs >1 warp
-    if (!isa<tt::DescriptorLoadOp, ttg::LocalAllocOp>(op))
-      return false;
-  }
-  return true;
-}
-
-bool isSimpleMMA(Partition *partition) {
-  for (auto node : partition->getNodes()) {
-    if (!node->isData() || !node->isOp())
-      continue;
-    auto op = node->getOp();
-    if (!isa<ttng::MMAv5OpInterface, ttg::MemDescTransOp>(op))
-      return false;
-  }
-  return true;
 }
 
 void serialize(size_t idx, Operation *region, Graph *graph) {
