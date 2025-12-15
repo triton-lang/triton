@@ -322,6 +322,13 @@ void TreeData::addMetrics(
 
 void TreeData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto newTree = std::make_unique<Tree>();
+  tree.swap(newTree);
+  scopeIdToContextId.clear();
+}
+
+void TreeData::clearCache() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
   scopeIdToContextId.clear();
 }
 

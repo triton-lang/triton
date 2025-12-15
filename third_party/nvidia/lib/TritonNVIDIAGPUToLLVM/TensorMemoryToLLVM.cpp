@@ -557,10 +557,11 @@ static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
-                             const TypeConverter *typeConverter,
-                             triton::nvidia_gpu::TMEMCopyOp op, Value src,
-                             Value baseDst, Value pred) {
+static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
+                                      Location loc,
+                                      const TypeConverter *typeConverter,
+                                      triton::nvidia_gpu::TMEMCopyOp op,
+                                      Value src, Value baseDst, Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = op.getContext();
   auto kOffset = str_attr("offset");
@@ -593,7 +594,12 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
 
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
                                           smemBase, instrShape, 0, 5);
-  assert(!loader.getDescriptor().transposed);
+  if (failed(loader)) {
+    return op->emitOpError("failed to find valid tcgen05.copy layout from "
+                           "shared memory descriptor ")
+           << srcTy << " to tensor memory descriptor " << dstTy;
+  }
+  assert(!loader->getDescriptor().transposed);
   bool twoCTAs = getModuleTwoCTAs(op);
   // Check correct lbo/sbo along the multicast
   auto strideRow = cvt.getBasis(kRow, llvm::Log2_32(8), kOffset);
@@ -607,12 +613,13 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
   }
 
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
-    auto desc = loader.smemLoad(0, col, rewriter, loc);
+    auto desc = loader->smemLoad(0, col, rewriter, loc);
     auto tmemAddr =
         b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32),
               /*disjoint=*/true);
     createTcgen05Cp(rewriter, loc, tmemAddr, desc, pred, atom, twoCTAs);
   }
+  return success();
 }
 
 struct TensorMemoryCopyOpConversion
@@ -626,8 +633,9 @@ struct TensorMemoryCopyOpConversion
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     bool twoCTAs = getModuleTwoCTAs(op);
-    copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
-                     adaptor.getDst(), pred);
+    if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
+                                adaptor.getSrc(), adaptor.getDst(), pred)))
+      return failure();
 
     if (op.getBarrier()) {
       auto barrier = LLVM::getSharedMemoryObjectFromStruct(

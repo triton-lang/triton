@@ -2978,6 +2978,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+def test_amd_warp_pipeline(target):
+
+    @gluon.jit
+    def kernel():
+        c0: ttgl.constexpr = 0
+        one: ttgl.constexpr = 1
+
+        # Simple loop with an explicit split point
+        for i in range(c0, 10, one):
+            with ttgl.amd.warp_pipeline_stage("stage0"):
+                x = i + one
+            with ttgl.amd.warp_pipeline_stage("stage1"):
+                y = x * one
+                x = y + one
+
+    module = run_parser(kernel, *make_args(num_warps=8), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c10_i32 = arith.constant 10 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %0 = arith.bitcast %c0_i32 : i32 to i32
+    %1 = arith.bitcast %c10_i32 : i32 to i32
+    %2 = arith.bitcast %c1_i32 : i32 to i32
+    %3 = ub.poison : i32
+    scf.for %arg0 = %0 to %1 step %2  : i32 {
+      %c1_i32_0 = arith.constant 1 : i32
+      %c1_i32_1 = arith.constant 1 : i32
+      %4 = arith.addi %arg0, %c1_i32_1 : i32
+      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0"}
+      %c1_i32_2 = arith.constant 1 : i32
+      %c1_i32_3 = arith.constant 1 : i32
+      %5 = arith.muli %4, %c1_i32_3 : i32
+      %c1_i32_4 = arith.constant 1 : i32
+      %c1_i32_5 = arith.constant 1 : i32
+      %6 = arith.addi %5, %c1_i32_5 : i32
+      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+    }
+    tt.return
+  }
+}
+""")
+
+
 @gluon.jit
 def print_num_warps():
     num_warps: ttgl.constexpr = ttgl.num_warps()
