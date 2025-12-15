@@ -51,11 +51,11 @@ llvm::Error TritonPlugin::loadPlugin() {
 
   if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES.c_str())) {
     auto enumeratePassesAPIOrErr =
-      getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
-          ENUMERATE_PASSES);
+        getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+            ENUMERATE_PASSES);
     auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
     auto registerPassAPIOrErr =
-      getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+        getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
 
     if (auto Err = enumeratePassesAPIOrErr.takeError())
       return Err;
@@ -71,10 +71,11 @@ llvm::Error TritonPlugin::loadPlugin() {
 
   if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS.c_str())) {
     auto enumerateDialectsAPIOrErr =
-      getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
-          ENUMERATE_DIALECTS);
+        getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+            ENUMERATE_DIALECTS);
     auto dialectPluginInfoAPIOrErr =
-      getAPI<dialectPluginInfoType, dialectPluginInfoCType>(DIALECT_PLUGININFO);
+        getAPI<dialectPluginInfoType, dialectPluginInfoCType>(
+            DIALECT_PLUGININFO);
 
     if (auto Err = enumerateDialectsAPIOrErr.takeError())
       return Err;
