@@ -1082,8 +1082,7 @@ if __name__ == "__main__":
     PREFETCH = args.prefetch_lds
 
     if args.warp_specialized:
-        # For warp specialized, use smaller blocks to avoid vgpr spill
-        BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 128
         print(
             f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, NUM_TOTAL_WARPS={NUM_WARPS}, {NUM_BUFFERS=}, {PERSISTENT=}"
         )
