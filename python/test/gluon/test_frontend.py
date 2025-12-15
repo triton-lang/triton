@@ -1535,6 +1535,14 @@ def test_fence_async_shared():
 
 @filecheck_test
 @gluon.jit
+def test_cluster_sync():
+    # CHECK: ttng.cluster_arrive {relaxed = false}
+    # CHECK-NEXT: ttng.cluster_wait
+    blackwell.cluster_sync()
+
+
+@filecheck_test
+@gluon.jit
 def test_inline_asm_elementwise():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     x = ttgl.arange(0, 16, layout)
