@@ -26,13 +26,95 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
-
+namespace ttg = mlir::triton::gpu;
 namespace {
+
+// Given a barrier allocation value (which may be a view into a larger alloc),
+// find the root allocation by walking through MemDescIndexOp chains.
+static Value getRootAllocation(Value alloc) {
+  while (auto indexOp = alloc.getDefiningOp<triton::gpu::MemDescIndexOp>()) {
+    alloc = indexOp.getSrc();
+  }
+  return alloc;
+}
+
+// Find the WarpSpecializeOp that uses the given allocation.
+// The allocation is passed as an operand to the warp_specialize op.
+static triton::gpu::WarpSpecializeOp
+findAssociatedWarpSpecializeOp(Value barrierAlloc) {
+  Value rootAlloc = getRootAllocation(barrierAlloc);
+
+  for (Operation *user : rootAlloc.getUsers()) {
+    if (auto wsOp = dyn_cast<triton::gpu::WarpSpecializeOp>(user)) {
+      return wsOp;
+    }
+  }
+  return nullptr;
+}
+
+bool isMultiThreadedArriveBarrier(triton::nvidia_gpu::ArriveBarrierOp op) {
+  Value alloc = op.getAlloc();
+
+  // Get the root allocation by walking through MemDescIndexOp chains.
+  // arrive_barrier uses a memdesc_index result, we need the underlying
+  // local_alloc.
+  Value rootAlloc = getRootAllocation(alloc);
+
+  // Iterate over all uses of the root allocation (the local_alloc).
+  // Each use could be a memdesc_index that is then used by an init_barrier.
+  for (Operation *user : rootAlloc.getUsers()) {
+    if (auto indexOp = dyn_cast<ttg::MemDescIndexOp>(user)) {
+      // Iterate over users of this memdesc_index to find init_barrier ops.
+      for (Operation *indexUser : indexOp.getResult().getUsers()) {
+        if (auto initOp =
+                dyn_cast<triton::nvidia_gpu::InitBarrierOp>(indexUser)) {
+          if (initOp.getDependentPartitionIds()) {
+            return true;
+          }
+          return false;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+// Calculate the barrier count from dependentPartitionIds by summing
+// the warp counts of the specified partitions and multiplying by 32.
+static std::optional<int>
+calculateBarrierCount(triton::nvidia_gpu::InitBarrierOp op) {
+  auto partitionAttr = op.getDependentPartitionIds();
+  if (!partitionAttr)
+    return std::nullopt;
+
+  auto wsOp = findAssociatedWarpSpecializeOp(op.getAlloc());
+  if (!wsOp) {
+    return std::nullopt;
+  }
+
+  auto partitionNumWarps = wsOp.getPartitionNumWarps();
+  int numWarps = 0;
+  for (int32_t partitionId : *partitionAttr) {
+    if (partitionId < 0 ||
+        partitionId >= static_cast<int>(partitionNumWarps.size())) {
+      op.emitError("dependentPartitionId ")
+          << partitionId
+          << " is out of range (max: " << partitionNumWarps.size() - 1 << ")";
+      return std::nullopt;
+    }
+    numWarps += partitionNumWarps[partitionId];
+  }
+
+  return numWarps * 32;
+}
+
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -65,11 +147,25 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
+    // Determine the barrier count. If dependentPartitionIds is specified,
+    // calculate the count from the associated WarpSpecializeOp's partition
+    // warp counts. Otherwise, use the count attribute directly.
+    int barrierCount = op.getCount();
+    if (op.getDependentPartitionIds()) {
+      auto calculatedCount = calculateBarrierCount(op);
+      if (!calculatedCount) {
+        return op.emitError(
+            "failed to calculate barrier count from dependentPartitionIds: "
+            "could not find associated warp_specialize op");
+      }
+      barrierCount = *calculatedCount;
+    }
+
     auto id = getThreadId(rewriter, loc);
     auto pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(op.getCount()) + ";";
+                            std::to_string(barrierCount) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -238,7 +334,7 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *> operands;
 
     std::optional<Value> pred;
-    if (!op.getMultiThreaded()) {
+    if (!isMultiThreadedArriveBarrier(op)) {
       TritonLLVMOpBuilder b(op.getLoc(), rewriter);
       Value id = getThreadId(rewriter, op.getLoc());
       pred = b.icmp_eq(id, b.i32_val(0));

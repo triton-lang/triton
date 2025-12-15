@@ -748,8 +748,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_mbarrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
-             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred,
-                                                mlir::UnitAttr());
+             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
            })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,

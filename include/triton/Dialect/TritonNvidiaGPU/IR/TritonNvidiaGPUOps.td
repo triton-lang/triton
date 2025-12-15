@@ -240,9 +240,6 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
 
     The operation accepts an optional predicate.
 
-    The operation also accepts an optional `multiThreaded` attribute to indicate
-    that it should be performed on all threads, not just the thread with ID 0.
-
     Example:
 
     ```mlir
@@ -254,8 +251,7 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
-    Optional<I1>:$pred,
-    OptionalAttr<UnitAttr>:$multiThreaded
+    Optional<I1>:$pred
   );
 
   let assemblyFormat = [{
@@ -264,8 +260,7 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      return build($_builder, $_state, alloc, count,
-                   /*pred=*/Value(), /*multiThreaded=*/mlir::UnitAttr());
+      return build($_builder, $_state, alloc, count, /*pred=*/Value());
     }]>
   ];
 

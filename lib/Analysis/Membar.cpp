@@ -8,6 +8,10 @@
 #include <deque>
 
 namespace mlir {
+namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
+
+using namespace mlir;
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
@@ -217,12 +221,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If this op is may be signalling other threads asynchronously, make sure
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
-      if (!(dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(op))
-               .getMultiThreaded()) {
-        Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-        curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
-        curBlockInfo.syncReadIntervals[allIntervals].insert(op);
-      }
+      // TODO: Replace .getMultiThreaded() with invocation to helper function to
+      // determine if the arrive barrier is multi-threaded or not.
+      Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
+      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
+      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
     }
     scratchBufferId = allocation->getBufferId(op);
   }

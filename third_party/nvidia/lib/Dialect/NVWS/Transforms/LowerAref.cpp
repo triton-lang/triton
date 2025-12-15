@@ -509,9 +509,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp = nvidia_gpu::ArriveBarrierOp::create(
-          rewriter, loc, mbar, 1, nullptr,
-          UnitAttr::get(rewriter.getContext()));
+      arriveOp =
+          nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1, nullptr);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
