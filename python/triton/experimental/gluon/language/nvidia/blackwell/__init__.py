@@ -10,7 +10,7 @@ from triton.experimental.gluon.language._layouts import SharedLinearLayout
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
-from ..hopper import fence_async_shared, mbarrier
+from ..hopper import cluster_sync, fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
+    "cluster_sync",
     "fence_async_shared",
     "get_tmem_reg_layout",
     "mbarrier",

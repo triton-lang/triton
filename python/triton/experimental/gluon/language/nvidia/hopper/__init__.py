@@ -8,7 +8,16 @@ from typing import List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from triton._C.libtriton import ir
 
-__all__ = ["async_copy", "fence_async_shared", "mbarrier", "mma_v2", "tma", "warpgroup_mma", "warpgroup_mma_wait"]
+__all__ = [
+    "async_copy",
+    "cluster_sync",
+    "fence_async_shared",
+    "mbarrier",
+    "mma_v2",
+    "tma",
+    "warpgroup_mma",
+    "warpgroup_mma_wait",
+]
 
 
 @_core.builtin
@@ -21,6 +30,14 @@ def fence_async_shared(cluster=False, _semantic=None):
     """
     cluster = _core._unwrap_if_constexpr(cluster)
     _semantic.builder.create_fence_async_shared(cluster)
+
+
+@_core.builtin
+def cluster_sync(_semantic=None):
+    """
+    Synchronize all CTAs in a cluster.
+    """
+    _semantic.builder.create_cluster_sync()
 
 
 class warpgroup_mma_accumulator_type(_core.base_type):
