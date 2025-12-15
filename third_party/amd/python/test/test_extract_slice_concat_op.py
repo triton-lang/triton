@@ -38,6 +38,10 @@ class BlockedLayout:
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
+# -----------------------
+# test extract slice
+# -----------------------
+
 # list of pairs defining ExtractSliceOp input and output layouts
 regs2x2 = [[1, 0], [0, 1]]
 
@@ -98,6 +102,74 @@ def get_blocked_layout():
         ]
     else:
         return []
+
+
+@pytest.mark.parametrize(
+    "M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset",
+    [[256, 256, 256, 32, 0, 32], [128, 128, 128, 64, 0, 64], [1, 512, 1, 256, 0, 256], [512, 1, 256, 1, 256, 0]])
+@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("extract_layout", get_extract_layout())
+@pytest.mark.parametrize("blocked_layout", get_blocked_layout())
+def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout,
+                       extract_layout, device, tmp_path: pathlib.Path):
+    if not is_hip():
+        pytest.skip("extract_slice is AMD specific instruction.")
+
+    ir = f"""
+    #blocked = {blocked_layout}
+    #src_extract_layout = {extract_layout[0]}
+    #dst_extract_layout = {extract_layout[1]}
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
+    tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
+        %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
+        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %42 = tt.make_range {{end = {M_tile_size} : i32, start = 0 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
+        %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
+        %43 = tt.expand_dims %42 {{axis = 1 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #blocked>
+        %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
+        %44 = arith.muli %43, %cst_n : tensor<{M_tile_size}x1xi32, #blocked>
+        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
+        %7 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
+        %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
+        %33 = tt.make_range {{end = {N_tile_size} : i32, start = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
+        %34 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
+        %37 = tt.expand_dims %33 {{axis = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #blocked>
+        %38 = tt.broadcast %37 : tensor<1x{N_tile_size}xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
+        %39 = tt.broadcast %44 : tensor<{M_tile_size}x1xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
+        %40 = arith.addi %38, %39 : tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
+        %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
+        %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %12 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_extract_layout>
+        %13 = amdg.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #src_extract_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout>
+        %14 = ttg.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
+        %15 = tt.addptr %34, %40 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>, tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
+        tt.store %15, %14 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
+        tt.return
+    }}
+    }}
+    """
+    x = torch.randn((M, N), device=device, dtype=dtype)
+
+    temp_file = tmp_path / "test_extract_slice.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    extract_slice = torch.empty((M_tile_size, N_tile_size), device=device, dtype=dtype)
+
+    kernel[(1, 1, 1)](x.data_ptr(), extract_slice)
+    test_result = torch.equal(x[M_tile_offset:M_tile_size + M_tile_offset, N_tile_offset:N_tile_offset + N_tile_size],
+                              extract_slice)
+
+    assert test_result
+
+
+# -----------------------
+# test concat op
+# -----------------------
 
 
 # defining ConcatOp input and output layouts
@@ -173,98 +245,16 @@ def get_dst_layout():
         return []
 
 
-# Generate test parameters based on the value of threads
-def pytest_generate_tests(metafunc):
-    if metafunc.function.__name__ == "test_extract_slice":
-        cases = []
-        for extract_layout in get_extract_layout():
-            for blocked_layout in get_blocked_layout():
-                cases.append([extract_layout, blocked_layout])
-        metafunc.parametrize("extract_layout, blocked_layout", cases)
-    elif metafunc.function.__name__ == "test_concat_op":
-        cases = []
-        src_layout = get_src_layout()
-        dst_layout = get_dst_layout()
-        broadcasted_32x32 = get_broadcasted_32x32()
-        blocked_32x32 = get_blocked_32x32()
-        cases.extend([[src_layout[0], dst_layout[0], 128, 128, 256,
-                       256], [src_layout[1], dst_layout[1], 32, 32, 64, 64],
-                      [broadcasted_32x32, blocked_32x32, 32, 32, 64, 64],
-                      [blocked_32x32, broadcasted_32x32, 32, 32, 64, 64]])
-        metafunc.parametrize("src_layout, dst_layout, M, N, M_tile_size, N_tile_size", cases)
-
-
-# -----------------------
-# test extract slice
-# -----------------------
+src_layout = get_src_layout()
+dst_layout = get_dst_layout()
+broadcasted_32x32 = get_broadcasted_32x32()
+blocked_32x32 = get_blocked_32x32()
 
 
 @pytest.mark.parametrize(
-    "M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset",
-    [[256, 256, 256, 32, 0, 32], [128, 128, 128, 64, 0, 64], [1, 512, 1, 256, 0, 256], [512, 1, 256, 1, 256, 0]])
-@pytest.mark.parametrize("dtype", [torch.float16])
-def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout,
-                       extract_layout, device, tmp_path: pathlib.Path):
-    if not is_hip():
-        pytest.skip("extract_slice is AMD specific instruction.")
-
-    ir = f"""
-    #blocked = {blocked_layout}
-    #src_extract_layout = {extract_layout[0]}
-    #dst_extract_layout = {extract_layout[1]}
-    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
-    tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
-        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
-        %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
-        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
-        %42 = tt.make_range {{end = {M_tile_size} : i32, start = 0 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
-        %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
-        %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
-        %43 = tt.expand_dims %42 {{axis = 1 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #blocked>
-        %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
-        %44 = arith.muli %43, %cst_n : tensor<{M_tile_size}x1xi32, #blocked>
-        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
-        %7 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
-        %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
-        %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
-        %33 = tt.make_range {{end = {N_tile_size} : i32, start = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
-        %34 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
-        %37 = tt.expand_dims %33 {{axis = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #blocked>
-        %38 = tt.broadcast %37 : tensor<1x{N_tile_size}xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
-        %39 = tt.broadcast %44 : tensor<{M_tile_size}x1xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
-        %40 = arith.addi %38, %39 : tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
-        %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-        %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %12 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_extract_layout>
-        %13 = amdg.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #src_extract_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout>
-        %14 = ttg.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
-        %15 = tt.addptr %34, %40 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>, tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
-        tt.store %15, %14 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
-        tt.return
-    }}
-    }}
-    """
-    x = torch.randn((M, N), device=device, dtype=dtype)
-
-    temp_file = tmp_path / "test_extract_slice.ttgir"
-    temp_file.write_text(ir)
-    kernel = triton.compile(str(temp_file))
-
-    extract_slice = torch.empty((M_tile_size, N_tile_size), device=device, dtype=dtype)
-
-    kernel[(1, 1, 1)](x.data_ptr(), extract_slice)
-    test_result = torch.equal(x[M_tile_offset:M_tile_size + M_tile_offset, N_tile_offset:N_tile_offset + N_tile_size],
-                              extract_slice)
-
-    assert test_result
-
-
-# -----------------------
-# test concat op
-# -----------------------
-
-
+    "src_layout, dst_layout, M, N, M_tile_size, N_tile_size",
+    [[src_layout[0], dst_layout[0], 128, 128, 256, 256], [src_layout[1], dst_layout[1], 32, 32, 64, 64],
+     [broadcasted_32x32, blocked_32x32, 32, 32, 64, 64], [blocked_32x32, broadcasted_32x32, 32, 32, 64, 64]])
 @pytest.mark.parametrize("dtype", [torch.float16])
 def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout, device, tmp_path: pathlib.Path):
     if not is_hip():
