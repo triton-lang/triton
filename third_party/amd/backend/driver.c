@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// Include shared TDM utilities
+#include "TDMCommon.h"
+
 typedef struct {
   uint32_t group0_0;
   uint32_t group0_1;
@@ -21,6 +24,14 @@ typedef struct {
   uint32_t group1_5;
   uint32_t group1_6;
   uint32_t group1_7;
+  uint32_t group2_0;
+  uint32_t group2_1;
+  uint32_t group2_2;
+  uint32_t group2_3;
+  uint32_t group3_0;
+  uint32_t group3_1;
+  uint32_t group3_2;
+  uint32_t group3_3;
 } TDMDescriptor;
 
 typedef struct {
@@ -54,36 +65,39 @@ static PyTypeObject PyTDMDescriptorType = {
     .tp_dealloc = (destructor)PyTDMDescriptor_dealloc,
 };
 
-// TODO: Both host-side and device-side TDM descriptor follow the same encoding
-// format. Consider to add a common utility to remove duplicate code.
+// Encodes a TDM descriptor. Supports 1D-5D tensors.
+// Uses the same encoding format as createTDMDescriptor in TDMUtility.cpp.
 static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
                                 uint32_t *blockSize, int numWarps,
                                 int padInterval, int padAmount, uint32_t *shape,
                                 uint32_t *strides, uint64_t globalAddress,
                                 int rank) {
-  // NYI: TDM > 2D cases
-  if (rank != 2)
+  if (rank < 1 || rank > 5)
     return false;
 
-  // Get warp distribution
-  uint32_t numWarpsDim0 = numWarps;
-  for (; numWarpsDim0 > blockSize[0]; numWarpsDim0 /= 2)
-    ;
-  uint32_t numWarpsDim1 = numWarps / numWarpsDim0;
-  if (!(numWarpsDim0 > 0 && blockSize[1] % numWarpsDim1 == 0))
-    return false;
+  memset(desc, 0, sizeof(TDMDescriptor));
 
-  uint32_t blockSize0 = (blockSize[0] + numWarpsDim0 - 1) / numWarpsDim0;
-  uint32_t blockSize1 = (blockSize[1] + numWarpsDim1 - 1) / numWarpsDim1;
+  // Convert to int64_t for shared function and get adjusted block sizes
+  int64_t blockShape64[5], adjustedBlockSize64[5];
+  for (int i = 0; i < rank; ++i)
+    blockShape64[i] = blockSize[i];
+  tdmGetAdjustedBlockShape(blockShape64, rank, numWarps, adjustedBlockSize64);
+
+  // Convert back to uint32_t
+  uint32_t adjustedBlockSize[5];
+  for (int i = 0; i < rank; ++i)
+    adjustedBlockSize[i] = (uint32_t)adjustedBlockSize64[i];
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
+  // [1:0]:     pred (to be filled later)
+  // [63:32]:   lds address (to be filled later)
   // [120:64]:  global address
   // [127:126]: type - currently always set to 0x2
   desc->group0_2 = (uint32_t)(globalAddress & 0xFFFFFFFF);
-  desc->group0_3 = (uint32_t)((globalAddress >> 32) & 0x01FFFFFF);
-  desc->group0_3 |= (0x1 << 31);
+  desc->group0_3 = (uint32_t)((globalAddress >> 32) & 0x7FFFFFFF) | (0x1 << 31);
 
   // group1 (256 bits / 8 dwords) effective bit encoding:
+  // [15:0]:    multicast mask
   // [17:16]:   data size - log2(element size in bytes)
   // [20]:      enable padding
   // [24:22]:   pad interval - log2(pad interval in dwords) - 1
@@ -92,26 +106,72 @@ static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
   // [111:80]:  tensor shape dim outer
   // [127:112]: block shape dim inner
   // [143:128]: block shape dim outer
+  // [159:144]: tile_dim2
   // [207:160]: tensor stride dim outer (we only use 32 bits)
+  // [255:208]: tensor stride dim 2 (48 bits)
   int elementSizeInBytes = elementBitWidth / 8;
-  int dataSize = log2(elementSizeInBytes);
-  desc->group1_0 = (dataSize << 16);
+  int dataSize = (int)log2(elementSizeInBytes);
   int dwordSize = 32;
   int padIntervalInDwords = padInterval * elementBitWidth / dwordSize;
   int padAmountInDwords = padAmount * elementBitWidth / dwordSize;
+
+  desc->group1_0 = (dataSize << 16);
   if (padIntervalInDwords > 0 && padAmountInDwords > 0) {
-    int log2PadInterval = log2(padIntervalInDwords);
+    int log2PadInterval = (int)log2(padIntervalInDwords);
     desc->group1_0 |= (1 << 20);
     desc->group1_0 |= ((log2PadInterval - 1) << 22);
     desc->group1_0 |= ((padAmountInDwords - 1) << 25);
   }
-  desc->group1_1 = (shape[1] << 16);
-  desc->group1_2 = (shape[1] >> 16);
-  desc->group1_2 |= (shape[0] << 16);
-  desc->group1_3 = (shape[0] >> 16);
-  desc->group1_3 |= (blockSize1 << 16);
-  desc->group1_4 = (blockSize0 & 0xFFFF);
-  desc->group1_5 = strides[0];
+
+  // Encode tensor shapes (48-bit encoding, indices from end: rank-1 is inner)
+  desc->group1_1 = (shape[rank - 1] << 16);
+  desc->group1_2 = (shape[rank - 1] >> 16);
+
+  if (rank >= 2) {
+    desc->group1_2 |= (shape[rank - 2] << 16);
+    desc->group1_3 = (shape[rank - 2] >> 16);
+  }
+
+  // Block shapes
+  desc->group1_3 |= (adjustedBlockSize[rank - 1] << 16);
+  if (rank >= 2)
+    desc->group1_4 = (adjustedBlockSize[rank - 2] & 0xFFFF);
+  if (rank >= 3)
+    desc->group1_4 |= (adjustedBlockSize[rank - 3] << 16);
+
+  // Strides
+  if (rank >= 2)
+    desc->group1_5 = strides[rank - 2];
+  if (rank >= 3) {
+    desc->group1_6 = (strides[rank - 3] << 16);
+    desc->group1_7 = (strides[rank - 3] >> 16);
+  }
+
+  // group2 (128 bits / 4 dwords) for 3D-5D tensors:
+  // [31:0]:    tensor_dim2 (3rd dimension from end)
+  // [63:32]:   tensor_dim3 (4th dimension from end)
+  // [111:64]:  tensor_dim2_stride (48 bits, we use 32 bits)
+  // [127:112]: tile_dim3
+  if (rank >= 3) {
+    desc->group2_0 = shape[rank - 3];
+    if (rank >= 4) {
+      desc->group2_1 = shape[rank - 4];
+      desc->group2_2 = strides[rank - 4];
+      desc->group2_3 = (adjustedBlockSize[rank - 4] << 16);
+    }
+  }
+
+  // group3 (128 bits / 4 dwords) for 4D-5D tensors:
+  // [47:0]:    tensor_dim3_stride (48 bits, we use 32 bits)
+  // [79:48]:   tensor_dim4 (5th dimension from end)
+  // [95:80]:   tile_dim4
+  // [127:96]:  reserved
+  if (rank == 5) {
+    desc->group3_0 = strides[rank - 5];
+    desc->group3_1 = (shape[rank - 5] << 16);
+    desc->group3_2 = (shape[rank - 5] >> 16);
+    desc->group3_2 |= (adjustedBlockSize[rank - 5] << 16);
+  }
 
   return true;
 }
@@ -309,12 +369,13 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i, s:i}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i, s:i, s:i}", "max_shared_mem",
       props.sharedMemPerBlock, "max_num_regs", props.regsPerBlock,
       "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
       props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
       props.memoryBusWidth, "arch", props.gcnArchName, "warpSize",
-      props.warpSize, "max_threads_per_sm", props.maxThreadsPerMultiProcessor);
+      props.warpSize, "max_threads_per_sm", props.maxThreadsPerMultiProcessor,
+      "cooperativeLaunch", props.cooperativeLaunch);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -388,16 +449,16 @@ static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
   PyObject *shapeFast = NULL;
   PyObject *stridesFast = NULL;
 
-  uint32_t blockSizeInt[2];
-  uint32_t shapeInt[2];
-  uint32_t stridesInt[2];
+  uint32_t blockSizeInt[5];
+  uint32_t shapeInt[5];
+  uint32_t stridesInt[5];
 
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
     goto cleanup;
   int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
-  if (rank != 2) {
-    PyErr_SetString(PyExc_RuntimeError, "rank must be 2");
+  if (rank == 0 || rank > 5) {
+    PyErr_SetString(PyExc_RuntimeError, "rank must be between 1 and 5");
     goto cleanup;
   }
 

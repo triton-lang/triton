@@ -778,7 +778,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
 
     # Shared memory subtile size is limited by the swizzle byte size.
-    contigDimSize: gl.constexpr = o_smem.type.layout.swizzle_byte_width * 8 / o_smem.type.element_ty.primitive_bitwidth
+    contigDimSize: gl.constexpr = o_smem.type.layout.swizzle_byte_width * 8 // o_smem.type.element_ty.primitive_bitwidth
     if o_smem.type.shape[1] // config.SPLIT_D_FACTOR >= contigDimSize:
         SPLIT_N_FACTOR: gl.constexpr = config.SPLIT_D_FACTOR
     else:

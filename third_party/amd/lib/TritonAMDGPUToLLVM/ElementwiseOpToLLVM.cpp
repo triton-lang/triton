@@ -1904,7 +1904,8 @@ struct FpToFpOpConversion
          (llvm::isa<Float16Type>(srcElementType)) ||
          (llvm::isa<BFloat16Type>(srcElementType))) &&
         ((llvm::isa<Float8E4M3FNType>(dstElementType)) ||
-         (llvm::isa<Float8E5M2Type>(dstElementType)))) {
+         (llvm::isa<Float8E5M2Type>(dstElementType))) &&
+        ((roundingMode.has_value()) && (*roundingMode != RoundingMode::RTZ))) {
       numElements = 8;
       useFP16IntermediateSrc = false;
     }

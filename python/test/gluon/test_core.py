@@ -10,8 +10,8 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
-    is_hip_gfx11,
-    is_hip_gfx12,
+    is_hip_rdna3,
+    is_hip_rdna4,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -574,6 +574,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     K *= shape_k
     instr_shape[1] *= shape_n
 
+    num_warps = warps[0] * warps[1]
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
 
     if is_blackwell():
@@ -582,9 +583,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         if M * N // 128 // num_ctas > MAX_ROWS:
             N //= (M * N // 128 // num_ctas // MAX_ROWS)
 
-    # No idea what's going on TBH
-    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) != (1, 1, 1):
-        pytest.skip("FIXME: Fails with Illegal Instruction error. Not sure why")
+    if two_ctas and N // ctas_per_cga[1] == 512:
+        # grep for [Note: numRepN > 1 and two_ctas]
+        pytest.skip("grep for [Note: numRepN > 1 and two_ctas]")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 
@@ -671,7 +672,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, cga_layout=cga_layout_b)
     if use_tcgen05:
-        tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
+        tmem_shape = (min(M // ctas_per_cga[0], 128), min(N // ctas_per_cga[1], 256))
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
@@ -725,7 +726,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         False,
         use_tcgen05,
         mma_barrier_layout,
-        num_warps=warps[0] * warps[1],
+        num_warps=num_warps,
         num_ctas=num_ctas,
     )
 
@@ -787,7 +788,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.skipif(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
+@pytest.mark.skipif(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 def test_amd_wmma(M, N, K, in_dtype):
@@ -837,8 +838,8 @@ def test_amd_wmma(M, N, K, in_dtype):
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
 
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    wmma_version = 1 if is_hip_gfx11() else 2
-    k_width = 16 if is_hip_gfx11() else 8
+    wmma_version = 1 if is_hip_rdna3() else 2
+    k_width = 16 if is_hip_rdna3() else 8
     wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)

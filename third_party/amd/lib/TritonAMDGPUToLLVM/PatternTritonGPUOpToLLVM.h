@@ -42,6 +42,7 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit);
 void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
+                                        const AMD::TargetInfo &,
                                         PatternBenefit benefit);
 
 void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
