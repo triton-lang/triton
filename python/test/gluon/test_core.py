@@ -108,6 +108,61 @@ def test_tma():
 
 
 @gluon.jit
+def tma_multicast_copy_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    # Need to synchronise all the CTAs after the mbarrier initialisation
+    # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
+    ttgl.barrier(cluster=True)
+
+    mbarrier.expect(bar, descs=[in_desc])
+    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+
+    mbarrier.invalidate(bar)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
+def test_tma_multicast_copy(ctas_per_cga):
+    from triton._C.libtriton.gluon_ir import make_cga_layout
+    cga_split_num = [min(ctas_per_cga[0], 2), min(ctas_per_cga[1], 2)]
+    cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
+
+    BLOCK_M, BLOCK_N = 16, 16
+    BLOCK_M *= cga_split_num[0]
+    BLOCK_N *= cga_split_num[1]
+
+    inp = torch.randn((BLOCK_M, BLOCK_N), dtype=torch.float16, device="cuda")
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_M, BLOCK_N],
+        ttgl.float16,
+        cga_layout=cga_layout,
+    )
+
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [BLOCK_M, BLOCK_N], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [BLOCK_M, BLOCK_N], layout)
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    compiled = tma_multicast_copy_kernel[(1, )](
+        in_desc,
+        out_desc,
+        num_warps=4,
+        num_ctas=num_ctas,
+    )
+    expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
+    assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@gluon.jit
 def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
                                        ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
@@ -157,7 +212,7 @@ def test_device_tma_load():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, input_desc.block_type.nbytes)
+        mbarrier.expect(bar, descs=[input_desc])
         tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0)
         mbarrier.invalidate(bar)
@@ -344,7 +399,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, M: ttgl.constexpr, N: 
 
     for k in range(NUM_K_TILES):
         mbarrier.init(tma_bar, count=1)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        mbarrier.expect(tma_bar, descs=[a_desc, b_desc])
         tma.async_copy_global_to_shared(a_desc, [0, k * BLOCK_K], tma_bar, smem_a)
         tma.async_copy_global_to_shared(b_desc, [0, k * BLOCK_K], tma_bar, smem_b)
         mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
@@ -1345,7 +1400,7 @@ def test_tma_slice():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, in_desc.block_type.nbytes)
+        mbarrier.expect(bar, descs=[in_desc])
         tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem_slice1)
         mbarrier.wait(bar, phase=0)
 

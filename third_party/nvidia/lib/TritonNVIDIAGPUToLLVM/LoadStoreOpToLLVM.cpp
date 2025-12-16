@@ -1275,12 +1275,7 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
         LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
                                 blockShape[dim], kMsg, outDimNames[dim]);
   }
-  auto cgaLayout = getCGALayout(ty.getEncoding());
-  for (int i = 0; i < rank; ++i) {
-    auto dim = cgaLayout.getCTAOrder()[i];
-    msgToOffset *= LinearLayout::identity1D(cgaLayout.getCTASplitNum()[dim],
-                                            kBlock, outDimNames[dim]);
-  }
+  msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
   return msgToOffset;
 }
 
@@ -1321,13 +1316,14 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     ttg::MemDescType dstTy = op.getResult().getType();
     Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+    auto barrierTy = op.getBarrier().getType();
     auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(),
-        typeConverter->convertType(op.getBarrier().getType().getElementType()),
-        rewriter);
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
     Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, dstTy);
+
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
 
@@ -1341,10 +1337,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
     auto smemTy = op.getResult().getType();
-    Attribute encoding = smemTy.getEncoding();
-    auto mmaEncoding = dyn_cast_or_null<NVMMASharedEncodingAttr>(encoding);
 
-    auto shapePerCTA = ttg::getShapePerCTA(smemTy);
     int rank = op.getCoord().size();
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
@@ -1358,6 +1351,33 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto zero = b.i32_val(0);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    // We multicast if the flag is on and the block layout has broadcasting
+    auto maskCGABroadcast = smemLayout.getFreeVariableMasks().lookup(kBlock);
+    bool multicast = op.getMulticast() && maskCGABroadcast != 0;
+    Value multicastMask;
+    Value barrierPtr = barrierMemObj.getBase();
+    if (multicast) {
+      auto numCTAs = ttg::lookupNumCTAs(op);
+      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, maskCGABroadcast, numCTAs);
+      // If we multicast, we emit the full message from the representative CTA
+      // meaning the CTA with the lowest CTA id in a multicast group.
+      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
+    }
+
+    auto barrierMask =
+        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+    if (barrierMask) {
+      // This part is to support TMA into tcgen05.mma 2CTA mostly, i.e.,
+      // barrierMask == 1
+      // Mask with ones on the bits where the CTA broadcasts.
+      // This is a trick from cutlass to implement a faster `mapa`.
+      auto fullMask = ~(barrierMask << 24);
+      Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+      barrierInt = b.and_(barrierInt, b.i32_val(fullMask));
+      barrierPtr = b.inttoptr(barrierPtr.getType(), barrierInt);
+    }
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1384,7 +1404,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-          "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
+          "d.shared::cluster.global.mbarrier::complete_tx::bytes";
+      if (multicast)
+        tmaInst += ".multicast::cluster";
+      tmaInst += " [$1], [$2, {";
 
       auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                        {{kMsg, copyIdxVal}, {kBlock, ctaId}});
@@ -1398,9 +1421,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         if (i != rank - 1)
           tmaInst += ", ";
       }
-      operands.push_back(
-          ptxBuilderTMA.newOperand(barrierMemObj.getBase(), "r"));
-      tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
+      operands.push_back(ptxBuilderTMA.newOperand(barrierPtr, "r"));
+      tmaInst += "}], [$" + std::to_string(operandIdx++) + "]";
+      if (multicast) {
+        operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
+        tmaInst += ", $" + std::to_string(operandIdx++);
+      }
+      tmaInst += ";";
 
       auto &tma = *ptxBuilderTMA.create(tmaInst);
       tma(operands, /*onlyAttachMLIRArgs=*/true);
@@ -1802,7 +1829,6 @@ struct AsyncCopyMbarrierArriveOpConversion
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
-    TritonLLVMOpBuilder b(loc, rewriter);
     NVVM::CpAsyncMBarrierArriveOp::create(rewriter, loc,
                                           barrierMemObj.getBase(), noinc);
     op->erase();
