@@ -24,9 +24,11 @@ struct TritonPlugin {
 
 public:
   llvm::Error checkLibraryValid(const std::string &error) const;
-  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
-  const std::string ENUMERATE_DIALECTS = "tritonEnumeratePluginDialects";
-  const std::string DIALECT_PLUGININFO = "tritonGetDialectPluginInfo";
+  static constexpr char *ENUMERATE_PASSES = (char*)"tritonEnumeratePluginPasses";
+  static constexpr char *ENUMERATE_DIALECTS = (char*)"tritonEnumeratePluginDialects";
+  static constexpr char *DIALECT_PLUGININFO = (char*)"tritonGetDialectPluginInfo";
+  static constexpr char *ADD_PASS = (char*)"tritonAddPluginPass";
+  static constexpr char *REGISTER_PASS = (char*)"tritonRegisterPluginPass";
 
 private:
   using EnumeratePyBindHandlesType =
@@ -34,13 +36,11 @@ private:
   using EnumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
 
-  const std::string ADD_PASS = "tritonAddPluginPass";
   using AddPassType =
       std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
   using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
                                               const char *);
 
-  const std::string REGISTER_PASS = "tritonRegisterPluginPass";
   using RegisterPassType = std::function<TritonPluginResult(const char *)>;
   using RegisterPassCType = TritonPluginResult (*)(const char *);
 
