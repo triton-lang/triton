@@ -1569,9 +1569,7 @@ void replaceUsesAndPropagateType(
       }
       iterArg.setType(val.getType());
       for (OpOperand &iterArgUse : iterArg.getUses()) {
-        if (llvm::isa<ttng::WarpGroupDotWaitOp>(iterArgUse.getOwner())) {
-          operandsToReplace.push_back(&iterArgUse);
-        }
+        operandsToReplace.push_back(&iterArgUse);
       }
     }
 

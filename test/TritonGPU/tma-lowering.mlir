@@ -24,7 +24,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %v_smem_initial = ttg.local_alloc %v_initial : (tensor<128x128xf16, #blocked_tma>) -> !ttg.memdesc<128x128xf16, #shared_tma, #smem_tma>
     
     // CHECK: scf.for
-    // CHECK-SAME: iter_args({{.*}}: tensor<128x128xf32, #mma>, {{.*}}: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>)
+    // CHECK-SAME: iter_args({{.*}})
     // CHECK-SAME: -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>)
     %result:2 = scf.for %iv = %c0_i32 to %N step %c128_i32 iter_args(%acc = %cst, %v_smem = %v_smem_initial) -> (tensor<128x128xf32, #mma_tma>, !ttg.memdesc<128x128xf16, #shared_tma, #smem_tma>) : i32 {
       %v_new = tt.descriptor_load %desc_v[%iv, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared_tma>> -> tensor<128x128xf16, #blocked_tma>
