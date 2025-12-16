@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "async_copy",
-    "cluster_sync",
     "fence_async_shared",
     "mbarrier",
     "mma_v2",
@@ -30,14 +29,6 @@ def fence_async_shared(cluster=False, _semantic=None):
     """
     cluster = _core._unwrap_if_constexpr(cluster)
     _semantic.builder.create_fence_async_shared(cluster)
-
-
-@_core.builtin
-def cluster_sync(_semantic=None):
-    """
-    Synchronize all CTAs in a cluster.
-    """
-    _semantic.builder.create_cluster_sync()
 
 
 class warpgroup_mma_accumulator_type(_core.base_type):
