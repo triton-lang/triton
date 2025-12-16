@@ -1,9 +1,18 @@
+import warnings
+
 import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, bitwidth, get_layout
+from triton_kernels.tensor import FP4, Tensor, bitwidth, get_layout
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
+
+
+def is_x_scale_swizzled(precision_config):
+    return (precision_config is not None and precision_config.a_mx_scale is not None
+            and isinstance(precision_config.a_mx_scale, Tensor)
+            and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -38,11 +47,15 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
-    elif k is not None:
+    elif is_persistent and is_x_scale_swizzled(precision_config):
+        # x scale has been swizzled to BlackwellActMXScaleLayout, enforce block_k to be multiple of 128
+        block_k = max(block_k, 128)
+    elif k is not None:  # cover small k case
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
     has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
+        # Cap block_k to conserve smem to increase num_stages
         block_k = min(block_k, 128)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
         block_k = min(block_k, 32)
@@ -86,6 +99,14 @@ def compute_num_stages(
     if precision_config.max_num_imprecise_acc is not None:
         return 3
     weight_size = bitwidth(rhs_dtype) / 8
+    if precision_config.b_mx_scale is not None and lhs_dtype in [torch.float16, torch.bfloat16]:
+        # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
+        # smem_capacity accordingly.
+        # w/o this, gets the following error:
+        # "triton.runtime.errors.OutOfResources: out of resource: shared memory, Required: 263356, Hardware limit: 232448. Reducing block sizes or `num_stages` may help"
+        # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
+        # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
+        weight_size = 2
     stage_size = block_m * block_k * lhs_dtype.itemsize + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
@@ -120,5 +141,10 @@ def compute_num_stages(
     elif has_native_mxfp:
         # mx scales
         stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
-    num_stages = min(4, smem_capacity // int(stage_size))
+    num_stages = min(smem_capacity // int(stage_size), 4)
+    if num_stages == 0:
+        warnings.warn(f"num_stages computed is 0 with {stage_size=} and {smem_capacity=}, "
+                      "bumping up to 1 but this may lead to out of shared memory errors, "
+                      "and in that case consider reducing block sizes.")
+        num_stages = 1
     return num_stages

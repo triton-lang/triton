@@ -3,6 +3,9 @@
 #include "triton/Tools/LayoutUtils.h"
 #include <optional>
 
+// Include shared C-compatible TDM utilities
+#include "../../backend/include/TDMCommon.h"
+
 namespace mlir::LLVM::AMD {
 namespace {
 
@@ -54,30 +57,16 @@ decodeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return {srcPtr, tensorShape, tensorStride};
 }
 
+// C++ wrapper for the shared tdmGetWarpDistribution function
 SmallVector<int> getWarpDistribution(ArrayRef<int64_t> blockShape,
                                      int numWarps) {
-  SmallVector<int> warps(blockShape.size(), 1);
-  int remainingWarps = numWarps;
-
-  // Distribute warps across dimensions, starting from the first dimension
-  for (size_t i = 0; i < blockShape.size() && remainingWarps > 1; ++i) {
-    // Try to assign as many warps as possible to this dimension
-    // without exceeding the block shape
-    while (remainingWarps > 1 && warps[i] * 2 <= blockShape[i]) {
-      warps[i] *= 2;
-      remainingWarps /= 2;
-    }
-  }
-
-  // If there are still remaining warps, assign them to the last dimension
-  // This ensures we use all available warps
-  if (remainingWarps > 1) {
-    warps[blockShape.size() - 1] *= remainingWarps;
-  }
+  int numDims = blockShape.size();
+  SmallVector<int> warps(numDims);
+  tdmGetWarpDistribution(blockShape.data(), numDims, numWarps, warps.data());
 
   // Verify the distribution is valid
   int totalWarps = 1;
-  for (size_t i = 0; i < warps.size(); ++i) {
+  for (int i = 0; i < numDims; ++i) {
     totalWarps *= warps[i];
     assert(blockShape[i] % warps[i] == 0 &&
            "Block shape must be divisible by warp distribution");
@@ -226,13 +215,11 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 
   // Distribute block among warps
-  if (numDims >= 2) {
-    auto warps = getWarpDistribution(blockShape, numWarps);
-    blockShape[0] = ceil(blockShape[0], int64_t(warps[0]));
-    blockShape[1] = ceil(blockShape[1], int64_t(warps[1]));
-  } else {
-    // For 1D case, all warps work on the single dimension
-    blockShape[0] = ceil(blockShape[0], int64_t(numWarps));
+  {
+    int64_t blkShapePerWarp[5];
+    tdmGetAdjustedBlockShape(blockShape.data(), numDims, numWarps,
+                             &blkShapePerWarp[0]);
+    blockShape.assign(blkShapePerWarp, blkShapePerWarp + blockShape.size());
   }
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
@@ -246,17 +233,48 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   group0[3] = b.trunc(i32_ty, b.lshr(globalAddr, v32));
   group0[3] = b.or_(group0[3], b.i32_val(1 << 31));
 
-  // group1 (256 bits / 8 dwords) effective bit encoding:
-  // [15:0]:    multicast mask
-  // [17:16]:   data size - log2(element size in bytes)
-  // [20]:      enable padding
-  // [24:22]:   pad interval - log2(pad interval in dwords) - 1
-  // [31:25]:   pad amount - pad amount in dwords - 1
-  // [79:48]:   tensor shape dim inner
-  // [111:80]:  tensor shape dim outer
-  // [127:112]: block shape dim inner
-  // [143:128]: block shape dim outer
-  // [207:160]: tensor stride dim outer (we only use 32 bits)
+  /* group1 bit-field definition:
+
+    NOTE that in this chart
+    - {tensor|tile}-dim0 for means innermost dimension.
+    - stride-dim0 refers to the stride of the 2nd innermost dimension.
+      FIXME: Is the stride for innermost dimension always 1, and hence no
+      need to set in the descriptor
+
+    ================================================================
+     dword | dword     | bit-size | field
+           | -bit-ofst |
+     ------------------------------------------------
+      0      0          16         multicast mask
+             16         2          data size - log2(element size in bytes)
+             18         1          atomic barrier enable
+             19         1          iterate enable
+             20         1          pad enable
+             22         3          pad interval
+                                   (log2(pad interval in dwords) - 1)
+             25         7          pad amount - pad amount in dwords - 1
+                                   (pad amount in dwords - 1)
+     ---------------------------------------------------------
+     1       0          16         atomic barrier address
+             16         16         tensor_dim0 (low-16-bit)
+     --------------------------------------------------------
+     2       0           16        tensor_dim0 (high-16-bit)
+             16          16        tensor_dim1 (low-16-bit)
+     ----------------------------------------------------------
+     3       0           16        tensor_dim1 (high-16-bit)
+             16          16        tile_dim0
+     -------------------------------------------------------
+     4       0           16        tile_dim1
+             16          16        tile_dim2
+     -------------------------------------------------------
+     5       0           32        tensor_dim0_stride(low-32-bit)
+     -------------------------------------------------------
+     6       0           16        tensor_dim0_stride(high-16-bit)
+            16           16        tensor_dim1_stride(low-16-bit)
+     -------------------------------------------------------------
+     7       0           32        tensor_dim1_stride(high-16-bit)
+     ================================================================
+  */
   SmallVector<Value> group1(8, b.i32_val(0));
   int32_t dataSize = log2(elementSizeInBytes);
   unsigned dwordSize = 32;
@@ -329,11 +347,19 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     }
   }
 
-  // group3 (128 bits / 4 dwords) effective bit encoding:
-  // [47:0]:    tensor_dim3_stride (4th dimension from the end)
-  // [79:48]:   tensor_dim4 (5th dimension from the end)
-  // [95:80]:   tile_dim4
-  // [127:96]:  reserved
+  /* group3 bit-field definition
+    ================================================================
+     dword | dword     | bit-size | field
+           | -bit-ofst |
+     ---------------------------------------------------------------
+         0           0          32 tensor_dim3_stride LSB-32
+         1           0          16 tensor_dim3_stride MSB-16
+                    16          16 tensor_dim4 LSB-16
+         2          00          16 tensor_dim4 MSB-16
+                    16          16 tile_dim4
+         3           0          32 reserved
+    ================================================================
+  */
   SmallVector<Value> group3(4, b.i32_val(0));
   if (numDims >= 4) {
 

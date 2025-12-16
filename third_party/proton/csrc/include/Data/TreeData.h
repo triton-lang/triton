@@ -3,8 +3,12 @@
 
 #include "Context/Context.h"
 #include "Data.h"
+#include "nlohmann/json.hpp"
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
+
+using json = nlohmann::json;
 
 namespace proton {
 
@@ -25,7 +29,11 @@ public:
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
+  std::string toJsonString() const override;
+
   void clear() override;
+
+  void clearCache() override;
 
 protected:
   // ScopeInterface
@@ -34,6 +42,12 @@ protected:
   void exitScope(const Scope &scope) override;
 
 private:
+  // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
+  // the background threads concurrently, so methods that access them should be
+  // protected by a (shared) mutex.
+  class Tree;
+  json buildHatchetJson(TreeData::Tree *tree) const;
+
   void dumpHatchet(std::ostream &os) const;
 
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
@@ -42,10 +56,6 @@ private:
     return OutputFormat::Hatchet;
   }
 
-  // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
-  // the background threads concurrently, so methods that access them should be
-  // protected by a (shared) mutex.
-  class Tree;
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;

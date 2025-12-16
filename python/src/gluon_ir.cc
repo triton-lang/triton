@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -105,8 +106,7 @@ struct GluonOpBuilder : public TritonOpBuilder {
         getContext(), [&](Diagnostic &diag) { printDiagStr(os, diag); });
 
     if (failed(AttrOrType::verifyInvariants(
-            [&] { return mlir::emitError(getLastLoc()); },
-            std::forward<ArgTs>(args)...)))
+            [&] { return mlir::emitError(getLastLoc()); }, args...)))
       throw std::runtime_error(os.str());
 
     return AttrOrType::get(ctx, std::forward<ArgTs>(args)...);
@@ -368,7 +368,7 @@ void init_gluon_ir(py::module &&m) {
                                          {kBlock, blockBases}},
                                         outDims,
                                         /*requiresSurjective=*/true);
-             return ttg::LinearEncodingAttr::get(ctx, ll);
+             return ttg::LinearEncodingAttr::get(ctx, std::move(ll));
            })
       .def("to_linear_layout",
            [](GluonOpBuilder &self, Attribute layout,
@@ -377,14 +377,15 @@ void init_gluon_ir(py::module &&m) {
              auto linearLayout = ttg::toLinearLayout(shape, layout);
 
              if (isa<ttg::DistributedEncodingTrait>(layout)) {
-               auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
+               auto attr =
+                   ttg::LinearEncodingAttr::get(ctx, std::move(linearLayout));
                return layoutToGluon(attr);
              }
              if (isa<ttg::SharedEncodingTrait>(layout)) {
                auto alignment =
                    cast<ttg::SharedEncodingTrait>(layout).getAlignment();
-               auto attr = ttg::SharedLinearEncodingAttr::get(ctx, linearLayout,
-                                                              alignment);
+               auto attr = ttg::SharedLinearEncodingAttr::get(
+                   ctx, std::move(linearLayout), alignment);
                return layoutToGluon(attr);
              }
 
@@ -476,7 +477,7 @@ void init_gluon_ir(py::module &&m) {
                  {{kOffset, offsetBases}, {kBlock, blockBases}},
                  tt::standardOutDimNames(ctx, rank));
              return ttg::PaddedSharedEncodingAttr::get(ctx, intervals, paddings,
-                                                       ll);
+                                                       std::move(ll));
            })
       .def("get_shared_linear_layout",
            [](GluonOpBuilder &self, std::vector<std::vector<int>> &offsetBases,
@@ -488,8 +489,8 @@ void init_gluon_ir(py::module &&m) {
              auto outDims = tt::standardOutDimNames(ctx, offsetBases[0].size());
              auto ll = tt::LinearLayout(
                  {{kOffset, offsetBases}, {kBlock, blockBases}}, outDims);
-             return self.getChecked<ttg::SharedLinearEncodingAttr>(ctx, ll,
-                                                                   alignment);
+             return self.getChecked<ttg::SharedLinearEncodingAttr>(
+                 ctx, std::move(ll), alignment);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
@@ -597,6 +598,13 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::AsyncCopyGlobalToLocalOp>(
                  pointer, smem, mask, other, cacheModifier, evictionPolicy,
                  isVolatile);
+           })
+      .def("create_async_copy_local_to_global",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy) {
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                 smem, pointer, mask, cacheModifier, evictionPolicy);
            })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
@@ -879,9 +887,9 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src) {
+              Value src, Value barrier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
-                                                            src);
+                                                            src, barrier);
            })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {
@@ -903,6 +911,13 @@ void init_gluon_ir(py::module &&m) {
       .def("create_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           })
+      .def("create_warp_pipeline_border",
+           [](GluonOpBuilder &self, const std::string &marker) {
+             auto border = self.create<ROCDL::SchedBarrier>(0);
+             auto ctx = self.getContext();
+             border->setAttr("triton.warp_pipeline.border",
+                             StringAttr::get(ctx, marker));
            });
 
   m.def(
@@ -958,7 +973,7 @@ void init_gluon_ir(py::module &&m) {
         if (!layout)
           return py::none();
 
-        auto attr = ttg::LinearEncodingAttr::get(ctx, *layout);
+        auto attr = ttg::LinearEncodingAttr::get(ctx, std::move(*layout));
         return layoutToGluon(attr);
       });
 
@@ -989,7 +1004,7 @@ void init_gluon_ir(py::module &&m) {
 
           auto ll = ttg::chooseScaledMfmaScaleLayout(
               &ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
-          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          auto attr = ttg::LinearEncodingAttr::get(&ctx, std::move(ll));
           return layoutToGluon(attr);
         });
 
@@ -1006,7 +1021,7 @@ void init_gluon_ir(py::module &&m) {
 
           auto ll = ttg::chooseScaledWmmaScaleLayout(
               &ctx, opIdx, shape, wmmaMDim, tilesPerWarp, warpsPerCTA);
-          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          auto attr = ttg::LinearEncodingAttr::get(&ctx, std::move(ll));
           return layoutToGluon(attr);
         });
 

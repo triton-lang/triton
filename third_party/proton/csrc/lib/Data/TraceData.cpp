@@ -229,7 +229,16 @@ void TraceData::addMetrics(
   }
 }
 
+std::string TraceData::toJsonString() const { throw NotImplemented(); }
+
 void TraceData::clear() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto newTrace = std::make_unique<Trace>();
+  trace.swap(newTrace);
+  scopeIdToContextId.clear();
+}
+
+void TraceData::clearCache() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   scopeIdToContextId.clear();
 }
