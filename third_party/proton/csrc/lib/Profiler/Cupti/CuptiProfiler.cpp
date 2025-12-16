@@ -733,17 +733,19 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                              ->hGraph;
         uint32_t graphExecId = 0;
         cupti::getGraphExecId<true>(graphExec, &graphExecId);
-        if (pImpl->graphStates.contain(graphExecId)) {
+        auto graphRef = pImpl->graphStates.find(graphExecId);
+        if (graphRef.has_value() && 
+            !graphRef.value().get().metricKernelNodeIds.empty()) {
           std::map<Data *, std::vector<std::pair<bool, size_t>>>
               metricNodeScopes;
           auto dataSet = profiler.getDataSet();
-          for (auto *data : dataSet) {
-            for (auto nodeId :
-                 pImpl->graphStates[graphExecId].metricKernelNodeIds) {
+          auto &graphExec = graphRef.value().get();
+          for (auto nodeId : graphExec.metricKernelNodeIds) {
+            for (auto *data : dataSet) {
               bool isApi = false;
               size_t scopeId = 0;
               if (profiler.correlation.getGraphNodeScope(externId, data, nodeId,
-                                                        isApi, scopeId)) {
+                                                         isApi, scopeId)) {
                 metricNodeScopes[data].push_back({isApi, scopeId});
               }
             }
