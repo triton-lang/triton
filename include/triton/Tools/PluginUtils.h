@@ -24,11 +24,14 @@ struct TritonPlugin {
 
 public:
   llvm::Error checkLibraryValid(const std::string &error) const;
-  static constexpr char *ENUMERATE_PASSES = (char*)"tritonEnumeratePluginPasses";
-  static constexpr char *ENUMERATE_DIALECTS = (char*)"tritonEnumeratePluginDialects";
-  static constexpr char *DIALECT_PLUGININFO = (char*)"tritonGetDialectPluginInfo";
-  static constexpr char *ADD_PASS = (char*)"tritonAddPluginPass";
-  static constexpr char *REGISTER_PASS = (char*)"tritonRegisterPluginPass";
+  static constexpr char *ENUMERATE_PASSES =
+      (char *)"tritonEnumeratePluginPasses";
+  static constexpr char *ENUMERATE_DIALECTS =
+      (char *)"tritonEnumeratePluginDialects";
+  static constexpr char *DIALECT_PLUGININFO =
+      (char *)"tritonGetDialectPluginInfo";
+  static constexpr char *ADD_PASS = (char *)"tritonAddPluginPass";
+  static constexpr char *REGISTER_PASS = (char *)"tritonRegisterPluginPass";
 
 private:
   using EnumeratePyBindHandlesType =
