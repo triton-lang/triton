@@ -395,15 +395,18 @@ it sends an “LDS atomic arrive” to signal its completion.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_copy_local_to_global</span></code> (triton::amdgpu::AsyncTDMCopyLocalToGlobalOp)<a class="headerlink" href="#amdg-async-tdm-copy-local-to-global-triton-amdgpu-asynctdmcopylocaltoglobalop" title="Link to this heading">¶</a></h2>
 <p><em>Copy data based on descriptor from local memory to global memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_local_to_global` $desc `[` $indices `]` `from` $src
-              attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($desc))
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_local_to_global` $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+              attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($desc))
 </pre></div>
 </div>
 <p>This operation copies data from local memory to global memory
 asynchronously. This is analogue to tt.store except the data are copied from
 local memory pointed by <code class="docutils literal notranslate"><span class="pre">src</span></code> instead of a distributed tensor. The copy
 destination depends on the global memory pointed to by <code class="docutils literal notranslate"><span class="pre">desc</span></code>. This
-operation does not support shared memory padding or swizzling.</p>
+operation does not support shared memory padding or swizzling.
+The operation can also take an optional 64bit LDS barrier address, in which case
+it sends an “LDS atomic arrive” to signal its completion.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
 <section id="id4">
 <h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -420,6 +423,9 @@ operation does not support shared memory padding or swizzling.</p>
 <td><p>variadic of 32-bit signless integer</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
