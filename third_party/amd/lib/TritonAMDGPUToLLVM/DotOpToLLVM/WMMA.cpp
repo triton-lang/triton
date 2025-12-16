@@ -21,13 +21,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/Support/LLVM.h"
+
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
-
 namespace mlir::triton::AMD {
 namespace {
 
@@ -214,6 +217,60 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
                                tiedLower);
 }
 
+LinearLayout computeRepLayout(SmallVector<unsigned> &repA,
+                              SmallVector<unsigned> &repB,
+                              AMDWmmaEncodingAttr wmmaLayout, int K, int kDim,
+                              ArrayRef<long int> resShape, MLIRContext *ctx) {
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+
+  // To compute repetition layout, we need to divide WMMA layout
+  // with layout that describes single WMMA tile layout for all warps.
+  auto rank = resShape.size();
+  auto warpLayout = wmmaLayout.getWarpLayout();
+  auto tile = wmmaLayout.getTileLayout(resShape) * warpLayout;
+
+  // Sometimes tile can be larger then the whole layout, depending on the
+  // block sizes so we need to adjust it in order to be sure that it is
+  // divisible.
+  llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
+  auto dims = standardOutDimNames(ctx, rank);
+  for (auto [dim, size] : llvm::zip(dims, resShape)) {
+    shapeMap[dim] = size;
+  }
+  tile = ensureLayoutNotLargerThan(tile, shapeMap);
+
+  auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
+  auto repLayout = divideLeft(wmmaLL, tile).value();
+
+  // wmmaLayout.getTileLayout(resShape) * warpLayout is more then "single WMMA
+  // tile layout for all warps" as it can can include repetitions that are
+  // sometimes part of warpLayout. So after division, we need to extract these
+  // reps from warpLayout (aka register sublayout) and compose it with quotient.
+  auto llReg = warpLayout.sublayout({kRegister}, dims);
+  llReg = LinearLayout(llReg.getBases(), dims);
+
+  repLayout = llReg * repLayout;
+
+  const unsigned d0 = repLayout.getOutDimSize(StringAttr::get(ctx, "dim0"));
+  const unsigned d1 = repLayout.getOutDimSize(StringAttr::get(ctx, "dim1"));
+  const unsigned kTiles = std::max(static_cast<unsigned>(K / kDim), 1u);
+
+  if (rank < 3) {
+    repA = {1u, d0, kTiles};
+    repB = {1u, kTiles, d1};
+  } else {
+    const unsigned d2 = repLayout.getOutDimSize(StringAttr::get(ctx, "dim2"));
+    repA = {d0, d1, kTiles};
+    repB = {d0, kTiles, d2};
+  }
+
+  assert(repA[2] == repB[1]);
+  return repLayout;
+}
+
 // Conduct the Dot conversion.
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter,
@@ -221,7 +278,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
-  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+  auto ctx = op.getContext();
   auto mnkDim = wmmaLayout.getInstrShape();
 
   auto loc = op.getLoc();
@@ -256,8 +313,14 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   intrinsicName = maybeWmmaIntrinsic->name;
 
-  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDim, 0);
-  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDim, 1);
+  auto resShape = dTensorTy.getShape();
+  auto rank = resShape.size();
+  auto K = aTensorTy.getShape()[rank - 1];
+  SmallVector<unsigned> repA;
+  SmallVector<unsigned> repB;
+
+  auto repLayout =
+      computeRepLayout(repA, repB, wmmaLayout, K, kDim, resShape, ctx);
 
   assert(repA[2] == repB[1]);
 
@@ -300,51 +363,51 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   if (tied)
     intrinsicName += ".tied";
 
-  for (int b = 0; b < numRepB; ++b) {
-    for (int m = 0; m < numRepM / tiedGroup; ++m) {
-      for (int n = 0; n < numRepN; ++n) {
-        auto batchOffIdx = b * numRepM * numRepN * dElemsToStorePerThread;
-        auto nRepOffId = n * dElemsToStorePerThread;
-        auto nBatchOffSum = nRepOffId + batchOffIdx;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
 
-        Value acc = tb.undef(vecTy);
-        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          for (int subTied = 0; subTied < tiedGroup; ++subTied) {
-            auto mRepOffId =
-                (m * tiedGroup + subTied) * numRepN * dElemsToStorePerThread;
-            auto fcThreadOffIdx = nBatchOffSum + mRepOffId;
-            acc = tb.insert_element(
-                vecTy, acc, fc[fcThreadOffIdx + v],
-                tb.i32_val(v * paddedOutputElemSize + subTied));
-          }
-        }
-        for (size_t k = 0; k < numRepK; ++k) {
-          for (int subTied = 0; subTied < tiedGroup; ++subTied) {
-            auto optTied =
-                tied ? std::optional<bool>(subTied != 0) : std::nullopt;
-            acc = wmmaLayout.getIsTransposed()
-                      ? generateWMMAOp(rewriter, loc, wmmaVer, hb[{b, n, k}],
-                                       ha[{b, m * tiedGroup + subTied, k}], acc,
-                                       bTensorTy.getElementType(),
-                                       aTensorTy.getElementType(), dstElemTy,
-                                       intrinsicName, optTied)
-                      : generateWMMAOp(rewriter, loc, wmmaVer,
-                                       ha[{b, m * tiedGroup + subTied, k}],
-                                       hb[{b, n, k}], acc,
-                                       aTensorTy.getElementType(),
-                                       bTensorTy.getElementType(), dstElemTy,
-                                       intrinsicName, optTied);
-          }
-        }
-        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          for (int subTied = 0; subTied < tiedGroup; ++subTied) {
-            auto mRepOffId =
-                (m * tiedGroup + subTied) * numRepN * dElemsToStorePerThread;
-            auto fcThreadOffIdx = nBatchOffSum + mRepOffId;
-            fc[fcThreadOffIdx + v] = tb.extract_element(
-                dstElemTy, acc, tb.i32_val(v * paddedOutputElemSize + subTied));
-          }
-        }
+  auto numIterations = numRepB * numRepM * numRepN;
+
+  for (int i = 0; i < numIterations; ++i) {
+    auto repIndices =
+        repLayout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    int b = (rank == 3 ? repIndices[0].second : 0);
+    int m = repIndices[rank == 3 ? 1 : 0].second;
+    int n = repIndices[rank == 3 ? 2 : 1].second;
+    if (tiedGroup == 2 && m % 2 == 1) {
+      continue;
+    }
+
+    Value acc = tb.undef(vecTy);
+    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+      for (int subTied = 0; subTied < tiedGroup; ++subTied) {
+        acc = tb.insert_element(vecTy, acc,
+                                fc[(i + subTied) * dElemsToStorePerThread + v],
+                                tb.i32_val(v * paddedOutputElemSize + subTied));
+      }
+    }
+    for (size_t k = 0; k < numRepK; ++k) {
+      for (int subTied = 0; subTied < tiedGroup; ++subTied) {
+        auto optTied = tied ? std::optional<bool>(subTied != 0) : std::nullopt;
+        acc = wmmaLayout.getIsTransposed()
+                  ? generateWMMAOp(rewriter, loc, wmmaVer, hb[{b, n, k}],
+                                   ha[{b, m * tiedGroup + subTied, k}], acc,
+                                   bTensorTy.getElementType(),
+                                   aTensorTy.getElementType(), dstElemTy,
+                                   intrinsicName, optTied)
+                  : generateWMMAOp(
+                        rewriter, loc, wmmaVer,
+                        ha[{b, m * tiedGroup + subTied, k}], hb[{b, n, k}], acc,
+                        aTensorTy.getElementType(), bTensorTy.getElementType(),
+                        dstElemTy, intrinsicName, optTied);
+      }
+    }
+    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+      for (int subTied = 0; subTied < tiedGroup; ++subTied) {
+        fc[(i + subTied) * dElemsToStorePerThread + v] = tb.extract_element(
+            dstElemTy, acc, tb.i32_val(v * paddedOutputElemSize + subTied));
       }
     }
   }
@@ -362,11 +425,11 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
                                triton::DotScaledOp::Adaptor adaptor,
                                ConversionPatternRewriter &rewriter,
                                const LLVMTypeConverter *typeConverter) {
+  auto ctx = op.getContext();
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
   assert(wmmaVer == 3 && "Scaled dot not supported for wmma1/wmma2");
-  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto mnkDim = wmmaLayout.getInstrShape();
 
   auto loc = op.getLoc();
@@ -402,12 +465,17 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   if (isFp6A || isFp6B)
     return op.emitError("NYI: FP6 scaled dot");
 
-  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDimA, 0);
-  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDimB, 1);
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto K = aTensorTy.getShape()[rank - 1];
+  auto resShape = dTensorTy.getShape();
+  SmallVector<unsigned> repA;
+  SmallVector<unsigned> repB;
 
-  auto tilesPerWarp = wmmaLayout.getTilesPerWarp();
-
-  assert(repA[2] == repB[1]);
+  auto repLayout =
+      computeRepLayout(repA, repB, wmmaLayout, K, kDimA, resShape, ctx);
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();
@@ -426,6 +494,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto kPaddingA = kBaseA - kBaseA / paddingFactor;
   auto kPaddingB = kBaseB - kBaseB / paddingFactor;
   auto KBaseScale = 4;
+  int numPackedValsM = numRepM == 1 ? 1 : 2;
+  int numPackedValsN = numRepN == 1 ? 1 : 2;
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
@@ -435,11 +505,11 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       kBaseB, kPaddingB, bTensorTy.getElementType(), loc);
   ValueTable sa = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedAScale, numRepB,
-      numRepM / tilesPerWarp[0], numRepK, KBaseScale, 0,
+      numRepM / numPackedValsM, numRepK, KBaseScale, 0,
       aScaleTensorTy.getElementType(), loc);
   ValueTable sb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedBScale, numRepB,
-      numRepN / tilesPerWarp[1], numRepK, KBaseScale, 0,
+      numRepN / numPackedValsN, numRepK, KBaseScale, 0,
       bScaleTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
@@ -455,41 +525,39 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
-  for (int b = 0; b < numRepB; ++b) {
-    for (int m = 0; m < numRepM; ++m) {
-      for (int n = 0; n < numRepN; ++n) {
-        auto batchOffIdx = b * numRepM * numRepN * dElemsToStorePerThread;
-        auto mRepOffId = m * numRepN * dElemsToStorePerThread;
-        auto nRepOffId = n * dElemsToStorePerThread;
-        auto fcThreadOffIdx = batchOffIdx + mRepOffId + nRepOffId;
+  auto numIterations = numRepB * numRepM * numRepN;
+  for (int i = 0; i < numIterations; ++i) {
+    auto repIndices =
+        repLayout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    int b = (rank == 3 ? repIndices[0].second : 0);
+    int m = repIndices[rank == 3 ? 1 : 0].second;
+    int n = repIndices[rank == 3 ? 2 : 1].second;
 
-        Value acc = tb.undef(vecTy);
-        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          acc = tb.insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
-                                  tb.i32_val(v));
-        }
-        for (size_t k = 0; k < numRepK; k++) {
-          int scaleOpSelA = m % tilesPerWarp[rank - 2];
-          int scaleOpSelB = n % tilesPerWarp[rank - 1];
-          acc = wmmaLayout.getIsTransposed()
-                    ? generateScaledWMMAIntrinsic(
-                          rewriter, loc, hb[{b, n, k}],
-                          sb[{b, n / tilesPerWarp[rank - 1], k}], ha[{b, m, k}],
-                          sa[{b, m / tilesPerWarp[rank - 2], k}], acc,
-                          scaledBElemType, scaledAElemType, dstElemTy,
-                          KBaseScale, scaleOpSelB, scaleOpSelA)
-                    : generateScaledWMMAIntrinsic(
-                          rewriter, loc, ha[{b, m, k}],
-                          sa[{b, m / tilesPerWarp[rank - 2], k}], hb[{b, n, k}],
-                          sb[{b, n / tilesPerWarp[rank - 1], k}], acc,
-                          scaledAElemType, scaledBElemType, dstElemTy,
-                          KBaseScale, scaleOpSelA, scaleOpSelB);
-        }
-        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          fc[fcThreadOffIdx + v] =
-              tb.extract_element(dstElemTy, acc, tb.i32_val(v));
-        }
-      }
+    Value acc = tb.undef(vecTy);
+    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+      acc = tb.insert_element(vecTy, acc, fc[dElemsToStorePerThread * i + v],
+                              tb.i32_val(v));
+    }
+    for (size_t k = 0; k < numRepK; k++) {
+      int scaleOpSelA = m % numPackedValsM;
+      int scaleOpSelB = n % numPackedValsN;
+      acc = wmmaLayout.getIsTransposed()
+                ? generateScaledWMMAIntrinsic(
+                      rewriter, loc, hb[{b, n, k}],
+                      sb[{b, n / numPackedValsN, k}], ha[{b, m, k}],
+                      sa[{b, m / numPackedValsM, k}], acc, scaledBElemType,
+                      scaledAElemType, dstElemTy, KBaseScale, scaleOpSelB,
+                      scaleOpSelA)
+                : generateScaledWMMAIntrinsic(
+                      rewriter, loc, ha[{b, m, k}],
+                      sa[{b, m / numPackedValsM, k}], hb[{b, n, k}],
+                      sb[{b, n / numPackedValsN, k}], acc, scaledAElemType,
+                      scaledBElemType, dstElemTy, KBaseScale, scaleOpSelA,
+                      scaleOpSelB);
+    }
+    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+      fc[dElemsToStorePerThread * i + v] =
+          tb.extract_element(dstElemTy, acc, tb.i32_val(v));
     }
   }
 
