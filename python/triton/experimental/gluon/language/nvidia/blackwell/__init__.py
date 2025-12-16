@@ -2,8 +2,8 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
-import itertools
 from triton.runtime.jit import constexpr_function
+import triton.experimental.gluon as gluon
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 from triton.experimental.gluon.language._layouts import SharedLinearLayout
@@ -378,7 +378,8 @@ def tcgen05_copy(src, dst, _semantic=None):
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
+                _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -389,6 +390,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
@@ -407,8 +409,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
+    multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast)
 
 
 @builtin
@@ -454,6 +457,57 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     b_type = _semantic._str_to_fp_type(b_type.value)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+
+
+@constexpr_function
+def _num_canonical_ctas(smems):
+    if not smems:
+        return 1
+
+    def basis_is_zero(basis):
+        return all(b == 0 for b in basis)
+
+    def num_broadcast_bits(smem):
+        return sum(basis_is_zero(basis) for basis in smem.layout.cga_layout)
+
+    if len(smems) == 1:
+        return 2**num_broadcast_bits(smems[0])
+
+    assert len(smems) == 2
+    num_broadcast_bits_a = num_broadcast_bits(smems[0])
+    num_broadcast_bits_b = num_broadcast_bits(smems[1])
+    # Asser that for every basis, at least one of them is non-zero
+    # so that the inclusion-exclusion principle below works
+    # This can be generalised if needed by substracting below 2**size_intersection
+    for i in range(len(smems[0].layout.cga_layout)):
+        assert not basis_is_zero(smems[0].layout.cga_layout[i]) or not basis_is_zero(smems[1].layout.cga_layout[i])
+
+    # Inclusion-exclusion
+    num_cta_commits = 2**num_broadcast_bits_a + 2**num_broadcast_bits_b - 1
+    return num_cta_commits
+
+
+@gluon.jit
+def tcgen05_mbarrier_init(barrier, multicast=()):
+    """
+    Initialize an mbarrier for tcgen05 operations.
+
+    When `multicast=True`, we initialize the barrier to wait for all participating
+    CTAs to commit. In 2CTA mode, only the "leader" CTAs (even CTAs) issue the
+    tcgen05 sequence, so the expected arrival count is `num_ctas // 2`.
+
+    Args:
+        barrier (shared_memory_descriptor): The barrier to initialize.
+        multicast (List[shared_memory_descriptor]): Shared memory descriptors
+            used in the tcgen05 instruction coming from a TMA with multicast.
+    """
+    assert len(multicast) >= 0 and len(multicast) <= 2, \
+        "Multicast must be empty or contain 0, 1, or 2 smem descriptors"
+
+    # Count the number of canonical CTAs that will launch the next multicast instruction
+    # This is the union of both subspaces
+    count: ttgl.constexpr = _num_canonical_ctas(multicast)
+    mbarrier.init(barrier, count)
 
 
 @builtin
