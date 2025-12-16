@@ -61,7 +61,7 @@ class FusedComm:
     #   dst_y_m: BLOCK_M(int)      the destination row offsets
     #   dst_y_n: BLOCK_N(int)      the destination column offsets
     map_dst_coord: Closure
-    # scatter_shard_indx: torch.Tensor | None = None
+    all_writes_issued: Closure
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
@@ -479,6 +479,7 @@ def matmul(a, b, bias,
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "map_dst_coord": fused_comm.map_dst_coord,
+        "all_writes_issued": fused_comm.all_writes_issued,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}

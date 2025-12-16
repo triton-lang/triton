@@ -13,7 +13,6 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    threadfence_system,
     compute_pids,
 )
 
@@ -77,6 +76,7 @@ def _matmul(
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
              pYPtrs=None,
              map_dst_coord=None,
+             all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
              ):
@@ -181,6 +181,8 @@ def _matmul(
     total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
 
     if padding_m > 0 and pid >= total_actual_tiles:
+        if pYPtrs is not None:
+            all_writes_issued.fn(*all_writes_issued.captured)
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
@@ -496,4 +498,4 @@ def _matmul(
 
 
     if pYPtrs is not None:
-        threadfence_system()
+        all_writes_issued.fn(*all_writes_issued.captured)

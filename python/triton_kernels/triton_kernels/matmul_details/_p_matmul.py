@@ -20,7 +20,6 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    threadfence_system,
     compute_pids,
 )
 
@@ -105,6 +104,7 @@ def _p_matmul(
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
              pYPtrs=None,
              map_dst_coord=None,
+             all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              ):
@@ -631,7 +631,7 @@ def _p_matmul(
         tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
 
     if pYPtrs is not None:
-        threadfence_system()
+        all_writes_issued.fn(*all_writes_issued.captured)
 
 _per_device_alloc_fns = {}
 def get_per_device_per_stream_alloc_fn(device):
