@@ -1,5 +1,5 @@
-include_directories(${PROJECT_SOURCE_DIR}/Plugins/DialectPlugins/DialectPlugin/include)
-include_directories(${PROJECT_BINARY_DIR}/Plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_SOURCE_DIR}/plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_BINARY_DIR}/plugins/DialectPlugins/DialectPlugin/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/nvidia/include)
 
 add_mlir_dialect_library(MLIRDialectPlugin
@@ -10,7 +10,7 @@ add_mlir_dialect_library(MLIRDialectPlugin
         SHARED
 
         ADDITIONAL_HEADER_DIRS
-        ${PROJECT_SOURCE_DIR}/Plugins/include/
+        ${PROJECT_SOURCE_DIR}/plugins/include/
 
         DEPENDS
         TritonIR

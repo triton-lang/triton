@@ -1,5 +1,5 @@
-include_directories(${PROJECT_SOURCE_DIR}/Plugins/DialectPlugins/DialectPlugin/include)
-include_directories(${PROJECT_BINARY_DIR}/Plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_SOURCE_DIR}/plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_BINARY_DIR}/plugins/DialectPlugins/DialectPlugin/include)
 
 # This is so add_mlir_doc doesn't hit "error: mkdir(/docs): Permission denied"
 set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
