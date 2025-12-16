@@ -269,72 +269,29 @@ bool isDriverAPILaunch(CUpti_CallbackId cbId) {
 
 // TODO: Move it to GPUProfiler.h once AMD side is settled
 struct GraphState {
-  using ContextPtr = std::shared_ptr<const std::vector<Context>>;
-  using ContextId = uint32_t;
+  using ContextNames = std::vector<std::string>;
 
-  struct ContextsKey {
-    uint64_t a;
-    uint64_t b;
-  };
-  struct ContextsKeyHash {
-    size_t operator()(const ContextsKey &k) const noexcept {
-      return static_cast<size_t>(k.a ^ (k.b * 0x9e3779b97f4a7c15ull));
+  static ContextNames toContextNames(std::vector<Context> contexts) {
+    ContextNames names;
+    names.reserve(contexts.size());
+    for (auto &ctx : contexts) {
+      names.push_back(std::move(ctx.name));
     }
-  };
-  struct ContextsKeyEq {
-    bool operator()(const ContextsKey &lhs, const ContextsKey &rhs) const noexcept {
-      return lhs.a == rhs.a && lhs.b == rhs.b;
+    return names;
+  }
+
+  static std::vector<Context> toContexts(const ContextNames &names) {
+    std::vector<Context> contexts;
+    contexts.reserve(names.size());
+    for (const auto &name : names) {
+      contexts.emplace_back(name);
     }
-  };
-
-  struct ContextIntern {
-    std::unordered_map<ContextsKey, std::vector<ContextId>, ContextsKeyHash,
-                       ContextsKeyEq>
-        keyToIds;
-    std::vector<ContextPtr> idToContexts;
-
-    static ContextsKey makeKey(const std::vector<Context> &contexts) {
-      std::hash<std::string_view> hasher;
-      uint64_t a = 0x243f6a8885a308d3ull;
-      uint64_t b = 0x9e3779b97f4a7c15ull;
-      for (const auto &ctx : contexts) {
-        const auto h = static_cast<uint64_t>(hasher(std::string_view(ctx.name)));
-        a ^= h + 0x9e3779b97f4a7c15ull + (a << 6) + (a >> 2);
-        b ^= (h * 0xbf58476d1ce4e5b9ull) + 0x94d049bb133111ebull + (b << 7) +
-             (b >> 3);
-      }
-      a ^= static_cast<uint64_t>(contexts.size());
-      b ^= static_cast<uint64_t>(contexts.size()) << 1;
-      return {a, b};
-    }
-
-    ContextId intern(std::vector<Context> contexts) {
-      const auto key = makeKey(contexts);
-      auto &candidates = keyToIds[key];
-      for (auto id : candidates) {
-        if (*idToContexts[id] == contexts) {
-          return id;
-        }
-      }
-      const auto id = static_cast<ContextId>(idToContexts.size());
-      idToContexts.push_back(
-          std::make_shared<const std::vector<Context>>(std::move(contexts)));
-      candidates.push_back(id);
-      return id;
-    }
-
-    const std::vector<Context> &get(ContextId id) const {
-      return *idToContexts.at(id);
-    }
-  };
-
-  struct ContextTables {
-    std::unordered_map<Data *, ContextIntern> dataToContextIntern;
-  };
+    return contexts;
+  }
 
   struct NodeState {
-    // Mapping from Data object to scope id capturing the graph
-    std::map<Data *, ContextId> captureContextIds;
+    // Mapping from Data object to captured callpath (context names)
+    std::map<Data *, ContextNames> captureContextNames;
     // A unique id for the graph node
     uint64_t nodeId{};
   };
@@ -355,19 +312,6 @@ struct GraphState {
   uint32_t graphId{};
   // Total number of GPU kernels launched by this graph
   size_t numInstances{1};
-
-  ContextId internCaptureContexts(Data *data, std::vector<Context> contexts) {
-    if (!contextTables) {
-      contextTables = std::make_shared<ContextTables>();
-    }
-    return contextTables->dataToContextIntern[data].intern(std::move(contexts));
-  }
-
-  const std::vector<Context> &getCaptureContexts(Data *data, ContextId id) const {
-    return contextTables->dataToContextIntern.at(data).get(id);
-  }
-
-  std::shared_ptr<ContextTables> contextTables = std::make_shared<ContextTables>();
 };
 
 // Track pending graphs per device so flushing a single device won't drain
@@ -636,9 +580,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               } else {
                 contexts.push_back(threadState.scopeStack.back());
               }
-              pImpl->graphStates[graphId].nodeIdToState[nodeId].captureContextIds[data] =
-                  pImpl->graphStates[graphId].internCaptureContexts(
-                      data, std::move(contexts));
+              pImpl->graphStates[graphId]
+                  .nodeIdToState[nodeId]
+                  .captureContextNames[data] =
+                  GraphState::toContextNames(std::move(contexts));
             }
             if (threadState.isMetricKernelLaunching)
               pImpl->graphStates[graphId].metricKernelNodeIds.insert(nodeId);
@@ -650,8 +595,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
           cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
           // Clone all node states
-          pImpl->graphStates[graphId].contextTables =
-              pImpl->graphStates[originalGraphId].contextTables;
           pImpl->graphStates[graphId].nodeIdToState[nodeId] =
               pImpl->graphStates[originalGraphId].nodeIdToState[originalNodeId];
           if (pImpl->graphStates[originalGraphId].metricKernelNodeIds.find(
@@ -740,15 +683,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphState = pImpl->graphStates[graphExecId];
 
           // Build per-Data callpath groups: callpathId -> [nodeIds...]
-          std::map<Data *,
-                   std::unordered_map<GraphState::ContextId, std::vector<uint64_t>>>
+          std::map<Data *, std::map<GraphState::ContextNames, std::vector<uint64_t>>>
               dataToCallpathToNodes;
           for (const auto &[nodeId, nodeState] : graphState.nodeIdToState) {
-            for (const auto &[data, callpathId] : nodeState.captureContextIds) {
+            for (const auto &[data, callpath] : nodeState.captureContextNames) {
               if (dataSet.find(data) == dataSet.end()) {
                 continue;
               }
-              dataToCallpathToNodes[data][callpathId].push_back(nodeId);
+              dataToCallpathToNodes[data][callpath].push_back(nodeId);
             }
           }
 
@@ -756,18 +698,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               graphNodeScopes;
           for (auto &[data, callpathToNodes] : dataToCallpathToNodes) {
             const auto baseScopeId = data->addOp(externId, GraphState::captureTag);
-            std::unordered_map<GraphState::ContextId, size_t> callpathToScopeId;
-
-            for (const auto &[callpathId, nodeIds] : callpathToNodes) {
-              auto it = callpathToScopeId.find(callpathId);
-              if (it == callpathToScopeId.end()) {
-                const auto &contexts =
-                    graphState.getCaptureContexts(data, callpathId);
-                it = callpathToScopeId
-                         .emplace(callpathId, data->addOp(baseScopeId, contexts))
-                         .first;
-              }
-              const auto nodeScopeId = it->second;
+            for (const auto &[callpath, nodeIds] : callpathToNodes) {
+              const auto nodeScopeId =
+                  data->addOp(baseScopeId, GraphState::toContexts(callpath));
               for (auto nodeId : nodeIds) {
                 const bool isAPI =
                     graphState.apiNodeIds.find(nodeId) != graphState.apiNodeIds.end();
