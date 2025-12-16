@@ -545,19 +545,19 @@ LinearLayout chooseWmmaWarpLinearLayout(MLIRContext *ctx, unsigned rank,
   const unsigned warpsPerCTAM = warpsPerCTA[mIndex];
   const unsigned warpsPerCTAN = warpsPerCTA[nIndex];
 
-  auto warpLayout = LinearLayout::identity1D(tilesPerWarpN, kRegister, dimN);
-  warpLayout *= LinearLayout::identity1D(warpsPerCTAN, kWarp, dimN);
-  warpLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
-  warpLayout *= LinearLayout::identity1D(warpsPerCTAM, kWarp, dimM);
-  warpLayout = warpLayout.transposeOuts({dimM, dimN});
+  auto ctaLayout = LinearLayout::identity1D(tilesPerWarpN, kRegister, dimN);
+  ctaLayout *= LinearLayout::identity1D(warpsPerCTAN, kWarp, dimN);
+  ctaLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
+  ctaLayout *= LinearLayout::identity1D(warpsPerCTAM, kWarp, dimM);
+  ctaLayout = ctaLayout.transposeOuts({dimM, dimN});
 
   if (hasBatchDim) {
     auto dimB = outDimNames[0];
     const unsigned warpsPerCTAB = warpsPerCTA[0];
-    warpLayout *= LinearLayout::identity1D(warpsPerCTAB, kWarp, dimB);
+    ctaLayout *= LinearLayout::identity1D(warpsPerCTAB, kWarp, dimB);
   }
 
-  return warpLayout;
+  return ctaLayout;
 }
 
 std::optional<LinearLayout>
@@ -829,8 +829,8 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(ArrayRef<int64_t> shape) const {
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto tileLayout = getTileLayout(shape);
-  auto warpLayout = getWarpLayout();
-  auto ctaLayout = tileLayout * warpLayout;
+  auto ctaLayout = getCtaLayout();
+  auto wmmaLayout = tileLayout * ctaLayout;
 
   auto rank = shape.size();
   MLIRContext *ctx = getContext();
@@ -838,8 +838,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   SmallVector<StringAttr> repDimNames =
       permuteDimNames(standardOutDimNames(ctx, rank), defaultRepOrder);
 
-  ctaLayout = ctaLayout.transposeOuts(repDimNames);
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  wmmaLayout = wmmaLayout.transposeOuts(repDimNames);
+  return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
 }
 
 LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
@@ -894,21 +894,21 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   tileLayout *= LinearLayout::identity1D(std::max(kSize, kDim) / kTileSize,
                                          kRegister, dimK);
 
-  auto warpMfmaLayout = wmmaLayout.getWarpLayout();
+  auto ctaLayout = wmmaLayout.getCtaLayout();
   // Zero out M or N dim based on opIdx
-  auto warpDotMfmaLayout = projectAwayOutDim(warpMfmaLayout, dimK, ctx);
+  ctaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
   // If repetition (aka register basis) iz 0 in all out dims we need to remove
   // it since this repetition doesn't make sense for dotOp layout.
-  warpDotMfmaLayout =
-      actionRemoveBroadcastedRegs(warpDotMfmaLayout).apply(warpDotMfmaLayout);
+  ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
-  LinearLayout ctaLayout = tileLayout * warpDotMfmaLayout;
+  LinearLayout dotOperanLayout = tileLayout * ctaLayout;
 
   SmallVector<StringAttr> repDimNames =
       permuteDimNames(standardOutDimNames(ctx, rank), order);
-  ctaLayout = ctaLayout.transposeOuts(repDimNames);
+  dotOperanLayout = dotOperanLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCGALayout(), shape);
+  return combineCtaCgaWithShape(dotOperanLayout, wmmaLayout.getCGALayout(),
+                                shape);
 }
 
 LinearLayout
@@ -1419,7 +1419,7 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
-                                         LinearLayout warpMfmaLayout) {
+                                         LinearLayout ctaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   SmallVector<int32_t> order;
@@ -1462,18 +1462,16 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   auto firstRepInNonK = tileLayout.getInDimSizeLog2(kRegister);
 
   if (dotOperandIdx == 1) {
-    warpMfmaLayout = transposeLinearLayout(warpMfmaLayout, order);
+    ctaLayout = transposeLinearLayout(ctaLayout, order);
   }
 
   // Zero out M or N dim based on opIdx
-  auto warpDotMfmaLayout = projectAwayOutDim(warpMfmaLayout, dimK, ctx);
+  auto warpDotMfmaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
   // If repetition (aka register basis) iz 0 in all out dims we need to remove
   // it since this repetition doesn't make sense for dotOp layout.
-  warpDotMfmaLayout =
-      actionRemoveBroadcastedRegs(warpDotMfmaLayout).apply(warpDotMfmaLayout);
+  ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
-  LinearLayout ctaLayout = tileLayout;
-  ctaLayout = tileLayout.transposeOuts(outDimNames) * warpDotMfmaLayout;
+  ctaLayout = tileLayout.transposeOuts(outDimNames) * ctaLayout;
   auto nonOpSelLayout = combineCtaCgaWithShape(
       ctaLayout, CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2),
       dotOperandShape);

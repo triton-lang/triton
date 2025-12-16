@@ -229,8 +229,8 @@ LinearLayout computeRepLayout(SmallVector<unsigned> &repA,
   // To compute repetition layout, we need to divide WMMA layout
   // with layout that describes single WMMA tile layout for all warps.
   auto rank = resShape.size();
-  auto warpLayout = wmmaLayout.getWarpLayout();
-  auto tile = wmmaLayout.getTileLayout(resShape) * warpLayout;
+  auto ctaLayout = wmmaLayout.getCtaLayout();
+  auto tile = wmmaLayout.getTileLayout(resShape) * ctaLayout;
 
   // Sometimes tile can be larger then the whole layout, depending on the
   // block sizes so we need to adjust it in order to be sure that it is
@@ -243,13 +243,17 @@ LinearLayout computeRepLayout(SmallVector<unsigned> &repA,
   tile = ensureLayoutNotLargerThan(tile, shapeMap);
 
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
+
+  // Normalize layout so outputs are in the standard order.
+  wmmaLL = wmmaLL.transposeOuts(dims);
+  tile = tile.transposeOuts(dims);
   auto repLayout = divideLeft(wmmaLL, tile).value();
 
-  // wmmaLayout.getTileLayout(resShape) * warpLayout is more then "single WMMA
+  // wmmaLayout.getTileLayout(resShape) * ctaLayout is more then "single WMMA
   // tile layout for all warps" as it can can include repetitions that are
-  // sometimes part of warpLayout. So after division, we need to extract these
-  // reps from warpLayout (aka register sublayout) and compose it with quotient.
-  auto llReg = warpLayout.sublayout({kRegister}, dims);
+  // sometimes part of ctaLayout. So after division, we need to extract these
+  // reps from ctaLayout (aka register sublayout) and compose it with quotient.
+  auto llReg = ctaLayout.sublayout({kRegister}, dims);
   llReg = LinearLayout(llReg.getBases(), dims);
 
   repLayout = llReg * repLayout;

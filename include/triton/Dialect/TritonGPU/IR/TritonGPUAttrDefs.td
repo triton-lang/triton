@@ -1080,7 +1080,7 @@ It is characterized by the following parameters:
   - 1: RDNA3; e.g., gfx1100, gfx1101
   - 2: RDNA4; e.g., gfx1200, gfx1201
   - 3: gfx1250
-- `warpLayout` indicates the warp layout in the block. This is a generalization
+- `ctaLayout` indicates the warp layout in the block. This is a generalization
    compared to previous warp layout representation using warpsPerCTA and tilesPerWarp
    parameters.
 - `instrShape` indicates the shape in the form of (M, N, K) of the matrix
@@ -1163,8 +1163,8 @@ Row |
 31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
 
 Example 2:
-This example illustrates the purpose of the warpLayout parameter.
-warpLayout is a linear layout describing how warps are arranged across WMMA tiles.
+This example illustrates the purpose of the ctaLayout parameter.
+ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
 Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
 For instance, a configuration with 4 warps, represented as:
 
@@ -1172,7 +1172,7 @@ warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
 
 would translate to:
 
-warpLayout = {reg = [], warp = [[0, 1], [1, 0]]}
+ctaLayout = {reg = [], warp = [[0, 1], [1, 0]]}
 
 By default, WMMA assumes that each warp in a CTA computes exactly one WMMA tile.
 In the grid below, each w* label indicates which warp computes that tile:
@@ -1189,7 +1189,7 @@ warpsPerCTA = [2, 2], tilesPerWarp  = [2, 2]
 
 would translate to:
 
-warpLayout = {reg = [[0, 1], [1, 0]], warps = [[0, 2], [2, 0]] }
+ctaLayout = {reg = [[0, 1], [1, 0]], warps = [[0, 2], [2, 0]] }
 
 w0 w0 w1 w1
 w0 w0 w1 w1
@@ -1200,7 +1200,7 @@ This parameter provides a more general way to define warp mappings than what
 warpsPerCTA and tilesPerWarp alone could express.
 For instance:
 
-warpLayout = {reg = [[1, 0], [0, 1]], warps = [[0, 2], [2, 0]]}
+ctaLayout = {reg = [[1, 0], [0, 1]], warps = [[0, 2], [2, 0]]}
 
 still represents a layout similar to:
 
@@ -1212,7 +1212,7 @@ The motivation for this broader formulation comes from the need to describe swiz
 layouts, which help avoid LDS partition conflicts on architectures such as gfx1250.
 A valid example of such swizzled configuration is:
 
-warpLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
+ctaLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
 
 With corresponding mapping:
 
@@ -1221,10 +1221,10 @@ w2 w3
 w0 w1 <- first tile computed by w1
 w2 w3
 
-Note that warpLayout naturally composes with layout definied on a single WMMA tile
+Note that ctaLayout naturally composes with layout definied on a single WMMA tile
 to form final WMMA layout.
 
-wmmaLayout = tileLayout * warpLayout
+wmmaLayout = tileLayout * ctaLayout
 
 This simplifies both WMMA and dotOperand layouts lowering to linear layout.
   }];
@@ -1232,7 +1232,7 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
   let parameters = (
     ins
     "unsigned": $version,
-    LinearLayoutParam:$warpLayout,
+    LinearLayoutParam:$ctaLayout,
     "bool":$isTransposed,
     "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape

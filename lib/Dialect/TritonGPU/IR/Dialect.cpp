@@ -1394,7 +1394,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseUInt(parser, attr, rank, "rank").failed())
         return {};
     }
-    if (attr.getName() == "warpLayout") {
+    if (attr.getName() == "ctaLayout") {
       warpLayAttr = attr.getValue();
       continue;
     }
@@ -1421,7 +1421,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   auto dictWarpLay = llvm::dyn_cast<DictionaryAttr>(warpLayAttr);
   if (!dictWarpLay) {
     parser.emitError(parser.getNameLoc(),
-                     "expected dictionary value for 'warpLayout'");
+                     "expected dictionary value for 'ctaLayout'");
     return {};
   }
 
@@ -1443,9 +1443,9 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "version = " << getVersion()
-          << ", isTranspose = " << getIsTransposed() << ", warpLayout = {";
+          << ", isTranspose = " << getIsTransposed() << ", ctaLayout = {";
 
-  printLinearLayout(printer, getWarpLayout());
+  printLinearLayout(printer, getCtaLayout());
 
   printer << "}";
 
@@ -1459,7 +1459,7 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 
 LogicalResult
 AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned version, LinearLayout warpLayout,
+                            unsigned version, LinearLayout ctaLayout,
                             bool isTransposed, CGAEncodingAttr cgaLayout,
                             llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
