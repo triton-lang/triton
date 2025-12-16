@@ -1210,6 +1210,18 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
               !isNone(to) && !isMMA(to) && !isLoad(to) && !isCostlySFU(to);
      }},
 
+    // NONE merges with costly producer (except LOAD or MMA)
+    // This will prefer to merge NONE nodes into costly groups, rather than
+    // non-costly groups
+    // e.g. in the two SFU groups of attention kernels
+    {"none_producer_costly",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return isNone(to) && !isNone(from) && !isMMA(from) && !isLoad(from) &&
+              from->getPartition()->getCost() > 256;
+     }},
+
     // NONE merges with producer (except LOAD or MMA)
     {"none_producer",
      [](Edge edge) {
