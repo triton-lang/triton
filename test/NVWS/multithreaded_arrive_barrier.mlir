@@ -21,7 +21,7 @@ tt.func @auto_simple(
   %true = arith.constant true
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
 
-  // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 32;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+  // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 128;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
   // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
 
   // CHECK: "mbarrier.arrive.shared::cta.b64 _, [$0];"
