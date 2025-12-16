@@ -45,7 +45,7 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
 def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
   let summary = "Ensure all specified async_copy_* operations are complete.";
   let description = [{
-    The `async_wait` op waits for all previously issued async copies to finish without syncronising CTA execution.
+    The `async_wait` op waits until at most "num" async copy groups are outstanding without synchronising CTA execution.
     It takes zero or more `asyncToken` plus an integer `num` that specifies how many async copy groups can remain
     outstanding after the `async_wait` op is completed. `num = 0` waits until all groups of async copies are complete.
 
@@ -67,7 +67,7 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
 }
 
 def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
-  let summary = "Commit pending async copies so they can be waited on";
+  let summary = "Commit pending async copies into an async group that can be waited on";
   let description = [{
     Closes the current batch of async_copy_* operations
     and allows for them to be waited on with `ttg.async_wait`.
