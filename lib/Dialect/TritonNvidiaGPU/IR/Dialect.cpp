@@ -150,13 +150,32 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
         LinearLayout::identity1D(cgaShape[0], rowColDims[1], dims[0]) *
         LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
     auto quot = divideRight(ll, ctaCol);
+    bool isM64TwoCTA = !quot.has_value();
+    if (!quot.has_value()) {
+      // m=64 and twoCTAs case
+      auto bases = ll.getBases();
+      auto logCTANum = llvm::Log2_32(cgaShape[0] * cgaShape[1]);
+      auto logNCols = ll.getInDimSizeLog2(rowColDims[1]);
+      std::swap(bases[rowColDims[0]].back(),
+                bases[rowColDims[1]][logNCols - logCTANum]);
+      auto transposedLl =
+          LinearLayout(bases, ll.getOutDims(), ll.isSurjective());
+      quot = divideRight(transposedLl, ctaCol);
+    }
     assert(quot.has_value());
     auto maybeRet =
         getDistributedLayoutForTmemLdSt(*quot, atom, numWarps, bitwidth);
     if (!maybeRet)
       return maybeRet;
     // Add the full block layout (with broadcasting)
-    return *maybeRet * cgaLayout->getLinearLayout();
+    auto ret = *maybeRet * cgaLayout->getLinearLayout();
+    if (isM64TwoCTA) {
+      auto bases = ret.getBases();
+      auto kWarp = StringAttr::get(ctx, "warp");
+      std::swap(bases[kWarp][1], bases[kBlock][0]);
+      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+    }
+    return ret;
   }
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
