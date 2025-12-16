@@ -51,11 +51,11 @@ llvm::Error TritonPlugin::loadPlugin() {
 
   if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES.c_str())) {
     auto enumeratePassesAPIOrErr =
-        getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
             ENUMERATE_PASSES);
-    auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
+    auto addPassAPIOrErr = getAPI<AddPassType, AddPassCType>(ADD_PASS);
     auto registerPassAPIOrErr =
-        getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+        getAPI<RegisterPassType, RegisterPassCType>(REGISTER_PASS);
 
     if (auto Err = enumeratePassesAPIOrErr.takeError())
       return Err;
@@ -71,10 +71,10 @@ llvm::Error TritonPlugin::loadPlugin() {
 
   if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS.c_str())) {
     auto enumerateDialectsAPIOrErr =
-        getAPI<enumeratePyBindHandlesType, enumeratePyBindHandlesCType>(
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
             ENUMERATE_DIALECTS);
     auto dialectPluginInfoAPIOrErr =
-        getAPI<dialectPluginInfoType, dialectPluginInfoCType>(
+        getAPI<DialectPluginInfoType, DialectPluginInfoCType>(
             DIALECT_PLUGININFO);
 
     if (auto Err = enumerateDialectsAPIOrErr.takeError())
@@ -90,7 +90,7 @@ llvm::Error TritonPlugin::loadPlugin() {
 }
 
 llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
-    enumeratePyBindHandlesType &enumeratePyBindHandles,
+    EnumeratePyBindHandlesType &enumeratePyBindHandles,
     std::vector<const char *> &handles) {
   if (auto Err = loadPlugin())
     return Err;

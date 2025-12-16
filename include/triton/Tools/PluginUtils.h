@@ -29,24 +29,24 @@ public:
   const std::string DIALECT_PLUGININFO = "tritonGetDialectPluginInfo";
 
 private:
-  using enumeratePyBindHandlesType =
+  using EnumeratePyBindHandlesType =
       std::function<TritonPluginResult(uint32_t *, const char **)>;
-  using enumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
+  using EnumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
 
   const std::string ADD_PASS = "tritonAddPluginPass";
-  using addPassType =
+  using AddPassType =
       std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
-  using addPassCType = TritonPluginResult (*)(mlir::PassManager *,
+  using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
                                               const char *);
 
   const std::string REGISTER_PASS = "tritonRegisterPluginPass";
-  using registerPassType = std::function<TritonPluginResult(const char *)>;
-  using registerPassCType = TritonPluginResult (*)(const char *);
+  using RegisterPassType = std::function<TritonPluginResult(const char *)>;
+  using RegisterPassCType = TritonPluginResult (*)(const char *);
 
-  using dialectPluginInfoType =
+  using DialectPluginInfoType =
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
-  using dialectPluginInfoCType =
+  using DialectPluginInfoCType =
       ::mlir::DialectPluginLibraryInfo (*)(const char *);
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
@@ -64,7 +64,7 @@ private:
   llvm::Expected<TritonPluginResult> checkAPIResult(TritonPluginResult result,
                                                     const char *handle) const;
   llvm::Expected<TritonPluginResult>
-  enumeratePyBindHandles(enumeratePyBindHandlesType &enumeratePyBindHandles,
+  enumeratePyBindHandles(EnumeratePyBindHandlesType &enumeratePyBindHandles,
                          std::vector<const char *> &passNames);
 
 public:
@@ -89,11 +89,11 @@ public:
 private:
   std::string filename = "";
   mutable llvm::sys::DynamicLibrary library;
-  enumeratePyBindHandlesType enumeratePassesAPI;
-  enumeratePyBindHandlesType enumerateDialectsAPI;
-  addPassType addPassAPI;
-  registerPassType registerPassAPI;
-  dialectPluginInfoType dialectPluginInfoAPI;
+  EnumeratePyBindHandlesType enumeratePassesAPI;
+  EnumeratePyBindHandlesType enumerateDialectsAPI;
+  AddPassType addPassAPI;
+  RegisterPassType registerPassAPI;
+  DialectPluginInfoType dialectPluginInfoAPI;
   bool isLoaded = false;
 };
 
