@@ -129,7 +129,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   }];
 }
 
-
 // Allocate shared memory
 def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor";
