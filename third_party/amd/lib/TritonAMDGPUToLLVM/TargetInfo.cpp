@@ -123,7 +123,7 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                                     {}, {});
   } else {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier();
+    b.barrier(triton::gpu::AddrSpace::All);
   }
 }
 
@@ -617,7 +617,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
   // Set block barrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::All);
   // Perform the trap to abort the kernel.
   LLVM::Trap::create(rewriter, loc);
 }

@@ -79,7 +79,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -89,42 +89,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -192,7 +192,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -214,16 +214,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -515,7 +515,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_medium_dependency
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -537,16 +537,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -617,7 +617,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_large_dependency
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -627,42 +627,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -902,16 +902,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.dot
 //CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 //CHECK: ttg.local_store
 //CHECK: ttg.local_store
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.dot
 //CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -993,7 +993,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_medium_epilogue
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -1015,17 +1015,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -1102,7 +1102,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: pingpong_large_epilogue
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -1112,43 +1112,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -1399,7 +1399,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: pingpong_medium_persistent_epilogue_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -1421,16 +1421,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
@@ -1521,7 +1521,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: pingpong_large_persistent_epilogue_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
@@ -1531,42 +1531,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]

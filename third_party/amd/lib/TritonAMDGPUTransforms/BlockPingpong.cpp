@@ -174,7 +174,8 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  auto barrierOp = gpu::BarrierOp::create(builder, loc);
+  auto barrierOp = triton::gpu::BarrierOp::create(
+      builder, loc, triton::gpu::AddrSpace::Local);
   auto schedBarrierOp = ROCDL::SchedBarrier::create(builder, loc, 0);
   return {barrierOp, schedBarrierOp};
 }
@@ -776,7 +777,9 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(triton::gpu::BarrierOp::create(builder, loc,
+                                             triton::gpu::AddrSpace::Local),
+              false);
   }
   // Ideally we want the memory cluster to start with
   //
@@ -814,7 +817,9 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(triton::gpu::BarrierOp::create(builder, loc,
+                                             triton::gpu::AddrSpace::Local),
+              false);
   }
   prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
@@ -915,7 +920,8 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   // Set barrier before starting the loop. This resolves any remaining required
   // synchronization before beginning the specialized asymmetric
   // synchronization.
-  auto preBarrier = gpu::BarrierOp::create(builder, loc);
+  auto preBarrier = triton::gpu::BarrierOp::create(
+      builder, loc, triton::gpu::AddrSpace::Local);
   preBarrier->moveBefore(forOp);
   builder.setInsertionPointAfter(preBarrier);
 

@@ -459,31 +459,42 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-class LocalBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
+class BarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
 public:
-  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter, benefit),
+  BarrierOpConversion(const LLVMTypeConverter &converter,
+                      const AMD::TargetInfo &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::BarrierOp>(converter, benefit),
         targetInfo(targetInfo) {}
-  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
+  using OpAdaptor = typename triton::gpu::BarrierOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (!isCDNA(targetInfo.getISAFamily()))
       return failure();
-    // In CDNA we can lower local_barrier to s_waitcnt + s_barrier
+    // Check no other memory addrspaces are selected and that we only sync on
+    // cta
+    auto mask = triton::gpu::AddrSpace::Local |
+                triton::gpu::AddrSpace::GlobalRead |
+                triton::gpu::AddrSpace::GlobalWrite;
+    if ((op.getAddrSpace() & ~mask) != triton::gpu::AddrSpace::None)
+      return failure();
+    // In CDNA we can lower barrier to s_waitcnt + s_barrier
     // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
     //   when the instruction completes.
     //   In this case we require 0 outstanding LDS operations
     //   amdgpu::MemoryCounterWaitOp will lower s_waitcnt
-    // - s_barrier syncronizes the execution for the CTA
-    auto dsAttr = rewriter.getI32IntegerAttr(0);
-    amdgpu::MemoryCounterWaitOp::create(
-        rewriter, op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
-        /* ds= */ dsAttr);
+    // - s_barrier synchronizes the execution for the CTA
+    IntegerAttr zero = rewriter.getI32IntegerAttr(0);
+    bool localBarrier = op.hasLocal();
+    bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
+    if (localBarrier || globalBarrier) {
+      amdgpu::MemoryCounterWaitOp::create(
+          rewriter, op->getLoc(), /* load= */ globalBarrier ? zero : nullptr,
+          /* store= */ globalBarrier ? zero : nullptr,
+          /* ds= */ localBarrier ? zero : nullptr);
+    }
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 
     return success();
@@ -622,6 +633,6 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
                                            transBenefit);
   patterns.add<LocalLoadPackedTransposedOpConversion>(typeConverter, targetInfo,
                                                       benefit);
-  patterns.add<LocalBarrierOpConversion, MemoryCounterWaitOpConversion>(
+  patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
       typeConverter, targetInfo, barrierBenefit);
 }

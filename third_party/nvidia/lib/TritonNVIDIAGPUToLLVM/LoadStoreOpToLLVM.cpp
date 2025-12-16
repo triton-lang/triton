@@ -565,7 +565,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1) {
-    b.barrier();
+    b.barrier(ttg::AddrSpace::Local);
   } else {
     triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
     triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
@@ -951,7 +951,8 @@ public:
 
           // Recover values from predicated block (from SMEM)
           rewriter.setInsertionPointToStart(endBlock);
-          b.barrier();
+          b.barrier(ttg::AddrSpace::Local);
+
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
           return success();

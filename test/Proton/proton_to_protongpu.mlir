@@ -21,7 +21,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: proton_gpu.circular_store start %[[SEGMENT]], %[[START]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK: proton_gpu.circular_store end %[[SEGMENT]], %[[END]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local|global_read|global_write
   // CHECK: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
   // CHECK: tt.return
   tt.func @simple_record() {
@@ -53,7 +53,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK: }
     // CHECK: %[[END0:.*]] = proton_gpu.read_counter : i32
     // CHECK: proton_gpu.circular_store end %[[SEGMENT]], %[[END0]] {scopeId = 0 : i32}
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local|global_read|global_write
     // CHECK: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]]
     proton.record start "name1"
     scf.for %arg0 = %i to %c4 step %c1 {
@@ -93,7 +93,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK: proton_gpu.circular_store start %[[SEGMENT]], %[[START2]] {scopeId = 2 : i32}
     // CHECK: %[[END2:.*]] = proton_gpu.read_counter : i32
     // CHECK: proton_gpu.circular_store end %[[SEGMENT]], %[[END2]] {scopeId = 2 : i32}
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local|global_read|global_write
     // CHECK: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]]
     proton.record start "name1"
     scf.for %arg0 = %i to %c4 step %c1 {
@@ -140,7 +140,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK:     } : (!ttg.memdesc<256xi32, #shared, #smem, mutable>, !tt.ptr<i32>) -> ()
 // CHECK:     %[[COUNTER6:.*]] = proton_gpu.read_counter : i32
 // CHECK:     proton_gpu.circular_store end %[[SEGMENT]], %[[COUNTER6]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-// CHECK:     gpu.barrier
+// CHECK: ttg.barrier local|global_read|global_write
 // CHECK:     proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
 // CHECK:     tt.return
 // CHECK:   }
@@ -176,7 +176,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-GMEM: proton_gpu.circular_store start %[[SEGMENT]], %[[START]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #proton_gpu.global_memory, warp>, i32
   // CHECK-GMEM: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK-GMEM: proton_gpu.circular_store end %[[SEGMENT]], %[[END]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #proton_gpu.global_memory, warp>, i32
-  // CHECK-GMEM: gpu.barrier
+  // CHECK-GMEM: ttg.barrier local|global_read|global_write
   // CHECK-GMEM: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #proton_gpu.global_memory, warp>, !tt.ptr<i32>
   // CHECK-GMEM: tt.return
   tt.func @global_mem_buffer() {

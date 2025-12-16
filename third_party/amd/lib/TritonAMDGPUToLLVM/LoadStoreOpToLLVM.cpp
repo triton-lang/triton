@@ -15,6 +15,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -1840,11 +1841,7 @@ struct AtomicCASOpConversion
           return success();
         }
 
-        auto dsCount = rewriter.getI32IntegerAttr(0);
-        amdgpu::MemoryCounterWaitOp::create(rewriter, op->getLoc(),
-                                            /*load=*/nullptr, /*store=*/nullptr,
-                                            /*ds=*/dsCount);
-        b.barrier();
+        b.barrier(triton::gpu::AddrSpace::Local);
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = b.load(valueElemTy, atomPtr);
@@ -2049,7 +2046,7 @@ struct AtomicRMWOpConversion
             return success();
           }
           Value atomPtr = *atomicSharedMemBase;
-          b.barrier();
+          b.barrier(triton::gpu::AddrSpace::Local);
           Value ret = b.load(valueElemTy, atomPtr);
 
           rewriter.replaceOp(op, {ret});
