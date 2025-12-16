@@ -89,7 +89,7 @@ public:
     SmallVector<unsigned> tpw(warps.size(), 1u);
     std::iota(cOrd.begin(), cOrd.end(), 0);
     LinearLayout ctaLayout =
-        chooseWmmaWarpLinearLayout(&ctx, warps.size(), warps, tpw);
+        chooseWmmaCTALinearLayout(&ctx, warps.size(), warps, tpw);
     return AMDWmmaEncodingAttr::get(
         &ctx, version, ctaLayout, transposed,
         CGAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd), instrShape);

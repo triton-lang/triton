@@ -526,38 +526,20 @@ LinearLayout replaceFirstRepWithLane(LinearLayout inLayout, int firstRepInNonK,
   return LinearLayout(std::move(result), outDimNames);
 }
 
-LinearLayout chooseWmmaWarpLinearLayout(MLIRContext *ctx, unsigned rank,
-                                        ArrayRef<unsigned> warpsPerCTA,
-                                        ArrayRef<unsigned> tilesPerWarp) {
+LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
+                                       ArrayRef<unsigned> warpsPerCTA,
+                                       ArrayRef<unsigned> tilesPerWarp) {
   StringAttr kWarp = S("warp");
   StringAttr kRegister = S("register");
+  auto dims = standardOutDimNames(ctx, rank);
 
-  bool hasBatchDim = rank == 3;
-  auto mIndex = 0 + hasBatchDim;
-  auto nIndex = 1 + hasBatchDim;
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  auto dimM = outDimNames[mIndex];
-  auto dimN = outDimNames[nIndex];
-
-  const unsigned tilesPerWarpM = tilesPerWarp[mIndex];
-  const unsigned tilesPerWarpN = tilesPerWarp[nIndex];
-  const unsigned warpsPerCTAM = warpsPerCTA[mIndex];
-  const unsigned warpsPerCTAN = warpsPerCTA[nIndex];
-
-  auto ctaLayout = LinearLayout::identity1D(tilesPerWarpN, kRegister, dimN);
-  ctaLayout *= LinearLayout::identity1D(warpsPerCTAN, kWarp, dimN);
-  ctaLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
-  ctaLayout *= LinearLayout::identity1D(warpsPerCTAM, kWarp, dimM);
-  ctaLayout = ctaLayout.transposeOuts({dimM, dimN});
-
-  if (hasBatchDim) {
-    auto dimB = outDimNames[0];
-    const unsigned warpsPerCTAB = warpsPerCTA[0];
-    ctaLayout *= LinearLayout::identity1D(warpsPerCTAB, kWarp, dimB);
+  auto order = getMatrixOrder(rank, /*rowMajor*/ true);
+  LinearLayout ret;
+  for (auto d : order) {
+    ret *= LinearLayout::identity1D(tilesPerWarp[d], kRegister, dims[d]);
+    ret *= LinearLayout::identity1D(warpsPerCTA[d], kWarp, dims[d]);
   }
-
-  return ctaLayout;
+  return ret.transposeOuts(dims);
 }
 
 std::optional<LinearLayout>
@@ -753,22 +735,13 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
       .transposeOuts(outDimNames);
 }
 
-LinearLayout AMDWmmaEncodingAttr::getTileLayout(ArrayRef<int64_t> shape) const {
-  int rank = shape.size();
+LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
   assert(rank == getRank());
 
   bool hasBatchDim = rank == 3;
   int mIndex = 0 + hasBatchDim;
   int nIndex = 1 + hasBatchDim;
   (void)mIndex, (void)nIndex;
-
-  auto mnkDim = getInstrShape();
-  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
-  (void)mDim, (void)nDim;
-
-  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
-          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
-         "Unsupported tensor shape for given wmma layout");
 
   MLIRContext *ctx = getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
@@ -828,11 +801,25 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(ArrayRef<int64_t> shape) const {
 
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto tileLayout = getTileLayout(shape);
+  auto mnkDim = getInstrShape();
+  auto rank = shape.size();
+  bool hasBatchDim = rank == 3;
+  int mIndex = 0 + hasBatchDim;
+  int nIndex = 1 + hasBatchDim;
+  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
+  (void)mDim, (void)nDim;
+
+  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
+          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
+         "Unsupported tensor shape for given wmma layout");
+
+  auto tileLayout = getTileLayout(rank);
   auto ctaLayout = getCtaLayout();
   auto wmmaLayout = tileLayout * ctaLayout;
 
-  auto rank = shape.size();
+  // This output-dimension transposition is no longer required, as the
+  // generalized WMMA lowering makes the repetition order irrelevant. It is
+  // retained solely to preserve compatibility with legacy tests.
   MLIRContext *ctx = getContext();
   auto defaultRepOrder = getMatrixOrder(rank, true);
   SmallVector<StringAttr> repDimNames =

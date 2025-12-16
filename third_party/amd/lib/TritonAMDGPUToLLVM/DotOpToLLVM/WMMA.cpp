@@ -220,7 +220,7 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
 LinearLayout computeRepLayout(SmallVector<unsigned> &repA,
                               SmallVector<unsigned> &repB,
                               AMDWmmaEncodingAttr wmmaLayout, int K, int kDim,
-                              ArrayRef<long int> resShape, MLIRContext *ctx) {
+                              ArrayRef<int64_t> resShape, MLIRContext *ctx) {
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
@@ -230,7 +230,7 @@ LinearLayout computeRepLayout(SmallVector<unsigned> &repA,
   // with layout that describes single WMMA tile layout for all warps.
   auto rank = resShape.size();
   auto ctaLayout = wmmaLayout.getCtaLayout();
-  auto tile = wmmaLayout.getTileLayout(resShape) * ctaLayout;
+  auto tile = wmmaLayout.getTileLayout(rank) * ctaLayout;
 
   // Sometimes tile can be larger then the whole layout, depending on the
   // block sizes so we need to adjust it in order to be sure that it is
