@@ -1553,8 +1553,8 @@ void replaceUsesAndPropagateType(
     }
 
     // If val is used as the iter arg of a scf::ForOp, update the corresponding
-    // types on the forOp. Additionally, if it is used as an operand in a
-    // WarpGroupDotWaitOp inside the loop, schedule it for late replacement.
+    // types on the forOp. Additionally, if it is used as an operand inside the
+    // loop, schedule it for late replacement.
     if (auto forOp = dyn_cast<scf::ForOp>(use.getOwner())) {
       unsigned operandIdx = use.getOperandNumber();
       if (operandIdx < forOp.getNumControlOperands()) {
