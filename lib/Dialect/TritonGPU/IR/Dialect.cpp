@@ -648,9 +648,10 @@ static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
   return success();
 }
 
-std::optional<LinearLayout>
-parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
-                  ArrayRef<std::string> inDimNames) {
+std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
+                                              AsmParser &parser,
+                                              ArrayRef<std::string> inDimNames,
+                                              int emptyLayoutRank = 0) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
@@ -702,12 +703,15 @@ parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
       break;
     }
   }
-
   // To implement this we'd need to serialise the rank as well.
   // We can do this if we ever need it
   if (rank == 0) {
-    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
-    return {};
+    if (emptyLayoutRank == 0) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "Empty Layout not supported");
+      return {};
+    }
+    rank = emptyLayoutRank;
   }
 
   // Generate standared outDimNames (dim0, dim1, ...)
@@ -1364,9 +1368,6 @@ LogicalResult AMDMfmaEncodingAttr::verify(
 //===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
-bool AMDWmmaEncodingAttr::hasUnitTilesPerWarp() const {
-  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
-}
 
 Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -1378,28 +1379,27 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned version = 0;
+  unsigned rank = 2;
   bool isTransposed = false;
-  SmallVector<unsigned> warpsPerCTA;
-  SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
   Attribute cgaAttr = nullptr;
+  Attribute warpLayAttr = nullptr;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
       if (parseUInt(parser, attr, version, "version").failed())
         return {};
     }
+    if (attr.getName() == "rank") {
+      if (parseUInt(parser, attr, rank, "rank").failed())
+        return {};
+    }
+    if (attr.getName() == "warpLayout") {
+      warpLayAttr = attr.getValue();
+      continue;
+    }
     if (attr.getName() == "isTranspose") {
       if (parseBool(parser, attr, isTransposed, "isTranspose").failed())
-        return {};
-    }
-    if (attr.getName() == "warpsPerCTA") {
-      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
-        return {};
-    }
-    if (attr.getName() == "tilesPerWarp") {
-      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
-              .failed())
         return {};
     }
     if (attr.getName() == "CGALayout") {
@@ -1414,30 +1414,42 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
+  if (!warpLayAttr) {
+    return {};
+  }
+
+  auto dictWarpLay = llvm::dyn_cast<DictionaryAttr>(warpLayAttr);
+  if (!dictWarpLay) {
+    parser.emitError(parser.getNameLoc(),
+                     "expected dictionary value for 'warpLayout'");
+    return {};
+  }
+
+  std::vector<std::string> inDimNames = {"register", "warp"};
+  auto maybeLL = parseLinearLayout(dictWarpLay, parser, inDimNames, rank);
+  if (!maybeLL.has_value())
+    return {};
+
   std::optional<CGAEncodingAttr> CGALayout =
-      parseCGAAttr(parser, cgaAttr, /*rank=*/warpsPerCTA.size());
+      parseCGAAttr(parser, cgaAttr, /*rank=*/rank);
   if (!CGALayout.has_value())
     return {};
 
-  if (tilesPerWarp.empty())
-    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
-
   return parser.getChecked<AMDWmmaEncodingAttr>(
-      parser.getContext(), version, isTransposed, warpsPerCTA, tilesPerWarp,
+      parser.getContext(), version, std::move(*maybeLL), isTransposed,
       *CGALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "version = " << getVersion()
-          << ", isTranspose = " << getIsTransposed() //
-          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+          << ", isTranspose = " << getIsTransposed() << ", warpLayout = {";
+
+  printLinearLayout(printer, getWarpLayout());
+
+  printer << "}";
 
   maybePrintCGALayout(getContext(), printer, getCGALayout());
-
-  auto tilesPerWarp = getTilesPerWarp();
-  if (!hasUnitTilesPerWarp())
-    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
 
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
@@ -1445,11 +1457,11 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult AMDWmmaEncodingAttr::verify(
-    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
-    bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    llvm::ArrayRef<unsigned int> tilesPerWarp, CGAEncodingAttr cgaLayout,
-    llvm::ArrayRef<unsigned> instrShape) {
+LogicalResult
+AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned version, LinearLayout warpLayout,
+                            bool isTransposed, CGAEncodingAttr cgaLayout,
+                            llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
 
@@ -2313,41 +2325,6 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getRepOrder() const {
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
-}
-
-SmallVector<int64_t>
-AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
-                                      int opIdx) const {
-  auto mnkDim = getInstrShape();
-  SmallVector<int64_t, 2> operandTileShape{opIdx == 0 ? mnkDim[0] : kDim,
-                                           opIdx == 0 ? kDim : mnkDim[1]};
-
-  assert(operandTileShape.size() == 2);
-  auto warpsPerCTA = getWarpsPerCTA();
-  auto tilesPerWarp = getTilesPerWarp();
-
-  auto rank = operandShape.size();
-  assert(rank == 2 || rank == 3);
-  int numRepBatch =
-      rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
-  if (opIdx == 0)
-    return {
-        numRepBatch,
-        std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
-                                  warpsPerCTA[rank - 2])) *
-            tilesPerWarp[rank - 2],
-        std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
-  else {
-    assert(opIdx == 1);
-    return {
-        numRepBatch,
-        std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] /
-                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
-                                  warpsPerCTA[rank - 1])) *
-            tilesPerWarp[rank - 1]};
-  }
 }
 
 SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
