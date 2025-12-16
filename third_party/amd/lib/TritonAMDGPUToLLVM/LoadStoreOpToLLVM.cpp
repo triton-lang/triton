@@ -1122,7 +1122,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 };
 
 struct AsyncCopyLocalToGlobalOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyLocalToGlobalOp>,
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncCopyLocalToGlobalOp>,
       public DirectToLdsLoadConversionBase {
   AsyncCopyLocalToGlobalOpConversion(LLVMTypeConverter &converter,
                                      const AMD::TargetInfo &targetInfo,
@@ -1132,7 +1132,8 @@ struct AsyncCopyLocalToGlobalOpConversion
         DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::AsyncCopyLocalToGlobalOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
+                  OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Only supported on GFX1250
     if (targetInfo.getISAFamily() != ISAFamily::GFX1250) {

@@ -99,7 +99,7 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
     return getNumberOfAsyncCopyInstructions(
         ptrType, bufferOp.getDest().getType(), bufferOp.getMask(), contig,
         axisInfo);
-  } else if (auto copyOp = dyn_cast<ttg::AsyncCopyLocalToGlobalOp>(op)) {
+  } else if (auto copyOp = dyn_cast<amdgpu::AsyncCopyLocalToGlobalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getDst(), axisInfo);
     return getNumberOfAsyncCopyInstructions(copyOp.getDst().getType(),
                                             copyOp.getSrc().getType(),

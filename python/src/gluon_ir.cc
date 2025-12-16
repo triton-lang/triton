@@ -603,7 +603,7 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
               tt::CacheModifier cacheModifier,
               tt::EvictionPolicy evictionPolicy) {
-             self.create<ttg::AsyncCopyLocalToGlobalOp>(
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
                  smem, pointer, mask, cacheModifier, evictionPolicy);
            })
       .def("create_async_copy_mbarrier_arrive",
