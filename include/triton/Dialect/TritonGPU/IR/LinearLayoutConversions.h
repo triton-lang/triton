@@ -82,9 +82,9 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     CGAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape);
 
-LinearLayout chooseWmmaWarpLinearLayout(MLIRContext *ctx, unsigned rank,
-                                        ArrayRef<unsigned> warpsPerCTA,
-                                        ArrayRef<unsigned> tilesPerWarp);
+LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
+                                       ArrayRef<unsigned> warpsPerCTA,
+                                       ArrayRef<unsigned> tilesPerWarp);
 // In this function, we construct a linear layout representing the
 // <shared memory offset, iteration, block> -> <tensor element index> mapping
 // for entire `src` and `dst` tensors.  We determine the shape of the

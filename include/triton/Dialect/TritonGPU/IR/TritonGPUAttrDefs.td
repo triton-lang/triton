@@ -1243,7 +1243,7 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    LinearLayout getTileLayout(ArrayRef<int64_t> shape) const;
+    LinearLayout getTileLayout(unsigned rank) const;
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }

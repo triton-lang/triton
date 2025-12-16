@@ -1321,7 +1321,7 @@ public:
     SmallVector<unsigned> tilesPerWarp(rank, 1u);
 
     auto ctaLayout =
-        ttg::chooseWmmaWarpLinearLayout(ctx, rank, warpsPerTile, tilesPerWarp);
+        ttg::chooseWmmaCTALinearLayout(ctx, rank, warpsPerTile, tilesPerWarp);
     auto wmmaEnc = ttg::AMDWmmaEncodingAttr::get(
         ctx, wmmaVersion, ctaLayout, true, cgaLayout, {mDim, nDim, kDim});
     auto wmmaPackedEnc = ttg::AMDWmmaEncodingAttr::get(
@@ -1580,8 +1580,8 @@ public:
     // store instructions.
     bool isTransposed = true;
     SmallVector<unsigned> tilesPerWarp(retShape.size(), 1u);
-    auto ctaLayout = ttg::chooseWmmaWarpLinearLayout(
-        ctx, retShape.size(), warpsPerTile, tilesPerWarp);
+    auto ctaLayout = ttg::chooseWmmaCTALinearLayout(ctx, retShape.size(),
+                                                    warpsPerTile, tilesPerWarp);
 
     wmmaEnc =
         ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
