@@ -550,10 +550,7 @@ public:
       return failure();
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
-    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
-    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
-    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    bool useTwoCTAs = false;
+    bool useTwoCTAs = canUseTwoCTAs(dotOp);
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
     }
