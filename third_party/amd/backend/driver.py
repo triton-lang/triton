@@ -817,6 +817,14 @@ class HIPLauncher(object):
         mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
         self.launch = wrap_handle_tensordesc(mod.launch, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
+        # Check if cooperative groups are supported on the device.
+        if self.launch_cooperative_grid:
+            driver = triton.runtime.driver.active
+            assert isinstance(driver, HIPDriver)
+            device = driver.get_current_device()
+            device_properties = driver.utils.get_device_properties(device)
+            assert device_properties['cooperativeLaunch'], \
+                "Cooperative launch requested but not supported by device"
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
 
