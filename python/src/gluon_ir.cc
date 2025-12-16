@@ -257,13 +257,13 @@ py::object layoutToGluon(Attribute layout) {
         cgaBases);
   } else if (auto amdWmma = dyn_cast<ttg::AMDWmmaEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(amdWmma.getCGALayout());
-    const auto &warpLayout = amdWmma.getWarpLayout();
+    const auto &ctaLayout = amdWmma.getCtaLayout();
     auto ctx = layout.getContext();
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
     return layouts.AMDWMMALayout(
-        amdWmma.getVersion(), warpLayout.getBases().lookup(kReg),
-        warpLayout.getBases().lookup(kWarp), amdWmma.getIsTransposed(),
+        amdWmma.getVersion(), ctaLayout.getBases().lookup(kReg),
+        ctaLayout.getBases().lookup(kWarp), amdWmma.getIsTransposed(),
         toStdVector(amdWmma.getInstrShape()), cgaBases);
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
@@ -462,12 +462,12 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              auto kReg = mlir::StringAttr::get(ctx, "register");
              auto kWarp = mlir::StringAttr::get(ctx, "warp");
-             auto warpLayout =
+             auto ctaLayout =
                  tt::LinearLayout({{kReg, regBases}, {kWarp, warpBases}},
                                   tt::standardOutDimNames(ctx, rank));
              auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return ttg::AMDWmmaEncodingAttr::get(
-                 ctx, version, warpLayout, transposed, cgaLayout, instrShape);
+                 ctx, version, ctaLayout, transposed, cgaLayout, instrShape);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
@@ -1033,11 +1033,11 @@ void init_gluon_ir(py::module &&m) {
           auto rank = shape.size();
           auto kReg = mlir::StringAttr::get(&ctx, "register");
           auto kWarp = mlir::StringAttr::get(&ctx, "warp");
-          auto warpLayout =
+          auto ctaLayout =
               tt::LinearLayout({{kReg, regBases}, {kWarp, warpBases}},
                                tt::standardOutDimNames(&ctx, rank));
           auto ll = ttg::chooseScaledWmmaScaleLayout(&ctx, opIdx, shape,
-                                                     wmmaMDim, warpLayout);
+                                                     wmmaMDim, ctaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });

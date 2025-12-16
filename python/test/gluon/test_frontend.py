@@ -1899,10 +1899,10 @@ def test_amd_wmma_layout(target):
     module = run_parser(amd_wmma_layout_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[0, 1], [0, 2]]}}>
-#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[0, 1], [1, 0]]}}>
-#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpLayout = {register = [], warp = [[0, 1], [0, 2]]}}>
-#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpLayout = {register = [], warp = [[0, 1], [1, 0]]}}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {register = [], warp = [[0, 1], [0, 2]]}}>
+#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {register = [], warp = [[0, 1], [1, 0]]}}>
+#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, ctaLayout = {register = [], warp = [[0, 1], [0, 2]]}}>
+#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, ctaLayout = {register = [], warp = [[0, 1], [1, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @amd_wmma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f16
@@ -1933,7 +1933,7 @@ def test_infer_layout_for_amd_wmma(target):
     module = run_parser(infer_layout_for_amd_wmma_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_layout_for_amd_wmma_kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2486,7 +2486,7 @@ def test_amd_rdna3_wmma(target):
     module = run_parser(kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
+#mma = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2523,7 +2523,7 @@ def test_amd_rdna4_wmma(target):
     module = run_parser(kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {register = [], warp = [[1, 0], [2, 0]]}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f16
@@ -2721,8 +2721,8 @@ def test_amd_wmma_scaled(target):
         anonymize_ir(module.str_nodebug()), """\
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [16, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = []}>
-#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
-#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %c17_i8 = arith.constant 17 : i8
@@ -2763,8 +2763,8 @@ def test_amd_wmma_scaled_none(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [], block = []}>
-#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = []}, instrShape = [16, 16, 64]}>
-#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = []}, instrShape = [16, 16, 128]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 128]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %c17_i8 = arith.constant 17 : i8
@@ -2805,8 +2805,8 @@ def test_amd_wmma_scaled_scalar(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [], block = []}>
-#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = []}, instrShape = [16, 16, 64]}>
-#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpLayout = {register = [], warp = []}, instrShape = [16, 16, 128]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 128]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %c17_i8 = arith.constant 17 : i8
