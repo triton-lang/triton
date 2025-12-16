@@ -629,8 +629,10 @@ def make_tensordesc_arg(arg, metadata):
     padding = 1 if arg.padding == "nan" else 0
 
     if fp4_padded:
-        shape = list(shape)
-        shape[-1] *= 2
+        expanded_shape = list(shape)
+        expanded_shape[-1] *= 2
+    else:
+        expanded_shape = shape
 
     cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor(
         arg.base.data_ptr(),
@@ -638,7 +640,7 @@ def make_tensordesc_arg(arg, metadata):
         elem_size,
         TMA_DTYPE_DEVICE_TO_HOST[elem_type],
         block_size,
-        shape,
+        expanded_shape,
         strides,
         padding,
     )

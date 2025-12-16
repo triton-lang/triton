@@ -131,8 +131,10 @@ std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
   }
 
   bool fp4Padded = isFp4Padded(encoding);
-  assert(!fp4Padded || swizzleBytes == 128 &&
-                           "elem type .b4x16_p64 supports only 128B swizzling");
+  if (fp4Padded && swizzleBytes != 128) {
+    op->emitError("elem type .b4x16_p64 supports only 128B swizzling.");
+    return std::nullopt;
+  }
 
   int32_t swizzleMode = 0;
   if (swizzleBytes == 128) {

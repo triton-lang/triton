@@ -216,10 +216,10 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-      auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
-      auto elemType = ttng::getTMAElementType(nullptr, descTy);
-      assert(swizzle.has_value());
-      assert(elemType.has_value());
+      auto swizzle = ttng::getTMASwizzleMode(mod.getOperation(), descTy);
+      auto elemType = ttng::getTMAElementType(mod.getOperation(), descTy);
+      if (!swizzle.has_value() || !elemType.has_value())
+        throw py::type_error("Invalid descriptor type");
       auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
