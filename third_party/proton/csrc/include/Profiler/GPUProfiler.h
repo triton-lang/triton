@@ -103,6 +103,8 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
+      if (scopeStack.empty())
+        return;
       profiler.exitOp(scopeStack.back());
       scopeStack.pop_back();
     }
@@ -116,7 +118,8 @@ protected:
 
     void exitScope() {
       // Exit the last NVTX range scope
-      sessionManager.exitScope(scopeStack.back());
+      if (scopeStack.empty())
+        return;
       scopeStack.pop_back();
     }
   };
