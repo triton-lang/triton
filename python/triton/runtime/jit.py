@@ -386,6 +386,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     }
 
     class Serializer(json.JSONEncoder):
+
         def default(self, obj):
             if isinstance(obj, JITFunction):
                 return f"JITFunction({get_full_name(obj)})"
