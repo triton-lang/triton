@@ -79,7 +79,11 @@ uint32_t processActivityKernel(
             isApiExternId = state.isApiExternId;
           });
       for (auto *data : dataSet) {
-        data->addOpAndMetric(parentId, kernel->name, metric, isApiExternId);
+        if (isApiExternId) {
+          data->addOpAndMetric(parentId, kernel->name, metric);
+        } else {
+          data->addMetric(parentId, metric);
+        }
       }
     }
     corrIdToExternId.erase(correlationId);
@@ -128,7 +132,11 @@ uint32_t processActivityKernel(
           isAPI = res.first;
           scopeId = res.second;
         }
-        data->addOpAndMetric(scopeId, kernel->name, metric, isAPI);
+        if (isAPI) {
+          data->addOpAndMetric(scopeId, kernel->name, metric);
+        } else {
+          data->addMetric(scopeId, metric);
+        }
       }
       if (ref.has_value()) {
         // Decrease the expected kernel count
