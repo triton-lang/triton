@@ -22,28 +22,28 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
   // CHECK-LABEL: wmma_gen2_layout
   tt.func @wmma_gen2_layout(%0: tensor<16x16xf16, #blocked>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 2, ctaLayout = {register = [], warp = []}}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #{{.+}}> -> tensor<16x16xf16, #[[$WMMA_GEN2]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen2_dot_op_layout
   tt.func @wmma_gen2_dot_op_layout(%0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 2, ctaLayout = {register = [], warp = []}}>, kWidth = 8}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}}>, kWidth = 8}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$WMMA_GEN2]], kWidth = 8}>>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen3_layout
   tt.func @wmma_gen3_layout(%0: tensor<16x16xf32, #blocked>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.amd_wmma<{version = 3, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 32]}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf32, #{{.+}}> -> tensor<16x16xf32, #[[$WMMA_GEN3]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen3_dot_op_layout
   tt.func @wmma_gen3_dot_op_layout(%0: tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
-    %1 = ttg.convert_layout %0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #ttg.amd_wmma<{version = 3, ctaLayout = {register = [], warp = []}, instrShape = [16, 16, 32]}>, kWidth = 8}>>
+    %1 = ttg.convert_layout %0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>, kWidth = 8}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #{{.+}}}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #[[$WMMA_GEN3]], kWidth = 8}>>
     tt.return
   }
