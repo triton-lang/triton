@@ -715,71 +715,39 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     return schedule[mma].first > schedule[op].first;
   };
 
-  // Find the first TMEMLoadOp user of alloc that appears in the MMA block
-  // in the linearized schedule.
-  auto linearizedSchedule = schedule.linearized(forOp);
-  Operation *latestSyncPoint =
-      linearizedSchedule.findNextUser<ttng::TMEMLoadOp>(
-          alloc, [&](ttng::TMEMLoadOp load) {
-            return load->getBlock() == mma->getBlock();
-          });
+  llvm::SmallDenseSet<Operation *> syncCandidates;
+
+  for (auto user : alloc->getUsers()) {
+    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      if (load->getBlock() != mma->getBlock()) {
+        continue;
+      }
+      syncCandidates.insert(load);
+    }
+  }
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
                                                       isLoadToBePipelined);
 
-  SmallVector<Operation *> updatedDefs;
   for (auto def : mmaPipeHelper.unpipelineableOperandDefs) {
     auto newStore = hoistBufferOutOfLoop(forOp, def, schedule);
-    if (newStore) {
-      updatedDefs.push_back(newStore);
-    } else {
-      updatedDefs.push_back(def);
-    }
-  }
-
-  // Note: We cannot depend on schedule.isOpBefore here because the relevant
-  // stage depends on the location relative to the MMA. For example, imagine
-  // the following setup:
-  // load {cluster: 1, stage: 0}
-  // mma {cluster: 1, stage: 0}
-  // tmem_load {cluster: 0, stage: 1}
-  //
-  // If we just check which occurs first in the schedule, we will insert the
-  // barrier before the load in the loop. However, this will actually happen
-  // after the tmem_load, which is not what we want. To handle this, we need
-  // to account for any operation that occurs before the mma needs its location
-  // evaluated with {stage + 1}.
-  //
-  auto isEarlierBarrierLocation = [&](Operation *newOp, Operation *oldOp) {
-    auto [aStage, aCluster] = schedule[newOp];
-    auto [bStage, bCluster] = schedule[oldOp];
-    // We care about the first location after the MMA, not the first location
-    // in the IR.
-    if (schedule.isOpBefore(newOp, mma)) {
-      aStage += 1;
-    }
-    if (schedule.isOpBefore(oldOp, mma)) {
-      bStage += 1;
-    }
-    if (aStage != bStage) {
-      return aStage < bStage;
-    }
-    if (aCluster != bCluster) {
-      return schedule.clusters.isBefore(aCluster, bCluster);
-    }
-    return newOp->isBeforeInBlock(oldOp);
-  };
-
-  if (!mmaPipeHelper.isPipelineable &&
-      mmaPipeHelper.isOperandsStateDetermined) {
-    // If the operands are not pipelineable, we need to insert a sync point
-    // before the earliest operand load
-    for (auto def : updatedDefs) {
-      if (!latestSyncPoint || isEarlierBarrierLocation(def, latestSyncPoint)) {
-        latestSyncPoint = def;
+    // If the operands are not pipelineable, we need to consider the stores as
+    // well.
+    if (!mmaPipeHelper.isPipelineable &&
+        mmaPipeHelper.isOperandsStateDetermined) {
+      if (newStore) {
+        syncCandidates.insert(newStore);
+      } else {
+        syncCandidates.insert(def);
       }
     }
   }
+
+  // Find the first sync candidate that appears after the MMA
+  // in the linearized schedule.
+  auto linearizedSchedule = schedule.linearized(forOp, mma);
+  Operation *latestSyncPoint = linearizedSchedule.findNext(
+      [&](Operation *op) { return syncCandidates.contains(op); });
 
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;

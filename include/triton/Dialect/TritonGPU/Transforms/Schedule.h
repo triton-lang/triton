@@ -194,37 +194,17 @@ public:
 
     LinearizedIterator end() const;
 
-    /// Advance the iterator to the next operation of type OpT.
-    /// Returns the found operation, or nullptr if not found.
-    /// The iterator position is updated to the found operation (or end).
-    template <typename OpT> OpT findNext() {
+    /// Advance the iterator to the next operation that satisfies the optional
+    /// predicate. Returns the found operation, or nullptr if not found. The
+    /// iterator position is updated to the found operation (or end).
+    Operation *findNext(std::function<bool(Operation *)> predicate = nullptr) {
       while (*this != end()) {
         Operation *op = *(*this)++;
-        if (auto typed = dyn_cast<OpT>(op)) {
-          return typed;
+        if (!predicate || predicate(op)) {
+          return op;
         }
       }
-      return OpT{};
-    }
-
-    /// Returns the next user of op that is of type UserT and satisfies the
-    /// optional predicate, or nullptr if not found. The iterator position is
-    /// updated to the found user (or end).
-    template <typename UserT = Operation *>
-    UserT findNextUser(Operation *op,
-                       std::function<bool(UserT)> predicate = nullptr) {
-      while (*this != end()) {
-        Operation *curr = *(*this)++;
-        if (llvm::any_of(curr->getOperands(),
-                         [op](Value v) { return v.getDefiningOp() == op; })) {
-          if (auto typed = dyn_cast<UserT>(curr)) {
-            if (!predicate || predicate(typed)) {
-              return typed;
-            }
-          }
-        }
-      }
-      return UserT{};
+      return nullptr;
     }
 
   private:
@@ -235,8 +215,13 @@ public:
   /// Get an iterator over the linearized schedule starting from the
   /// beginning. The forOp parameter specifies the loop whose operations
   /// are being iterated.
-  LinearizedIterator linearized(scf::ForOp forOp) const {
-    return LinearizedIterator(getOpsInOrder(forOp));
+  LinearizedIterator linearized(scf::ForOp forOp,
+                                Operation *initialOp = nullptr) const {
+    auto result = LinearizedIterator(getOpsInOrder(forOp));
+    if (initialOp) {
+      result.findNext([&](Operation *op) { return op == initialOp; });
+    }
+    return result;
   }
 
 private:
