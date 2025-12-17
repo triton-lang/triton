@@ -897,7 +897,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
-  appendOp(dotOps[0]);
+  moveOpAndPredecessorsUpSameBlock(dotOps[0]);
 
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
