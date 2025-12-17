@@ -12,6 +12,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
+from typing import NamedTuple
 
 
 @triton.jit
@@ -825,3 +826,45 @@ def test_higher_order_kernel(device, fresh_triton_cache, capsys):
 Compiling with fn_a
 Compiling with fn_a after modification
 """)
+
+
+def test_higher_order_kernel_warmup_with_hook(device, fresh_triton_cache):
+    @triton.jit
+    def fn_a(val):
+        return val
+
+    @triton.jit
+    def fn_b(val):
+        return -val
+
+    @triton.jit
+    def kernel(out_ptr, closure) -> None:
+        val = closure.fn(*closure.captured)
+        tl.store(out_ptr, val)
+
+    class Closure(NamedTuple):
+        fn: tl.constexpr
+        captured: tuple
+
+    name_a = 'test_higher_order_kernel_warmup_with_hook.<locals>.fn_a'
+    name_b = 'test_higher_order_kernel_warmup_with_hook.<locals>.fn_b'
+
+    specialization_data = None
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+
+    output = torch.empty((), device=device, dtype=torch.int32)
+
+    kernel.warmup(output, Closure(fn_a, (42,)), grid=(1, ))
+    print(specialization_data)
+    assert name_a in specialization_data
+    assert name_b not in specialization_data
+
+    kernel.warmup(output, Closure(fn_b, (42,)), grid=(1, ))
+    print(specialization_data)
+    assert name_a not in specialization_data
+    assert name_b in specialization_data
+

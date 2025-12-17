@@ -384,7 +384,14 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
         list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
         'options': options.__dict__, 'key': key
     }
-    serialized_obj = json.dumps(obj)
+
+    class Serializer(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, JITFunction):
+                return get_full_name(obj)
+            return super().default(obj)
+
+    serialized_obj = json.dumps(obj, cls=Serializer)
     return serialized_obj
 
 
