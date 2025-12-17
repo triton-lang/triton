@@ -263,7 +263,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
       });
 
   if (hasKernelMetric) {
-    output[TreeData::Tree::TreeNode::RootId]["metrics"]["invocations"] = 0;
+    output[TreeData::Tree::TreeNode::RootId]["metrics"]["count"] = 0;
     output[TreeData::Tree::TreeNode::RootId]["metrics"]["duration"] = 0;
   }
   if (hasCycleMetric) {
