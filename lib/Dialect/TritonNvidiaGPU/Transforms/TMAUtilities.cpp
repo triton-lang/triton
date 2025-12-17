@@ -132,8 +132,8 @@ FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
 
   bool fp4Padded = isFp4Padded(encoding);
   if (fp4Padded && swizzleBytes != 128) {
-    return emitError(loc) << "fp4 padded operands must be swizzled with "
-                             "128-byte width, but got "
+    return emitError(loc) << "fp4 padded operands (elem type .b4x16_p64) only "
+                             "supports 128-byte swizzling, but got "
                           << swizzleBytes;
   }
 
@@ -202,8 +202,8 @@ FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
   default:
     break;
   }
-  return emitError(loc, "Tensor descriptor element type must have size 1, 2, "
-                        "or 4 but got ")
+  return emitError(loc)
+         << "Tensor descriptor element type must have size 1, 2, or 4 but got "
          << elemSize;
 }
 

@@ -219,14 +219,10 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-      Location loc = arg.getLoc();
-      auto swizzle = ttng::getTMASwizzleMode(loc, descTy);
-      auto elemType = ttng::getTMAElementType(loc, descTy);
-      if (failed(swizzle) || failed(elemType)) {
-        throw std::runtime_error(
-            "invalid TMA descriptor shared memory layout for kernel argument " +
-            cast<NameLoc>(loc).getName().str());
-      }
+      auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
+      auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
+      if (failed(swizzle) || failed(elemType))
+        throw py::type_error("invalid TMA descriptor type");
       auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
