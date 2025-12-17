@@ -55,7 +55,7 @@ public:
   DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv)
       : desc(desc), baseb128(baseb128), ll(std::move(llInv)) {}
 
-  static DotOpMmaSmemLoader
+  static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
         Value smemBase, ArrayRef<unsigned> instrShape, unsigned MNdim,
         int mmaVersion, bool isFp4 = false,
@@ -82,7 +82,7 @@ public:
                  mmaVersion, mmaTy);
   }
 
-  static DotOpMmaSmemLoader
+  static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, const LinearLayout &ll,
         int bitwidth, Value smemBase, ArrayRef<unsigned> instrShapeArray,
         unsigned MNdim, int mmaVersion,
@@ -144,10 +144,12 @@ public:
              "Instruction shape is too large for the layout");
     }
 
-    auto desc = getDescriptor(ll, instrShape, bitwidth, MNdim, mmaVersion);
+    auto desc = getDescriptor(loc, ll, instrShape, bitwidth, MNdim, mmaVersion);
+    if (failed(desc))
+      return failure();
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
-    return {desc, baseb128, ll};
+    return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -186,10 +188,10 @@ private:
   Value baseb128;
   LinearLayout ll;
 
-  static MMASMEMDescriptor getDescriptor(const LinearLayout &ll,
-                                         ArrayRef<unsigned> instrShape,
-                                         int bitwidth, unsigned MNdim,
-                                         int mmaVersion) {
+  static FailureOr<MMASMEMDescriptor>
+  getDescriptor(Location loc, const LinearLayout &ll,
+                ArrayRef<unsigned> instrShape, int bitwidth, unsigned MNdim,
+                int mmaVersion) {
     // ll is a map from allocShape into offsets and blocks
     auto dims = to_vector(ll.getInDimNames());
     auto ctx = dims[0].getContext();
@@ -310,16 +312,16 @@ private:
             default:
               llvm_unreachable("Unsupported swizzling size.");
             }
-            return {/* .descriptor = */ desc,
-                    /* .swizzlingByteWidth = */ swizzling,
-                    /* .bitwidth = */ bitwidth,
-                    /* .transposed = */ transposed,
-                    /* .fp4Padded = */ fp4Padded};
+            return MMASMEMDescriptor{/* .descriptor = */ desc,
+                                     /* .swizzlingByteWidth = */ swizzling,
+                                     /* .bitwidth = */ bitwidth,
+                                     /* .transposed = */ transposed,
+                                     /* .fp4Padded = */ fp4Padded};
           }
         }
       }
     }
-    llvm::report_fatal_error("Failed to find a valid layout");
+    return failure();
   }
 };
 

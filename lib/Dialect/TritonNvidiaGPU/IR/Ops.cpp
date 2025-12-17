@@ -870,7 +870,7 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Incorrect tmem layout.");
     }
     if (tmemEnc.getBlockM() != 128) {
-      return emitOpError("Tmem layout ahouls have M=128.");
+      return emitOpError("Tmem layout must have blockM=128.");
     }
     if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");

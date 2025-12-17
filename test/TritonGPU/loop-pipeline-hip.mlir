@@ -252,8 +252,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON: ttg.local_alloc {{.*}}, mutable>
 // COMMON: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
 
-#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -702,13 +702,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// Check we do not get AsyncCopyGlobalToLocal because the vec width will be < 32bit.
-// The order of the shared memory will be getMemoryOrder(#linear1) == [0, 1]
-// which differs from the order [1, 0] of the blocked layout. Since we have to
-// gather into lds with AsyncCopyGlobalToLocal we have to fallback to registers
-
 // COMMON-LABEL: pipeline_scale_memory_order
-// COMMON-NOT: ttg.async_copy_global_to_local
+// ASYNC-2: ttg.async_copy_global_to_local
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
 #linear = #ttg.linear<{register = [[0, 4], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [[0, 0], [0, 0], [0, 0]], block = []}>
