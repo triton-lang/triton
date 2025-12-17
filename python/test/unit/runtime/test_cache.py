@@ -846,8 +846,8 @@ def test_higher_order_kernel_warmup_with_hook(device, fresh_triton_cache):
         fn: tl.constexpr
         captured: tuple
 
-    name_a = 'test_higher_order_kernel_warmup_with_hook.<locals>.fn_a'
-    name_b = 'test_higher_order_kernel_warmup_with_hook.<locals>.fn_b'
+    name_a = 'JITFunction(test_higher_order_kernel_warmup_with_hook.<locals>.fn_a)'
+    name_b = 'JITFunction(test_higher_order_kernel_warmup_with_hook.<locals>.fn_b)'
 
     specialization_data = None
     def cache_hook(*args, **kwargs):
