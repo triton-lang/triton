@@ -69,7 +69,7 @@ uint32_t processActivityKernel(
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   size_t parentId = 0;
-  bool valid = !corrIdToExternId.withRead(
+  bool valid = corrIdToExternId.withRead(
       correlationId, [&](const size_t &value) { parentId = value; });
   corrIdToExternId.erase(correlationId);
   if (!valid)
