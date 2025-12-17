@@ -110,13 +110,9 @@ void processActivityKernel(
     return;
   if (!isGraph) {
     if (auto metric = convertActivityToMetric(activity)) {
-      std::string kernelName;
-      if (state.isApiExternId && activity->kernel_name != nullptr) {
-        kernelName = activity->kernel_name;
-      }
       for (auto *data : dataSet) {
         if (state.isApiExternId) {
-          data->addOpAndMetric(externId, kernelName, metric);
+          data->addOpAndMetric(externId, activity->kernel_name, metric);
         } else {
           data->addMetric(externId, metric);
         }
@@ -132,21 +128,16 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
     if (auto metric = convertActivityToMetric(activity)) {
-      const std::string kernelName =
-          activity->kernel_name != nullptr ? activity->kernel_name : "";
       for (auto *data : dataSet) {
-        data->addOpAndMetric(externId, kernelName, metric);
+        data->addOpAndMetric(externId, activity->kernel_name, metric);
       }
     }
   }
-  if (state.numNodes != std::numeric_limits<size_t>::max() &&
-      state.numNodes > 0) {
-    --state.numNodes;
-  }
+  --state.numNodes;
   if (state.numNodes == 0) {
     corrIdToExternId.erase(activity->correlation_id);
-    externIdToState.erase(externId);
     corrIdToIsHipGraph.erase(activity->correlation_id);
+    externIdToState.erase(externId);
   }
   return;
 }
