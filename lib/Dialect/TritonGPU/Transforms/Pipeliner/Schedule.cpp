@@ -12,7 +12,6 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
 
 bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
                                        Cluster cluster) {
@@ -295,6 +294,60 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 // TODO: Should this be moved somewhere else?
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
+// ============================================================
+// LinearizedIterator Implementation
+// ============================================================
+
+tt::CoarseSchedule::LinearizedIterator &
+tt::CoarseSchedule::LinearizedIterator::operator++() {
+  if (index < opsInOrder.size())
+    ++index;
+  return *this;
+}
+
+tt::CoarseSchedule::LinearizedIterator
+tt::CoarseSchedule::LinearizedIterator::operator++(int) {
+  LinearizedIterator tmp = *this;
+  ++(*this);
+  return tmp;
+}
+
+Operation *tt::CoarseSchedule::LinearizedIterator::operator*() const {
+  if (index >= opsInOrder.size())
+    return nullptr;
+  return std::get<0>(opsInOrder[index]);
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator==(
+    const LinearizedIterator &other) const {
+  return index == other.index && opsInOrder.size() == other.opsInOrder.size();
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator!=(
+    const LinearizedIterator &other) const {
+  return !(*this == other);
+}
+
+tt::CoarseSchedule::LinearizedIterator
+tt::CoarseSchedule::LinearizedIterator::end() const {
+  LinearizedIterator endIt(SmallVector<std::tuple<Operation *, int, Cluster>>{});
+  endIt.index = opsInOrder.size();
+  endIt.opsInOrder = opsInOrder;
+  return endIt;
+}
+
+Operation *
+tt::CoarseSchedule::LinearizedIterator::findNextUser(Operation *op) {
+  while (*this != end()) {
+    Operation *curr = *(*this)++;
+    if (llvm::any_of(curr->getOperands(),
+                     [op](Value v) { return v.getDefiningOp() == op; })) {
+      return curr;
+    }
+  }
+  return nullptr;
+}
+
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
   int numStages = schedule.getNumStages();
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>

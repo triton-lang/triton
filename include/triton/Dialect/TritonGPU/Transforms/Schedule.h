@@ -169,6 +169,60 @@ public:
 
   LLVM_DUMP_METHOD void dump();
 
+  // ============================================================
+  // Linearized Schedule Iterator API
+  // ============================================================
+
+  /// A stateful iterator over operations in linearized schedule order.
+  /// Operations are yielded in order: (stage, cluster,
+  /// IR-order-within-cluster).
+  ///
+  /// The iterator maintains its position, allowing findNext/findNextUser to
+  /// search from the current position forward.
+  class LinearizedIterator {
+  public:
+    LinearizedIterator(
+        SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder)
+        : opsInOrder(std::move(opsInOrder)), index(0) {}
+
+    // Standard iterator operations
+    LinearizedIterator &operator++();
+    LinearizedIterator operator++(int);
+    Operation *operator*() const;
+    bool operator==(const LinearizedIterator &other) const;
+    bool operator!=(const LinearizedIterator &other) const;
+
+    LinearizedIterator end() const;
+
+    /// Advance the iterator to the next operation of type OpT.
+    /// Returns the found operation, or nullptr if not found.
+    /// The iterator position is updated to the found operation (or end).
+    template <typename OpT> OpT findNext() {
+      while (*this != end()) {
+        Operation *op = *(*this)++;
+        if (auto typed = dyn_cast<OpT>(op)) {
+          return typed;
+        }
+      }
+      return OpT{};
+    }
+
+    /// Returns the next user of op, or nullptr if not found.
+    /// The iterator position is updated to the found user (or end).
+    Operation *findNextUser(Operation *op);
+
+  private:
+    SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
+    size_t index;
+  };
+
+  /// Get an iterator over the linearized schedule starting from the
+  /// beginning. The forOp parameter specifies the loop whose operations
+  /// are being iterated.
+  LinearizedIterator linearized(scf::ForOp forOp) const {
+    return LinearizedIterator(getOpsInOrder(forOp));
+  }
+
 private:
   int numStages = 0;
 };
