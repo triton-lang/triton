@@ -147,16 +147,13 @@ protected:
     void popExternId() { externIdQueue.pop_front(); }
 
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t numInstances = 1) {
+    void correlate(uint64_t correlationId, size_t numNodes) {
       if (externIdQueue.empty())
         return;
       const auto externId = externIdQueue.back();
       corrIdToExternId.insert(correlationId, externId);
-      if (numInstances != 1) {
-        externIdToState.upsert(externId, [&](ExternIdState &state) {
-          state.numNodes = (numInstances == 0) ? 1 : numInstances;
-        });
-      }
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.numNodes = numNodes; });
     }
 
     bool isApiExternId(size_t externId) const {

@@ -306,7 +306,7 @@ struct GraphState {
   // A unique id for the graph and graphExec instances; they don't overlap
   uint32_t graphId{};
   // Total number of GPU kernels launched by this graph
-  size_t numInstances{1};
+  size_t numNodes{1};
 };
 
 // Track pending graphs per device so flushing a single device won't drain
@@ -553,11 +553,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
-          // only increase the numInstances in CREATED callback
+          // only increase the numNodes in CREATED callback
           if (!pImpl->graphStates.contain(graphId)) {
             pImpl->graphStates[graphId] = GraphState();
           } else {
-            pImpl->graphStates[graphId].numInstances++;
+            pImpl->graphStates[graphId].numNodes++;
           }
           if (profiler.isOpInProgress()) {
             for (auto *data : dataSet) {
@@ -599,8 +599,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           }
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
-        auto &numInstances = pImpl->graphStates[graphId].numInstances;
-        numInstances--;
+        auto &numNodes = pImpl->graphStates[graphId].numNodes;
+        numNodes--;
         uint64_t nodeId = 0;
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
         pImpl->graphStates[graphId].nodeIdToState.erase(nodeId);
@@ -645,7 +645,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         return;
       }
       threadState.enterOp();
-      size_t numInstances = 1;
+      size_t numNodes = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
         auto graphExec = static_cast<const cuGraphLaunch_params *>(
@@ -653,10 +653,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                              ->hGraph;
         uint32_t graphExecId = 0;
         cupti::getGraphExecId<true>(graphExec, &graphExecId);
-        numInstances = std::numeric_limits<size_t>::max();
+        numNodes = std::numeric_limits<size_t>::max();
         auto findGraph = false;
         if (pImpl->graphStates.contain(graphExecId)) {
-          numInstances = pImpl->graphStates[graphExecId].numInstances;
+          numNodes = pImpl->graphStates[graphExecId].numNodes;
           findGraph = true;
         }
         if (!findGraph &&
@@ -704,7 +704,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           }
         }
       }
-      profiler.correlation.correlate(callbackData->correlationId, numInstances);
+      profiler.correlation.correlate(callbackData->correlationId, numNodes);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
