@@ -84,7 +84,8 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope> scopeStack; // Used for nvtx range tracking or triton op tracking
+    size_t apiExternId{Scope::DummyScopeId}; // Mark if an op is API-originated
+    std::vector<Scope> scopeStack;           // Used for nvtx range tracking
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
@@ -94,19 +95,15 @@ protected:
       if (profiler.isOpInProgress()) // Already in a triton op
         return;
       // Enter a new GPU API op
-      auto scope = Scope(Scope::getNewScopeId());
-      scopeStack.push_back(scope);
-      profiler.enterOp(scope);
-      profiler.correlation.setApiExternId(scope.scopeId);
+      apiExternId = Scope::getNewScopeId();
+      profiler.enterOp(Scope(apiExternId));
+      profiler.correlation.setApiExternId(apiExternId);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      if (scopeStack.empty())
-        return;
-      profiler.exitOp(scopeStack.back());
-      scopeStack.pop_back();
+      apiExternId = Scope::DummyScopeId;
     }
 
     void enterScope(const std::string &name) {
