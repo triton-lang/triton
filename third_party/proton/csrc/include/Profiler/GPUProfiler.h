@@ -63,10 +63,12 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->correlation.pushExternId(scope.scopeId);
+    this->threadState.scopeStack.push_back(scope);
     for (auto data : getDataSet())
       data->addOp(scope.scopeId, scope.name);
   }
   void stopOp(const Scope &scope) override {
+    this->threadState.scopeStack.pop_back();
     this->correlation.popExternId();
   }
 
@@ -85,7 +87,7 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     size_t opId{Scope::DummyScopeId}; // Mark if an op is API-originated
-    std::vector<Scope> scopeStack;           // Used for nvtx range tracking
+    std::vector<Scope> scopeStack;    // Used for nvtx range or triton op tracking
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
@@ -103,13 +105,14 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
+      // Exit a GPU API op
       profiler.exitOp(Scope(opId));
       opId = Scope::DummyScopeId;
     }
 
     void enterScope(const std::string &name) {
       // Enter a new NVTX range scope
-      auto scope = Scope(name);
+      Scope scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
