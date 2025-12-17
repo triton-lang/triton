@@ -7,14 +7,12 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/Set.h"
 
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace proton {
 

@@ -68,8 +68,6 @@ private:
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
-
-  static constexpr size_t MaxRegisteredDeviceIds = 32;
 };
 
 } // namespace proton

@@ -3,8 +3,9 @@
 
 #include "ByteSpan.h"
 #include <cstdint>
-#include <iostream>
+#include <iosfwd>
 #include <memory>
+#include <stdexcept>
 
 namespace proton {
 

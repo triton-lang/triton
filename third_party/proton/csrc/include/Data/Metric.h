@@ -115,7 +115,7 @@ public:
   }
 
   /// Update all values with another metric.
-  void updateMetric(Metric &other) {
+  void updateMetric(const Metric &other) {
     for (int i = 0; i < values.size(); ++i) {
       updateValue(i, other.values[i]);
     }
