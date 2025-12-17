@@ -117,6 +117,7 @@ protected:
       // Exit the last NVTX range scope
       if (scopeStack.empty())
         return;
+      sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
   };
