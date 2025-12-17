@@ -75,9 +75,7 @@ public:
 
   const std::vector<MetricValueType> &getValues() const { return values; }
 
-  const MetricValueType &getValue(int valueId) const {
-    return values[valueId];
-  }
+  const MetricValueType &getValue(int valueId) const { return values[valueId]; }
 
   /// Update a specific value id with the new value.
   void updateValue(int valueId, MetricValueType value) {

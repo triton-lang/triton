@@ -173,7 +173,7 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("sessionId"));
 
-    m.def(
+  m.def(
       "get_data_msgpack",
       [](size_t sessionId) {
         auto data = SessionManager::instance().getDataMsgPack(sessionId);

@@ -139,7 +139,8 @@ void processActivityKernel(
       }
     }
   }
-  if (state.numNodes != std::numeric_limits<size_t>::max() && state.numNodes > 0) {
+  if (state.numNodes != std::numeric_limits<size_t>::max() &&
+      state.numNodes > 0) {
     --state.numNodes;
   }
   if (state.numNodes == 0) {
@@ -150,14 +151,14 @@ void processActivityKernel(
   return;
 }
 
-void processActivity(RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
-                     RoctracerProfiler::ExternIdToStateMap &externIdToState,
-                     ThreadSafeMap<uint64_t, bool,
-                                   std::unordered_map<uint64_t, bool>>
-                         &corrIdToIsHipGraph,
-                     size_t parentId, std::set<Data *> &dataSet,
-                     const roctracer_record_t *record, bool isGraph,
-                     RoctracerProfiler::ExternIdState &state) {
+void processActivity(
+    RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    RoctracerProfiler::ExternIdToStateMap &externIdToState,
+    ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
+        &corrIdToIsHipGraph,
+    size_t parentId, std::set<Data *> &dataSet,
+    const roctracer_record_t *record, bool isGraph,
+    RoctracerProfiler::ExternIdState &state) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {

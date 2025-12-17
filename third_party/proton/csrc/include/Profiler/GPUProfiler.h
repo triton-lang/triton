@@ -40,8 +40,8 @@ public:
     bool isApiExternId{false};
     // ----graph launch fields----
     // For graph launches, the launch correlation id fans out into multiple
-    // kernel activity records. We track the expected fanout here and keep updating
-    // it when we have processed each kernel activity record.
+    // kernel activity records. We track the expected fanout here and keep
+    // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
     struct GraphNodeScopes {
@@ -165,16 +165,15 @@ protected:
 
     bool isApiExternId(size_t externId) const {
       bool isApi = false;
-      externIdToState.withRead(
-          externId,
-          [&](const ExternIdState &state) { isApi = state.isApiExternId; });
+      externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        isApi = state.isApiExternId;
+      });
       return isApi;
     }
 
     void setApiExternId(size_t externId) {
-      externIdToState.upsert(externId, [&](ExternIdState &state) {
-        state.isApiExternId = true;
-      });
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.isApiExternId = true; });
     }
 
     template <typename FlushFnT>

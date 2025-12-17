@@ -8,8 +8,7 @@
 namespace proton {
 namespace {
 
-template <typename T>
-void writeBE(std::vector<uint8_t> &out, T value) {
+template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
   using U = std::make_unsigned_t<T>;
   U u = static_cast<U>(value);
   for (int i = sizeof(U) - 1; i >= 0; --i) {
