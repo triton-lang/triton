@@ -559,9 +559,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           if (profiler.isOpInProgress()) {
             for (auto *data : dataSet) {
               auto contexts = data->getContexts();
-              // Trick: if the scope name is empty, it means the graph is
+              // Trick: if the externIdQueue is empty, it means the graph is
               // created by an API kernel but not Triton op
-              if (threadState.scopeStack.back().name.empty()) {
+              if (profiler.correlation.externIdQueue.empty()) {
                 if (!threadState
                          .isMetricKernelLaunching) // Ignore metric kernels
                   pImpl->graphStates[graphId].apiNodeIds.insert(nodeId);

@@ -91,8 +91,9 @@ protected:
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp() {
-      if (profiler.isOpInProgress())
+      if (profiler.isOpInProgress()) // Already in a triton op
         return;
+      // Enter a new GPU API op
       auto scope = Scope(Scope::getNewScopeId());
       scopeStack.push_back(scope);
       profiler.enterOp(scope);
@@ -107,12 +108,14 @@ protected:
     }
 
     void enterScope(const std::string &name) {
+      // Enter a new NVTX range scope
       auto scope = Scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
 
     void exitScope() {
+      // Exit the last NVTX range scope
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
