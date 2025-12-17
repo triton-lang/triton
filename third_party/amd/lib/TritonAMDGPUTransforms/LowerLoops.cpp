@@ -180,8 +180,10 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         auto regOrder = llEnc.getOrder();
         auto threadOrder = llEnc.getThreadOrder();
 
+        auto contig = llEnc.getElemsPerThread(srcTy.getShape());
         SetVector<unsigned> orderSet;
-        orderSet.insert(regOrder[0]);
+        if (contig[regOrder[0]] > 1)
+          orderSet.insert(regOrder[0]);
         orderSet.insert(threadOrder.begin(), threadOrder.end());
         order = orderSet.takeVector();
       }
