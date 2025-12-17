@@ -38,3 +38,18 @@ ignore = ["E501", "E701", "E731", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+
+[tool.pyrefly]
+project-includes = [
+    "python/triton/knobs.py",
+    "python/triton/runtime/build.py",
+    "python/triton/runtime/driver.py",
+    "python/triton/_utils.py",
+]
+
+project-excludes = ["**/build/"]
+
+[[tool.pyrefly.sub-config]]
+matches = "python/test/**"
+
+untyped-def-behavior = "skip-and-infer-return-any" # Replicate Mypy behavior for tests
