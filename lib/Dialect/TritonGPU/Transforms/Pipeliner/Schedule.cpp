@@ -330,22 +330,11 @@ bool tt::CoarseSchedule::LinearizedIterator::operator!=(
 
 tt::CoarseSchedule::LinearizedIterator
 tt::CoarseSchedule::LinearizedIterator::end() const {
-  LinearizedIterator endIt(SmallVector<std::tuple<Operation *, int, Cluster>>{});
+  LinearizedIterator endIt(
+      SmallVector<std::tuple<Operation *, int, Cluster>>{});
   endIt.index = opsInOrder.size();
   endIt.opsInOrder = opsInOrder;
   return endIt;
-}
-
-Operation *
-tt::CoarseSchedule::LinearizedIterator::findNextUser(Operation *op) {
-  while (*this != end()) {
-    Operation *curr = *(*this)++;
-    if (llvm::any_of(curr->getOperands(),
-                     [op](Value v) { return v.getDefiningOp() == op; })) {
-      return curr;
-    }
-  }
-  return nullptr;
 }
 
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {

@@ -715,17 +715,14 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     return schedule[mma].first > schedule[op].first;
   };
 
-  std::optional<Operation *> latestSyncPoint;
-  for (auto user : alloc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getBlock() != mma->getBlock()) {
-        continue;
-      }
-      if (!latestSyncPoint || schedule.isOpBefore(load, *latestSyncPoint)) {
-        latestSyncPoint = load;
-      }
-    }
-  }
+  // Find the first TMEMLoadOp user of alloc that appears in the MMA block
+  // in the linearized schedule.
+  auto linearizedSchedule = schedule.linearized(forOp);
+  Operation *latestSyncPoint =
+      linearizedSchedule.findNextUser<ttng::TMEMLoadOp>(
+          alloc, [&](ttng::TMEMLoadOp load) {
+            return load->getBlock() == mma->getBlock();
+          });
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
                                                       isLoadToBePipelined);
@@ -778,7 +775,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     // If the operands are not pipelineable, we need to insert a sync point
     // before the earliest operand load
     for (auto def : updatedDefs) {
-      if (!latestSyncPoint || isEarlierBarrierLocation(def, *latestSyncPoint)) {
+      if (!latestSyncPoint || isEarlierBarrierLocation(def, latestSyncPoint)) {
         latestSyncPoint = def;
       }
     }
@@ -787,14 +784,14 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
   if (latestSyncPoint && mmaPipeHelper.isOperandsStateDetermined) {
-    if (schedule.isOpBefore(*latestSyncPoint, mma)) {
+    if (schedule.isOpBefore(latestSyncPoint, mma)) {
       mainWaitStage = schedule[mma].first + 1;
       mainWaitCluster = schedule.clusters.newBefore(
-          schedule.splitClusterBefore(*latestSyncPoint, forOp));
+          schedule.splitClusterBefore(latestSyncPoint, forOp));
     } else {
-      mainWaitStage = schedule[*latestSyncPoint].first;
+      mainWaitStage = schedule[latestSyncPoint].first;
       mainWaitCluster = schedule.clusters.newBefore(
-          schedule.splitClusterBefore(*latestSyncPoint, forOp));
+          schedule.splitClusterBefore(latestSyncPoint, forOp));
     }
   }
 

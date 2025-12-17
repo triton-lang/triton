@@ -1718,7 +1718,7 @@ tt.func @conditional_store_race_fix(%lb : index, %ub : index, %step : index,
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride=1>
 module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @non_pipelined_op
   tt.func public @non_pipelined_op(%x_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %x_desc_0: i32, %x_desc_1: i32, %x_desc_2: i64, %x_desc_3: i64, %y_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %y_desc_4: i32, %y_desc_5: i32, %y_desc_6: i64, %y_desc_7: i64, %out_desc: !tt.tensordesc<tensor<64x64xf32, #shared1>>, %out_desc_8: i32, %out_desc_9: i32, %out_desc_10: i64, %out_desc_11: i64, %N: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {

@@ -207,9 +207,25 @@ public:
       return OpT{};
     }
 
-    /// Returns the next user of op, or nullptr if not found.
-    /// The iterator position is updated to the found user (or end).
-    Operation *findNextUser(Operation *op);
+    /// Returns the next user of op that is of type UserT and satisfies the
+    /// optional predicate, or nullptr if not found. The iterator position is
+    /// updated to the found user (or end).
+    template <typename UserT = Operation *>
+    UserT findNextUser(Operation *op,
+                       std::function<bool(UserT)> predicate = nullptr) {
+      while (*this != end()) {
+        Operation *curr = *(*this)++;
+        if (llvm::any_of(curr->getOperands(),
+                         [op](Value v) { return v.getDefiningOp() == op; })) {
+          if (auto typed = dyn_cast<UserT>(curr)) {
+            if (!predicate || predicate(typed)) {
+              return typed;
+            }
+          }
+        }
+      }
+      return UserT{};
+    }
 
   private:
     SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
