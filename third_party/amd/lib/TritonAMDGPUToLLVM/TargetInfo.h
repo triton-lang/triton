@@ -100,6 +100,7 @@ public:
   // ttg.async_wait
   bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+  bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
 
   bool supportsMultiCTALaunch() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
