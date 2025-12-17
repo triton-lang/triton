@@ -368,9 +368,6 @@ def tcgen05_copy(src, dst, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
 
-    WARNING: The current semantics of the instruction are not well defined and
-    the API will change in the future. Use at your own risk.
-
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
@@ -436,6 +433,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
+    assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
 
     if mbarriers is None:
         assert mbarrier_preds is None

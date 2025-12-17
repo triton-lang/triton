@@ -34,6 +34,10 @@ class TensorDescriptor:
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
         if self.padding == "nan":
             assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
+        assert not self.layout.fp4_padded or self.layout.swizzle_byte_width == 128, f"FP4 padded operands must be swizzled with 128-byte width, but got {self.layout.swizzle_byte_width}"
+        assert self.layout.element_bitwidth in [
+            8, 16, 32
+        ], f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {self.layout.element_bitwidth}"
 
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero"):
