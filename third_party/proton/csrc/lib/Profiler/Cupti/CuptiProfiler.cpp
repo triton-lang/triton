@@ -472,6 +472,9 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i].second;
+        if (scopeId == Scope::DummyScopeId) {
+          continue;
+        }
         switch (metricTypeIndex) {
         case variant_index_v<uint64_t, MetricValueType>: {
           uint64_t typedValue{};
@@ -728,18 +731,21 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphExec = graphRef.value().get();
           auto &externIdState = profiler.correlation.externIdToState[externId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
+            auto nodeIt = externIdState.graphNodeIdToScopes.find(nodeId);
             for (auto *data : dataSet) {
-              bool isApi =
-                  externIdState.graphNodeIdToScopes[nodeId].isApiExternId;
-              auto scopeId =
-                  externIdState.graphNodeIdToScopes[nodeId].dataToScopeId[data];
-              metricNodeScopes[data].push_back({isApi, scopeId});
+              if (nodeIt != externIdState.graphNodeIdToScopes.end()) {
+                bool isApi = nodeIt->second.isApiExternId;
+                auto dataIt = nodeIt->second.dataToScopeId.find(data);
+                if (dataIt != nodeIt->second.dataToScopeId.end()) {
+                  auto scopeId = dataIt->second;
+                  metricNodeScopes[data].push_back({isApi, scopeId});
+                }
+              }
             }
           }
           auto metricBufferCapacity =
               pImpl->metricBuffer->getCapacity(); // bytes
-          auto metricNodeCount =
-              pImpl->graphStates[graphExecId].metricKernelNodeIds.size();
+          auto metricNodeCount = graphExec.metricKernelNodeIds.size();
           auto drained = pImpl->pendingGraphQueue.pop(metricNodeCount,
                                                       metricBufferCapacity);
           if (drained.first != 0) { // Reached capacity
