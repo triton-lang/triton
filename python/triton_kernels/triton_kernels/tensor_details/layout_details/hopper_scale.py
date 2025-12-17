@@ -67,13 +67,13 @@ class HopperMXScaleLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         if self.mx_axis == len(self.leading_shape) + 1:
-            N, K = block_shape[-2:]
+            *head, N, K = block_shape
             assert N % 32 == 0, N
-            return [*block_shape[:-2], N // 32, K * 32]
+            return [*head, N // 32, K * 32]
         else:
-            K, N = block_shape[-2:]
+            *head, K, N = block_shape
             assert N % 32 == 0, N
-            return [*block_shape[:-2], K * 32, N // 32]
+            return [*head, K * 32, N // 32]
 
 
 @triton.jit

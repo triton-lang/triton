@@ -78,8 +78,8 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
-    shape = [128, 128]
-    shape[1 - mx_axis] = 256
+    shape = [64, 64]
+    shape[1 - mx_axis] = 32 * num_warps
     x = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
     x_fp4_val, x_fp4_scale = downcast_to_mxfp(x, torch.uint8, axis=mx_axis)
     x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=mx_axis)
@@ -90,12 +90,13 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     y = torch.empty_like(x_bf16)
     scale_block = [s // 32 if i == mx_axis else s for i, s in enumerate(shape)]
     scale_block = get_layout(x_fp4_scale).swizzle_block_shape(scale_block)
+    value_block = [s // 2 if i == mx_axis else s for i, s in enumerate(shape)]
+    value_block = get_layout(x_fp4_val).swizzle_block_shape(value_block)
     _upcast_mxfp4_to_bf16[(1, )](
         y, x_fp4_val.storage.data, x_fp4_scale.storage.data,  #
         x_fp4_val.storage.data.stride(0), x_fp4_val.storage.data.stride(1),  #
         x_fp4_scale.storage.data.stride(0), x_fp4_scale.storage.data.stride(1),  #
         y.stride(0), y.stride(1),  #
-        x_fp4_val.storage.data.shape[0], x_fp4_val.storage.data.shape[1],  #
-        shape[0], shape[1],  #
+        *value_block, *shape,  #
         *scale_block, mx_axis=mx_axis, num_warps=num_warps)
     assert (y == x_bf16).all()

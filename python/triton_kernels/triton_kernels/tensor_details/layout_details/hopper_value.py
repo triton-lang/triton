@@ -214,13 +214,13 @@ class HopperMXValueLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         if self.mx_axis == len(self.leading_shape) + 1:
-            N, K = block_shape[-2:]
+            *head, N, K = block_shape
             assert N % 4 == 0
-            return [*block_shape[:-2], N // 4, K * 4]
+            return [*head, N // 4, K * 4]
         else:
-            K, N = block_shape[-2:]
+            *head, K, N = block_shape
             assert N % 4 == 0
-            return [*block_shape[:-2], K * 4, N // 4]
+            return [*head, K * 4, N // 4]
 
 
 @triton.jit
