@@ -103,6 +103,7 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
+      profiler.exitOp(Scope(apiExternId));
       apiExternId = Scope::DummyScopeId;
     }
 
