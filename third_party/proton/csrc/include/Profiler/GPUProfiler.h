@@ -105,20 +105,17 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      // Exit a GPU API op
       profiler.exitOp(Scope(opId));
       opId = Scope::DummyScopeId;
     }
 
-    void enterScope(const std::string &name) {
-      // Enter a new NVTX range scope
+    void enterScope(const std::string &name) { // NVTX range
       Scope scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
 
-    void exitScope() {
-      // Exit the last NVTX range scope
+    void exitScope() { // NVTX range
       if (scopeStack.empty())
         return;
       sessionManager.exitScope(scopeStack.back());
