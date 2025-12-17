@@ -63,8 +63,9 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn"]
-    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn", "num_warps"}
+    unsupported = set(constraints.keys()) - constraints_supported
+    assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per slice
     if ragged_metadata is None:
         slice_size = m
@@ -116,7 +117,9 @@ def make_default_opt_flags_amd(
     # w_cache_modifier:
     w_cache_modifier = ".cg" if block_m <= 32 else None
     # num_warps, num_stages
-    num_warps = 2 if (m is not None and m <= 16) else 8
+    num_warps = constraints.get("num_warps", None)
+    if num_warps is None:
+        num_warps = 2 if (m is not None and m <= 16) else 8
     num_stages = 2
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
@@ -187,8 +190,9 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn"]
-    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    constraints_supported = {"block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
+    unsupported = set(constraints.keys()) - constraints_supported
+    assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per expert
     if routing_data is None or batch_size > 1:
         slice_size = m
@@ -302,8 +306,7 @@ def make_default_opt_flags_nvidia(
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     assert num_stages >= 1
-    # Handshake with the HBM swizzling
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config)
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
