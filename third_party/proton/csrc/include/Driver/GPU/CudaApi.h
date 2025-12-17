@@ -30,13 +30,31 @@ CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
 
 template <bool CheckSuccess> CUresult streamSynchronize(CUstream stream);
 
+template <bool CheckSuccess> CUresult streamDestroy(CUstream stream);
+
 template <bool CheckSuccess>
 CUresult memcpyDToHAsync(void *dst, CUdeviceptr src, size_t count,
                          CUstream stream);
 
+template <bool CheckSuccess>
+CUresult memsetD32Async(CUdeviceptr dst, unsigned int ui, size_t N,
+                        CUstream stream);
+
+template <bool CheckSuccess>
+CUresult memAlloc(CUdeviceptr *dptr, size_t bytesize);
+
+template <bool CheckSuccess> CUresult memFree(CUdeviceptr dptr);
+
 template <bool CheckSuccess> CUresult memAllocHost(void **pp, size_t bytesize);
 
 template <bool CheckSuccess> CUresult memFreeHost(void *p);
+
+template <bool CheckSuccess>
+CUresult launchKernel(CUfunction f, unsigned int gridDimX,
+                      unsigned int gridDimY, unsigned int gridDimZ,
+                      unsigned int blockDimX, unsigned int blockDimY,
+                      unsigned int blockDimZ, unsigned int sharedMemBytes,
+                      CUstream hStream, void **kernelParams, void **extra);
 
 Device getDevice(uint64_t index);
 

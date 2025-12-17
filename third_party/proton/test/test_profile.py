@@ -15,6 +15,7 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
+import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip
 
 
@@ -75,12 +76,14 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(is_hip(), reason="Currently broken after updating to ROCm 7")
 def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
-    @triton.jit
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 
@@ -104,11 +107,13 @@ def test_cudagraph(tmp_path: pathlib.Path):
             with proton.scope(f"iter_{i}"):
                 fn()
 
-    proton.enter_scope("test")
-    g.replay()
+    with proton.scope("test0"):
+        g.replay()
+
+    with proton.scope("test1"):
+        g.replay()
+
     g.reset()
-    torch.cuda.synchronize()
-    proton.exit_scope()
     proton.finalize()
 
     with temp_file.open() as f:
@@ -117,24 +122,28 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # {torch.ones, add, foo, test}
     assert len(data[0]["children"]) >= 4
     # find the test frame
-    test_frame = None
+    test0_frame = None
+    test1_frame = None
     for child in data[0]["children"]:
-        if child["frame"]["name"] == "test":
-            test_frame = child
-            break
-    assert test_frame is not None
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+        if child["frame"]["name"] == "test1":
+            test1_frame = child
+    assert test0_frame is not None
+    assert test1_frame is not None
     # {torch.ones, add, foo}
     if is_hip():
-        assert len(test_frame["children"]) >= 2
-        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+        assert len(test0_frame["children"]) >= 2
+        assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
         # cuda backend supports "<captured_at>" annotation
-        child = test_frame["children"][0]
-        assert child["frame"]["name"] == "<captured_at>"
-        # 0...9 iterations
-        assert len(child["children"]) == 10
-        # check one of the iterations
-        assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+        for test_frame in [test0_frame, test1_frame]:
+            child = test_frame["children"][0]
+            assert child["frame"]["name"] == "<captured_at>"
+            # 0...9 iterations
+            assert len(child["children"]) == 10
+            # check one of the iterations
+            assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
@@ -190,8 +199,66 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert test0_frame["metrics"]["cpu_time (ns)"] > 0
     test1_frame = test0_frame["children"][0]
     assert test1_frame["metrics"]["cpu_time (ns)"] > 0
-    kernel_frame = test1_frame["children"][0]
-    assert kernel_frame["metrics"]["time (ns)"] > 0
+
+
+def test_get_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tree_json.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    with proton.scope("test"):
+        x = torch.ones((2, 2), device="cuda")
+        foo[(1, )](x, x, 4)
+        foo[(1, )](x, x, 4)
+
+    try:
+        _ = proton.get_data(session)
+    except RuntimeError as e:
+        assert "Cannot get data while the session is active" in str(e)
+
+    proton.deactivate(session)
+
+    database = proton.get_data(session)
+    gf, _, _, _ = viewer.get_raw_metrics(database)
+    foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
+    ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
+
+    proton.finalize()
+    assert len(foo_frame) == 1
+    assert int(foo_frame["count"].values[0]) == 2
+    assert len(ones_frame) == 1
+    assert int(ones_frame["count"].values[0]) == 1
+
+
+def test_clear_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_clear_data.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    with proton.scope("test0"):
+        x = torch.ones((2, 2), device="cuda")
+        x + x  # type: ignore
+
+    proton.deactivate(session)
+    proton.clear_data(session)
+    database = proton.get_data(session)
+    assert database[0]["children"] == []
+    assert database[0]["frame"]["name"] == "ROOT"
+
+    proton.activate(session)
+    with proton.scope("test1"):
+        x * x  # type: ignore
+    proton.deactivate(session)
+    database = proton.get_data(session)
+
+    proton.finalize()
+    assert len(database[0]["children"]) == 1
+    assert database[0]["children"][0]["frame"]["name"] == "test1"
+    kernel_frame = database[0]["children"][0]["children"][0]
+    assert "elementwise" in kernel_frame["frame"]["name"]
 
 
 def test_hook_launch(tmp_path: pathlib.Path):
@@ -523,3 +590,232 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
         kernel = proton_scope["children"][0]
     assert "elementwise" in kernel["frame"]["name"]
     assert kernel["metrics"]["count"] == 1
+
+
+def test_tensor_metrics_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    x = torch.ones((10, 10), device="cuda", dtype=torch.float32)
+    x_mean = x.mean()
+    x_std = x.std()
+    with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
+        torch.randn((10, 10), device="cuda")
+        torch.zeros_like(x)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 4
+    # get the test frame
+    test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test":
+            test_frame = child
+            break
+    assert test_frame is not None
+    assert test_frame["metrics"]["x_mean"] == 1.0
+    assert test_frame["metrics"]["x_std"] == 0.0
+
+
+def test_tensor_metrics_hook(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metric_value = torch.tensor(8.0, device="cuda")
+        return {"name": "foo_test", "flops": metric_value}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((8, ), device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, x.numel(), y, num_warps=4)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    # metadata scope + foo_test
+    assert len(children) == 2
+    foo_test_frame = None
+    for child in children:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+            break
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["flops"] == 8.0
+
+
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        x_sum = x.sum()
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device="cuda")
+        with proton.metadata_state():
+            a_sum = a.sum()
+        with proton.scope("scope_b", metrics={"sum": a_sum}):
+            b = torch.ones((2, 2), device="cuda")
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    # four kernels
+    fn()
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for _ in range(10):
+            fn()
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    # metadata scope + kernels + scope_a + scope_b + test0
+    assert len(children) == 7
+    test0_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    capture_at_frame = test0_frame["children"][0]
+
+    foo_test_frame = None
+    scope_a_frame = None
+    scope_b_frame = None
+    for child in capture_at_frame["children"]:
+        if child["frame"]["name"] == "foo_test":
+            foo_test_frame = child
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
+    assert foo_test_frame is not None
+    assert foo_test_frame["metrics"]["bytes"] == 160
+    assert foo_test_frame["metrics"]["flops"] == 40
+    assert scope_a_frame is not None
+    assert scope_a_frame["metrics"]["bytes"] == 160
+    assert scope_b_frame is not None
+    assert scope_b_frame["metrics"]["sum"] == 40.0
+
+
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("Requires at least two CUDA devices")
+
+    devices = [torch.device(f"cuda:{i}") for i in range(2)]
+    streams = []
+    for device in devices:
+        with torch.cuda.device(device):
+            streams.append(torch.cuda.Stream(device=device))
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        x_sum = x.sum()
+        device_idx = x.device.index
+        return {"name": f"foo_test_{device_idx}", "bytes": x.numel() * x.element_size(), "flops": x_sum}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def run_on_device(device_id):
+        with proton.scope(f"scope_a_{device_id}", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device=f"cuda:{device_id}")
+        with proton.metadata_state():
+            a_sum = a.sum()
+        with proton.scope(f"scope_b_{device_id}", metrics={"sum": a_sum}):
+            b = torch.ones((2, 2), device=f"cuda:{device_id}")
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_tensor_metrics_multi_device_cudagraph.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    graphs = []
+    for device, stream in zip(devices, streams):
+        with torch.cuda.device(device):
+            torch.cuda.set_stream(stream)
+            # warmup
+            run_on_device(device.index)
+            # graph capture
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, stream=stream):
+                for _ in range(10):
+                    run_on_device(device.index)
+        graphs.append((device, stream, g))
+
+    for device, stream, graph in graphs:
+        with torch.cuda.device(device):
+            torch.cuda.set_stream(stream)
+            with proton.scope(f"test_device_{device.index}"):
+                graph.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    for device in devices:
+        device_name = f"test_device_{device.index}"
+        launch_frame = next((child for child in children if child["frame"]["name"] == device_name), None)
+        assert launch_frame is not None
+        capture_at_frame = launch_frame["children"][0]
+        assert capture_at_frame["frame"]["name"] == "<captured_at>"
+
+        foo_frame = None
+        scope_a_frame = None
+        scope_b_frame = None
+        for child in capture_at_frame["children"]:
+            if child["frame"]["name"] == f"foo_test_{device.index}":
+                foo_frame = child
+            if child["frame"]["name"] == f"scope_a_{device.index}":
+                scope_a_frame = child
+            if child["frame"]["name"] == f"scope_b_{device.index}":
+                scope_b_frame = child
+
+        assert foo_frame is not None
+        assert scope_a_frame is not None
+        assert scope_b_frame is not None
+        assert foo_frame["metrics"]["bytes"] == 160
+        assert foo_frame["metrics"]["flops"] == 40
+        assert foo_frame["metrics"]["device_id"] == str(device.index)
+        assert scope_a_frame["metrics"]["bytes"] == 160
+        assert scope_b_frame["metrics"]["sum"] == 40.0
+
+    assert len(data) > 1
+    cuda_devices = data[1].get("CUDA", {})
+    assert len(cuda_devices) >= 2

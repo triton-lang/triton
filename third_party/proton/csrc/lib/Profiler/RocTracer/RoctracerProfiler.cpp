@@ -4,6 +4,7 @@
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
+#include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
 
 #include "hip/amd_detail/hip_runtime_prof.h"
@@ -189,7 +190,10 @@ std::tuple<bool, bool> matchKernelCbId(uint32_t cbId) {
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
-      : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
+      : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
+    runtime = &HipRuntime::instance();
+    metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+  }
   virtual ~RoctracerProfilerPimpl() = default;
 
   void doStart() override;
@@ -353,19 +357,22 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    // TODO(Keren): Roctracer doesn't support cuda graph yet.
+    bool hasCorrelation =
+        correlation.corrIdToExternId.contain(record->correlation_id);
     auto externId =
-        correlation.corrIdToExternId.contain(record->correlation_id)
+        hasCorrelation
             ? correlation.corrIdToExternId.at(record->correlation_id).first
             : Scope::DummyScopeId;
     auto isAPI = correlation.apiExternIds.contain(externId);
     bool isGraph = pImpl->CorrIdToIsHipGraph.contain(record->correlation_id);
-    processActivity(correlation.corrIdToExternId, correlation.apiExternIds,
-                    externId, dataSet, record, isAPI, isGraph);
-    // Track correlation ids from the same stream and erase those <
-    // correlationId
-    correlation.corrIdToExternId.erase(record->correlation_id);
-    correlation.apiExternIds.erase(externId);
+    if (hasCorrelation) {
+      processActivity(correlation.corrIdToExternId, correlation.apiExternIds,
+                      externId, dataSet, record, isAPI, isGraph);
+      // Track correlation ids from the same stream and erase those <
+      // correlationId
+    } else {
+      correlation.apiExternIds.erase(externId);
+    }
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);

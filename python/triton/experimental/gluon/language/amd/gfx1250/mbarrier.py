@@ -10,20 +10,11 @@ class MBarrierLayout(SwizzledSharedLayout):
     Layout for mbarrier synchronization.
 
     Args:
-        ctas_per_cga (int): CTAs per CGA grouping. Defaults to 1.
-        cta_split_num (int): CTA split factor. Defaults to 1.
+        cga_layout (List[List[int]]): CGA layout bases. Defaults to [].
     """
 
-    def __init__(self, ctas_per_cga: int = 1, cta_split_num: int = 1):
-        super().__init__(
-            vec=1,
-            per_phase=1,
-            max_phase=1,
-            order=[0],
-            ctas_per_cga=[ctas_per_cga],
-            cta_split_num=[cta_split_num],
-            cta_order=[0],
-        )
+    def __init__(self, cga_layout=None):
+        super().__init__(vec=1, per_phase=1, max_phase=1, order=[0], cga_layout=cga_layout or [])
 
 
 @builtin
@@ -62,7 +53,7 @@ def arrive(mbarrier, *, count=1, _semantic=None):
     Arrive at an mbarrier with a specified count. The operation requires a `count` attribute
     of at least 1, and decreases the pending arrival count of the mbarrier by the specific count.
     If the pending count reaches zero, the phase changes (is decremented in a wraparound manner) and the
-    pending count is reloaded with the init count value. Returns the mbarrier's phase prior to the "arrive" operation.
+    pending count is reloaded with the init count value. Returns the mbarrier's phase parity (0 for even, 1 for odd) prior to the "arrive" operation.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier to be signalled.

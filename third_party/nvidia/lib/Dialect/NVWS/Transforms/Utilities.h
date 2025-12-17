@@ -37,6 +37,7 @@ gpu::MemDescType getArefMultiBufferedType(gpu::MemDescType arefBufType,
                                           int depth);
 int getArefDepth(gpu::MemDescType bufTy);
 
+scf::ForOp getOuterWSLoop(scf::ForOp innerFor);
 } // namespace mlir::triton::nvws
 
 #endif // NVIDIA_NVWS_TRANSFORMS_UTILITY_H_

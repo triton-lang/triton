@@ -12,8 +12,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <string>
 
 namespace py = pybind11;
 
@@ -96,6 +99,30 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUOptimizePartitionWarps);
 }
 
+void init_plugin_passes(py::module &&m) {
+  std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+  if (filename.empty())
+    return;
+
+  TritonPlugin TP(filename);
+  std::vector<const char *> passNames;
+  if (auto result = TP.getPassHandles(passNames); !result)
+    throw TP.err2exp(result.takeError());
+
+  for (unsigned i = 0; i < passNames.size(); ++i) {
+    const char *passName = passNames.data()[i];
+
+    m.def(passName, [passName](mlir ::PassManager &pm) {
+      std::string filename =
+          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      TritonPlugin TP(filename);
+      if (auto result = TP.addPass(&pm, passName); !result)
+        throw TP.err2exp(result.takeError());
+    });
+  }
+}
+
 void init_triton_passes_convert(py::module &&m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createSCFToControlFlowPass);
@@ -130,4 +157,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
   init_gluon_passes(m.def_submodule("gluon"));
+  init_plugin_passes(m.def_submodule("plugin"));
 }

@@ -82,7 +82,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     %arg6: tensor<32x64xf32, #blocked>,
     %arg7: tensor<32x64xf32, #blocked>) {
 
-    // expected-error @+1 {{CTA tile shapes must match between source and destination tensors.}}
+    // expected-error @+1 {{No source register holds the element for destination index [16, 0]}}
     %1 = amdg.concat %arg0, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6, %arg7:
     tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked> -> tensor<128x128xf32, #blocked1>
     tt.return
@@ -167,7 +167,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     %arg2: tensor<32x16xf32, #src_layout>,
     %arg3: tensor<32x16xf32, #src_layout>) {
 
-    // expected-error @+1 {{Register basis must match on a CTA tile between source and destination.}}
+    // expected-error @+1 {{Lane and warp dim basis must match between source and destination layout.}}
     %1 = amdg.concat %arg0, %arg1, %arg2, %arg3:
     tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout>, tensor<32x16xf32, #src_layout> -> tensor<64x32xf32, #dst_layout>
     tt.return

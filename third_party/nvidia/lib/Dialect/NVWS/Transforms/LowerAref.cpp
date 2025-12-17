@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
         case AsyncOp::NONE:
-          count.consumerPendingCount += 1;
+          count.producerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
@@ -198,7 +198,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          count.producerPendingCount += 1;
+          count.consumerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported consumer kind");
@@ -208,10 +208,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   }
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
-  if (count.producerPendingCount == 0)
-    count.producerPendingCount = 1;
   if (count.consumerPendingCount == 0)
     count.consumerPendingCount = 1;
+  if (count.producerPendingCount == 0)
+    count.producerPendingCount = 1;
 
   return count;
 }
@@ -249,8 +249,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
-  auto emptyMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
+  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
+  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
@@ -305,10 +305,9 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       }
     }
   }
-  auto newLoadOp =
-      rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
-          pred);
+  auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
+      rewriter, op.getLoc(), op.getDesc(), indices, barrierAlloc,
+      op.getResult(), pred);
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
@@ -822,8 +821,8 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
 void combineArefs(scf::ForOp loop) {
-  SmallVector<ArefGetEnterOp> getEnterOps;
-  loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
+  // We combine getEnterOps in the same loop body, not across a loop.
+  auto getEnterOps = loop.getOps<ArefGetEnterOp>();
 
   // Arefs whose get-enter ops share the same dominant consumer can be combined
   DominanceInfo domInfo(loop);
@@ -925,9 +924,11 @@ public:
 
     SmallVector<scf::ForOp> loops;
     m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
-        loops.push_back(loop);
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName)) {
+        loop->walk([&](scf::ForOp op) { loops.push_back(op); });
+      }
     });
+
     for (scf::ForOp loop : loops) {
       combineArefs(loop);
     }

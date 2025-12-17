@@ -469,6 +469,10 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // -----------------------------------------------------------------------
 
 // If an operation is contained within a warp specialize region, this returns
+// the warp ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartWarpId(Block *block);
+
+// If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
 std::optional<int> getWarpGroupStartThreadId(Block *block);
 
@@ -489,7 +493,6 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;

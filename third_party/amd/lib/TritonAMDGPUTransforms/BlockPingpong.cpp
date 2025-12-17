@@ -897,7 +897,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
-  appendOp(dotOps[0]);
+  moveOpAndPredecessorsUpSameBlock(dotOps[0]);
 
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
@@ -1075,7 +1075,7 @@ void Pingponger::getDotPingponged() {
       LDBG("Currently only support num_warp=8 for async PP");
       return;
     }
-    if (numStages > 2 && dotOps.size() == 1 && dotShape[0] > 64 &&
+    if (numStages == 3 && dotOps.size() == 1 && dotShape[0] > 64 &&
         dotShape[1] > 64 && (elemWidth == 16 || elemWidth == 8)) {
       if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the "
@@ -1185,8 +1185,19 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize <= smallTile && tileSize >= minTile)
+    if (tileSize <= smallTile && tileSize >= minTile) {
       transformOnePPClusters(builder, loc);
+      LDBG("Pingpong scheduling applied for numWarps=4 with tileSize=" +
+           std::to_string(tileSize) + " (in range [" + std::to_string(minTile) +
+           ", " + std::to_string(smallTile) +
+           "]), One Dot-Memory (ping-pong) cluster used.");
+    } else {
+      std::stringstream message;
+      message << "Skipping pingpong for numWarps=4: tileSize=" << tileSize
+              << " is outside the range [" << minTile << ", " << smallTile
+              << "]";
+      LDBG(message.str());
+    }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8 && numStages == 2) {
@@ -1216,8 +1227,15 @@ void Pingponger::getDotPingponged() {
              "cluster transformation");
         return;
       }
-    } else
+    } else {
+      std::stringstream message;
+      message << "Skipping pingpong for numWarps=8, numStages=2: tileSize="
+              << tileSize
+              << " does not match supported tile sizes (medium=" << mediumTile
+              << " or large=" << largeTile << ")";
+      LDBG(message.str());
       return;
+    }
 
     // Let half of the warps start the loop first and the others follow later
     // but in the synchronized way. This can be accomplished by calling

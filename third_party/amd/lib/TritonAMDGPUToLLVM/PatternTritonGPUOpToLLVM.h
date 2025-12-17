@@ -42,6 +42,7 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit);
 void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
+                                        const AMD::TargetInfo &,
                                         PatternBenefit benefit);
 
 void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
@@ -54,7 +55,8 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    const TargetInfo &targetInfo,
                                    PatternBenefit benefit);
 
-void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns);
+void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns,
+                                     const TargetInfo &targetInfo);
 
 void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
@@ -63,6 +65,11 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
+void populateWarpIdOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfo &targetInfo,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
+
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_

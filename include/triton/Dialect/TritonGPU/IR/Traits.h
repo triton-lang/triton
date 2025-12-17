@@ -22,6 +22,12 @@ class LocalLoadTrait
   // Optional: Add methods or verification logic here
 };
 
+template <typename ConcreteType>
+class MemWaitOpTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemWaitOpTrait> {
+  // Optional: Add methods or verification logic here
+};
+
 } // namespace OpTrait
 } // namespace mlir
 

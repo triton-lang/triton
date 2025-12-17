@@ -163,7 +163,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                             rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 
@@ -324,6 +324,29 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
   return true;
 }
 
+static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
+                             SmallVector<Value> &acc, triton::ReduceOp op,
+                             unsigned numLaneToReduce, unsigned interleave) {
+  Operation *reduxOp = op.getSingleCombiner();
+  if (!reduxOp)
+    return false;
+
+  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
+  if (!mfma16Case)
+    return false;
+
+  Value val = acc[0];
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  if (bits > 32)
+    return false;
+
+  StringRef intrinsic = "llvm.amdgcn.permlane16.swap";
+  for (auto i = 0; i < acc.size(); i++) {
+    acc[i] = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
+  }
+  return true;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -332,6 +355,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
       warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+    return true;
+  if ((getISAFamily() == ISAFamily::GFX1250) &&
+      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
@@ -659,6 +685,20 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 
 bool TargetInfo::supportsMultiCTALaunch() const {
   return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({32, 64, 128}, biwWidth);
+  }
+  return false;
+}
+
+bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
+  }
+  return false;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

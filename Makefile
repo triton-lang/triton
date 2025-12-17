@@ -43,12 +43,14 @@ test-unit: all
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
+		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 
 .PHONY: test-distributed
 test-distributed: all
 	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTHON) -m pip install "python/triton_kernels[tests]" -v
 	$(PYTEST) --tb=short -s python/triton_kernels/bench/distributed.py
 
 .PHONY: test-gluon
@@ -82,6 +84,8 @@ test-python: test-unit test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
+	$(PYTEST) python/test/gluon/test_frontend.py
+	$(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python
