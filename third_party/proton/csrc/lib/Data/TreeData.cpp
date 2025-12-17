@@ -263,13 +263,18 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
       });
 
   if (hasKernelMetric) {
-    output[TreeData::Tree::TreeNode::RootId]["metrics"]["count"] = 0;
-    output[TreeData::Tree::TreeNode::RootId]["metrics"]["duration"] = 0;
+    KernelMetric kernelMetric;
+    output[TreeData::Tree::TreeNode::RootId]["metrics"]
+          [kernelMetric.getValueName(KernelMetric::Invocations)] = 0;
+    output[TreeData::Tree::TreeNode::RootId]["metrics"]
+          [kernelMetric.getValueName(KernelMetric::Duration)] = 0;
   }
   if (hasCycleMetric) {
-    output[TreeData::Tree::TreeNode::RootId]["metrics"]["duration"] = 0;
-    output[TreeData::Tree::TreeNode::RootId]["metrics"]["normalized_duration"] =
-        0;
+    CycleMetric cycleMetric;
+    output[TreeData::Tree::TreeNode::RootId]["metrics"]
+          [cycleMetric.getValueName(CycleMetric::Duration)] = 0;
+    output[TreeData::Tree::TreeNode::RootId]["metrics"]
+          [cycleMetric.getValueName(CycleMetric::NormalizedDuration)] = 0;
   }
   if (hasPCSamplingMetric) {
     PCSamplingMetric pcSamplingMetric;
@@ -557,10 +562,6 @@ void TreeData::exitScope(const Scope &scope) {}
 
 size_t TreeData::addOp(size_t scopeId, const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  return addOpLocked(scopeId, name);
-}
-
-size_t TreeData::addOpLocked(size_t scopeId, const std::string &name) {
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end()) {
     // Obtain the current context
@@ -603,11 +604,6 @@ size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
 
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  addMetricLocked(scopeId, metric);
-}
-
-void TreeData::addMetricLocked(size_t scopeId,
-                               const std::shared_ptr<Metric> &metric) {
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   // The profile data is deactivated, ignore the metric
   if (scopeIdIt == scopeIdToContextId.end())

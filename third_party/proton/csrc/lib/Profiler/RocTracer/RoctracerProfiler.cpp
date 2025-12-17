@@ -109,8 +109,8 @@ void processActivityKernel(
   if (externId == Scope::DummyScopeId)
     return;
   if (!isGraph) {
-    if (auto metric = convertActivityToMetric(activity)) {
-      for (auto *data : dataSet) {
+    for (auto *data : dataSet) {
+      if (auto metric = convertActivityToMetric(activity)) {
         if (state.isApiExternId) {
           data->addOpAndMetric(externId, activity->kernel_name, metric);
         } else {
@@ -127,8 +127,8 @@ void processActivityKernel(
     // 2. GraphExec -> Graph
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
-    if (auto metric = convertActivityToMetric(activity)) {
-      for (auto *data : dataSet) {
+    for (auto *data : dataSet) {
+      if (auto metric = convertActivityToMetric(activity)) {
         data->addOpAndMetric(externId, activity->kernel_name, metric);
       }
     }

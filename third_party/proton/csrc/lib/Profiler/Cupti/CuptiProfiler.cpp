@@ -77,13 +77,16 @@ uint32_t processActivityKernel(
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
-    if (auto metric = convertActivityToMetric(activity)) {
-      bool isApiExternId = false;
-      externIdToState.withRead(parentId,
-                               [&](const CuptiProfiler::ExternIdState &state) {
-                                 isApiExternId = state.isApiExternId;
-                               });
-      for (auto *data : dataSet) {
+    bool isApiExternId = false;
+    externIdToState.withRead(
+        parentId, [&](const CuptiProfiler::ExternIdState &state) {
+          isApiExternId = state.isApiExternId;
+        });
+    // Do not share the same Metric instance across multiple Data objects.
+    // Otherwise, updating one Data will mutate the Metric observed by others
+    // (counts will incorrectly compound with the number of active sessions).
+    for (auto *data : dataSet) {
+      if (auto metric = convertActivityToMetric(activity)) {
         if (isApiExternId) {
           data->addOpAndMetric(parentId, kernel->name, metric);
         } else {
@@ -103,54 +106,54 @@ uint32_t processActivityKernel(
     // - parentId -> launch context
     // --- CUPTI thread ---
     // - corrId -> numNodes
-    if (auto metric = convertActivityToMetric(activity)) {
-      auto scopeId = parentId;
-      bool isAPI = true;
-      auto iter = externIdToStateCache.find(scopeId);
-      std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
-      if (iter == externIdToStateCache.end()) {
-        // Cache miss, fetch from the main map
-        ref = externIdToState.find(scopeId);
-        // Update the cache
-        if (ref.has_value()) {
-          externIdToStateCache.emplace(scopeId, ref.value());
-        }
-      } else {
-        ref = std::ref(iter->second);
+    auto scopeId = parentId;
+    bool isAPI = true;
+    auto iter = externIdToStateCache.find(scopeId);
+    std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
+    if (iter == externIdToStateCache.end()) {
+      // Cache miss, fetch from the main map
+      ref = externIdToState.find(scopeId);
+      // Update the cache
+      if (ref.has_value()) {
+        externIdToStateCache.emplace(scopeId, ref.value());
       }
-      for (auto *data : dataSet) {
-        if (ref.has_value()) {
-          // We have a graph creation captured
-          auto &graphNodeIdToScopes = ref.value().get().graphNodeIdToScopes;
-          auto nodeIt = graphNodeIdToScopes.find(kernel->graphNodeId);
-          if (nodeIt == graphNodeIdToScopes.end()) {
-            // No captured context for this node
-            continue;
-          }
-          if (nodeIt->second.dataToScopeId.find(data) ==
-              nodeIt->second.dataToScopeId.end()) {
-            // No captured context for this data
-            continue;
-          }
-          isAPI = nodeIt->second.isApiExternId;
-          scopeId = nodeIt->second.dataToScopeId.at(data);
+    } else {
+      ref = std::ref(iter->second);
+    }
+    for (auto *data : dataSet) {
+      if (ref.has_value()) {
+        // We have a graph creation captured
+        auto &graphNodeIdToScopes = ref.value().get().graphNodeIdToScopes;
+        auto nodeIt = graphNodeIdToScopes.find(kernel->graphNodeId);
+        if (nodeIt == graphNodeIdToScopes.end()) {
+          // No captured context for this node
+          continue;
         }
+        if (nodeIt->second.dataToScopeId.find(data) ==
+            nodeIt->second.dataToScopeId.end()) {
+          // No captured context for this data
+          continue;
+        }
+        isAPI = nodeIt->second.isApiExternId;
+        scopeId = nodeIt->second.dataToScopeId.at(data);
+      }
+      if (auto metric = convertActivityToMetric(activity)) {
         if (isAPI) {
           data->addOpAndMetric(scopeId, kernel->name, metric);
         } else {
           data->addMetric(scopeId, metric);
         }
       }
-      if (ref.has_value()) {
-        // Decrease the expected kernel count
-        auto &state = ref.value().get();
-        if (state.numNodes > 0) {
-          state.numNodes--;
-        }
-        // If all kernels have been processed, clean up
-        if (state.numNodes == 0) {
-          externIdToState.erase(parentId);
-        }
+    }
+    if (ref.has_value()) {
+      // Decrease the expected kernel count
+      auto &state = ref.value().get();
+      if (state.numNodes > 0) {
+        state.numNodes--;
+      }
+      // If all kernels have been processed, clean up
+      if (state.numNodes == 0) {
+        externIdToState.erase(parentId);
       }
     }
   }
