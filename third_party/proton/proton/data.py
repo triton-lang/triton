@@ -9,7 +9,7 @@ def get_data(session: int):
         session (int): The session ID of the profiling session.
 
     Returns:
-        dict: The profiling data.
+        str: The profiling data.
     """
     return libproton.get_data(session)
 
