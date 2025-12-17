@@ -69,11 +69,11 @@ uint32_t processActivityKernel(
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   size_t parentId = 0;
-  bool valid = corrIdToExternId.withRead(
-      correlationId, [&](const size_t &value) { parentId = value; });
-  corrIdToExternId.erase(correlationId);
-  if (!valid)
+  if (!/*not valid*/corrIdToExternId.withRead(
+      correlationId, [&](const size_t &value) { parentId = value; })) {
+    corrIdToExternId.erase(correlationId);
     return correlationId;
+  }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
@@ -95,6 +95,7 @@ uint32_t processActivityKernel(
       }
     }
     externIdToState.erase(parentId);
+    corrIdToExternId.erase(correlationId);
   } else {
     // Graph kernels
     // A single graph launch can trigger multiple kernels.
@@ -154,6 +155,7 @@ uint32_t processActivityKernel(
       // If all kernels have been processed, clean up
       if (state.numNodes == 0) {
         externIdToState.erase(parentId);
+        corrIdToExternId.erase(correlationId);
       }
     }
   }
