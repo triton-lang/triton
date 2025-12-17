@@ -1,5 +1,4 @@
 #include "TraceDataIO/Parser.h"
-#include <iostream>
 
 using namespace proton;
 
