@@ -2466,3 +2466,135 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
     out_tri = out_handle.cpu()
     out_ref = a.cpu()
     assert torch.equal(out_tri, out_ref)
+
+
+# ==============================================================================
+# Test async_copy shared_to_global with various layouts and vectorization
+# ==============================================================================
+
+
+@gluon.jit
+def async_store_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                      blocked_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    """
+    Test kernel for async_copy.shared_to_global with 2D tensors.
+    Loads from global -> shared (regular), then stores from shared -> global (async).
+    """
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+
+    # Regular load from global and store to shared
+    value = ttgl.load(a_ptrs, mask=mask)
+    buffer.store(value)
+
+    # Async store from shared to global
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+
+@gluon.jit
+def async_copy_shared_to_global_multi_cta_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                 blocked_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    """
+    Test kernel for async_copy.shared_to_global with multi-CTA and 2D tensors.
+    """
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+
+    # Regular load from global and store to shared
+    value = ttgl.load(a_ptrs, mask=mask)
+    buffer.store(value)
+
+    # Async store from shared to global
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+
+@ASYNC_COPY_TEST_PARAM_SIZE
+@ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
+@ASYNC_COPY_TEST_PARAM_DTYPE
+def test_runtime_async_store(M, N, vec_size, shared_layout, dtype):
+    """Test async_copy.shared_to_global with various layouts, sizes, and dtypes."""
+    BLOCK_M = 128
+    BLOCK_N = 128
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    if dtype == torch.float8_e4m3fn:
+        # range from min normal (0 00001 00) to max normal (0 11110 11)
+        a = torch.randint(0x04, 0x7B, (M, N), dtype=torch.uint8).view(dtype)
+    else:
+        a = torch.rand((M, N), dtype=dtype)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out_handle = out.cuda()
+
+    run_kernel = lambda: async_store_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
+                                                                 blocked_layout, shared_layout)
+
+    if (vec_size * dtype.itemsize) == 2:
+        # since 16 bit stores are not supported, we have to abort compilation
+        with pytest.raises(RuntimeError):
+            run_kernel()
+    else:
+        run_kernel()
+        out_tri = out_handle.cpu()
+        out_ref = a.cpu()
+        assert torch.equal(out_tri, out_ref)
+
+
+@pytest.mark.parametrize("blocked_layout", [
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[1, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 2], [0, 0], [0, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 0], [1, 0], [0, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 2], [0, 4], [0, 0]]),
+])
+def test_async_copy_shared_to_global_multi_cta(blocked_layout):
+    """Test async_copy.shared_to_global with multi-CTA configurations."""
+    M, N = 1024, 1024
+    BLOCK_M, BLOCK_N = 128, 128
+    num_ctas = 2**len(blocked_layout.cga_layout)
+
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], blocked_layout.cga_layout)
+
+    a = torch.rand((M, N), dtype=torch.float32)
+    out = torch.empty_like(a)
+
+    a_d = a.cuda()
+    out_d = out.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+
+    async_copy_shared_to_global_multi_cta_kernel[grid](a_d, out_d, M, N, BLOCK_M, BLOCK_N, blocked_layout,
+                                                       shared_layout, num_warps=1, num_ctas=num_ctas)
+    out_tri = out_d.cpu()
+    assert torch.equal(out_tri, a)
