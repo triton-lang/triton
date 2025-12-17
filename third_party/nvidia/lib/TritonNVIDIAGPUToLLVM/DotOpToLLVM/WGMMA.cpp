@@ -224,16 +224,29 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto warpGroups = {warpSize[0] / 4, warpSize[1]};
   bool transA = false;
   if (aInShared) {
-    aLoader =
+    auto loader =
         DotOpMmaSmemLoader::build(loc, rewriter, cast<MemDescType>(aTensorTy),
                                   baseA, {M, K}, 0, 3, false, dTensorTy);
+    if (failed(loader)) {
+      return mlir::emitError(loc, "failed to find valid wgmma layout for "
+                                  "operand A in shared memory ")
+             << aTensorTy << " for WGMMA instruction shape [" << M << ", " << K
+             << "]";
+    }
+    aLoader = std::move(*loader);
     transA = aLoader.getDescriptor().transposed;
   } else {
     structA = unpackLLElements(loc, loadedA, rewriter);
   }
-  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {K, N}, 1, 3, false, dTensorTy);
-  bool transB = !bLoader.getDescriptor().transposed;
+  auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
+                                           {K, N}, 1, 3, false, dTensorTy);
+  if (failed(bLoader)) {
+    return mlir::emitError(loc, "failed to find valid wgmma layout for "
+                                "operand B in shared memory ")
+           << bTensorTy << " for WGMMA instruction shape [" << K << ", " << N
+           << "]";
+  }
+  bool transB = !bLoader->getDescriptor().transposed;
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -288,7 +301,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
-        auto b = bLoader.smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
+        auto b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
         numLowPrecisionAcc += K;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.

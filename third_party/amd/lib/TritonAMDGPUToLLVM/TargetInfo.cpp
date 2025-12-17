@@ -694,6 +694,13 @@ bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
   return false;
 }
 
+bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
+  }
+  return false;
+}
+
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())

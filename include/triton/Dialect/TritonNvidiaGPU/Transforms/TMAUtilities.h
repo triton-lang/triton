@@ -31,18 +31,13 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
-SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
-                                      int elementBitWidth, int swizzleBytes,
-                                      bool fp4Padded, bool transposed,
-                                      bool packedSize);
-
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
                                              bool packedSize) {
   auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
-  return getTMABlockShape(shapePerCTA, mmaEnc.getElementBitWidth(),
-                          mmaEnc.getSwizzlingByteWidth(), mmaEnc.getFp4Padded(),
-                          mmaEnc.getTransposed(), packedSize);
+  return triton::gpu::getTMABlockShape(
+      shapePerCTA, mmaEnc.getElementBitWidth(), mmaEnc.getSwizzlingByteWidth(),
+      mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize);
 }
 
 inline SmallVector<int64_t> getTMABlockShape(RankedTensorType ty,

@@ -43,7 +43,15 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
 }
 
 def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
-  let summary = "async wait";
+  let summary = "Ensure all specified async_copy_* operations are complete.";
+  let description = [{
+    The `async_wait` op waits until at most "num" async copy groups are outstanding without synchronising CTA execution.
+    It takes zero or more `asyncToken` plus an integer `num` that specifies how many async copy groups can remain
+    outstanding after the `async_wait` op is completed. `num = 0` waits until all groups of async copies are complete.
+
+    This operation does not provide any syncronisation in the CTA, if syncronisation is needed use `ttg.local_barrier`
+    in addition to this operation.
+  }];
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
 
@@ -59,8 +67,12 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
 }
 
 def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
-  let summary = "async commit group";
-
+  let summary = "Commit pending async copies into an async group that can be waited on";
+  let description = [{
+    Closes the current batch of async_copy_* operations
+    and allows for them to be waited on with `ttg.async_wait`.
+    This is required in order to ensure async copy operations can be waited on.
+  }];
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
@@ -80,17 +92,21 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   OptionalTypesMatchWith<"infer other type from src type",
                  "src", "other", "getPointeeType($_self)">,
 ]> {
-  let summary = "copy data from global memory to local memory asynchronously";
+  let summary = "Copy data from global memory to local memory asynchronously";
 
   let hasVerifier = 1;
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
-    This is analogue to tt.load except the data are copied to local memory pointed
+    This is analogue to `tt.load` except the data are copied to local memory pointed
     to by the memory descriptor instead of a distributed tensor. The rest of the
-    operands are the same as tt.load.
+    operands are the same as `tt.load`.
     Contiguity is the maximum number of elements that can be loaded in a single vector with
     the given layout and mask.
-    This allows op to use async_copy_global_to_local even if the alignment cannot be proven based on IR.
+    This allows op to use `async_copy_global_to_local` even if the alignment cannot be proven based on IR.
+
+    The data will only be available in local memory after `ttg.async_wait` is issued to wait on the
+    completion of `async_copy_global_to_local`. The async copy operations must be committed using
+    `ttg.async_commit_group` to close the batch and allow for them to be waited on.
   }];
 
   let arguments = (ins
@@ -128,7 +144,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     attr-dict `:` type($src) `->` type($result)
   }];
 }
-
 
 // Allocate shared memory
 def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
