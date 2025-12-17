@@ -464,18 +464,34 @@ bool isMultiThreadedArriveBarrier(ArriveBarrierOp op) {
   }
 
   Value rootAlloc = definingOp.getSrc();
-  for (Operation *user : rootAlloc.getUsers()) {
-    if (auto indexOp = dyn_cast<gpu::MemDescIndexOp>(user)) {
-      for (Operation *memDescUser : indexOp.getResult().getUsers()) {
-        if (auto initOp = dyn_cast<InitBarrierOp>(memDescUser)) {
-          if (initOp.getDependentPartitionIds()) {
-            return true;
+  // Non-default partition allocations are passed as arguments to the WS op.
+  if (auto blockArg = dyn_cast<BlockArgument>(rootAlloc)) {
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    auto wsPartitionsOp = dyn_cast<gpu::WarpSpecializePartitionsOp>(parentOp);
+    if (!wsPartitionsOp) {
+      return false;
+    }
+
+    gpu::WarpSpecializeOp wsOp = wsPartitionsOp.getParentOp();
+    rootAlloc = wsOp.getExplicitCaptures()[blockArg.getArgNumber()];
+  }
+
+  // Determine if barriers initialized by this alloc are multithreaded.
+  if (rootAlloc.getDefiningOp<gpu::LocalAllocOp>()) {
+    for (Operation *user : rootAlloc.getUsers()) {
+      if (auto indexOp = dyn_cast<gpu::MemDescIndexOp>(user)) {
+        for (Operation *memDescUser : indexOp.getResult().getUsers()) {
+          if (auto initOp = dyn_cast<InitBarrierOp>(memDescUser)) {
+            if (initOp.getDependentPartitionIds()) {
+              return true;
+            }
+            return false;
           }
-          return false;
         }
       }
     }
   }
+
   return false;
 }
 
