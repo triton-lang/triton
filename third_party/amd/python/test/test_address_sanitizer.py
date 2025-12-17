@@ -33,5 +33,13 @@ def test_address_sanitizer():
     os.environ["AMDGCN_USE_BUFFER_OPS"] = "0"
 
     out = subprocess.Popen(["python", "address_sanitizer_helper.py"], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    assert "Begin function __asan_report" in out.stdout.read().decode()
-    assert "heap-buffer-overflow" in out.stderr.read().decode()
+    stdout_output = out.stdout.read().decode()
+    stderr_output = out.stderr.read().decode()
+    
+    print("=== ASAN STDOUT ===")
+    print(stdout_output)
+    print("=== ASAN STDERR ===")
+    print(stderr_output)
+    
+    assert "Begin function __asan_report" in stdout_output
+    assert "heap-buffer-overflow" in stderr_output
