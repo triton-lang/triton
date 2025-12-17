@@ -93,7 +93,7 @@ protected:
     void enterOp() {
       if (profiler.isOpInProgress())
         return;
-      auto scope = Scope::Scope(Scope::getNewScopeId());
+      auto scope = Scope(Scope::getNewScopeId());
       scopeStack.push_back(scope);
       profiler.enterOp(scope);
       profiler.correlation.setApiExternId(scope.scopeId);
