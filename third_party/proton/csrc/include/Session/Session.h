@@ -4,7 +4,6 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
-#include "nlohmann/json.hpp"
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -94,7 +93,6 @@ public:
 
   size_t getContextDepth(size_t sessionId);
 
-  nlohmann::json getDataJson(size_t sessionId);
   std::vector<uint8_t> getDataMsgPack(size_t sessionId);
 
   std::string getData(size_t sessionId);

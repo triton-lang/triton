@@ -4,9 +4,7 @@
 #include <map>
 #include <stdexcept>
 #include <variant>
-#include <vector>
 
-#include "nlohmann/json.hpp"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -18,7 +16,6 @@ using namespace proton;
 // users to handle subtle type differences for the same metric name, which would
 // be confusing and error-prone.
 using PythonMetricValueType = std::variant<int64_t, double>;
-using json = nlohmann::json;
 namespace {
 
 std::map<std::string, MetricValueType> convertPythonMetrics(
@@ -33,46 +30,6 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
   }
   return converted;
 }
-
-pybind11::object jsonToPy(const json &value) {
-  if (value.is_null()) {
-    return pybind11::none();
-  }
-  if (value.is_boolean()) {
-    return pybind11::bool_(value.get<bool>());
-  }
-  if (value.is_number_integer()) {
-    return pybind11::int_(value.get<int64_t>());
-  }
-  if (value.is_number_unsigned()) {
-    return pybind11::int_(value.get<uint64_t>());
-  }
-  if (value.is_number_float()) {
-    return pybind11::float_(value.get<double>());
-  }
-  if (value.is_string()) {
-    return pybind11::str(value.get_ref<const std::string &>());
-  }
-  if (value.is_array()) {
-    pybind11::list result(value.size());
-    for (size_t i = 0; i < value.size(); ++i) {
-      result[i] = jsonToPy(value[i]);
-    }
-    return result;
-  }
-  if (value.is_object()) {
-    pybind11::dict result;
-    for (const auto &[key, val] : value.items()) {
-      result[pybind11::str(key)] = jsonToPy(val);
-    }
-    return result;
-  }
-  throw std::runtime_error("Unsupported JSON value type");
-}
-
-struct MsgPackBuffer {
-  std::vector<uint8_t> data;
-};
 
 } // namespace
 
@@ -212,37 +169,16 @@ static void initProton(pybind11::module &&m) {
   m.def(
       "get_data",
       [](size_t sessionId) {
-        auto data = SessionManager::instance().getDataJson(sessionId);
-        return jsonToPy(data);
+        return SessionManager::instance().getData(sessionId);
       },
       pybind11::arg("sessionId"));
 
-  m.def(
+    m.def(
       "get_data_msgpack",
       [](size_t sessionId) {
         auto data = SessionManager::instance().getDataMsgPack(sessionId);
         return pybind11::bytes(reinterpret_cast<const char *>(data.data()),
                                data.size());
-      },
-      pybind11::arg("sessionId"));
-
-  pybind11::class_<MsgPackBuffer>(m, "MsgPackBuffer",
-                                 pybind11::buffer_protocol())
-      .def(pybind11::init<>())
-      .def_buffer([](MsgPackBuffer &buffer) -> pybind11::buffer_info {
-        return pybind11::buffer_info(
-            buffer.data.data(), sizeof(uint8_t),
-            pybind11::format_descriptor<uint8_t>::format(), 1,
-            {static_cast<pybind11::ssize_t>(buffer.data.size())},
-            {static_cast<pybind11::ssize_t>(sizeof(uint8_t))});
-      });
-
-  m.def(
-      "get_data_msgpack_buffer",
-      [](size_t sessionId) {
-        MsgPackBuffer buffer;
-        buffer.data = SessionManager::instance().getDataMsgPack(sessionId);
-        return buffer;
       },
       pybind11::arg("sessionId"));
 

@@ -10,6 +10,7 @@
 #include "Utility/Set.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <thread>
 #include <unordered_map>
@@ -32,18 +33,30 @@ public:
                     std::unordered_map<uint64_t, size_t>>;
 
   struct ExternIdState {
+    // ----non-graph launch fields----
+    // If graphNodeIdToScopes is empty, this externId is non-graph launch.
+    // For non-graph launches, we only need to track whether the externId
+    // itself is API-originated.
     bool isApiExternId{false};
+    // ----graph launch fields----
     // For graph launches, the launch correlation id fans out into multiple
-    // kernel activity records. We track the expected fanout here.
-    size_t numKernels{1};
-    std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
-        dataToGraphNodeScopeId;
+    // kernel activity records. We track the expected fanout here and keep updating
+    // it when we have processed each kernel activity record.
+    size_t numNodes{1};
+
+    struct GraphNodeScopes {
+      bool isApiExternId{false};
+      std::map<Data *, size_t> dataToScopeId;
+    };
+
+    // graphNodeId -> (per-Data scopeId + API-originated flag)
+    std::unordered_map<uint64_t, GraphNodeScopes> graphNodeIdToScopes;
   };
 
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
   // issue.
   using ExternIdToStateMap =
-      ThreadSafeMap<size_t, /*extern_id*/ ExternIdState,
+      ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
@@ -63,12 +76,6 @@ protected:
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
-  void clearCache() override {
-    if (!getDataSet().empty()) {
-      return;
-    }
-    correlation.clear();
-  }
   virtual void doAddMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
@@ -92,8 +99,7 @@ protected:
         return;
       opId = Scope::getNewScopeId();
       profiler.enterOp(Scope(opId));
-      profiler.correlation.externIdToState.upsert(
-          opId, [&](ExternIdState &state) { state.isApiExternId = true; });
+      profiler.correlation.setApiExternId(opId);
     }
 
     void exitOp() {
@@ -128,11 +134,6 @@ protected:
 
     Correlation() = default;
 
-    void clear() {
-      corrIdToExternId.clear();
-      externIdToState.clear();
-    }
-
     void submit(const uint64_t correlationId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
     }
@@ -143,7 +144,11 @@ protected:
 
     void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
 
-    void popExternId() { externIdQueue.pop_front(); }
+    void popExternId() {
+      if (externIdQueue.empty())
+        return;
+      externIdQueue.pop_back();
+    }
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t numInstances = 1) {
@@ -153,7 +158,7 @@ protected:
       corrIdToExternId.insert(correlationId, externId);
       if (numInstances != 1) {
         externIdToState.upsert(externId, [&](ExternIdState &state) {
-          state.numKernels = numInstances;
+          state.numNodes = (numInstances == 0) ? 1 : numInstances;
         });
       }
     }
@@ -161,46 +166,15 @@ protected:
     bool isApiExternId(size_t externId) const {
       bool isApi = false;
       externIdToState.withRead(
-          externId, [&](const ExternIdState &state) { isApi = state.isApiExternId; });
+          externId,
+          [&](const ExternIdState &state) { isApi = state.isApiExternId; });
       return isApi;
     }
 
-    void setGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
-                           bool isApi, size_t scopeId) {
+    void setApiExternId(size_t externId) {
       externIdToState.upsert(externId, [&](ExternIdState &state) {
-        state.dataToGraphNodeScopeId[data][nodeId] = {isApi, scopeId};
+        state.isApiExternId = true;
       });
-    }
-
-    void mergeGraphNodeScopes(
-        size_t externId,
-        const std::map<Data *, std::unordered_map<uint64_t, std::pair<bool, size_t>>>
-            &scopes) {
-      externIdToState.upsert(externId, [&](ExternIdState &state) {
-        for (const auto &[data, nodeIdToScope] : scopes) {
-          auto &dst = state.dataToGraphNodeScopeId[data];
-          dst.insert(nodeIdToScope.begin(), nodeIdToScope.end());
-        }
-      });
-    }
-
-    bool getGraphNodeScope(size_t externId, Data *data, uint64_t nodeId,
-                           bool &isApi, size_t &scopeId) const {
-      bool found = false;
-      externIdToState.withRead(externId, [&](const ExternIdState &state) {
-        auto dataIt = state.dataToGraphNodeScopeId.find(data);
-        if (dataIt == state.dataToGraphNodeScopeId.end()) {
-          return;
-        }
-        auto nodeIt = dataIt->second.find(nodeId);
-        if (nodeIt == dataIt->second.end()) {
-          return;
-        }
-        isApi = nodeIt->second.first;
-        scopeId = nodeIt->second.second;
-        found = true;
-      });
-      return found;
     }
 
     template <typename FlushFnT>

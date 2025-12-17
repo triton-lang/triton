@@ -25,8 +25,6 @@ public:
 
   virtual ~Profiler() = default;
 
-  virtual void clearCache() {}
-
   /// Start the profiler.
   /// If the profiler is already started, this function does nothing.
   Profiler *start() {

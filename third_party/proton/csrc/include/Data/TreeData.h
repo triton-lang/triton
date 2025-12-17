@@ -4,7 +4,6 @@
 #include "Context/Context.h"
 #include "Data.h"
 #include "nlohmann/json.hpp"
-#include <array>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -27,15 +26,17 @@ public:
 
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
+  // Override to optimize addOp + addMetric calls
+  // 1. to avoid double locking
+  // 2. to avoid looking up scopeId -> contextId twice
   void addOpAndMetric(size_t scopeId, const std::string &opName,
-                      std::shared_ptr<Metric> metric, bool addOp) override;
+                      std::shared_ptr<Metric> metric) override;
 
   void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
-  json toJson() const;
-  std::vector<uint8_t> toMsgPack() const;
+  std::vector<uint8_t> toMsgPack() const override;
 
   std::string toJsonString() const override;
 
@@ -73,8 +74,6 @@ private:
   std::unordered_map<size_t, size_t> scopeIdToContextId;
 
   static constexpr size_t MaxRegisteredDeviceIds = 32;
-  std::array<std::string, 2> kernelInclusiveValueNames;
-  std::vector<std::string> pcSamplingValueNames;
 };
 
 } // namespace proton

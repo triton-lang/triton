@@ -73,13 +73,9 @@ public:
 
   virtual bool isExclusive(int valueId) const = 0;
 
-  std::vector<MetricValueType> getValues() const { return values; }
+  const std::vector<MetricValueType> &getValues() const { return values; }
 
-  const std::vector<MetricValueType> &getValuesRef() const { return values; }
-
-  MetricValueType getValue(int valueId) { return values[valueId]; }
-
-  const MetricValueType &getValueRef(int valueId) const {
+  const MetricValueType &getValue(int valueId) const {
     return values[valueId];
   }
 
@@ -202,15 +198,15 @@ public:
     this->values[StreamId] = streamId;
   }
 
-  virtual const std::string &getName() const { return name; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string &getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
 
-  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
+  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[kernelMetricKind::Count] = {
@@ -261,17 +257,15 @@ public:
     this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
   }
 
-  virtual const std::string &getName() const { return name; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string &getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return false; }
+  bool isProperty(int valueId) const override { return false; }
+  bool isExclusive(int valueId) const override { return false; }
 
-  virtual bool isExclusive(int valueId) const { return false; }
-
-private:
   const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
       "num_samples",
       "num_stalled_samples",
@@ -344,15 +338,15 @@ public:
     this->values[PostFinalTime] = postFinalTime;
   }
 
-  virtual const std::string &getName() const { return name; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string &getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
 
-  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
+  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
