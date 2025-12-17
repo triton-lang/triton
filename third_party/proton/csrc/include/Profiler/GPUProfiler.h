@@ -144,11 +144,7 @@ protected:
 
     void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
 
-    void popExternId() {
-      if (externIdQueue.empty())
-        return;
-      externIdQueue.pop_back();
-    }
+    void popExternId() { externIdQueue.pop_front(); }
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t numInstances = 1) {
