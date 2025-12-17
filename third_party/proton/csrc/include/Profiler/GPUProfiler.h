@@ -87,7 +87,7 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     size_t opId{Scope::DummyScopeId};
-    std::vector<Scope> scopeStack;    // Used for nvtx range or triton op tracking
+    std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
     bool isApiExternId{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};

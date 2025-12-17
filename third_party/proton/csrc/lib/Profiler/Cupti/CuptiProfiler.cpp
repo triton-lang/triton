@@ -69,8 +69,8 @@ uint32_t processActivityKernel(
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   size_t parentId = 0;
-  if (!/*not valid*/corrIdToExternId.withRead(
-      correlationId, [&](const size_t &value) { parentId = value; })) {
+  if (!/*not valid*/ corrIdToExternId.withRead(
+          correlationId, [&](const size_t &value) { parentId = value; })) {
     corrIdToExternId.erase(correlationId);
     return correlationId;
   }
@@ -78,10 +78,10 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isApiExternId = false;
-    externIdToState.withRead(
-        parentId, [&](const CuptiProfiler::ExternIdState &state) {
-          isApiExternId = state.isApiExternId;
-        });
+    externIdToState.withRead(parentId,
+                             [&](const CuptiProfiler::ExternIdState &state) {
+                               isApiExternId = state.isApiExternId;
+                             });
     // Do not share the same Metric instance across multiple Data objects.
     // Otherwise, updating one Data will mutate the Metric observed by others
     // (counts will incorrectly compound with the number of active sessions).
