@@ -1,4 +1,5 @@
 #include "TraceDataIO/EntryDecoder.h"
+#include <ostream>
 
 using namespace proton;
 
