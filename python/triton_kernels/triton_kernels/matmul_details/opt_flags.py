@@ -117,9 +117,7 @@ def make_default_opt_flags_amd(
     # w_cache_modifier:
     w_cache_modifier = ".cg" if block_m <= 32 else None
     # num_warps, num_stages
-    num_warps = constraints.get("num_warps", None)
-    if num_warps is None:
-        num_warps = 2 if (m is not None and m <= 16) else 8
+    num_warps = 2 if (m is not None and m <= 16) else 8
     num_stages = 2
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
@@ -156,7 +154,7 @@ def make_default_opt_flags_amd(
         block_m=replace_with_valid_constraint('block_m', block_m),
         block_n=replace_with_valid_constraint('block_n', block_n),
         block_k=replace_with_valid_constraint('block_k', block_k),
-        num_warps=num_warps,
+        num_warps=replace_with_valid_constraint('num_warps', num_warps),
         num_stages=num_stages,
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
