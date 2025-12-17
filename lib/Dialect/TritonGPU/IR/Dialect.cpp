@@ -651,7 +651,7 @@ static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
 std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
                                               AsmParser &parser,
                                               ArrayRef<std::string> inDimNames,
-                                              int emptyLayoutRank = 0) {
+                                              int serializedRank = 0) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
@@ -703,15 +703,18 @@ std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
       break;
     }
   }
-  // To implement this we'd need to serialise the rank as well.
-  // We can do this if we ever need it
+
+  if (rank == 0 && serializedRank == 0) {
+    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+    return {};
+  }
+
   if (rank == 0) {
-    if (emptyLayoutRank == 0) {
-      parser.emitError(parser.getCurrentLocation(),
-                       "Empty Layout not supported");
-      return {};
-    }
-    rank = emptyLayoutRank;
+    rank = serializedRank;
+  } else if (serializedRank != 0 && serializedRank != rank) {
+    parser.emitError(parser.getCurrentLocation(),
+                     "Serialized rank and rank deduced from LL need to match");
+    return {};
   }
 
   // Generate standared outDimNames (dim0, dim1, ...)
@@ -733,15 +736,27 @@ std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
 //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
 //   warp = [[16, 0], [32, 0]],
 //   block = []}>
-static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
-  printer << join(ll.getBases(), ", ", [](const auto &base) {
-    return base.first.str() + " = " + "[" +
-           join(base.second, ", ",
-                [](const std::vector<int32_t> &vec) {
-                  return "[" + join(vec, ", ") + "]";
-                }) +
-           "]";
-  });
+static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll,
+                              bool skipEmptyBases = false) {
+  bool first = true;
+
+  for (const auto &base : ll.getBases()) {
+    // Skip bases with no vectors if requested.
+    if (skipEmptyBases && base.second.empty())
+      continue;
+
+    if (!first)
+      printer << ", ";
+    first = false;
+
+    printer << base.first.str() << " = [";
+
+    printer << join(base.second, ", ", [](const std::vector<int32_t> &vec) {
+      return "[" + join(vec, ", ") + "]";
+    });
+
+    printer << "]";
+  }
 }
 
 // Print the CGA encoding as `CGALayout = [[...]]` when the layout is
@@ -1425,19 +1440,31 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   }
 
-  std::vector<std::string> inDimNames = {"register", "warp"};
-  auto maybeLL = parseLinearLayout(dictWarpLay, parser, inDimNames, rank);
-  if (!maybeLL.has_value())
-    return {};
+  // Enable optional parsing of register dimension, since it's almost always
+  // size 1 dim.
+  auto ctx = parser.getContext();
+  LinearLayout ctaLL;
+  std::vector<std::string> inDimNames;
+  auto kReg = StringAttr::get(ctx, "register");
+  Attribute value = dictWarpLay.get(kReg);
+  if (!value) {
+    ctaLL = parseLinearLayout(dictWarpLay, parser, {"warp"}, rank).value();
+    auto outDims = standardOutDimNames(ctx, rank);
+    auto regsLL = LinearLayout::identity1D(1, kReg, outDims[rank - 1]);
+    ctaLL = regsLL * ctaLL;
+  } else {
+    ctaLL = parseLinearLayout(dictWarpLay, parser, {"register", "warp"}, rank)
+                .value();
+  }
 
   std::optional<CGAEncodingAttr> CGALayout =
       parseCGAAttr(parser, cgaAttr, /*rank=*/rank);
   if (!CGALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(
-      parser.getContext(), version, std::move(*maybeLL), isTransposed,
-      *CGALayout, instrShape);
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
+                                                std::move(ctaLL), isTransposed,
+                                                *CGALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1445,7 +1472,7 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
           << "version = " << getVersion()
           << ", isTranspose = " << getIsTransposed() << ", ctaLayout = {";
 
-  printLinearLayout(printer, getCtaLayout());
+  printLinearLayout(printer, getCtaLayout(), /*skipEmptyBases*/ true);
 
   printer << "}";
 

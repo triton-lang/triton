@@ -262,8 +262,8 @@ py::object layoutToGluon(Attribute layout) {
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
     return layouts.AMDWMMALayout(
-        amdWmma.getVersion(), ctaLayout.getBases().lookup(kReg),
-        ctaLayout.getBases().lookup(kWarp), amdWmma.getIsTransposed(),
+        amdWmma.getVersion(), amdWmma.getIsTransposed(),
+        ctaLayout.getBases().lookup(kWarp), ctaLayout.getBases().lookup(kReg),
         toStdVector(amdWmma.getInstrShape()), cgaBases);
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
@@ -454,9 +454,9 @@ void init_gluon_ir(py::module &&m) {
                  tilesPerWarp, elementBitWidth);
            })
       .def("get_amd_wmma_layout",
-           [](GluonOpBuilder &self, unsigned version,
+           [](GluonOpBuilder &self, unsigned version, bool transposed,
+              std::vector<std::vector<int32_t>> &warpBases,
               std::vector<std::vector<int32_t>> &regBases,
-              std::vector<std::vector<int32_t>> &warpBases, bool transposed,
               std::vector<std::vector<int32_t>> &cgaBases,
               std::vector<unsigned> &instrShape, unsigned rank) -> Attribute {
              auto ctx = self.getContext();

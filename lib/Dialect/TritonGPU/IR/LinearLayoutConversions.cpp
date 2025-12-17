@@ -1453,7 +1453,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   }
 
   // Zero out M or N dim based on opIdx
-  auto warpDotMfmaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
+  ctaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
   // If repetition (aka register basis) iz 0 in all out dims we need to remove
   // it since this repetition doesn't make sense for dotOp layout.
   ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);

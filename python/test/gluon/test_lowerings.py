@@ -121,8 +121,8 @@ def _reduce_layouts():
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, reg_bases=[], warp_bases=[[0, 1], [0, 2]]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, reg_bases=[], warp_bases=[[0, 1], [0, 2]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2]]),
         ttgl.DotOperandLayout(
             parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
             operand_index=1, k_width=8),
@@ -509,13 +509,13 @@ _mma_pairs = [
     ],
     # AMD WMMA v1 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, reg_bases=[], warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, reg_bases=[], warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
     # AMD WMMA v2 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, reg_bases=[], warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, reg_bases=[], warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
 ]
 
