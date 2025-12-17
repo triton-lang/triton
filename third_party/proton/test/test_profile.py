@@ -234,6 +234,33 @@ def test_get_data(tmp_path: pathlib.Path):
     assert int(ones_frame["count"].values[0]) == 1
 
 
+def test_clear_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_clear_data.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    with proton.scope("test0"):
+        x = torch.ones((2, 2), device="cuda")
+        x + x  # type: ignore
+
+    proton.deactivate(session)
+    proton.clear_data(session)
+    database = proton.get_data(session)
+    assert database[0]["children"] == []
+    assert database[0]["frame"]["name"] == "ROOT"
+
+    proton.activate(session)
+    with proton.scope("test1"):
+        x * x  # type: ignore
+    proton.deactivate(session)
+    database = proton.get_data(session)
+
+    proton.finalize()
+    assert len(database[0]["children"]) == 1
+    assert database[0]["children"][0]["frame"]["name"] == "test1"
+    kernel_frame = database[0]["children"][0]["children"][0]
+    assert "elementwise" in kernel_frame["frame"]["name"]
+
+
 def test_hook_launch(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):

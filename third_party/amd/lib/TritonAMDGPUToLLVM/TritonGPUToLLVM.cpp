@@ -61,6 +61,11 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
+    // Warp specialization is lowered later.
+    addLegalOp<triton::gpu::WarpSpecializeOp>();
+    addLegalOp<triton::gpu::WarpYieldOp>();
+    addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
+    addLegalOp<triton::gpu::WarpReturnOp>();
   }
 };
 
@@ -245,6 +250,9 @@ struct ConvertTritonAMDGPUToLLVM
 
     AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
+
+    // Ensure warp group code is isolated from above.
+    makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 
 private:

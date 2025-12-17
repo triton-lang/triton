@@ -192,6 +192,16 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
+  if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
+    auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
+    if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
+                                enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
+                                enc.getTransposed(), /*packedSize=*/false,
+                                emitError)))
+      return failure();
+  }
+
   return success();
 }
 

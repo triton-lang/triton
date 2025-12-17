@@ -9,6 +9,83 @@
 
 namespace mlir {
 
+AllocationSlice::AllocationSlice(Value value,
+                                 Interval<size_t> allocationInterval)
+    : allocationInterval(allocationInterval) {
+  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
+  this->accessTy = accessTy;
+
+  // Get the memdesc_subslice information if present. If no subslice is
+  // present the whole interval is accessed
+  if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
+    // We know there aren't subslices before the one because of subslice::fold
+    // Still need to check this for where a fold isn't possible (control flow)
+    // and when a subslice is carried in a loop
+    if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
+      subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
+    }
+  }
+}
+
+bool AllocationSlice::intersects(const AllocationSlice &other) const {
+  // Disjoint intervals don't overlap
+  if (!allocationInterval.intersects(other.allocationInterval))
+    return false;
+
+  // If access types are unknown, assume intersection
+  if (!accessTy || !other.accessTy)
+    return true;
+
+  // If offsets are unknown, conservatively assume overlap
+  if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
+    return true;
+
+  // If layouts differ, we assume intersection as we currently only work on
+  // logical elements
+  if (accessTy.getEncoding() != other.accessTy.getEncoding())
+    return true;
+
+  auto shapeA = SmallVector<int64_t>(accessTy.getShape());
+  auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
+  // Chek if all subslice region dimensions have some intersection
+  // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
+  // If any dimension doesn't intersect, we are looking at disjoint subslices
+  for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
+    int64_t startA = subsliceOffsets[i];
+    int64_t endA = startA + shapeA[i];
+    int64_t startB = other.subsliceOffsets[i];
+    int64_t endB = startB + shapeB[i];
+
+    // Is A completely before B? Is B completely before A? If so, disjoint
+    if (endA <= startB || endB <= startA)
+      return false;
+  }
+
+  // All dimensions of subslices have some intersection
+  return true;
+}
+
+void AllocationSlice::print(raw_ostream &os) const {
+  os << "interval=[" << allocationInterval.start() << ","
+     << allocationInterval.end() << ")";
+
+  os << " offsets=[";
+  if (!subsliceOffsets.empty()) {
+    llvm::interleaveComma(subsliceOffsets, os);
+  } else {
+    os << "unknown";
+  }
+  os << "]";
+
+  os << " shape=";
+  if (accessTy) {
+    llvm::interleave(accessTy.getShape(), os, "x");
+    os << " layout=" << accessTy.getEncoding();
+  } else {
+    os << "? layout=unknown";
+  }
+}
+
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
       dyn_cast<FunctionOpInterface>(allocation->getOperation());
@@ -199,16 +276,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         if (auto value = effectInstance.getValue()) {
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
+              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto slice = AllocationSlice(value, interval);
+
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncWriteIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncWriteSlices[slice].insert(op);
               else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo
-                    .syncReadIntervals[allocation->getAllocatedInterval(
-                        bufferId)]
-                    .insert(op);
+                curBlockInfo.syncReadSlices[slice].insert(op);
             }
           }
         }
@@ -218,8 +292,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
       Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
-      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
-      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
+      auto allMemorySlice = AllocationSlice(allIntervals);
+      curBlockInfo.syncWriteSlices[allMemorySlice].insert(op);
+      curBlockInfo.syncReadSlices[allMemorySlice].insert(op);
     }
     scratchBufferId = allocation->getBufferId(op);
   }
@@ -242,14 +317,15 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     }
 
-    if (!curBlockInfo.syncReadIntervals.empty() ||
-        !curBlockInfo.syncWriteIntervals.empty()) {
+    if (!curBlockInfo.syncReadSlices.empty() ||
+        !curBlockInfo.syncWriteSlices.empty()) {
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncWriteIntervals[interval].insert(op);
+    auto scratchSlice = AllocationSlice(interval);
+    curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
@@ -259,7 +335,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // read/write on shared memory
     if (insertCTABarrier || !isWarpSync)
       blockInfo->sync();
-    curBlockInfo.syncReadIntervals[interval].insert(op);
+    curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
