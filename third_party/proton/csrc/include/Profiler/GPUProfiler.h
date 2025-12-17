@@ -63,12 +63,10 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->correlation.pushExternId(scope.scopeId);
-    this->threadState.scopeStack.push_back(scope);
     for (auto data : getDataSet())
       data->addOp(scope.scopeId, scope.name);
   }
   void stopOp(const Scope &scope) override {
-    this->threadState.scopeStack.pop_back();
     this->correlation.popExternId();
   }
 
@@ -86,9 +84,7 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope>
-        scopeStack; // Used for nvtx range tracking or triton op tracking
-    size_t opId{Scope::DummyScopeId};
+    std::vector<Scope> scopeStack; // Used for nvtx range tracking or triton op tracking
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
@@ -97,15 +93,17 @@ protected:
     void enterOp() {
       if (profiler.isOpInProgress())
         return;
-      opId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(opId));
-      profiler.correlation.setApiExternId(opId);
+      auto scope = Scope::Scope(Scope::getNewScopeId());
+      scopeStack.push_back(scope);
+      profiler.enterOp(scope);
+      profiler.correlation.setApiExternId(scope.scopeId);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      profiler.exitOp(Scope(opId));
+      profiler.exitOp(scopeStack.back());
+      scopeStack.pop_back();
     }
 
     void enterScope(const std::string &name) {
@@ -115,9 +113,6 @@ protected:
     }
 
     void exitScope() {
-      if (scopeStack.empty()) {
-        return;
-      }
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
