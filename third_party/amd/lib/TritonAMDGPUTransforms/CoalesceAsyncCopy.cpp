@@ -102,8 +102,7 @@ struct CoalesceAsyncCopyWrites
     ttg::DistributedEncodingTrait newDistEnc;
 
     if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            copyOp.getContext(), regToSharedLayout, threadsPerWarp,
-            loadContig)) {
+            rewriter, regToSharedLayout, threadsPerWarp, loadContig)) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
 
