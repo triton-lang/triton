@@ -22,6 +22,7 @@
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace proton {
 
@@ -300,9 +301,9 @@ struct GraphState {
   // which is the order of node creation
   std::map<uint64_t, NodeState> nodeIdToState;
   // Identify whether a node is a metric kernel node
-  std::set<uint64_t> metricKernelNodeIds;
+  std::unordered_set<uint64_t> metricKernelNodeIds;
   // Identify if a node is launched by an API call or triton
-  std::set<uint64_t> apiNodeIds;
+  std::unordered_set<uint64_t> apiNodeIds;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
