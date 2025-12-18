@@ -669,7 +669,7 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     # Note that this 5D swizzling scheme has minimum block size requirements
     # of BLOCK_N >= 128 and BLOCK_K >= VEC_SIZE * 4 (64 for nvfp4 and 128 for MX).
     REP_MN = BLOCK_MN // 128
-    REP_K = BLOCK_K // VEC_SIZE // 4
+    REP_K = BLOCK_K // (VEC_SIZE * 4)
     # Use a 5D TMA descriptor with block shape [1, rep_m, rep_k, 2, 256] of uint8
     # elements. With 256 bytes along the inner dimension, we better utilize the
     # L2 cache and don't require the TMA engine to emit many small messages (16B)
