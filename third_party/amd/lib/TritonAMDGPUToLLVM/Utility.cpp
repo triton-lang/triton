@@ -596,63 +596,44 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
                                       unsigned threadsPerWarp,
                                       unsigned vecSize) {
+  auto kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
+
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
+  if (vecSize != contig) {
     LDBG("Load vectorization ("
          << vecSize << ") and contiguity (" << contig
          << ") do not match resulting in strided writes");
     return false;
   }
 
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = contig * (1 << inLane);
-    if (basis != expected) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for lane "
-           << 1 + inLane << "; given " << basis << " but expected "
-           << expected);
-      return false;
-    }
-  }
-  // Additionally we could swizzle based on the warp dimension so we need to
-  // check that when all bases are divided by contig, none of the first
-  // (log2(warpSize) + 1) bits are set to 1
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  assert(llvm::isPowerOf2_32(contig));
-  unsigned mask = (threadsPerWarp * contig) - 1;
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
-    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
-    if ((basis & mask) != 0) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for warp "
-           << inWarp);
-      return false;
-    }
-  }
+  // Create a coalesced/identity layout and see if it divides srcToShared
+  auto coalescedLayout =
+      LinearLayout::identity1D(contig, kReg, kOffset) *
+      LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
 
-  return true;
+  return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
 }
 
 bool doesSwizzleInsideWarp(MLIRContext *ctx,
                            const LinearLayout &srcToSharedLayout,
                            unsigned threadsPerWarp) {
-  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  // If all bases in lane dimension are below threadsPerWarp multiplied with the
-  // contiguity we do not swizzle across warp boundaries.
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  unsigned upperLimit = threadsPerWarp * contig;
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
 
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    if (basis >= upperLimit) {
-      return false;
-    }
-  }
-  return true;
+  // Extract the base tile for one instruction based on contiguity
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  auto baseTile = srcToSharedLayout.sublayout({kReg, kLane}, {kOffset});
+  baseTile = baseTile.resizeInDim(kReg, contig);
+
+  // Resize the output dimension to the total number of elements a warp loads
+  // with a single instruction
+  baseTile = baseTile.resizeOutDim(kOffset, threadsPerWarp * contig);
+  // If the resulting layout is invertible we know that we have no broadcasting
+  // and every warp writes coalesced into LDS (ignoring swizzling between lanes)
+  return baseTile.isInvertible();
 }
 
 // On gfx9, direct to LDS loads do not support per lane shared offsets. We need
@@ -670,7 +651,7 @@ bool doesSwizzleInsideWarp(MLIRContext *ctx,
 //    produce wrong results if we invalidate the condition in the future
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        unsigned &vectorSize) {
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
   if (paddedEnc)
@@ -678,11 +659,19 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
 
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
   int vectorBits = vectorSize * elemBitWidth;
-  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
-    return false;
 
+  if (vectorBits < 32) {
+    LDBG("vectorBits < 32, not support for loads directly to LDS");
+    return false;
+  }
+
+  // Following checks are specific to architectures not supporting scattering
   if (targetInfo.supportsDirectToLDSScattering())
     return true;
+
+  // We cannot stride when loading directly to LDS
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
+    return false;
 
   // Compute the blocked -> shared linear layout to check preconditions
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
@@ -690,7 +679,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (paddedEnc) {
     sharedLayout = paddedEnc.getLinearComponent();
   } else {
-    sharedLayout = triton::gpu::toLinearLayout(srcTy.getShape(), dstEnc);
+    sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
   }
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
@@ -698,16 +687,27 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   bool requiresSrcPtrSwizzling = swizzledEnc && swizzledEnc.getMaxPhase() != 1;
   unsigned warpSize = targetInfo.getWarpSize();
 
-  if (!requiresSrcPtrSwizzling &&
-      !canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
-                                        warpSize, vectorSize)) {
-    LDBG("Does not write coalesced into LDS");
+  // Check that we only exchange elements within a warp
+  if (!doesSwizzleInsideWarp(srcTy.getContext(), srcToSharedLayout, warpSize)) {
+    LDBG("Swizzles across warp boundaries");
     return false;
   }
 
-  if (requiresSrcPtrSwizzling &&
-      !doesSwizzleInsideWarp(srcTy.getContext(), srcToSharedLayout, warpSize)) {
-    LDBG("Swizzles across warp boundaries");
+  // Check that each warp writes into one contiguous block of LDS. For swizzled
+  // layouts, we need to check for the non swizzled layout since we apply the
+  // swizzling to the src pointers instead
+  if (requiresSrcPtrSwizzling) {
+    auto flatSharedEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
+        srcTy.getContext(), swizzledEnc.getVec(), 1, 1, swizzledEnc.getOrder(),
+        swizzledEnc.getCGALayout());
+    auto flatSharedLayout =
+        tt::gpu::toLinearLayout(dstAllocShape, flatSharedEnc);
+    srcToSharedLayout = srcLayout.invertAndCompose(flatSharedLayout);
+  }
+
+  if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
+                                        warpSize, vectorSize)) {
+    LDBG("Does not write coalesced into LDS");
     return false;
   }
 
