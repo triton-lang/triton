@@ -177,14 +177,16 @@ public:
   /// Operations are yielded lazily in order: (stage, cluster,
   /// IR-order-within-cluster).
   ///
-  /// The iterator is circular: it starts from initialOp, traverses to the end
-  /// of clusters, wraps around to the beginning, and stops when it reaches
-  /// initialOp again. The iterator maintains its position, allowing findNext
-  /// to search from the current position forward.
+  /// The iterator is circular and stage-aware: it starts from initialOp at its
+  /// stage, traverses to the end of clusters, wraps around to the beginning,
+  /// and when it reaches initialOp again, increments the stage limit. An op is
+  /// only yielded if its stage <= currStageLimit. The iterator stops when it
+  /// reaches initialOp and currStageLimit >= numStages.
   class LinearizedIterator {
   public:
     /// Construct an iterator for the given forOp and schedule.
-    /// The iterator starts at initialOp and wraps around circularly.
+    /// The iterator starts at initialOp and wraps around circularly with
+    /// stage-based filtering.
     LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule,
                        Operation *initialOp);
 
@@ -225,6 +227,8 @@ public:
     Block::iterator opEnd;
     Operation *currentOp = nullptr;
     Operation *initialOp = nullptr;
+    int currStageLimit = 0;
+    int maxStages = 0;
     bool atEnd = false;
   };
 

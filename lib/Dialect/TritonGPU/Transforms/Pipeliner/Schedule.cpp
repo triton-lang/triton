@@ -300,17 +300,19 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 
 tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
     scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
-    : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false) {
+    : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false),
+      maxStages(schedule.getNumStages() + 1) {
   clusterBegin = schedule.clusters.begin();
   clusterEnd = schedule.clusters.end();
   opIt = forOp.getBody()->without_terminator().begin();
   opEnd = forOp.getBody()->without_terminator().end();
 
-  // Find the cluster containing initialOp
+  // Find the cluster containing initialOp and its stage
   auto it = schedule.opToStageAndCluster.find(initialOp);
   if (it != schedule.opToStageAndCluster.end()) {
-    auto [_, cluster] = it->second;
+    auto [stage, cluster] = it->second;
     clusterIt = cluster;
+    currStageLimit = stage;
     // Find initialOp within its cluster
     while (opIt != opEnd) {
       Operation *op = &*opIt;
@@ -334,16 +336,22 @@ void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
       Operation *op = &*opIt;
       auto it = schedule->opToStageAndCluster.find(op);
       if (it != schedule->opToStageAndCluster.end()) {
-        auto [_, cluster] = it->second;
+        auto [stage, cluster] = it->second;
         if (cluster == clusterIt) {
-          // Check if we've come back to initialOp (completed the circle)
+          // Check if we've come back to initialOp
           if (op == initialOp) {
-            atEnd = true;
-            currentOp = nullptr;
+            // Check termination condition
+            if (currStageLimit >= maxStages) {
+              atEnd = true;
+              currentOp = nullptr;
+              return;
+            }
+          }
+          // Only yield if stage <= currStageLimit
+          if (stage <= currStageLimit) {
+            currentOp = op;
             return;
           }
-          currentOp = op;
-          return;
         }
       }
       ++opIt;
@@ -355,6 +363,8 @@ void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
     // Wrap around to the beginning if we've reached the end
     if (clusterIt == clusterEnd) {
       clusterIt = clusterBegin;
+      // Increment stage limit as we are in the next iteration.
+      currStageLimit++;
     }
   }
 }
