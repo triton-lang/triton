@@ -441,12 +441,14 @@ def validate_block_scaled(M, N, K, block_scale_type="nvfp4"):
     a, b, a_scale_cublas, b_scale_cublas = results[9:]
 
     # Test Triton implementation
-    output = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+    output = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n,
+                                 rep_k, configs)
     torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
 
     # Test cuBLAS implementation if available (available for mxfp8 and nvfp4 only as of 13.1)
     if cublas and block_scale_type in ["mxfp8", "nvfp4"]:
-        cublas_output = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
+        cublas_output = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas,
+                                                   block_scale_type=block_scale_type)
         torch.testing.assert_close(reference, cublas_output.to(torch.float32), atol=1e-3, rtol=1e-3)
         print(f"✅ (pass {block_scale_type} - Triton and cuBLAS)")
     else:
@@ -465,20 +467,22 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
 
     # Warmup
     for _ in range(warmup_reps):
-        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
+                                configs)
         if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
             _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
 
     # Benchmark
     proton.activate(0)
     for _ in range(reps):
-        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
+                                configs)
         if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
             bytes_per_elem = a.element_size()
             # For nvfp4, K is in elements but a.shape[1] is in bytes, so use K/2 for byte calculation
             K_bytes = K if block_scale_type == "mxfp8" else K // 2
             with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
-                      {"bytes": bytes_per_elem * (M * K_bytes + N * K_bytes + M * N), "flops": 2. * M * N * K}):
+                              {"bytes": bytes_per_elem * (M * K_bytes + N * K_bytes + M * N), "flops": 2. * M * N * K}):
                 _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
     proton.deactivate(0)
     print("Done benchmarking")

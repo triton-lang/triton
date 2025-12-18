@@ -112,7 +112,8 @@ private:
   }
 
   void unloadCublasDylib() {
-    if (dylibHandle) dlclose(dylibHandle);
+    if (dylibHandle)
+      dlclose(dylibHandle);
   }
 
   void successOrExit(cublasStatus_t status) {
@@ -224,8 +225,10 @@ public:
   // Block-scaled matmul: D = (A * scale_A) @ (B * scale_B)
   //
   // Supports two modes via is_mxfp8 parameter:
-  //   - MXFP8 (is_mxfp8=true):  FP8 E4M3 inputs, E8M0 scales (32-element groups)
-  //   - NVFP4 (is_mxfp8=false): FP4 E2M1 inputs, FP8 E4M3 scales (16-element groups)
+  //   - MXFP8 (is_mxfp8=true):  FP8 E4M3 inputs, E8M0 scales (32-element
+  //   groups)
+  //   - NVFP4 (is_mxfp8=false): FP4 E2M1 inputs, FP8 E4M3 scales (16-element
+  //   groups)
   //
   // Input layout requirements (row-major):
   //   - A: (M, K) in FP8/FP4 (FP4 is packed, 2 elements per byte)
@@ -235,58 +238,63 @@ public:
   //
   // Note: cuBLAS uses column-major layout. This function internally swaps
   // A and B operands and applies transposes to handle the conversion.
-  void block_scaled_matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D_out,
-                           uint64_t scale_A, uint64_t scale_B, bool is_mxfp8) {
+  void block_scaled_matmul(int m, int n, int k, uint64_t A, uint64_t B,
+                           uint64_t D_out, uint64_t scale_A, uint64_t scale_B,
+                           bool is_mxfp8) {
     cublasLtMatmulDesc_t matmulDesc = NULL;
     cublasOperation_t transa = CUBLAS_OP_T;
     cublasOperation_t transb = CUBLAS_OP_N;
 
-    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL, Ddesc = NULL;
+    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL,
+                           Ddesc = NULL;
 
     // Use FP32 compute and accumulation
     cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
-    successOrExit(cublasLtMatmulDescCreate(&matmulDesc, computeType, CUDA_R_32F));
+    successOrExit(
+        cublasLtMatmulDescCreate(&matmulDesc, computeType, CUDA_R_32F));
     successOrExit(cublasLtMatmulDescSetAttribute(
         matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa)));
     successOrExit(cublasLtMatmulDescSetAttribute(
         matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
 
     // Enable fast accumulation for MXFP8 only
-    // "Flag for managing FP8 fast accumulation mode. When enabled, on some GPUs problem
-    //  execution might be faster but at the cost of lower accuracy because intermediate
-    //  results will not periodically be promoted to a higher precision. Currently this
-    //  flag has an effect on the following GPUs: Ada, Hopper.""
+    // "Flag for managing FP8 fast accumulation mode. When enabled, on some GPUs
+    //  problem execution might be faster but at the cost of lower accuracy
+    //  because intermediate results will not periodically be promoted to a
+    //  higher precision. Currently this flag has an effect on the following
+    //  GPUs: Ada, Hopper.""
     if (is_mxfp8) {
       int8_t fastAccum = 1;
       successOrExit(cublasLtMatmulDescSetAttribute(
-          matmulDesc, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccum, sizeof(fastAccum)));
+          matmulDesc, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccum,
+          sizeof(fastAccum)));
     }
 
     // Set scale mode based on format
     // MXFP8: 32-element groups with E8M0 scales
     // NVFP4: 16-element groups with FP8 E4M3 scales
-    cublasLtMatmulMatrixScale_t ab_scale_type = is_mxfp8
-        ? CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0
-        : CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3;
+    cublasLtMatmulMatrixScale_t ab_scale_type =
+        is_mxfp8 ? CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0
+                 : CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3;
 
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_MODE,
-        &ab_scale_type, sizeof(ab_scale_type)));
+        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &ab_scale_type,
+        sizeof(ab_scale_type)));
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_MODE,
-        &ab_scale_type, sizeof(ab_scale_type)));
+        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &ab_scale_type,
+        sizeof(ab_scale_type)));
 
     // Set scale POINTERS
     // NOTE: A and B matrices are swapped in cublasLtMatmul call to handle
     // row-major vs column-major conversion.
-    void* scale_A_ptr = (void*)scale_A;
-    void* scale_B_ptr = (void*)scale_B;
+    void *scale_A_ptr = (void *)scale_A;
+    void *scale_B_ptr = (void *)scale_B;
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-        &scale_B_ptr, sizeof(scale_B_ptr)));  // Swapped
+        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_B_ptr,
+        sizeof(scale_B_ptr))); // Swapped
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-        &scale_A_ptr, sizeof(scale_A_ptr)));  // Swapped
+        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &scale_A_ptr,
+        sizeof(scale_A_ptr))); // Swapped
 
     // Create matrix layouts
     // MXFP8: CUDA_R_8F_E4M3, NVFP4: CUDA_R_4F_E2M1
@@ -306,12 +314,13 @@ public:
     cublasLtMatmulHeuristicResult_t heuristicResult = {};
 
     cublasStatus_t status = cublasLtMatmulAlgoGetHeuristic(
-        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Cdesc, preference,
-        1, &heuristicResult, &returnedResults);
+        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Cdesc, preference, 1,
+        &heuristicResult, &returnedResults);
 
     if (status != CUBLAS_STATUS_SUCCESS || returnedResults == 0) {
       throw std::runtime_error(
-          "cublasLtMatmulAlgoGetHeuristic failed (status=" + std::to_string(status) +
+          "cublasLtMatmulAlgoGetHeuristic failed (status=" +
+          std::to_string(status) +
           ", results=" + std::to_string(returnedResults) + ") for " +
           (is_mxfp8 ? "mxfp8" : "nvfp4"));
     }
@@ -324,20 +333,26 @@ public:
                                  workspace, workspaceSize, 0));
 
     // Cleanup
-    if (Cdesc) successOrExit(cublasLtMatrixLayoutDestroy(Cdesc));
-    if (Bdesc) successOrExit(cublasLtMatrixLayoutDestroy(Bdesc));
-    if (Adesc) successOrExit(cublasLtMatrixLayoutDestroy(Adesc));
-    if (matmulDesc) successOrExit(cublasLtMatmulDescDestroy(matmulDesc));
+    if (Cdesc)
+      successOrExit(cublasLtMatrixLayoutDestroy(Cdesc));
+    if (Bdesc)
+      successOrExit(cublasLtMatrixLayoutDestroy(Bdesc));
+    if (Adesc)
+      successOrExit(cublasLtMatrixLayoutDestroy(Adesc));
+    if (matmulDesc)
+      successOrExit(cublasLtMatmulDescDestroy(matmulDesc));
   }
 
   // Convenience wrappers for backward compatibility
-  void block_scaled_matmul_mxfp8(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D_out,
-                                 uint64_t scale_A, uint64_t scale_B) {
+  void block_scaled_matmul_mxfp8(int m, int n, int k, uint64_t A, uint64_t B,
+                                 uint64_t D_out, uint64_t scale_A,
+                                 uint64_t scale_B) {
     block_scaled_matmul(m, n, k, A, B, D_out, scale_A, scale_B, true);
   }
 
-  void block_scaled_matmul_nvfp4(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D_out,
-                                 uint64_t scale_A, uint64_t scale_B) {
+  void block_scaled_matmul_nvfp4(int m, int n, int k, uint64_t A, uint64_t B,
+                                 uint64_t D_out, uint64_t scale_A,
+                                 uint64_t scale_B) {
     block_scaled_matmul(m, n, k, A, B, D_out, scale_A, scale_B, false);
   }
 };
