@@ -564,7 +564,7 @@ Flags getNodeFlags(Node *node) {
       return Flags::LOAD;
     if (isa<tt::DescriptorStoreOp, tt::DescriptorScatterOp>(op))
       return Flags::STORE;
-    if (isa<ttng::MMAv5OpInterface>(op))
+    if (isa<ttng::MMAv5OpInterface>(op) || op->hasAttr("mma"))
       return Flags::MMA;
     if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op))
       return Flags::TMEM;

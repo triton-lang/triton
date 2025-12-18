@@ -320,7 +320,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %cst_3 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #linear>
     // CHECK: scf.for
     scf.for %arg3 = %lb to %ub step %step : i32 {
-      // CHECK-NEXT: tt.descriptor_load {{.*}} {ttg.partition = array<i32: 1>} {{.*}}
+      // CHECK-NEXT: tt.descriptor_load {{.*}} {ttg.partition = array<i32: 2>} {{.*}}
       %20 = tt.descriptor_load %arg1[%a0, %b0, %c0_i32] : !tt.tensordesc<tensor<1x128x64xbf16, #shared>> -> tensor<128x64xbf16, #blocked>
       %22 = arith.cmpi sge, %arg3, %c3_i32 : i32
       // CHECK: scf.if
@@ -340,7 +340,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       // CHECK-NEXT: } else {
       // CHECK-NEXT: scf.yield {ttg.partition = array<i32: 0>}
       // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
-      "use"(%23) {data} : (tensor<128x64xbf16, #blocked>) -> ()
+      "use"(%23) {data, mma} : (tensor<128x64xbf16, #blocked>) -> ()
       // CHECK: "use"
       // CHECK-NEXT ttg.warp_specialize.tag = 0 : i32
     } {tt.warp_specialize = true}
@@ -387,7 +387,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         scf.yield %41 : tensor<128x64xbf16, #blocked>
       }
       // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
-      "use"(%23) {data} : (tensor<128x64xbf16, #blocked>) -> ()
+      "use"(%23) {data, mma} : (tensor<128x64xbf16, #blocked>) -> ()
     } {tt.warp_specialize = true}
     tt.return
   }
