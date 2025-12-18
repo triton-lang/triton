@@ -9,6 +9,7 @@ import math
 from typing import Callable
 # utilities
 from triton_kernels import target_info
+from triton_kernels.meta import Closure
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
@@ -45,7 +46,22 @@ class FnName(Enum):
 @dataclass(frozen=True)
 class FusedComm:
     out_handles: torch.Tensor
-    scatter_shard_indx: torch.Tensor | None = None
+    # Map from the kernel output coord to the destination shard idx and coord.
+    # Used like:
+    #  dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(base_off_m, offs_m, base_off_n, offs_n, *map_dst_coord.closure)
+    # Arguments:
+    #   base_off_m: int | None     the base offset of offs_m; None if the rows are scattered
+    #   offs_m: BLOCK_M(int)       the output row offsets
+    #   base_off_n: int            the base offset of offs_n
+    #   offs_n: BLOCK_N(int)       the output column offsets
+    #   ...closure: tuple          additional arguments bound to the map_dst_coord function
+    # Returns:
+    #   dst_shard_idx: int | BLOCK_Mx1(int) | 1xBLOCK_N(int) | BLOCK_MxBLOCK_N(int)
+    #                              the destination shard index or indices
+    #   dst_y_m: BLOCK_M(int)      the destination row offsets
+    #   dst_y_n: BLOCK_N(int)      the destination column offsets
+    map_dst_coord: Closure
+    all_writes_issued: Closure
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
@@ -409,6 +425,7 @@ def matmul(a, b, bias,
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
         and (c_acc_in is None or c_acc_is_c)
+        and fused_comm is None
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
@@ -462,7 +479,8 @@ def matmul(a, b, bias,
     # w_transpose = w_storage.data.stride()[-1] != 1
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
-        "ScatterShardIndx": fused_comm.scatter_shard_indx,
+        "map_dst_coord": fused_comm.map_dst_coord,
+        "all_writes_issued": fused_comm.all_writes_issued,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
