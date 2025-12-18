@@ -5,11 +5,20 @@ TCGen05 Copy Instruction
 This tutorial will cover the `tcgen05_copy` instruction: how to use it and its
 applications.
 
-The `tcgen05_copy` instruction is an asynchronous tensorcore operation that
-copies data from shared memory to tensor memory. `tcgen05_copy` is implicitly
-pipelined with `tcgen05_mma` and `tcgen05_commit`. The completion of
-`tcgen05_copy` is tracked with `tcgen05_commit` on an mbarrier just like
-`tcgen05_mma`.
+The `tcgen05_copy` instruction is an asynchronous tensorcore operation that copies
+data from shared memory to tensor memory. The completion of `tcgen05_copy` is
+tracked with `tcgen05_commit` on an mbarrier just like `tcgen05_mma`. The
+completion of a single or multiple `tcgen05_copy` operations can be tracked by a
+single `tcgen05_commit`:
+
+```python
+tcgen05_copy(lhs_smem, lhs_tmem)
+tcgen05_copy(acc_smem, acc_tmem)
+tcgen05_commit(bar)
+mbarrier.wait(bar, phase=phase)
+acc = acc_tmem.load(acc_reg_layout)
+lhs = lhs_tmem.load(lhs_reg_layout)
+```
 
 `tcgen05_copy` can be used to copy data into tensor memory that is fed into a
 `tcgen05_mma` instruction. Because `tcgen05_copy` is implicitly pipelined with
@@ -23,22 +32,11 @@ tcgen05_commit(bar)
 mbarrier.wait(bar, phase=phase)
 ```
 
-The completion of a single or multiple `tcgen05_copy` operations can be tracked
-with `tcgen05_commit`:
-
-```python
-tcgen05_copy(lhs_smem, lhs_tmem)
-tcgen05_copy(acc_smem, acc_tmem)
-tcgen05_commit(bar)
-mbarrier.wait(bar, phase=phase)
-acc = acc_tmem.load(acc_reg_layout)
-lhs = lhs_tmem.load(lhs_reg_layout)
-```
-
 The implicit pipelining is because the PTX-level `tcgen05.copy` and `tcgen05.mma`
 instructions are executed by the tensor core pipe on the SM, which you can think
 of as a single thread running tensor core specific instructions on the SM,
-asynchronously from the rest of the SM.
+asynchronously from the rest of the SM. In other words, all `tcgen05_*` instructions
+enqueue a tensor core operation on the tensor pipe, which are executed in order.
 
 The following is also valid.
 
