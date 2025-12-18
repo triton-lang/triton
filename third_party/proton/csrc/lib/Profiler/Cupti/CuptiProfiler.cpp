@@ -562,10 +562,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           } else {
             pImpl->graphStates[graphId].numNodes++;
           }
-	          if (profiler.isOpInProgress()) {
-	            auto &graphState = pImpl->graphStates[graphId];
-	            for (auto *data : dataSet) {
-	              auto contexts = data->getContexts();
+          if (profiler.isOpInProgress()) {
+            auto &graphState = pImpl->graphStates[graphId];
+            for (auto *data : dataSet) {
+              auto contexts = data->getContexts();
               // Trick: if the scope name is empty, it means the graph is
               // created by an API kernel but not Triton op
               if (threadState.scopeStack.back().name.empty()) {
@@ -575,61 +575,61 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               } else {
                 contexts.push_back(threadState.scopeStack.back());
               }
-	              graphState.nodeIdToState[nodeId].captureContexts[data] =
-	                  std::move(contexts);
-	              graphState.dataToCallpathToNodes[data]
-	                  [graphState.nodeIdToState[nodeId].captureContexts[data]]
-	                      .push_back(nodeId);
-	            }
-	            if (threadState.isMetricKernelLaunching)
-	              graphState.metricKernelNodeIds.insert(nodeId);
-	          } // else no op in progress, the creation is triggered by graph
-	            // clone/instantiate
-	        } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
-	          uint32_t originalGraphId = 0;
-	          uint64_t originalNodeId = 0;
-	          cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
-	          cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
-	          auto &graphState = pImpl->graphStates[graphId];
-	          // Clone all node states
-	          graphState.nodeIdToState[nodeId] =
-	              pImpl->graphStates[originalGraphId].nodeIdToState[originalNodeId];
-	          for (const auto &[data, callpath] :
-	               graphState.nodeIdToState[nodeId].captureContexts) {
-	            graphState.dataToCallpathToNodes[data][callpath].push_back(nodeId);
-	          }
-	          if (pImpl->graphStates[originalGraphId].metricKernelNodeIds.find(
-	                  originalNodeId) !=
-	              pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
-	            graphState.metricKernelNodeIds.insert(nodeId);
-	          }
-	          if (pImpl->graphStates[originalGraphId].apiNodeIds.find(
-	                  originalNodeId) !=
-	              pImpl->graphStates[originalGraphId].apiNodeIds.end()) {
-	            graphState.apiNodeIds.insert(nodeId);
-	          }
-	        }
-	      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
-	        auto &numNodes = pImpl->graphStates[graphId].numNodes;
-	        numNodes--;
-	        uint64_t nodeId = 0;
-	        cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-	        auto &graphState = pImpl->graphStates[graphId];
+              graphState.nodeIdToState[nodeId].captureContexts[data] =
+                  std::move(contexts);
+              graphState
+                  .dataToCallpathToNodes[data][graphState.nodeIdToState[nodeId]
+                                                   .captureContexts[data]]
+                  .push_back(nodeId);
+            }
+            if (threadState.isMetricKernelLaunching)
+              graphState.metricKernelNodeIds.insert(nodeId);
+          } // else no op in progress, the creation is triggered by graph
+            // clone/instantiate
+        } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
+          uint32_t originalGraphId = 0;
+          uint64_t originalNodeId = 0;
+          cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
+          cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
+          auto &graphState = pImpl->graphStates[graphId];
+          // Clone all node states
+          graphState.nodeIdToState[nodeId] =
+              pImpl->graphStates[originalGraphId].nodeIdToState[originalNodeId];
           for (const auto &[data, callpath] :
-                graphState.nodeIdToState[nodeId].captureContexts) {
-            auto &nodes =
-                graphState.dataToCallpathToNodes[data][callpath];
-            nodes.erase(std::remove(nodes.begin(), nodes.end(), nodeId),
-                        nodes.end());
+               graphState.nodeIdToState[nodeId].captureContexts) {
+            graphState.dataToCallpathToNodes[data][callpath].push_back(nodeId);
           }
-          graphState.nodeIdToState.erase(nodeId);
-	        graphState.metricKernelNodeIds.erase(nodeId);
-	        graphState.apiNodeIds.erase(nodeId);
-	      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
-	        pImpl->graphStates.erase(graphId);
-	      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-	        pImpl->graphStates.erase(graphExecId);
-	      }
+          if (pImpl->graphStates[originalGraphId].metricKernelNodeIds.find(
+                  originalNodeId) !=
+              pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
+            graphState.metricKernelNodeIds.insert(nodeId);
+          }
+          if (pImpl->graphStates[originalGraphId].apiNodeIds.find(
+                  originalNodeId) !=
+              pImpl->graphStates[originalGraphId].apiNodeIds.end()) {
+            graphState.apiNodeIds.insert(nodeId);
+          }
+        }
+      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
+        auto &numNodes = pImpl->graphStates[graphId].numNodes;
+        numNodes--;
+        uint64_t nodeId = 0;
+        cupti::getGraphNodeId<true>(graphData->node, &nodeId);
+        auto &graphState = pImpl->graphStates[graphId];
+        for (const auto &[data, callpath] :
+             graphState.nodeIdToState[nodeId].captureContexts) {
+          auto &nodes = graphState.dataToCallpathToNodes[data][callpath];
+          nodes.erase(std::remove(nodes.begin(), nodes.end(), nodeId),
+                      nodes.end());
+        }
+        graphState.nodeIdToState.erase(nodeId);
+        graphState.metricKernelNodeIds.erase(nodeId);
+        graphState.apiNodeIds.erase(nodeId);
+      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
+        pImpl->graphStates.erase(graphId);
+      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
+        pImpl->graphStates.erase(graphExecId);
+      }
     }
   } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
     auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
@@ -687,24 +687,24 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-	          auto dataSet = profiler.getDataSet();
-	          auto externId = profiler.correlation.externIdQueue.back();
-	          auto &graphState = pImpl->graphStates[graphExecId];
-	
-	          // For each unique call path, we generate a scope id per data object
-	          auto &graphNodeIdToScopes =
-	              profiler.correlation.externIdToState[externId]
-	                  .graphNodeIdToScopes;
-	          for (auto &[data, callpathToNodes] :
-	               graphState.dataToCallpathToNodes) {
-	            if (dataSet.find(data) == dataSet.end()) {
-	              continue;
-	            }
-	            const auto baseScopeId =
-	                data->addOp(externId, GraphState::captureTag);
-	            for (const auto &[callpath, nodeIds] : callpathToNodes) {
-	              const auto nodeScopeId = data->addOp(baseScopeId, callpath);
-	              for (auto nodeId : nodeIds) {
+          auto dataSet = profiler.getDataSet();
+          auto externId = profiler.correlation.externIdQueue.back();
+          auto &graphState = pImpl->graphStates[graphExecId];
+
+          // For each unique call path, we generate a scope id per data object
+          auto &graphNodeIdToScopes =
+              profiler.correlation.externIdToState[externId]
+                  .graphNodeIdToScopes;
+          for (auto &[data, callpathToNodes] :
+               graphState.dataToCallpathToNodes) {
+            if (dataSet.find(data) == dataSet.end()) {
+              continue;
+            }
+            const auto baseScopeId =
+                data->addOp(externId, GraphState::captureTag);
+            for (const auto &[callpath, nodeIds] : callpathToNodes) {
+              const auto nodeScopeId = data->addOp(baseScopeId, callpath);
+              for (auto nodeId : nodeIds) {
                 auto isAPI = graphState.apiNodeIds.find(nodeId) !=
                              graphState.apiNodeIds.end();
                 auto &nodeScopes = graphNodeIdToScopes[nodeId];
