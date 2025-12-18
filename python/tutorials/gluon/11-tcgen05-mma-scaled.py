@@ -3,18 +3,18 @@ Blocked-Scaled Matrix Multiplication
 ====================================
 
 Block scaling is a quantization technique whereby a floating point tensor `X` is
-quantized into a tensor `Q` of the same shape but with a lower-precision dtype
+quantized into: a tensor `Q` of the same shape, but with a lower-precision dtype;
 and a scale tensor `S`. Tensor `X` is quantized into `Q` by dividing it into
 equally-sized blocks, where each block is associated with a single scale factor.
 
 When performing matrix multiplication on block-scaled tensors, we load both
-quantized operands and their scales from GPU global memory (VRAM) on to the SMs,
+quantized operands and their scales from global memory on to the SMs,
 where they are dequantized by multiplying each block of quantized values by their
 respective scale factors. The MMA itself is then performed in a higher precision.
 
 We can accelerate the MMA of the dequantized operands using tensor core
 instructions like `tcgen05_mma`. But NVIDIA Blackwell GPUs support hardware
-acceleration for block-scaled MMAs, in the form of `tcgen05_mma_scaled`
+acceleration for block-scaled MMAs, in the form of the `tcgen05_mma_scaled`
 instructions which fuse the operand dequantization and MMA into a single
 instruction.
 
@@ -634,7 +634,7 @@ if __name__ == "__main__":
 # the A matrix, the layout is
 #
 # ```
-# [M // 32 // 4, K // VEC_SIZE // 4, 32, 4, 4]
+# [M // (32 * 4), K // (VEC_SIZE * 4), 32, 4, 4]
 # ```
 #
 # This way, each tensor core MMA in the matmul inner loop over the K blocks can
@@ -669,11 +669,11 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     # Note that this 5D swizzling scheme has minimum block size requirements
     # of BLOCK_N >= 128 and BLOCK_K >= VEC_SIZE * 4 (64 for nvfp4 and 128 for MX).
     REP_MN = BLOCK_MN // 128
-    REP_K = BLOCK_K // VEC_SIZE // 4
+    REP_K = BLOCK_K // (VEC_SIZE * 4)
     # Use a 5D TMA descriptor with block shape [1, rep_m, rep_k, 2, 256] of uint8
     # elements. With 256 bytes along the inner dimension, we better utilize the
     # L2 cache and don't require the TMA engine to emit many small messages (16B)
-    # messages as with 32x16xu8.
+    # as it would with 32x16xu8.
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
     IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
@@ -875,8 +875,9 @@ if __name__ == "__main__":
 # which we learned about in the previous tutorial, to asynchronously copy the
 # scales from shared to tensor memory.
 #
-# We can entirely unswizzle the scales in shared memory by reshaping and permuting
-# the shared memory descriptor.
+# To avoid this, we can instead view the shared memory in a new layout which undoes
+# the swizzling. We do this by reshaping and permuting the shared memory descriptor, 
+# in the reverse of the way we generated the original swizzle pattern.
 
 
 @gluon.jit
@@ -1212,8 +1213,8 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
         off_k_a *= 2
     if b_desc.layout.fp4_padded:
         off_k_b *= 2
-    off_k_a_scale = k // BLOCK_K * A_REP_K
-    off_k_b_scale = k // BLOCK_K * B_REP_K
+    off_k_a_scale = (k // BLOCK_K) * A_REP_K
+    off_k_b_scale = (k // BLOCK_K) * B_REP_K
 
     index = producer.index
     bar = bars.index(index)
