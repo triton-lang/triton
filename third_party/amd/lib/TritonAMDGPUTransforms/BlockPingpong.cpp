@@ -897,7 +897,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
-  appendOp(dotOps[0]);
+  moveOpAndPredecessorsUpSameBlock(dotOps[0]);
 
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
@@ -1075,7 +1075,7 @@ void Pingponger::getDotPingponged() {
       LDBG("Currently only support num_warp=8 for async PP");
       return;
     }
-    if (numStages > 2 && dotOps.size() == 1 && dotShape[0] > 64 &&
+    if (numStages == 3 && dotOps.size() == 1 && dotShape[0] > 64 &&
         dotShape[1] > 64 && (elemWidth == 16 || elemWidth == 8)) {
       if (transformTwoClusterWithLocalLoadAndAll(builder, loc).failed()) {
         LDBG("Encountered failure when trying to execute the "

@@ -53,7 +53,7 @@ def arrive(mbarrier, *, count=1, _semantic=None):
     Arrive at an mbarrier with a specified count. The operation requires a `count` attribute
     of at least 1, and decreases the pending arrival count of the mbarrier by the specific count.
     If the pending count reaches zero, the phase changes (is decremented in a wraparound manner) and the
-    pending count is reloaded with the init count value. Returns the mbarrier's phase prior to the "arrive" operation.
+    pending count is reloaded with the init count value. Returns the mbarrier's phase parity (0 for even, 1 for odd) prior to the "arrive" operation.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier to be signalled.

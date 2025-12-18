@@ -445,10 +445,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "strides=[");
-    for (int i = 0; i < rank; ++i) {
+    for (int i = 0; i + 1 < rank; ++i) {
       off += snprintf(err + off, sizeof(err) - off, "%llu%s",
                       (unsigned long long)stridesLL[i],
-                      (i + 1 < rank) ? ", " : "");
+                      (i + 2 < rank) ? ", " : "");
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "blockSize=[");
@@ -461,7 +461,7 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
       off += snprintf(err + off, sizeof(err) - off, "%u%s",
                       (unsigned)elementStrides[i], (i + 1 < rank) ? ", " : "");
     }
-    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    off += snprintf(err + off, sizeof(err) - off, "] fill=%d\n", (int)fill);
     PyErr_SetString(PyExc_RuntimeError, err);
 
     goto cleanup;

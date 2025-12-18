@@ -8,7 +8,15 @@ from typing import List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from triton._C.libtriton import ir
 
-__all__ = ["async_copy", "fence_async_shared", "mbarrier", "mma_v2", "tma", "warpgroup_mma", "warpgroup_mma_wait"]
+__all__ = [
+    "async_copy",
+    "fence_async_shared",
+    "mbarrier",
+    "mma_v2",
+    "tma",
+    "warpgroup_mma",
+    "warpgroup_mma_wait",
+]
 
 
 @_core.builtin
@@ -58,7 +66,7 @@ class warpgroup_mma_accumulator(_core.base_value):
 
 
 @_core.builtin
-def warpgroup_mma_init(value, _semantic):
+def warpgroup_mma_init(value, _semantic=None):
     assert isinstance(value, _core.tensor)
     return warpgroup_mma_accumulator(value.handle, value.type)
 

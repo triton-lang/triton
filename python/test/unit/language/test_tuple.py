@@ -269,7 +269,7 @@ def test_passing_nested_tuple_with_constexpr(device):
     _nested_tuple_kernel[(1, )](((1, ), (tl.constexpr(2), )))
 
 
-def test_passing_nested_tuple_with_constexpr_and_jit_hook(device, fresh_knobs):
+def test_passing_nested_tuple_with_constexpr_and_jit_hook(device, fresh_knobs_except_libraries):
     # get the serialized specialization data
     specialization_data = None
 
@@ -277,7 +277,7 @@ def test_passing_nested_tuple_with_constexpr_and_jit_hook(device, fresh_knobs):
         nonlocal specialization_data
         specialization_data = kwargs["compile"]["specialization_data"]
 
-    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    fresh_knobs_except_libraries.runtime.jit_cache_hook = cache_hook
 
     device = getattr(torch, device).current_device()
 
@@ -364,3 +364,22 @@ def test_tuple_float():
         x, y = float("-inf"), float("inf")  # noqa: F841
 
     _namedtuple_float_tuple_kernel[(1, )]()
+
+
+@triton.constexpr_function
+def passthrough_constexpr(x):
+    return x
+
+
+class TrivialTuple(NamedTuple):
+    foo: tl.constexpr
+
+
+@pytest.mark.interpreter
+def test_tuple_constexpr_function():
+
+    @triton.jit
+    def kernel():
+        tl.static_assert(passthrough_constexpr(TrivialTuple(0)).foo == 0)
+
+    kernel[(1, )]()
