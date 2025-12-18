@@ -300,55 +300,46 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 
 tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
     scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
-    : forOp(forOp), schedule(&schedule), atEnd(false), currentStage(0),
-      numStages(schedule.getNumStages()) {
+    : forOp(forOp), schedule(&schedule), atEnd(false) {
   clusterIt = schedule.clusters.begin();
   clusterEnd = schedule.clusters.end();
   opIt = forOp.getBody()->without_terminator().begin();
   opEnd = forOp.getBody()->without_terminator().end();
   if (initialOp) {
-    initializeIterator(initialOp);
+    auto it = schedule.opToStageAndCluster.find(initialOp);
+    if (it != schedule.opToStageAndCluster.end()) {
+      auto [_, cluster] = it->second;
+      clusterIt = cluster;
+      advanceToNextScheduledOp();
+      findNext([&](Operation *op) { return op == initialOp; });
+    } else {
+      atEnd = true;
+      currentOp = nullptr;
+    }
   } else {
     advanceToNextScheduledOp();
   }
 }
 
 void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
-  while (currentStage < numStages) {
-    while (clusterIt != clusterEnd) {
-      while (opIt != opEnd) {
-        Operation *op = &*opIt;
-        auto it = schedule->opToStageAndCluster.find(op);
-        if (it != schedule->opToStageAndCluster.end()) {
-          auto [stage, cluster] = it->second;
-          if (cluster == clusterIt && stage == currentStage) {
-            currentOp = op;
-            return;
-          }
+  while (clusterIt != clusterEnd) {
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      auto it = schedule->opToStageAndCluster.find(op);
+      if (it != schedule->opToStageAndCluster.end()) {
+        auto [_, cluster] = it->second;
+        if (cluster == clusterIt) {
+          currentOp = op;
+          return;
         }
-        ++opIt;
       }
-      ++clusterIt;
-      opIt = forOp.getBody()->without_terminator().begin();
+      ++opIt;
     }
-    ++currentStage;
-    clusterIt = schedule->clusters.begin();
+    ++clusterIt;
+    opIt = forOp.getBody()->without_terminator().begin();
   }
   atEnd = true;
   currentOp = nullptr;
-}
-
-void tt::CoarseSchedule::LinearizedIterator::initializeIterator(Operation *op) {
-  auto it = schedule->opToStageAndCluster.find(op);
-  if (it != schedule->opToStageAndCluster.end()) {
-    auto [stage, cluster] = it->second;
-    currentStage = stage;
-    clusterIt = cluster;
-    findNext([&](Operation *nextOp) { return nextOp == op; });
-  } else {
-    atEnd = true;
-    currentOp = nullptr;
-  }
 }
 
 tt::CoarseSchedule::LinearizedIterator &

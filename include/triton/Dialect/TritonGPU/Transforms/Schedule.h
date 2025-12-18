@@ -215,8 +215,6 @@ public:
   private:
     /// Advance to the next valid operation in the schedule.
     void advanceToNextScheduledOp();
-    /// Set the iterator state based on this op.
-    void initializeIterator(Operation *op);
 
     scf::ForOp forOp;
     const CoarseSchedule *schedule;
@@ -224,8 +222,6 @@ public:
     ClusterList::const_iterator clusterEnd;
     Block::iterator opIt;
     Block::iterator opEnd;
-    int currentStage;
-    int numStages;
     Operation *currentOp = nullptr;
     bool atEnd = false;
   };
