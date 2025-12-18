@@ -874,8 +874,9 @@ if __name__ == "__main__":
 # which we learned about in the previous tutorial, to asynchronously copy the
 # scales from shared to tensor memory.
 #
-# We can entirely unswizzle the scales in shared memory by reshaping and permuting
-# the shared memory descriptor.
+# To avoid this, we can instead view the shared memory in a new layout which undoes
+# the swizzling. We do this by reshaping and permuting the shared memory descriptor, 
+# in the reverse of the way we generated the original swizzle pattern.
 
 
 @gluon.jit
