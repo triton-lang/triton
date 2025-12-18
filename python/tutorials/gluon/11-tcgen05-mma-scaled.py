@@ -876,7 +876,7 @@ if __name__ == "__main__":
 # scales from shared to tensor memory.
 #
 # To avoid this, we can instead view the shared memory in a new layout which undoes
-# the swizzling. We do this by reshaping and permuting the shared memory descriptor, 
+# the swizzling. We do this by reshaping and permuting the shared memory descriptor,
 # in the reverse of the way we generated the original swizzle pattern.
 
 
