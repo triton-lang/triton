@@ -1607,13 +1607,13 @@ class TritonSemantic(Generic[TensorTy]):
         if lhs_scale is not None:
             scale_factor = 16 if lhs_scale.dtype.is_fp8e4nv() else 32
             lhs_scale_shape = lhs_scale.type.shape
-            assert lhs_scale_shape[-2] == [
+            assert lhs_scale_shape[-2:] == [
                 M, K // scale_factor
             ], f"lhs_scale must be a tensor of shape [..., {M}, {K // scale_factor}]. Got {lhs_scale_shape}"
         if rhs_scale is not None:
             scale_factor = 16 if rhs_scale.dtype.is_fp8e4nv() else 32
             rhs_scale_shape = rhs_scale.type.shape
-            assert rhs_scale_shape[-2] == [
+            assert rhs_scale_shape[-2:] == [
                 N, K // scale_factor
             ], f"rhs_scale must be a tensor of shape [..., {N}, {K // scale_factor}]. Got {rhs_scale_shape}"
 
