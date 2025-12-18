@@ -6,6 +6,7 @@ import pytest
 import torch
 from typing import Union
 import triton
+from triton._internal_testing import is_hopper
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
@@ -205,7 +206,7 @@ def _build_test_op_cases():
 ])
 @pytest.mark.parametrize("do_gamma", [False,True])
 @pytest.mark.parametrize("is_persistent", [False,True])
-@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
