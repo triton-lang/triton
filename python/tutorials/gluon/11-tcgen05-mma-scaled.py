@@ -1204,8 +1204,8 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
         off_k_a *= 2
     if b_desc.layout.fp4_padded:
         off_k_b *= 2
-    off_k_a_scale = k // BLOCK_K * A_REP_K
-    off_k_b_scale = k // BLOCK_K * B_REP_K
+    off_k_a_scale = (k // BLOCK_K) * A_REP_K
+    off_k_b_scale = (k // BLOCK_K) * B_REP_K
 
     index = producer.index
     bar = bars.index(index)
