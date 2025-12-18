@@ -746,20 +746,20 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   // Find the first sync candidate that appears after the MMA
   // in the linearized schedule.
   auto linearizedSchedule = schedule.linearized(forOp, mma);
-  Operation *latestSyncPoint = linearizedSchedule.findNext(
+  std::optional<Operation *> latestSyncPoint = linearizedSchedule.findNext(
       [&](Operation *op) { return syncCandidates.contains(op); });
 
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
   if (latestSyncPoint && mmaPipeHelper.isOperandsStateDetermined) {
-    if (schedule.isOpBefore(latestSyncPoint, mma)) {
+    if (schedule.isOpBefore(*latestSyncPoint, mma)) {
       mainWaitStage = schedule[mma].first + 1;
       mainWaitCluster = schedule.clusters.newBefore(
-          schedule.splitClusterBefore(latestSyncPoint, forOp));
+          schedule.splitClusterBefore(*latestSyncPoint, forOp));
     } else {
-      mainWaitStage = schedule[latestSyncPoint].first;
+      mainWaitStage = schedule[*latestSyncPoint].first;
       mainWaitCluster = schedule.clusters.newBefore(
-          schedule.splitClusterBefore(latestSyncPoint, forOp));
+          schedule.splitClusterBefore(*latestSyncPoint, forOp));
     }
   }
 

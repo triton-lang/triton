@@ -298,10 +298,69 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 // LinearizedIterator Implementation
 // ============================================================
 
+tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
+    scf::ForOp forOp, const CoarseSchedule &schedule)
+    : forOp(forOp), schedule(&schedule), atEnd(false), currentStage(0) {
+  clusterIt = schedule.clusters.begin();
+  clusterEnd = schedule.clusters.end();
+  opIt = forOp.getBody()->without_terminator().begin();
+  opEnd = forOp.getBody()->without_terminator().end();
+  advanceToNextScheduledOp();
+}
+
+//   for (auto &op : forOp.getBody()->without_terminator()) {
+//     auto it = opToStageAndCluster.find(&op);
+//     if (it == opToStageAndCluster.end()) {
+//       continue;
+//     }
+//     auto [stage, cluster] = it->second;
+//     assert(cluster != Cluster{} && "Op with invalid cluster!");
+//     assert(stage < numStages && "Op with invalid stage!");
+//     int clusterId = *cluster;
+//     assert(clusterId == std::distance(clusters.begin(),
+//                                       ClusterList::const_iterator(cluster))
+//                                       &&
+//            "Cluster ID mismatch!");
+//     orderClusters[clusterId].push_back(make_tuple(&op, stage, cluster));
+//   }
+//   SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
+//   for (int i = 0; i < orderClusters.size(); i++) {
+//     for (auto [op, stage, cluster] : orderClusters[i]) {
+//       opsInOrder.push_back({op, stage, cluster});
+//     }
+//   }
+
+void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
+  while (currentStage < 10) {
+    while (clusterIt != clusterEnd) {
+      while (opIt != opEnd) {
+        Operation *op = &*opIt;
+        auto it = schedule->opToStageAndCluster.find(op);
+        if (it != schedule->opToStageAndCluster.end()) {
+          auto [stage, cluster] = it->second;
+          if (cluster == clusterIt && stage == currentStage) {
+            currentOp = op;
+            return;
+          }
+        }
+        ++opIt;
+      }
+      ++clusterIt;
+      opIt = forOp.getBody()->without_terminator().begin();
+    }
+    ++currentStage;
+    clusterIt = schedule->clusters.begin();
+  }
+  atEnd = true;
+  currentOp = nullptr;
+}
+
 tt::CoarseSchedule::LinearizedIterator &
 tt::CoarseSchedule::LinearizedIterator::operator++() {
-  if (index < opsInOrder.size())
-    ++index;
+  if (atEnd)
+    return *this;
+  ++opIt;
+  advanceToNextScheduledOp();
   return *this;
 }
 
@@ -313,28 +372,21 @@ tt::CoarseSchedule::LinearizedIterator::operator++(int) {
 }
 
 Operation *tt::CoarseSchedule::LinearizedIterator::operator*() const {
-  if (index >= opsInOrder.size())
-    return nullptr;
-  return std::get<0>(opsInOrder[index]);
+  return currentOp;
 }
 
 bool tt::CoarseSchedule::LinearizedIterator::operator==(
     const LinearizedIterator &other) const {
-  return index == other.index && opsInOrder.size() == other.opsInOrder.size();
+  if (atEnd && other.atEnd)
+    return true;
+  if (atEnd != other.atEnd)
+    return false;
+  return currentOp == other.currentOp;
 }
 
 bool tt::CoarseSchedule::LinearizedIterator::operator!=(
     const LinearizedIterator &other) const {
   return !(*this == other);
-}
-
-tt::CoarseSchedule::LinearizedIterator
-tt::CoarseSchedule::LinearizedIterator::end() const {
-  LinearizedIterator endIt(
-      SmallVector<std::tuple<Operation *, int, Cluster>>{});
-  endIt.index = opsInOrder.size();
-  endIt.opsInOrder = opsInOrder;
-  return endIt;
 }
 
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {

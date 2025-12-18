@@ -174,16 +174,18 @@ public:
   // ============================================================
 
   /// A stateful iterator over operations in linearized schedule order.
-  /// Operations are yielded in order: (stage, cluster,
+  /// Operations are yielded lazily in order: (stage, cluster,
   /// IR-order-within-cluster).
   ///
   /// The iterator maintains its position, allowing findNext/findNextUser to
-  /// search from the current position forward.
+  /// search from the current position forward. Unlike the eager approach that
+  /// materializes all operations upfront, this iterator generates elements
+  /// on-demand by iterating through clusters and operations within the loop.
   class LinearizedIterator {
   public:
-    LinearizedIterator(
-        SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder)
-        : opsInOrder(std::move(opsInOrder)), index(0) {}
+    /// Construct an iterator for the given forOp and schedule.
+    /// This is the lazy constructor that generates elements on-demand.
+    LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule);
 
     // Standard iterator operations
     LinearizedIterator &operator++();
@@ -192,24 +194,36 @@ public:
     bool operator==(const LinearizedIterator &other) const;
     bool operator!=(const LinearizedIterator &other) const;
 
-    LinearizedIterator end() const;
+    bool isEnd() const { return atEnd; }
 
     /// Advance the iterator to the next operation that satisfies the optional
-    /// predicate. Returns the found operation, or nullptr if not found. The
-    /// iterator position is updated to the found operation (or end).
-    Operation *findNext(std::function<bool(Operation *)> predicate = nullptr) {
-      while (*this != end()) {
-        Operation *op = *(*this)++;
+    /// predicate. Returns the found operation, or std::nullopt if not found.
+    /// The iterator position is updated to the found operation (or end).
+    std::optional<Operation *>
+    findNext(std::function<bool(Operation *)> predicate = nullptr) {
+      while (!isEnd()) {
+        Operation *op = *(*this);
+        ++(*this);
         if (!predicate || predicate(op)) {
           return op;
         }
       }
-      return nullptr;
+      return std::nullopt;
     }
 
   private:
-    SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
-    size_t index;
+    /// Advance to the next valid operation in the schedule.
+    void advanceToNextScheduledOp();
+
+    scf::ForOp forOp;
+    const CoarseSchedule *schedule;
+    ClusterList::const_iterator clusterIt;
+    ClusterList::const_iterator clusterEnd;
+    Block::iterator opIt;
+    Block::iterator opEnd;
+    int currentStage;
+    Operation *currentOp = nullptr;
+    bool atEnd = false;
   };
 
   /// Get an iterator over the linearized schedule starting from the
@@ -217,7 +231,7 @@ public:
   /// are being iterated.
   LinearizedIterator linearized(scf::ForOp forOp,
                                 Operation *initialOp = nullptr) const {
-    auto result = LinearizedIterator(getOpsInOrder(forOp));
+    auto result = LinearizedIterator(forOp, *this);
     if (initialOp) {
       result.findNext([&](Operation *op) { return op == initialOp; });
     }
