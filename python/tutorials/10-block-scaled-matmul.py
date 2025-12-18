@@ -303,16 +303,14 @@ def cublas_block_scaled_matmul(a, a_scale, b, b_scale, block_scale_type="mxfp8")
         assert K_a == K_b, "K dimensions must match"
         assert a.dtype == torch.float8_e4m3fn, "Only FP8 E4M3 inputs supported for mxfp8"
         assert b.dtype == torch.float8_e4m3fn, "Only FP8 E4M3 inputs supported for mxfp8"
-        K = K_a
         # MXFP8 cuBLAS outputs FP16
         output = torch.empty((M, N), dtype=torch.float16, device="cuda")
         cublas.block_scaled_matmul_mxfp8(a, b, output, a_scale, b_scale)
     elif block_scale_type == "nvfp4":
-        # For packed FP4, K_a and K_b are in bytes, so K = K_a * 2 = K_b * 2
+        # For packed FP4, K_a and K_b are in bytes (K = K_a * 2 in elements)
         assert K_a == K_b, "K dimensions must match"
         assert a.dtype == torch.uint8, "Only uint8 packed FP4 inputs supported for nvfp4"
         assert b.dtype == torch.uint8, "Only uint8 packed FP4 inputs supported for nvfp4"
-        K = K_a * 2  # Convert from bytes to elements
         # NVFP4 cuBLAS outputs FP16
         output = torch.empty((M, N), dtype=torch.float16, device="cuda")
         cublas.block_scaled_matmul_nvfp4(a, b, output, a_scale, b_scale)
