@@ -463,9 +463,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       int contiguity = 1;
       if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
         canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
+        auto numCTAs = lookupNumCTAs(forOp);
         sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
             forOp.getContext(), 1, 1, 1, {0},
-            ttg::CGAEncodingAttr::getDefault(forOp.getContext(), 1));
+            ttg::CGAEncodingAttr::get1DLayout(forOp.getContext(), numCTAs));
         if (canUseAsyncCp) {
           scalarLoads.push_back(&op);
         }

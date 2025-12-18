@@ -50,7 +50,7 @@ public:
   NvidiaMmaEncodingAttr mma(unsigned versionMaj, unsigned versionMin,
                             ArrayRef<unsigned> instrShape,
                             ArrayRef<unsigned> numWarps) {
-    auto cgaLayout = CGAEncodingAttr::getDefault(&ctx, numWarps.size());
+    auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, numWarps.size());
     return NvidiaMmaEncodingAttr::get(&ctx, versionMaj, versionMin, numWarps,
                                       std::move(cgaLayout), instrShape);
   }

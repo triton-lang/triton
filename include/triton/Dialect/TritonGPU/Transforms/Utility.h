@@ -52,7 +52,7 @@ unsigned getElementBitWidth(RankedTensorType type);
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        SmallVector<int64_t> &shapePerCTA);
+                        ArrayRef<int64_t> shape);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);

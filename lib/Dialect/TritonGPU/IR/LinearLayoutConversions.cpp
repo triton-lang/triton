@@ -1221,9 +1221,19 @@ LinearLayout toLinearLayout(MemDescType type) {
   // Pass in the allocation shape. Then when using invertAndCompose it will
   // trim the allocationShape to the shape if they are different.
   // We also remove the first dimension of the allocationShape if there was a
-  // call to memdesc_index
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return toLinearLayout(shape, type.getEncoding());
+  // call to memdesc_index.
+  auto shape = type.getAllocShape();
+  Attribute layout = type.getEncoding();
+  if (auto enc = dyn_cast<LayoutEncodingTrait>(layout)) {
+    unsigned rank = enc.getRank();
+    if (shape.size() > rank)
+      shape = shape.take_back(rank);
+  } else if (isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+                 layout)) {
+    if (shape.size() > 2)
+      shape = shape.take_back(2);
+  }
+  return toLinearLayout(shape, layout);
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1404,8 +1414,9 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  return combineCtaCgaWithShape(
-      ctaLayout, CGAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+  return combineCtaCgaWithShape(ctaLayout,
+                                CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2),
+                                dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1535,7 +1546,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, 2);
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(ctx, 2);
   auto finalLay = combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
   return finalLay;
 }
