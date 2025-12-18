@@ -461,8 +461,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
   bool transB = !bLoader->getDescriptor().transposed;
 
-  assert((!aTensorTy.getElementType().isF32() || !(transA || transB)) &&
-         "Currently don't support transpose for F32.");
+  if (aTensorTy.getElementType().isF32() && (transA || transB)) {
+    return mlir::emitError(loc, "tcgen05.mma does not support transposed "
+                                "float32 operands in shared memory");
+  }
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   aInTmem};

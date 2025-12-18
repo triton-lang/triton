@@ -568,7 +568,13 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
-  return success();
+  auto enc = dyn_cast<TensorMemoryEncodingAttr>(getD().getType().getEncoding());
+  if (!enc) {
+    return emitOpError(
+        "expected accumulator layout to be a TensorMemoryLayout");
+  }
+  if (enc.getBlockM() != 128)
+    return emitOpError("only supports instruction shape blockM=128");
   return success();
 }
 

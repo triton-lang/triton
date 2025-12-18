@@ -44,6 +44,10 @@ class TensorDescriptor:
             for stride in self.strides[:-1]:
                 assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
             assert tl.target_info.cuda_capability_geq(10, 0), "fp4_padded requires blackwell or newer"
+        assert not self.layout.fp4_padded or self.layout.swizzle_byte_width == 128, f"FP4 padded operands must be swizzled with 128-byte width, but got {self.layout.swizzle_byte_width}"
+        assert self.layout.element_bitwidth in [
+            8, 16, 32
+        ], f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {self.layout.element_bitwidth}"
 
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero"):
