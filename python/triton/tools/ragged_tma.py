@@ -46,15 +46,103 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
 
 
 @triton.jit
+def _compute_ragged_descriptor_params_2d(
+    shape_0, shape_1,
+    stride_0, stride_1: tl.constexpr,
+    ragged_dim: tl.constexpr
+):
+    tl.static_assert(
+        ragged_dim < 1,
+        "Using last dim as ragged dim is not supported"
+    )
+
+    max_int: tl.constexpr = 0x7fff0000
+    billion: tl.constexpr = 0x40000000
+    two_to_34 = tl.to_tensor(2**34)
+    return (
+        [max_int, max_int, billion, shape_1],
+        [two_to_34 - stride_0, stride_0, stride_0, stride_1],
+    )
+
+
+@triton.jit
+def _compute_ragged_descriptor_params_3d(
+    shape_0, shape_1, shape_2,
+    stride_0, stride_1, stride_2: tl.constexpr,
+    ragged_dim: tl.constexpr
+):
+    tl.static_assert(
+        ragged_dim < 2,
+        "Using last dim as ragged dim is not supported"
+    )
+
+    max_int: tl.constexpr = 0x7fff0000
+    billion: tl.constexpr = 0x40000000
+    two_to_34 = tl.to_tensor(2**34)
+    if ragged_dim == 0:
+        return (
+            [max_int, max_int, billion, shape_1, shape_2],
+            [two_to_34 - stride_0, stride_0, stride_0, stride_1, stride_2],
+        )
+    else:
+        return (
+            [max_int, max_int, shape_0, billion, shape_2],
+            [two_to_34 - stride_1, stride_1, stride_0, stride_1, stride_2],
+        )
+
+
+@triton.jit
+def create_ragged_descriptor_device_2d(
+    base_ptr,
+    shape_0, shape_1,
+    stride_0, stride_1: tl.constexpr,
+    block_shape_0: tl.constexpr, block_shape_1: tl.constexpr,
+    ragged_dim: tl.constexpr
+):
+    shape, stride = _compute_ragged_descriptor_params_2d(
+        shape_0, shape_1,
+        stride_0, stride_1,
+        ragged_dim
+    )
+    one: tl.constexpr = 1
+    return tl.make_tensor_descriptor(
+        base_ptr,
+        shape=shape,
+        strides=[stride[0], stride[1], stride[2], stride_1],
+        block_shape=[one, one, block_shape_0, block_shape_1],
+    )
+
+
+@triton.jit
+def create_ragged_descriptor_device_3d(
+    base_ptr,
+    shape_0, shape_1, shape_2,
+    stride_0, stride_1, stride_2: tl.constexpr,
+    block_shape_0: tl.constexpr, block_shape_1: tl.constexpr, block_shape_2: tl.constexpr,
+    ragged_dim: tl.constexpr
+):
+    shape, stride = _compute_ragged_descriptor_params_3d(
+        shape_0, shape_1, shape_2,
+        stride_0, stride_1, stride_2,
+        ragged_dim
+    )
+    one: tl.constexpr = 1
+    return tl.make_tensor_descriptor(
+        base_ptr,
+        shape=shape,
+        strides=[stride[0], stride[1], stride[2], stride[3], stride_2],
+        block_shape=[one, one, block_shape_0, block_shape_1, block_shape_2],
+    )
+
+
+@triton.jit
 def to_ragged_indices(slice_off, slice_size, row):
     """
     Helper function for load_ragged and store_ragged.
     """
-
     billion = 0x40000000  # == 2**30
     x = billion - slice_size + row
     y = slice_off + slice_size
-
     return billion, y, x
 
 
