@@ -9,7 +9,10 @@ using namespace mlir;
 using namespace mlir::triton;
 
 constexpr int kBarrierCountBitWidth = 29;
-constexpr int kBarrierPhaseMask = ((1ULL << (32 - kBarrierCountBitWidth)) - 1);
+// NOTE: We only care for the parity of the phase (0: even, 1: odd), so use 1
+// bit constexpr int kBarrierPhaseMask = ((1ULL << (32 - kBarrierCountBitWidth))
+// - 1);
+constexpr int kBarrierPhaseMask = 1;
 constexpr int kInitCountPos = 32;
 
 namespace {
