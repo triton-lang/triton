@@ -1468,8 +1468,8 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // broadcast these values. This is a waste of memory. In order to deal with
   // that we can assignd other 16 threads (thread 15-31), to hold scales of the
   // next tile computed by the same warp (aka it's first repetition in non-k
-  // dim), if there is one. So register base that naturally representes first
-  // repetition needs to be moved to lane base that representes lane 16. Since
+  // dim), if there is one. So register base that naturally represents first
+  // repetition needs to be moved to lane base that represents lane 16. Since
   // for a single tile thread holds 4 vals, we move register base 2, to lane
   // base 4.
   auto retLayout = replaceFirstRepWithLane(nonOpSelLayout, firstRepInNonK, ctx);

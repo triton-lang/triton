@@ -833,7 +833,7 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64)])
 @pytest.mark.parametrize("NUM_BUFFERS", [2, 4])
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
-@pytest.mark.parametrize("PERSISTENT", [True])
+@pytest.mark.parametrize("PERSISTENT", [False, True])
 @pytest.mark.parametrize("M,N,K", [(256, 256, 512), (250, 250, 510)])
 @pytest.mark.parametrize("NUM_TOTAL_WARPS", [8, 12, 16])
 def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, M, N, K,
@@ -867,6 +867,10 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
         warp_bases.append((1 << i, 0))
 
     if not PERSISTENT:
+        warp_bases = [(0, 1)]
+        for i in range(int(math.log2(NUM_TOTAL_WARPS // 4))):
+            warp_bases.append((1 << i, 0))
+
         grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
         gemm_tdm_warp_specialized_kernel[grid](
             a_device, b_device, c_device,  #
@@ -879,6 +883,11 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
             WARP_BASES=tuple(warp_bases),  #
             num_warps=NUM_TOTAL_WARPS // 2)
     else:
+        warp_bases = [(0, 1)]
+        compute_warps = 4
+        for i in range(int(math.log2(compute_warps // 2))):
+            warp_bases.append((1 << i, 0))
+
         num_tiles = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
         # num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
         # NOTE: Explicitly set num_sms to small number to ensure that each CU will compute multiple tiles.
@@ -891,7 +900,8 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
             stride_bk, stride_bn,  #
             stride_cm, stride_cn,  #
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=NUM_TOTAL_WARPS,  #
+            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=NUM_TOTAL_WARPS, COMPUTE_WARPS=compute_warps,
+            WARP_BASES=tuple(warp_bases),  #
             num_warps=NUM_TOTAL_WARPS // 3)
 
     c_triton = c_device.cpu()
@@ -1265,7 +1275,8 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
                                                 BLOCK_K: ttgl.constexpr,  #
                                                 NUM_BUFFERS: ttgl.constexpr,  #
                                                 TRANSPOSE_B: ttgl.constexpr,  #
-                                                NUM_WARPS: ttgl.constexpr):
+                                                NUM_WARPS: ttgl.constexpr, COMPUTE_WARPS: ttgl.constexpr,
+                                                WARP_BASES: ttgl.constexpr):
     """Persistent warp specialized GEMM kernel with three partitions (producer, compute, epilogue)."""
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
@@ -1276,14 +1287,13 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
 
     # WS kernels require num_warps to be a multiple of 4; default partition (epilogue) must have multiple of 4 warps.
     PRODUCER_WARPS: ttgl.constexpr = 4
-    COMPUTE_WARPS: ttgl.constexpr = 4
     EPILOGUE_WARPS: ttgl.constexpr = 4
     WARP_SIZE: ttgl.constexpr = 32
 
     # accumulator buffers used for double-buffering to overlap epilogue with load of the next tile
     NUM_ACC_BUFFERS: ttgl.constexpr = 2
 
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
     shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
     SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
     SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
