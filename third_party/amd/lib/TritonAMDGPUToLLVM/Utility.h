@@ -102,15 +102,11 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       unsigned threadsPerWarp,
                                       unsigned vecSize);
 
-// Returns true if we load directly from global |srcTy| to shared memory
+// Returns true if we can load directly from global |srcTy| to shared memory
 // |dstEnc| for the given target.
-//
-// This function expects caller to pass in as |vectorSize| the vector size
+// This function expects the caller to pass in |vectorSize| as the vector size
 // reading from global memory, after factoring in axis information and alignment
 // hints. It will be updated to factor in shared memory |dstEnc| constraints.
-//
-// This is used by both the LLVM lowering and the conversion pattern to ensure
-// consistency.
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         unsigned &vectorSize);
