@@ -36,25 +36,18 @@ thread_local std::deque<size_t>
 
 namespace {
 
-std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
+std::shared_ptr<Metric>
+convertKernelActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
-  switch (activity->kind) {
-  case CUPTI_ACTIVITY_KIND_KERNEL:
-  case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
-    if (kernel->start < kernel->end) {
-      metric = std::make_shared<KernelMetric>(
-          static_cast<uint64_t>(kernel->start),
-          static_cast<uint64_t>(kernel->end), 1,
-          static_cast<uint64_t>(kernel->deviceId),
-          static_cast<uint64_t>(DeviceType::CUDA),
-          static_cast<uint64_t>(kernel->streamId));
-    } // else: not a valid kernel activity
-    break;
-  }
-  default:
-    break;
-  }
+  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
+  if (kernel->start < kernel->end) {
+    metric =
+        std::make_shared<KernelMetric>(static_cast<uint64_t>(kernel->start),
+                                       static_cast<uint64_t>(kernel->end), 1,
+                                       static_cast<uint64_t>(kernel->deviceId),
+                                       static_cast<uint64_t>(DeviceType::CUDA),
+                                       static_cast<uint64_t>(kernel->streamId));
+  } // else: not a valid kernel activity
   return metric;
 }
 
@@ -85,7 +78,7 @@ uint32_t processActivityKernel(
     // Otherwise, updating one Data will mutate the Metric observed by others
     // (counts will incorrectly compound with the number of active sessions).
     for (auto *data : dataSet) {
-      if (auto metric = convertActivityToMetric(activity)) {
+      if (auto metric = convertKernelActivityToMetric(activity)) {
         if (isApiExternId) {
           data->addOpAndMetric(parentId, kernel->name, metric);
         } else {
@@ -137,7 +130,7 @@ uint32_t processActivityKernel(
         isAPI = nodeIt->second.isApiExternId;
         scopeId = *scopeIdPtr;
       }
-      if (auto metric = convertActivityToMetric(activity)) {
+      if (auto metric = convertKernelActivityToMetric(activity)) {
         if (isAPI) {
           data->addOpAndMetric(scopeId, kernel->name, metric);
         } else {
