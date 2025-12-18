@@ -435,7 +435,7 @@ if __name__ == "__main__":
 # that each [BLOCK_M, BLOCK_K // VEC_SIZE] block is contiguous in global memory.
 #
 # One naive way to do that is layout the scale tensor as
-# [M // BLOCK_M, K // (BLOCK_K * BLOCK_K // VEC_SIZE), BLOCK_M, BLOCK_K // VEC_SIZE]
+# [M // BLOCK_M, (K // VEC_SIZE) // (BLOCK_K // VEC_SIZE), BLOCK_M, BLOCK_K // VEC_SIZE]
 # with order=[?, ?, 1, 0], i.e. contiguous along the dim=3 and then dim=2.
 #
 # dim=0 is the block index along the M dimension and dim=1 is the block index
