@@ -8,7 +8,7 @@ and a scale tensor `S`. Tensor `X` is quantized into `Q` by dividing it into
 equally-sized blocks, where each block is associated with a single scale factor.
 
 When performing matrix multiplication on block-scaled tensors, we load both
-quantized operands and their scales from GPU global memory (VRAM) on to the SMs,
+quantized operands and their scales from global memory on to the SMs,
 where they are dequantized by multiplying each block of quantized values by their
 respective scale factors. The MMA itself is then performed in a higher precision.
 
