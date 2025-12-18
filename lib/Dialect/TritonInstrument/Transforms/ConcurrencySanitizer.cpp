@@ -429,12 +429,12 @@ private:
     std::optional<MemEffectsOpInfo> info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       // TODO: For async TMA barriers, the barrier "arrive" corresponding to the
-      // completion mechanism is modeled by barrier_expect (PTX
-      // mbarrier.arrive.expect_tx). Individual async_tma_copy ops should not
-      // decrement the barrier state, otherwise multiple copies using the same
-      // barrier would incorrectly advance the phase multiple times.
-      // This should be improved bu tracking the barrier expected byte count,
-      // and "arriving" the barrier when the expected byte count is reached.
+      // completion mechanism is modeled by barrier_expect. Individual
+      // async_tma_copy ops should not decrement the barrier state, otherwise
+      // multiple copies using the same barrier would incorrectly advance the
+      // phase multiple times. This should be improved bu tracking the barrier
+      // expected byte count, and "arriving" the barrier when the expected byte
+      // count is reached.
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
