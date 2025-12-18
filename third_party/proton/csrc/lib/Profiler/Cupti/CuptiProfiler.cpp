@@ -688,7 +688,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-          auto startTime = std::chrono::high_resolution_clock::now();
           auto externId = profiler.correlation.externIdQueue.back();
           auto &graphState = pImpl->graphStates[graphExecId];
 
@@ -715,10 +714,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               }
             }
           }
-          auto endTime = std::chrono::high_resolution_clock::now();
-          std::chrono::duration<double> elapsed = endTime - startTime;
-          std::cerr << "[PROTON] Graph launch processing took "
-                    << elapsed.count() << " seconds." << std::endl;
         }
       }
       profiler.correlation.correlate(callbackData->correlationId, numNodes);
