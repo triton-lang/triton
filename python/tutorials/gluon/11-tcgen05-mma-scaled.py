@@ -634,7 +634,7 @@ if __name__ == "__main__":
 # the A matrix, the layout is
 #
 # ```
-# [M // 32 // 4, K // VEC_SIZE // 4, 32, 4, 4]
+# [M // (32 * 4), K // (VEC_SIZE * 4), 32, 4, 4]
 # ```
 #
 # This way, each tensor core MMA in the matmul inner loop over the K blocks can
