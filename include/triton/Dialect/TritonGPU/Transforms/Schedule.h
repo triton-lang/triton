@@ -177,16 +177,16 @@ public:
   /// Operations are yielded lazily in order: (stage, cluster,
   /// IR-order-within-cluster).
   ///
-  /// The iterator maintains its position, allowing findNext to
-  /// search from the current position forward. Unlike the eager approach that
-  /// materializes all operations upfront, this iterator generates elements
-  /// on-demand by iterating through clusters and operations within the loop.
+  /// The iterator is circular: it starts from initialOp, traverses to the end
+  /// of clusters, wraps around to the beginning, and stops when it reaches
+  /// initialOp again. The iterator maintains its position, allowing findNext
+  /// to search from the current position forward.
   class LinearizedIterator {
   public:
     /// Construct an iterator for the given forOp and schedule.
-    /// This is the lazy constructor that generates elements on-demand.
+    /// The iterator starts at initialOp and wraps around circularly.
     LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule,
-                       Operation *initialOp = nullptr);
+                       Operation *initialOp);
 
     // Standard iterator operations
     LinearizedIterator &operator++();
@@ -219,18 +219,19 @@ public:
     scf::ForOp forOp;
     const CoarseSchedule *schedule;
     ClusterList::const_iterator clusterIt;
+    ClusterList::const_iterator clusterBegin;
     ClusterList::const_iterator clusterEnd;
     Block::iterator opIt;
     Block::iterator opEnd;
     Operation *currentOp = nullptr;
+    Operation *initialOp = nullptr;
     bool atEnd = false;
   };
 
-  /// Get an iterator over the linearized schedule starting from the
-  /// beginning. The forOp parameter specifies the loop whose operations
-  /// are being iterated.
-  LinearizedIterator linearized(scf::ForOp forOp,
-                                Operation *initialOp = nullptr) const {
+  /// Get a circular iterator over the linearized schedule starting from
+  /// initialOp. The iterator will traverse from initialOp to the end, wrap
+  /// around to the beginning, and stop when it reaches initialOp again.
+  LinearizedIterator linearized(scf::ForOp forOp, Operation *initialOp) const {
     return LinearizedIterator(forOp, *this, initialOp);
   }
 

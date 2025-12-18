@@ -300,46 +300,63 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 
 tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
     scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
-    : forOp(forOp), schedule(&schedule), atEnd(false) {
-  clusterIt = schedule.clusters.begin();
+    : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false) {
+  clusterBegin = schedule.clusters.begin();
   clusterEnd = schedule.clusters.end();
   opIt = forOp.getBody()->without_terminator().begin();
   opEnd = forOp.getBody()->without_terminator().end();
-  if (initialOp) {
-    auto it = schedule.opToStageAndCluster.find(initialOp);
-    if (it != schedule.opToStageAndCluster.end()) {
-      auto [_, cluster] = it->second;
-      clusterIt = cluster;
-      advanceToNextScheduledOp();
-      findNext([&](Operation *op) { return op == initialOp; });
-    } else {
-      atEnd = true;
-      currentOp = nullptr;
+
+  // Find the cluster containing initialOp
+  auto it = schedule.opToStageAndCluster.find(initialOp);
+  if (it != schedule.opToStageAndCluster.end()) {
+    auto [_, cluster] = it->second;
+    clusterIt = cluster;
+    // Find initialOp within its cluster
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      if (op == initialOp) {
+        break;
+      }
+      ++opIt;
     }
-  } else {
+    // Move past initialOp to start iteration from the next op
+    ++opIt;
     advanceToNextScheduledOp();
+  } else {
+    atEnd = true;
+    currentOp = nullptr;
   }
 }
 
 void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
-  while (clusterIt != clusterEnd) {
+  while (true) {
     while (opIt != opEnd) {
       Operation *op = &*opIt;
       auto it = schedule->opToStageAndCluster.find(op);
       if (it != schedule->opToStageAndCluster.end()) {
         auto [_, cluster] = it->second;
         if (cluster == clusterIt) {
+          // Check if we've come back to initialOp (completed the circle)
+          if (op == initialOp) {
+            atEnd = true;
+            currentOp = nullptr;
+            return;
+          }
           currentOp = op;
           return;
         }
       }
       ++opIt;
     }
+    // Move to next cluster
     ++clusterIt;
     opIt = forOp.getBody()->without_terminator().begin();
+
+    // Wrap around to the beginning if we've reached the end
+    if (clusterIt == clusterEnd) {
+      clusterIt = clusterBegin;
+    }
   }
-  atEnd = true;
-  currentOp = nullptr;
 }
 
 tt::CoarseSchedule::LinearizedIterator &

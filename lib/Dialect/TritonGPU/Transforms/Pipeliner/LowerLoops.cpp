@@ -1,6 +1,5 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,7 +14,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -744,10 +742,13 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   // Find the first sync candidate that appears after the MMA
-  // in the linearized schedule.
+  // in the linearized schedule. This is either the first op to appear
+  // after the MMA or the first op
   auto linearizedSchedule = schedule.linearized(forOp, mma);
-  std::optional<Operation *> latestSyncPoint = linearizedSchedule.findNext(
-      [&](Operation *op) { return syncCandidates.contains(op); });
+  std::optional<Operation *> latestSyncPoint =
+      schedule.linearized(forOp, mma).findNext([&](Operation *op) {
+        return syncCandidates.contains(op);
+      });
 
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
