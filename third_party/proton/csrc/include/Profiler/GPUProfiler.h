@@ -81,6 +81,8 @@ public:
       }
 
     private:
+      // In most cases, a graph node is only associated with one Data object.
+      // So we optimize the hot path here.
       Data *singleData{nullptr};
       size_t singleScopeId{0};
       std::unordered_map<Data *, size_t> multiDataToScopeId;
