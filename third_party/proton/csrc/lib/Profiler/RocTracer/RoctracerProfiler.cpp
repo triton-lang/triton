@@ -380,6 +380,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       processActivity(correlation.corrIdToExternId, correlation.externIdToState,
                       pImpl->CorrIdToIsHipGraph, externId, dataSet, record,
                       isGraph, state);
+    } else {
+      correlation.corrIdToExternId.erase(record->correlation_id);
+      pImpl->CorrIdToIsHipGraph.erase(record->correlation_id);
     }
     roctracer::getNextRecord<true>(record, &record);
   }
