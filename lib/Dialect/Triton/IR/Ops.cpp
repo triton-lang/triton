@@ -359,6 +359,8 @@ bool DotScaledOp::verifyOutputDims() {
 LogicalResult DotScaledOp::verify() {
   auto aShape = this->getA().getType().getShape();
   int64_t rank = aShape.size();
+  if (rank < 2)
+    return this->emitError("operands must be at least 2D");
 
   auto k = aShape[rank - 1];
   if (this->getAElemType() == ScaleDotElemType::E2M1) {
@@ -1367,8 +1369,7 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
   // TODO: We can support smaller gather sizes by padding the `local_alloc` this
   // lowers to to the nearest minimum tile size.
   if (unsigned rows = resultType.getShape()[0]; rows < 8) {
-    return op->emitOpError("gather must have at least 8 rows, but got ")
-           << rows;
+    return op->emitOpError("must have at least 8 rows, but got ") << rows;
   }
 
   Type dtype = resultType.getElementType();
@@ -1377,9 +1378,8 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
 
   unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
-    return op->emitOpError("gather of ")
-           << dtype << " must have at least " << minCols << " columns, but got "
-           << cols;
+    return op->emitOpError("must have at least ")
+           << minCols << " columns for " << dtype << ", but got " << cols;
   }
 
   if (resultType.getShape()[0] != indicesType.getShape()[0]) {

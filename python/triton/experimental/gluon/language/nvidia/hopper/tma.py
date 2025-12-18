@@ -87,7 +87,6 @@ class tensor_descriptor(base_value):
 
 @builtin
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, _semantic=None):
-    assert tensor_desc.layout == result.layout, f"tensor descriptor layout {tensor_desc.layout} does not match result shared memory layout {result.layout}"
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     _semantic.builder.create_async_tma_copy_global_to_local(tensor_desc.handle, coord, barrier.handle, result.handle,
@@ -96,7 +95,6 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
-    assert tensor_desc.layout == src.layout, f"tensor descriptor layout {tensor_desc.layout} does not match source shared memory layout {src.layout}"
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
