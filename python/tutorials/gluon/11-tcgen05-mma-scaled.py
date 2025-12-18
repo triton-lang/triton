@@ -138,13 +138,6 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     # BLOCK_K represents the number of actual elements along K.
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    # Note that the shape of a tensor descriptor whose operands are fp4 padded is multiplied by 2 along the inner dimension when
-    # queried on the device side. This is a quirk of the NVIDIA driver. For example, suppose A is a packed fp4 tensor represented
-    # by a uint8 tensor with shape [512, 1024]. On the device side, `a_desc.shape` will be [512, 2048]. If A is fp4 represented
-    # by a uint8 tensor with shape [512, 1024] but not padded, `a_desc.shape` will be [512, 1024]. While we can just pass `K` as
-    # a kernel argument, I want to highlight this oddity here because it can be confusing.
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     # Allocate shared memory for the operands.
     a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
@@ -474,8 +467,6 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
     b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
@@ -708,8 +699,6 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
     b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
@@ -993,8 +982,6 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
     b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
@@ -1251,8 +1238,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
@@ -1485,8 +1470,6 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     M = c_desc.shape[0]
     N = c_desc.shape[1]
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        K //= 2
 
     a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
