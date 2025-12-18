@@ -3,7 +3,7 @@ Blocked-Scaled Matrix Multiplication
 ====================================
 
 Block scaling is a quantization technique whereby a floating point tensor `X` is
-quantized into a tensor `Q` of the same shape but with a lower-precision dtype
+quantized into: a tensor `Q` of the same shape, but with a lower-precision dtype;
 and a scale tensor `S`. Tensor `X` is quantized into `Q` by dividing it into
 equally-sized blocks, where each block is associated with a single scale factor.
 
