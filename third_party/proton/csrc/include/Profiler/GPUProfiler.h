@@ -44,7 +44,46 @@ public:
 
     struct GraphNodeScopes {
       bool isApiExternId{false};
-      std::map<Data *, size_t> dataToScopeId;
+
+      void setScopeId(Data *data, size_t scopeId) {
+        if (singleData == nullptr || singleData == data) {
+          singleData = data;
+          singleScopeId = scopeId;
+          return;
+        }
+        if (multiDataToScopeId.empty()) {
+          multiDataToScopeId.reserve(2);
+        }
+        multiDataToScopeId[data] = scopeId;
+      }
+
+      const size_t *findScopeId(Data *data) const {
+        if (singleData == data) {
+          return &singleScopeId;
+        }
+        if (multiDataToScopeId.empty()) {
+          return nullptr;
+        }
+        auto it = multiDataToScopeId.find(data);
+        if (it == multiDataToScopeId.end()) {
+          return nullptr;
+        }
+        return &it->second;
+      }
+
+      template <typename FnT> void forEachScopeId(FnT &&fn) const {
+        if (singleData != nullptr) {
+          fn(singleData, singleScopeId);
+        }
+        for (const auto &[data, scopeId] : multiDataToScopeId) {
+          fn(data, scopeId);
+        }
+      }
+
+    private:
+      Data *singleData{nullptr};
+      size_t singleScopeId{0};
+      std::unordered_map<Data *, size_t> multiDataToScopeId;
     };
 
     // graphNodeId -> (per-Data scopeId + API-originated flag)

@@ -128,13 +128,13 @@ uint32_t processActivityKernel(
           // No captured context for this node
           continue;
         }
-        if (nodeIt->second.dataToScopeId.find(data) ==
-            nodeIt->second.dataToScopeId.end()) {
+        auto scopeIdPtr = nodeIt->second.findScopeId(data);
+        if (scopeIdPtr == nullptr) {
           // No captured context for this data
           continue;
         }
         isAPI = nodeIt->second.isApiExternId;
-        scopeId = nodeIt->second.dataToScopeId.at(data);
+        scopeId = *scopeIdPtr;
       }
       if (auto metric = convertActivityToMetric(activity)) {
         if (isAPI) {
@@ -687,7 +687,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-          auto dataSet = profiler.getDataSet();
+          auto startTime = std::chrono::high_resolution_clock::now();
           auto externId = profiler.correlation.externIdQueue.back();
           auto &graphState = pImpl->graphStates[graphExecId];
 
@@ -697,9 +697,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                   .graphNodeIdToScopes;
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
-            if (dataSet.find(data) == dataSet.end()) {
-              continue;
-            }
             const auto baseScopeId =
                 data->addOp(externId, GraphState::captureTag);
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
@@ -709,10 +706,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                              graphState.apiNodeIds.end();
                 auto &nodeScopes = graphNodeIdToScopes[nodeId];
                 nodeScopes.isApiExternId = isAPI;
-                nodeScopes.dataToScopeId[data] = nodeScopeId;
+                nodeScopes.setScopeId(data, nodeScopeId);
               }
             }
           }
+          auto endTime = std::chrono::high_resolution_clock::now();
+          std::chrono::duration<double> elapsed = endTime - startTime;
+          std::cerr << "[PROTON] Graph launch processing took "
+                    << elapsed.count() << " seconds." << std::endl;
         }
       }
       profiler.correlation.correlate(callbackData->correlationId, numNodes);
@@ -741,21 +742,17 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           std::map<Data *,
                    std::vector<std::pair</*isAPI=*/bool, /*scopeId=*/size_t>>>
               metricNodeScopes;
-          auto dataSet = profiler.getDataSet();
           auto &graphExec = graphRef.value().get();
           auto &externIdState = profiler.correlation.externIdToState[externId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
             auto nodeIt = externIdState.graphNodeIdToScopes.find(nodeId);
-            for (auto *data : dataSet) {
-              if (nodeIt != externIdState.graphNodeIdToScopes.end()) {
-                bool isApi = nodeIt->second.isApiExternId;
-                auto dataIt = nodeIt->second.dataToScopeId.find(data);
-                if (dataIt != nodeIt->second.dataToScopeId.end()) {
-                  auto scopeId = dataIt->second;
-                  metricNodeScopes[data].push_back({isApi, scopeId});
-                }
-              }
+            if (nodeIt == externIdState.graphNodeIdToScopes.end()) {
+              continue;
             }
+            bool isApi = nodeIt->second.isApiExternId;
+            nodeIt->second.forEachScopeId([&](Data *data, size_t scopeId) {
+              metricNodeScopes[data].push_back({isApi, scopeId});
+            });
           }
           auto metricBufferCapacity =
               pImpl->metricBuffer->getCapacity(); // bytes
