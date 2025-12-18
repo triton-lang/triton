@@ -31,6 +31,9 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritongpu-prefetch"
@@ -45,6 +48,342 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
+
+static SmallVector<Value>
+getPrefetchSrc(Value v, scf::ForOp forContext = nullptr,
+               SmallPtrSetImpl<Value> *visitedArgs = nullptr) {
+  Operation *op = v.getDefiningOp();
+  bool foundConvertFromShared = false;
+  SmallVector<Value> rets;
+  if (!op) {
+    if (!forContext)
+      return rets;
+    auto barg = dyn_cast<BlockArgument>(v);
+    if (!barg)
+      return rets;
+    if (barg.getOwner()->getParentOp() != forContext.getOperation())
+      return rets;
+    if (barg.getArgNumber() < forContext.getNumInductionVars())
+      return rets;
+    SmallPtrSet<Value, 8> localVisited;
+    if (!visitedArgs)
+      visitedArgs = &localVisited;
+    if (!visitedArgs->insert(barg).second)
+      return rets;
+    auto yieldOp = cast<scf::YieldOp>(forContext.getBody()->getTerminator());
+    unsigned iterIdx = barg.getArgNumber() - forContext.getNumInductionVars();
+    return getPrefetchSrc(yieldOp.getOperand(iterIdx), forContext, visitedArgs);
+  }
+  rets.push_back(v);
+  LDBG("Prefetch src: " << *op);
+  SmallPtrSet<Operation *, 8> visited;
+  Operation *curr = op;
+  while (curr) {
+    if (!visited.insert(curr).second)
+      break;
+    Value nextVal;
+    for (Value operand : curr->getOperands()) {
+      if (isa<triton::gpu::AsyncTokenType>(operand.getType()))
+        continue;
+      nextVal = operand;
+      break;
+    }
+    if (!nextVal)
+      break;
+    rets.push_back(nextVal);
+    if (auto load = dyn_cast<triton::gpu::LocalLoadOp>(curr))
+      if (isa<DotOperandEncodingAttr>(load.getType().getEncoding()))
+        foundConvertFromShared = true;
+    if (auto barg = dyn_cast<BlockArgument>(nextVal)) {
+      if (forContext &&
+          barg.getOwner()->getParentOp() == forContext.getOperation() &&
+          barg.getArgNumber() >= forContext.getNumInductionVars()) {
+        SmallPtrSet<Value, 8> localVisited;
+        if (!visitedArgs)
+          visitedArgs = &localVisited;
+        if (!visitedArgs->insert(barg).second)
+          break;
+        auto yieldOp =
+            cast<scf::YieldOp>(forContext.getBody()->getTerminator());
+        unsigned iterIdx =
+            barg.getArgNumber() - forContext.getNumInductionVars();
+        SmallVector<Value> tail = getPrefetchSrc(yieldOp.getOperand(iterIdx),
+                                                 forContext, visitedArgs);
+        rets.append(tail.begin(), tail.end());
+        if (!tail.empty())
+          foundConvertFromShared = true;
+        break;
+      }
+      break;
+    }
+    curr = nextVal.getDefiningOp();
+    if (curr)
+      LDBG("op: " << *curr);
+  }
+  std::reverse(rets.begin(), rets.end());
+
+  if (foundConvertFromShared)
+    return rets;
+  return {};
+}
+
+static bool isValueFromInductionVar(scf::ForOp forOp, Value v) {
+  if (auto barg = dyn_cast<BlockArgument>(v)) {
+    if (barg.getOwner()->getParentOp() == forOp.getOperation())
+      return barg.getArgNumber() < forOp.getNumInductionVars();
+  }
+  return false;
+}
+
+static bool collectOpsForLoad(triton::gpu::LocalLoadOp load, scf::ForOp forOp,
+                              SmallVector<Operation *> &orderedOps) {
+  DenseSet<Operation *> visited;
+  std::function<bool(Operation *)> dfs = [&](Operation *op) -> bool {
+    if (op->getBlock() != forOp.getBody())
+      return true;
+    if (!visited.insert(op).second)
+      return true;
+
+    if (isa<triton::gpu::AsyncWaitOp>(op)) {
+      orderedOps.push_back(op);
+      return true;
+    }
+
+    if (op->getNumResults() == 0) {
+      LDBG("Cannot clone op with no results: " << *op);
+      return false;
+    }
+
+    if (op != load.getOperation()) {
+      if (!isa<triton::gpu::AsyncWaitOp>(op) && !isMemoryEffectFree(op)) {
+        LDBG("Cannot clone op with side effects: " << *op);
+        return false;
+      }
+    }
+
+    for (Value operand : op->getOperands()) {
+      if (auto asyncWait = operand.getDefiningOp<triton::gpu::AsyncWaitOp>()) {
+        if (!dfs(asyncWait)) {
+          LDBG("Failed to clone async wait: " << *asyncWait);
+          return false;
+        }
+        continue;
+      }
+      if (isa<triton::gpu::AsyncTokenType>(operand.getType()))
+        continue;
+      if (isValueFromInductionVar(forOp, operand))
+        continue;
+      if (auto barg = dyn_cast<BlockArgument>(operand)) {
+        if (barg.getOwner()->getParentOp() == forOp.getOperation())
+          continue;
+      }
+      Operation *def = operand.getDefiningOp();
+      if (!def)
+        continue;
+      if (!dfs(def)) {
+        LDBG("Failed to clone operand def: " << *def);
+        return false;
+      }
+    }
+    orderedOps.push_back(op);
+    return true;
+  };
+
+  return dfs(load.getOperation());
+}
+
+struct LoadRotationInfo {
+  triton::gpu::LocalLoadOp loadOp;
+  SmallVector<Operation *> opsInOrder;
+  SmallVector<Value> carriedValues;
+  SmallVector<Value> initialValues;
+  SmallVector<Value> rotatedValues;
+  unsigned iterArgBase = 0;
+};
+
+static scf::ForOp rotateLocalLoadChains(scf::ForOp forOp) {
+  Block *loopBody = forOp.getBody();
+  auto yieldOp = cast<scf::YieldOp>(loopBody->getTerminator());
+
+  SmallVector<LoadRotationInfo, 4> rotations;
+  DenseSet<Operation *> seenLoads;
+
+  auto considerOperand = [&](Value operand) {
+    SmallVector<Value> vals = getPrefetchSrc(operand, forOp);
+    if (vals.empty())
+      return;
+    triton::gpu::LocalLoadOp load = nullptr;
+    for (Value candidate : vals) {
+      load = candidate.getDefiningOp<triton::gpu::LocalLoadOp>();
+      if (load)
+        break;
+    }
+    if (!load || load->getParentOfType<scf::ForOp>() != forOp)
+      return;
+    if (!seenLoads.insert(load.getOperation()).second)
+      return;
+    if (llvm::is_contained(yieldOp.getOperands(), load.getResult()))
+      return;
+
+    LoadRotationInfo info;
+    info.loadOp = load;
+    if (!collectOpsForLoad(load, forOp, info.opsInOrder))
+      return;
+    LDBG("Collected ops for load: " << info.opsInOrder.size());
+    rotations.push_back(std::move(info));
+  };
+
+  for (Operation &op : loopBody->without_terminator()) {
+    if (auto dot = dyn_cast<triton::DotOp>(&op)) {
+      considerOperand(dot.getA());
+      considerOperand(dot.getB());
+    }
+  }
+
+  LDBG("Candidate load chains: " << rotations.size());
+
+  if (rotations.empty())
+    return forOp;
+
+  for (auto &info : rotations) {
+    DenseSet<Operation *> sliceOps;
+    for (Operation *op : info.opsInOrder)
+      sliceOps.insert(op);
+    DenseSet<Value> seen;
+    info.carriedValues.clear();
+    for (Operation *op : info.opsInOrder) {
+      for (Value res : op->getResults()) {
+        bool needsCarry = false;
+        for (OpOperand &use : res.getUses()) {
+          Operation *user = use.getOwner();
+          if (sliceOps.contains(user))
+            continue;
+          needsCarry = true;
+          break;
+        }
+        if (needsCarry && seen.insert(res).second)
+          info.carriedValues.push_back(res);
+      }
+    }
+    LDBG("Carried values count: " << info.carriedValues.size());
+  }
+
+  llvm::erase_if(rotations, [](const LoadRotationInfo &info) {
+    return info.carriedValues.empty();
+  });
+
+  LDBG("Retained load chains after carry analysis: " << rotations.size());
+
+  if (rotations.empty())
+    return forOp;
+
+  DenseSet<Operation *> opsToRotate;
+  for (auto &info : rotations)
+    for (Operation *rotOp : info.opsInOrder)
+      opsToRotate.insert(rotOp);
+
+  OpBuilder preheaderBuilder(forOp);
+  preheaderBuilder.setInsertionPoint(forOp);
+
+  for (auto &info : rotations) {
+    IRMapping mapping;
+    mapping.map(forOp.getInductionVar(), forOp.getLowerBound());
+    for (auto [arg, init] :
+         llvm::zip(forOp.getRegionIterArgs(), forOp.getInitArgs()))
+      mapping.map(arg, init);
+    for (Operation *op : info.opsInOrder) {
+      Operation *clone = preheaderBuilder.clone(*op, mapping);
+      for (auto [origRes, newRes] :
+           llvm::zip(op->getResults(), clone->getResults()))
+        mapping.map(origRes, newRes);
+    }
+    info.initialValues.clear();
+    info.initialValues.reserve(info.carriedValues.size());
+    for (Value carry : info.carriedValues)
+      info.initialValues.push_back(mapping.lookupOrDefault(carry));
+  }
+
+  SmallVector<Value> newInitArgs(forOp.getInitArgs().begin(),
+                                 forOp.getInitArgs().end());
+  for (auto &info : rotations)
+    newInitArgs.append(info.initialValues.begin(), info.initialValues.end());
+
+  unsigned baseIterArgCount = forOp.getInitArgs().size();
+  unsigned extraArgCursor = baseIterArgCount;
+  for (auto &info : rotations) {
+    info.iterArgBase = extraArgCursor;
+    extraArgCursor += info.carriedValues.size();
+  }
+
+  OpBuilder builder(forOp);
+  auto newFor =
+      scf::ForOp::create(builder, forOp.getLoc(), forOp.getLowerBound(),
+                         forOp.getUpperBound(), forOp.getStep(), newInitArgs,
+                         [&](OpBuilder &nestedBuilder, Location loc,
+                             Value /*iv*/, ValueRange iterArgs) {
+                           scf::YieldOp::create(nestedBuilder, loc, iterArgs);
+                         });
+
+  IRMapping bodyMap;
+  bodyMap.map(forOp.getInductionVar(), newFor.getInductionVar());
+
+  auto newArgs = newFor.getRegionIterArgs();
+  for (auto [oldArg, newArg] : llvm::zip(forOp.getRegionIterArgs(),
+                                         newArgs.take_front(baseIterArgCount)))
+    bodyMap.map(oldArg, newArg);
+
+  for (auto &info : rotations)
+    for (auto [idx, value] : llvm::enumerate(info.carriedValues))
+      bodyMap.map(value, newArgs[info.iterArgBase + idx]);
+
+  OpBuilder bodyBuilder = OpBuilder::atBlockBegin(newFor.getBody());
+
+  for (Operation &op : loopBody->without_terminator()) {
+    if (opsToRotate.contains(&op))
+      continue;
+    Operation *clone = bodyBuilder.clone(op, bodyMap);
+    for (auto [origRes, newRes] :
+         llvm::zip(op.getResults(), clone->getResults()))
+      bodyMap.map(origRes, newRes);
+  }
+
+  Operation *defaultYield = newFor.getBody()->getTerminator();
+  defaultYield->erase();
+
+  OpBuilder tailBuilder = OpBuilder::atBlockEnd(newFor.getBody());
+  for (auto &info : rotations) {
+    info.rotatedValues.clear();
+    info.rotatedValues.reserve(info.carriedValues.size());
+    for (Operation *op : info.opsInOrder) {
+      Operation *clone = tailBuilder.clone(*op, bodyMap);
+      for (auto [origRes, newRes] :
+           llvm::zip(op->getResults(), clone->getResults()))
+        bodyMap.map(origRes, newRes);
+    }
+    for (Value carry : info.carriedValues)
+      info.rotatedValues.push_back(bodyMap.lookupOrDefault(carry));
+  }
+
+  SmallVector<Value> yieldValues;
+  unsigned extraYieldCount = 0;
+  for (auto &info : rotations)
+    extraYieldCount += info.rotatedValues.size();
+  yieldValues.reserve(yieldOp->getNumOperands() + extraYieldCount);
+  for (Value operand : yieldOp.getOperands())
+    yieldValues.push_back(bodyMap.lookupOrDefault(operand));
+  for (auto &info : rotations)
+    yieldValues.append(info.rotatedValues.begin(), info.rotatedValues.end());
+
+  scf::YieldOp::create(tailBuilder, forOp.getLoc(), yieldValues);
+
+  auto newResults = newFor.getResults();
+  for (auto [oldRes, newRes] : llvm::zip(
+           forOp.getResults(), newResults.take_front(forOp.getNumResults())))
+    oldRes.replaceAllUsesWith(newRes);
+
+  forOp.erase();
+  return newFor;
+}
 
 class Prefetcher {
   /// cache the ForOp we are working on
@@ -181,38 +520,6 @@ LogicalResult Prefetcher::initialize() {
   if (dotsInFor.size() > 1)
     return failure();
 
-  // returns source of cvt
-  auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
-    // walk back to conversion
-    Operation *op = v.getDefiningOp();
-    bool foundConvertFromShared = false;
-    SmallVector<Value> rets;
-    rets.push_back(op->getResult(0));
-    LDBG("Prefetch src: " << *op);
-    while (op) {
-      if (op->getNumOperands() != 1)
-        break;
-      if (!op->getResult(0).hasOneUse())
-        break;
-      rets.push_back(op->getOperand(0));
-      if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-        // NYI for other encodings, for example if we have transpose
-        // in the chain
-        if (isa<DotOperandEncodingAttr>(cvt.getType().getEncoding()))
-          foundConvertFromShared = true;
-        break;
-      }
-      op = op->getOperand(0).getDefiningOp();
-      if (op)
-        LDBG("op: " << *op);
-    }
-    std::reverse(rets.begin(), rets.end());
-
-    if (foundConvertFromShared)
-      return rets;
-    return {};
-  };
-
   auto getIncomingOp = [this](Value v) -> Value {
     if (auto arg = mlir::dyn_cast<BlockArgument>(v))
       if (arg.getOwner()->getParentOp() == forOp.getOperation())
@@ -220,10 +527,41 @@ LogicalResult Prefetcher::initialize() {
     return Value();
   };
 
-  auto getYieldOperand = [this](Value v) -> Value {
-    auto arg = mlir::cast<BlockArgument>(v);
+  auto getYieldOperand = [this](BlockArgument arg) -> Value {
     unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
     return yieldOp.getOperand(yieldIdx);
+  };
+
+  auto resolveMemDescFromInit = [&](BlockArgument arg) -> Value {
+    unsigned iterIdx = arg.getArgNumber() - forOp.getNumInductionVars();
+    Value initVal = forOp.getInitArgs()[iterIdx];
+    auto chain = getPrefetchSrc(initVal);
+    if (chain.empty())
+      return Value();
+    return chain.front();
+  };
+
+  auto resolveMemDescFromYield = [&](BlockArgument arg) -> Value {
+    unsigned iterIdx = arg.getArgNumber() - forOp.getNumInductionVars();
+    Value yieldVal = yieldOp.getOperand(iterIdx);
+    auto chain = getPrefetchSrc(yieldVal, forOp);
+    if (chain.empty())
+      return Value();
+    return chain.front();
+  };
+
+  auto selectMemDesc = [](ArrayRef<Value> vals) -> Value {
+    for (Value candidate : vals) {
+      auto memDescType =
+          dyn_cast<triton::gpu::MemDescType>(candidate.getType());
+      if (!memDescType)
+        continue;
+      if (isa<triton::gpu::MemDescIndexOp>(candidate.getDefiningOp()))
+        return candidate;
+      if (memDescType.getShape().size() == 2)
+        return candidate;
+    }
+    return Value();
   };
 
   for (triton::DotOp dot : dotsInFor) {
@@ -249,14 +587,26 @@ LogicalResult Prefetcher::initialize() {
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
       continue;
-    auto aVals = getPrefetchSrc(dot.getA());
-    auto bVals = getPrefetchSrc(dot.getB());
+    auto aVals = getPrefetchSrc(dot.getA(), forOp);
+    auto bVals = getPrefetchSrc(dot.getB(), forOp);
 
     if (aVals.size() && bVals.size()) {
-      Value aSmem = aVals.front();
-      Value bSmem = bVals.front();
+      LDBG("A chain length: " << aVals.size());
+      LDBG("B chain length: " << bVals.size());
+      Value aSmem = selectMemDesc(aVals);
+      Value bSmem = selectMemDesc(bVals);
+      if (!aSmem || !bSmem)
+        continue;
+      LDBG("Selected A memdesc type: " << aSmem.getType());
+      LDBG("Selected B memdesc type: " << bSmem.getType());
       Value aHeaderDef = getIncomingOp(aSmem);
       Value bHeaderDef = getIncomingOp(bSmem);
+      if (!aHeaderDef)
+        if (auto barg = dyn_cast<BlockArgument>(dot.getA()))
+          aHeaderDef = resolveMemDescFromInit(barg);
+      if (!bHeaderDef)
+        if (auto barg = dyn_cast<BlockArgument>(dot.getB()))
+          bHeaderDef = resolveMemDescFromInit(barg);
       // Only prefetch loop arg
       if (aHeaderDef && bHeaderDef) {
         dots.insert(dot);
@@ -266,8 +616,18 @@ LogicalResult Prefetcher::initialize() {
         dot2bHeaderDef[dot] = bHeaderDef;
         dot2aLoopArg[dot] = aSmem;
         dot2bLoopArg[dot] = bSmem;
-        dot2aYield[dot] = getYieldOperand(aSmem);
-        dot2bYield[dot] = getYieldOperand(bSmem);
+        if (auto barg = dyn_cast<BlockArgument>(dot.getA()))
+          dot2aYield[dot] = resolveMemDescFromYield(barg);
+        else if (auto barg = dyn_cast<BlockArgument>(aSmem))
+          dot2aYield[dot] = getYieldOperand(barg);
+        else
+          dot2aYield[dot] = aSmem;
+        if (auto barg = dyn_cast<BlockArgument>(dot.getB()))
+          dot2bYield[dot] = resolveMemDescFromYield(barg);
+        else if (auto barg = dyn_cast<BlockArgument>(bSmem))
+          dot2bYield[dot] = getYieldOperand(barg);
+        else
+          dot2bYield[dot] = bSmem;
       }
     }
   }
@@ -368,13 +728,17 @@ scf::ForOp Prefetcher::createNewForOp() {
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
-        Value aRem =
-            generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
-                             dotEncoding, builder, kOff, kShape);
+        Value mappedALoop = mapping.lookupOrDefault(dot2aLoopArg[dot]);
+        if (!mappedALoop)
+          break;
+        Value aRem = generatePrefetch(mappedALoop, 0, false, dotEncoding,
+                                      builder, kOff, kShape);
         cloneElementwiseOps(aRem, dot2aVals[dot], builder);
-        Value bRem =
-            generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
-                             dotEncoding, builder, kOff, kShape);
+        Value mappedBLoop = mapping.lookupOrDefault(dot2bLoopArg[dot]);
+        if (!mappedBLoop)
+          break;
+        Value bRem = generatePrefetch(mappedBLoop, 1, false, dotEncoding,
+                                      builder, kOff, kShape);
         cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
@@ -404,13 +768,23 @@ scf::ForOp Prefetcher::createNewForOp() {
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield = generatePrefetch(mapping.lookup(dot2aYield[dot]), 0, true,
-                                      dotEncoding, builder);
+    Value mappedAYield = mapping.lookupOrDefault(dot2aYield[dot]);
+    if (!mappedAYield)
+      mappedAYield = mapping.lookupOrDefault(dot2aLoopArg[dot]);
+    if (!mappedAYield)
+      continue;
+    Value aToYield =
+        generatePrefetch(mappedAYield, 0, true, dotEncoding, builder);
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
     // bToYield
-    Value bToYield = generatePrefetch(mapping.lookup(dot2bYield[dot]), 1, true,
-                                      dotEncoding, builder);
+    Value mappedBYield = mapping.lookupOrDefault(dot2bYield[dot]);
+    if (!mappedBYield)
+      mappedBYield = mapping.lookupOrDefault(dot2bLoopArg[dot]);
+    if (!mappedBYield)
+      continue;
+    Value bToYield =
+        generatePrefetch(mappedBYield, 1, true, dotEncoding, builder);
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
@@ -434,21 +808,24 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
             .failed()) {
       signalPassFailure();
     }
-    getOperation()->walk([&](scf::ForOp forOp) {
-      Prefetcher prefetcher(forOp);
+    SmallVector<scf::ForOp> loops;
+    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+
+    for (scf::ForOp forOp : loops) {
+      scf::ForOp rotated = rotateLocalLoadChains(forOp);
+      Prefetcher prefetcher(rotated);
 
       if (prefetcher.initialize().failed())
-        return;
+        continue;
 
       prefetcher.emitPrologue();
 
       scf::ForOp newForOp = prefetcher.createNewForOp();
 
-      // replace the original loop
-      for (unsigned i = 0; i < forOp->getNumResults(); ++i)
-        forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
-      forOp->erase();
-    });
+      for (unsigned i = 0; i < rotated->getNumResults(); ++i)
+        rotated->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
+      rotated->erase();
+    }
   }
 };
 
