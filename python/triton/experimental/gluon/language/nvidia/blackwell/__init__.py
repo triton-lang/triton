@@ -368,9 +368,6 @@ def tcgen05_copy(src, dst, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
 
-    WARNING: The current semantics of the instruction are not well defined and
-    the API will change in the future. Use at your own risk.
-
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
@@ -436,6 +433,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
+    assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
 
     if mbarriers is None:
         assert mbarrier_preds is None
@@ -459,7 +457,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @builtin
-def tcgen05_commit(barrier, _semantic=None):
+def tcgen05_commit(barrier, pred=True, two_ctas=False, _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when all async tcgen05 MMA and copy instructions previously issued by
@@ -467,5 +465,8 @@ def tcgen05_commit(barrier, _semantic=None):
 
     Args:
         barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        two_ctas (bool): Whether to use two-CTA mode. Defaults to False.
     """
-    _semantic.builder.create_tcgen05_commit(barrier.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, two_ctas)

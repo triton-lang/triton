@@ -84,7 +84,7 @@ public:
 
   static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, const LinearLayout &ll,
-        int bitwidth, Value smemBase, ArrayRef<unsigned> instrShapeArray,
+        int bitwidth, Value smemBase, ArrayRef<unsigned> instrShape,
         unsigned MNdim, int mmaVersion,
         std::optional<RankedTensorType> mmaTy = std::nullopt) {
     // ll is a map from two dimensions (dim0, dim1) or (row, col) into offsets
@@ -99,7 +99,6 @@ public:
     // Just needed for MMAv3
     assert(mmaTy.has_value() == (mmaVersion == 3));
     assert(MNdim < 2);
-    auto instrShape = to_vector(instrShapeArray);
     assert(instrShape.size() == 2);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -140,8 +139,13 @@ public:
     }
 
     for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
-      assert(instrSize <= ll.getInDimSize(dim) &&
-             "Instruction shape is too large for the layout");
+      if (instrSize <= ll.getInDimSize(dim))
+        continue;
+      auto inDims = ll.getInDims();
+      return mlir::emitError(loc)
+             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
+             << "] is too large for the layout with block size ["
+             << inDims[0].second << ", " << inDims[1].second << "]";
     }
 
     auto desc = getDescriptor(loc, ll, instrShape, bitwidth, MNdim, mmaVersion);

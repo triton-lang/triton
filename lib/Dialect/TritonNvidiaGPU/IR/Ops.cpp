@@ -238,6 +238,34 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   return verifyTMAEncoding(this, getDesc(), getSrc().getType().getEncoding());
 }
 
+static LogicalResult verifyGatherScatterOp(Operation *op,
+                                           RankedTensorType blockType,
+                                           MemDescType smemType,
+                                           RankedTensorType indicesType) {
+  // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
+  if (blockType.getRank() != 2)
+    return op->emitOpError("descriptor block must be 2D, but got ")
+           << blockType;
+  if (blockType.getShape()[0] != 1)
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
+           << blockType;
+
+  // Re-use the result verifier from the functional API
+  auto resultType =
+      RankedTensorType::get(smemType.getShape(), smemType.getElementType());
+  if (failed(DescriptorGatherOp::verifyResultType(op, resultType, indicesType)))
+    return failure();
+
+  if (resultType.getShape()[1] != blockType.getShape()[1])
+    return op->emitOpError("result tensor number of columns must match block (")
+           << blockType.getShape()[1] << "), but got " << resultType;
+  if (resultType.getElementType() != blockType.getElementType())
+    return op->emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << resultType;
+
+  return success();
+}
+
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -248,8 +276,9 @@ LogicalResult AsyncTMAGatherOp::verify() {
     return emitOpError("cannot store into immutable memory");
   if (failed(verifyTMAEncoding(this, getDesc(), resultType.getEncoding())))
     return failure();
-  return DescriptorGatherOp::verifyResultType(*this, resultType,
-                                              getXOffsets().getType());
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
+                               resultType, getXOffsets().getType());
 }
 
 // -- AsyncTMAScatter --
@@ -257,8 +286,9 @@ LogicalResult AsyncTMAScatterOp::verify() {
   auto srcType = getSrc().getType();
   if (failed(verifyTMAEncoding(this, getDesc(), srcType.getEncoding())))
     return failure();
-  return DescriptorGatherOp::verifyResultType(*this, srcType,
-                                              getXOffsets().getType());
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
+                               srcType, getXOffsets().getType());
 }
 
 // -- TCGen5MMAOp --
@@ -568,7 +598,13 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
-  return success();
+  auto enc = dyn_cast<TensorMemoryEncodingAttr>(getD().getType().getEncoding());
+  if (!enc) {
+    return emitOpError(
+        "expected accumulator layout to be a TensorMemoryLayout");
+  }
+  if (enc.getBlockM() != 128)
+    return emitOpError("only supports instruction shape blockM=128");
   return success();
 }
 

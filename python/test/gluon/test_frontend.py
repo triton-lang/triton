@@ -1520,7 +1520,7 @@ def test_zeros():
 @gluon.jit
 def test_barrier():
     # CHECK: gpu.barrier
-    ttgl.thread_barrier()
+    ttgl.barrier()
 
 
 @filecheck_test
@@ -1531,6 +1531,32 @@ def test_fence_async_shared():
 
     # CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
     blackwell.fence_async_shared(cluster=True)
+
+
+@filecheck_test
+@gluon.jit
+def test_barrier_cluster_single_cta():
+    # CHECK: gpu.barrier
+    ttgl.barrier(cluster=True)
+
+
+@gluon.jit
+def cluster_barrier_multi_cta_kernel():
+    ttgl.barrier(cluster=True)
+
+
+def test_cluster_barrier_multi_cta():
+    mod = run_parser(cluster_barrier_multi_cta_kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
+    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_wait
+    tt.return
+  }
+}
+""")
 
 
 @filecheck_test
