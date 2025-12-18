@@ -131,25 +131,29 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
 
   let description = [{
       Initializes a shared memory allocation with mbarrier information.
-      `alloc` is a descriptor to the shared memory allocation. `count` is the
-      number of arrives expected by the barrier.
+      `alloc` is a descriptor to the shared memory allocation.
 
-      If `dependentPartitionIds` is provided, the barrier count will be overridden
-      to the cumulative number of threads in the specified partitions.
+      Exactly one of `count` or `dependentPartitionIds` must be provided:
+      - `count`: The number of arrives expected by the barrier.
+      - `dependentPartitionIds`: The barrier count will be calculated as the
+        cumulative number of threads in the specified partitions.
 
       This lowers to PTX mbarrier.init.shared::cta.b64.
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
-    I32Attr:$count,
+    OptionalAttr<I32Attr>:$count,
     OptionalAttr<DenseI32ArrayAttr>:$dependentPartitionIds
   );
-  let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
+  let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "int32_t":$count), [{
-      build($_builder, $_state, alloc, count, /*dependentPartitionIds=*/nullptr);
+      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(count), /*dependentPartitionIds=*/nullptr);
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "DenseI32ArrayAttr":$dependentPartitionIds), [{
+      build($_builder, $_state, alloc, /*count=*/nullptr, dependentPartitionIds);
     }]>
   ];
 

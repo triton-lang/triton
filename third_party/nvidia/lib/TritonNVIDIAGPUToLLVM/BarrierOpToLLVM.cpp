@@ -122,7 +122,7 @@ struct InitBarrierOpConversion
     // Determine the barrier count. If dependentPartitionIds is specified,
     // calculate the count from the associated WarpSpecializeOp's partition
     // warp counts. Otherwise, use the count attribute directly.
-    int barrierCount = op.getCount();
+    int barrierCount;
     if (op.getDependentPartitionIds()) {
       auto calculatedCount = calculateBarrierCount(op);
       if (!calculatedCount) {
@@ -131,6 +131,9 @@ struct InitBarrierOpConversion
             "could not find associated warp_specialize op");
       }
       barrierCount = *calculatedCount;
+    } else {
+      // count must be set (verified by op verifier)
+      barrierCount = *op.getCount();
     }
 
     auto id = getThreadId(rewriter, loc);
