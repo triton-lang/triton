@@ -1278,6 +1278,12 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         for (Value operand : op->getOperands())
           markLive(operand);
       }
+      // Always mark loop bounds as live.
+      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        markLive(forOp.getLowerBound());
+        markLive(forOp.getUpperBound());
+        markLive(forOp.getStep());
+      }
     });
     // Propagate live property until reaching a fixed point.
     while (!queue.empty()) {
@@ -1286,10 +1292,6 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         auto result = mlir::cast<OpResult>(value);
         OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
-        // Mark the lowerBound, upperBound, and step as live.
-        markLive(nestedFor.getLowerBound());
-        markLive(nestedFor.getUpperBound());
-        markLive(nestedFor.getStep());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
         Value nestedYieldOperand =
