@@ -673,7 +673,7 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     # Use a 5D TMA descriptor with block shape [1, rep_m, rep_k, 2, 256] of uint8
     # elements. With 256 bytes along the inner dimension, we better utilize the
     # L2 cache and don't require the TMA engine to emit many small messages (16B)
-    # messages as with 32x16xu8.
+    # as it would with 32x16xu8.
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
     layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.uint8)
