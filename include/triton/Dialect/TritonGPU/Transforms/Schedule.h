@@ -177,7 +177,7 @@ public:
   /// Operations are yielded lazily in order: (stage, cluster,
   /// IR-order-within-cluster).
   ///
-  /// The iterator maintains its position, allowing findNext/findNextUser to
+  /// The iterator maintains its position, allowing findNext to
   /// search from the current position forward. Unlike the eager approach that
   /// materializes all operations upfront, this iterator generates elements
   /// on-demand by iterating through clusters and operations within the loop.
@@ -185,7 +185,8 @@ public:
   public:
     /// Construct an iterator for the given forOp and schedule.
     /// This is the lazy constructor that generates elements on-demand.
-    LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule);
+    LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule,
+                       Operation *initialOp = nullptr);
 
     // Standard iterator operations
     LinearizedIterator &operator++();
@@ -214,6 +215,8 @@ public:
   private:
     /// Advance to the next valid operation in the schedule.
     void advanceToNextScheduledOp();
+    /// Set the iterator state based on this op.
+    void initializeIterator(Operation *op);
 
     scf::ForOp forOp;
     const CoarseSchedule *schedule;
@@ -222,6 +225,7 @@ public:
     Block::iterator opIt;
     Block::iterator opEnd;
     int currentStage;
+    int numStages;
     Operation *currentOp = nullptr;
     bool atEnd = false;
   };
@@ -231,11 +235,7 @@ public:
   /// are being iterated.
   LinearizedIterator linearized(scf::ForOp forOp,
                                 Operation *initialOp = nullptr) const {
-    auto result = LinearizedIterator(forOp, *this);
-    if (initialOp) {
-      result.findNext([&](Operation *op) { return op == initialOp; });
-    }
-    return result;
+    return LinearizedIterator(forOp, *this, initialOp);
   }
 
 private:

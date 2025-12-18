@@ -299,39 +299,22 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 // ============================================================
 
 tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
-    scf::ForOp forOp, const CoarseSchedule &schedule)
-    : forOp(forOp), schedule(&schedule), atEnd(false), currentStage(0) {
+    scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
+    : forOp(forOp), schedule(&schedule), atEnd(false), currentStage(0),
+      numStages(schedule.getNumStages()) {
   clusterIt = schedule.clusters.begin();
   clusterEnd = schedule.clusters.end();
   opIt = forOp.getBody()->without_terminator().begin();
   opEnd = forOp.getBody()->without_terminator().end();
-  advanceToNextScheduledOp();
+  if (initialOp) {
+    initializeIterator(initialOp);
+  } else {
+    advanceToNextScheduledOp();
+  }
 }
 
-//   for (auto &op : forOp.getBody()->without_terminator()) {
-//     auto it = opToStageAndCluster.find(&op);
-//     if (it == opToStageAndCluster.end()) {
-//       continue;
-//     }
-//     auto [stage, cluster] = it->second;
-//     assert(cluster != Cluster{} && "Op with invalid cluster!");
-//     assert(stage < numStages && "Op with invalid stage!");
-//     int clusterId = *cluster;
-//     assert(clusterId == std::distance(clusters.begin(),
-//                                       ClusterList::const_iterator(cluster))
-//                                       &&
-//            "Cluster ID mismatch!");
-//     orderClusters[clusterId].push_back(make_tuple(&op, stage, cluster));
-//   }
-//   SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
-//   for (int i = 0; i < orderClusters.size(); i++) {
-//     for (auto [op, stage, cluster] : orderClusters[i]) {
-//       opsInOrder.push_back({op, stage, cluster});
-//     }
-//   }
-
 void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
-  while (currentStage < 10) {
+  while (currentStage < numStages) {
     while (clusterIt != clusterEnd) {
       while (opIt != opEnd) {
         Operation *op = &*opIt;
@@ -353,6 +336,19 @@ void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
   }
   atEnd = true;
   currentOp = nullptr;
+}
+
+void tt::CoarseSchedule::LinearizedIterator::initializeIterator(Operation *op) {
+  auto it = schedule->opToStageAndCluster.find(op);
+  if (it != schedule->opToStageAndCluster.end()) {
+    auto [stage, cluster] = it->second;
+    currentStage = stage;
+    clusterIt = cluster;
+    findNext([&](Operation *nextOp) { return nextOp == op; });
+  } else {
+    atEnd = true;
+    currentOp = nullptr;
+  }
 }
 
 tt::CoarseSchedule::LinearizedIterator &
