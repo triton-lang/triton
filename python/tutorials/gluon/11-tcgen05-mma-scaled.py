@@ -14,7 +14,7 @@ respective scale factors. The MMA itself is then performed in a higher precision
 
 We can accelerate the MMA of the dequantized operands using tensor core
 instructions like `tcgen05_mma`. But NVIDIA Blackwell GPUs support hardware
-acceleration for block-scaled MMAs, in the form of `tcgen05_mma_scaled`
+acceleration for block-scaled MMAs, in the form of the `tcgen05_mma_scaled`
 instructions which fuse the operand dequantization and MMA into a single
 instruction.
 
