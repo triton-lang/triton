@@ -276,7 +276,8 @@ LogicalResult AsyncTMAGatherOp::verify() {
     return emitOpError("cannot store into immutable memory");
   if (failed(verifyTMAEncoding(this, getDesc(), resultType.getEncoding())))
     return failure();
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                resultType, getXOffsets().getType());
 }
 
@@ -285,7 +286,8 @@ LogicalResult AsyncTMAScatterOp::verify() {
   auto srcType = getSrc().getType();
   if (failed(verifyTMAEncoding(this, getDesc(), srcType.getEncoding())))
     return failure();
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                srcType, getXOffsets().getType());
 }
 
