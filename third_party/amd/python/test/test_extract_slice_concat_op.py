@@ -42,37 +42,74 @@ class BlockedLayout:
 # test extract slice
 # -----------------------
 
-regs2x2 = [[1, 0], [0, 1]]
-lanes8x8 = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]]
-warps2x2 = [[16, 0], [0, 16]]
-redundant_ll = LinearLayout([[0, 0]] + regs2x2, lanes8x8, warps2x2, block=[])
-non_redundant_ll = LinearLayout(regs2x2, lanes8x8, warps2x2, block=[])
-
 # list of pairs defining ExtractSliceOp input and output layouts
-extract_layout = [
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
-    (BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0]), ) * 2,
-    (BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1]), ) * 2,
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]), ) * 2,
-    (redundant_ll, non_redundant_ll),
-    (non_redundant_ll, redundant_ll),
-]
-blocked_layout = [
-    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0]),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1]),
-    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
-    BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]),
-]
+regs2x2 = [[1, 0], [0, 1]]
+
+
+def get_extract_layout():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        lanes8x4 = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]]
+        warps2x2_32 = [[16, 0], [0, 8]]
+        redundant_ll = LinearLayout([[0, 0]] + regs2x2, lanes8x4, warps2x2_32, block=[])
+        non_redundant_ll = LinearLayout(regs2x2, lanes8x4, warps2x2_32, block=[])
+        return [
+            (BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0]), ) * 2,
+            (BlockedLayout([2, 2], [32, 1], [2, 2], [1, 0]), ) * 2,
+            (BlockedLayout([2, 2], [16, 2], [4, 1], [0, 1]), ) * 2,
+            (BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0]), ) * 2,
+            (BlockedLayout([1, 8], [16, 2], [4, 1], [0, 1]), ) * 2,
+            (redundant_ll, non_redundant_ll),
+            (non_redundant_ll, redundant_ll),
+        ]
+    elif THREADS_PER_WARP == 64:
+        lanes8x8 = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]]
+        warps2x2_64 = [[16, 0], [0, 16]]
+        redundant_ll = LinearLayout([[0, 0]] + regs2x2, lanes8x8, warps2x2_64, block=[])
+        non_redundant_ll = LinearLayout(regs2x2, lanes8x8, warps2x2_64, block=[])
+        return [
+            (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
+            (BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0]), ) * 2,
+            (BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1]), ) * 2,
+            (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
+            (BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]), ) * 2,
+            (redundant_ll, non_redundant_ll),
+            (non_redundant_ll, redundant_ll),
+        ]
+    else:
+        return []
+
+
+def get_blocked_layout():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        return [
+            BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0]),
+            BlockedLayout([2, 2], [16, 2], [2, 2], [1, 0]),
+            BlockedLayout([2, 2], [16, 2], [2, 2], [0, 1]),
+            BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0]),
+            BlockedLayout([1, 8], [16, 2], [4, 1], [0, 1]),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
+            BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0]),
+            BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1]),
+            BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
+            BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]),
+        ]
+    else:
+        return []
 
 
 @pytest.mark.parametrize(
     "M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset",
     [[256, 256, 256, 32, 0, 32], [128, 128, 128, 64, 0, 64], [1, 512, 1, 256, 0, 256], [512, 1, 256, 1, 256, 0]])
 @pytest.mark.parametrize("dtype", [torch.float16])
-@pytest.mark.parametrize("extract_layout", extract_layout)
-@pytest.mark.parametrize("blocked_layout", blocked_layout)
+@pytest.mark.parametrize("extract_layout", get_extract_layout())
+@pytest.mark.parametrize("blocked_layout", get_blocked_layout())
 def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout,
                        extract_layout, device, tmp_path: pathlib.Path):
     if not is_hip():
@@ -82,7 +119,7 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
     #blocked = {blocked_layout}
     #src_extract_layout = {extract_layout[0]}
     #dst_extract_layout = {extract_layout[1]}
-    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(64)} : i32}} {{
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
         %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
@@ -134,26 +171,84 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
 # test concat op
 # -----------------------
 
-blocked_32x32 = BlockedLayout([2, 2], [8, 8], [2, 2], [0, 1])
-broadcasted_32x32 = LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4],
-                                                                          [0, 8]], warp=[[16, 0], [0, 16]], block=[])
 
-src_layout = [
-    LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0],
-                                                                                     [16, 0], [0, 4]], warp=[[0, 32],
-                                                                                                             [32, 0]],
-                 block=[]),
-    LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0], [16, 0]],
-                 warp=[[0, 16], [0, 32]], block=[]),
-]
+# defining ConcatOp input and output layouts
+def get_blocked_32x32():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        return BlockedLayout([2, 2], [8, 4], [2, 2], [0, 1])
+    elif THREADS_PER_WARP == 64:
+        return BlockedLayout([2, 2], [8, 8], [2, 2], [0, 1])
+    else:
+        return []
 
-dst_layout = [
-    LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
-                 lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]),
-    LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0],
-                                                                            [16, 0]], warp=[[0, 16], [0, 64]],
-                 block=[]),
-]
+
+def get_broadcasted_32x32():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]],
+                            warp=[[16, 0], [0, 8]], block=[])
+    elif THREADS_PER_WARP == 64:
+        return LinearLayout(register=[[0, 0], [1, 0], [0, 1]], lane=[[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]],
+                            warp=[[16, 0], [0, 16]], block=[])
+    else:
+        return []
+
+
+def get_src_layout():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        return [
+            LinearLayout(register=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0],
+                                                                                                     [4, 0], [8, 0],
+                                                                                                     [16, 0]],
+                         warp=[[0, 32], [32, 0]], block=[]),
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [8, 0], [16, 0]],
+                         warp=[[0, 8], [0, 16]], block=[]),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0],
+                                                                                             [8, 0], [16, 0], [0, 4]],
+                         warp=[[0, 32], [32, 0]], block=[]),
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0], [16, 0]],
+                         warp=[[0, 16], [0, 32]], block=[]),
+        ]
+    else:
+        return []
+
+
+def get_dst_layout():
+    if not is_hip():
+        return []
+    if THREADS_PER_WARP == 32:
+        return [
+            LinearLayout(register=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
+                         lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 32], [32, 0]], block=[]),
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [8, 0],
+                                                                                    [16, 0]], warp=[[0, 8], [0, 16]],
+                         block=[]),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            LinearLayout(register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]],
+                         lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]),
+            LinearLayout(register=[[1, 0], [2, 0], [4, 0], [32, 0], [0, 32]], lane=[[0, 1], [0, 2], [0, 4], [0, 8],
+                                                                                    [8, 0], [16, 0]], warp=[[0, 16],
+                                                                                                            [0, 64]],
+                         block=[]),
+        ]
+    else:
+        return []
+
+
+src_layout = get_src_layout()
+dst_layout = get_dst_layout()
+broadcasted_32x32 = get_broadcasted_32x32()
+blocked_32x32 = get_blocked_32x32()
 
 
 @pytest.mark.parametrize(
@@ -164,13 +259,17 @@ dst_layout = [
 def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout, device, tmp_path: pathlib.Path):
     if not is_hip():
         pytest.skip("concat op is AMD specific instruction.")
+    if THREADS_PER_WARP == 32:
+        threadsPerWarp = [16, 2]
+    else:
+        threadsPerWarp = [16, 4]
 
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[16, 4], warpsPerCTA=[4, 1], order=[1, 0]}}>
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp={threadsPerWarp}, warpsPerCTA=[4, 1], order=[1, 0]}}>
     #src_layout = {src_layout}
     #dst_layout = {dst_layout}
 
-    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(64)} : i32}} {{
+    module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg3: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg4: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
         %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>

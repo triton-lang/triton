@@ -509,7 +509,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       scf.yield %token_4 : !ttg.async.token
       // CHECK-NEXT: }
     } {tt.num_stages = 3 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 16 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>]}
-    // CHECK-NEXT: put.exit [[AREF]], [[TOK1]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 16 : i32}
+    // CHECK-NEXT: put.exit [[AREF]], [[TOK1]] [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 16 : i32}
     // CHECK-NEXT: {{.*}}, [[TOK:%.*]] = nvws.aref.get.enter [[AREF]] :
     // CHECK-NEXT: aref.buffer [[AREF]], [[TOK]] :
     // CHECK-NEXT: tmem_load
@@ -724,8 +724,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       scf.yield %15, %6, %token_7, %23 : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token
       // CHECK-NEXT: } {
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>, array<i32: 1>, array<i32: 3>]}
-    // CHECK: aref.put.exit [[AREF_O]], [[RET]]#3 [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 3>, ttg.warp_specialize.tag = 0 : i32}
-    // CHECK-NEXT: aref.put.exit [[AREF_S]], [[RET]]#2 [#nvws.async_op<none>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: aref.put.exit [[AREF_O]], [[RET]]#3 [#nvws.async_op<none>] {ttg.partition = array<i32: 3>, ttg.warp_specialize.tag = 0 : i32}
+    // CHECK-NEXT: aref.put.exit [[AREF_S]], [[RET]]#2 [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 0 : i32}
     // CHECK-NEXT: aref.get.enter [[AREF_S]] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 0 : i32}
     // CHECK-NEXT: aref.get.exit [[AREF_S]], {{.*}} [{{.*}}] {ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = 0 : i32}
     // CHECK-NEXT: aref.get.enter [[AREF_O]] :

@@ -599,6 +599,13 @@ void init_gluon_ir(py::module &&m) {
                  pointer, smem, mask, other, cacheModifier, evictionPolicy,
                  isVolatile);
            })
+      .def("create_async_copy_local_to_global",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy) {
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                 smem, pointer, mask, cacheModifier, evictionPolicy);
+           })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -772,8 +779,8 @@ void init_gluon_ir(py::module &&m) {
                  useAcc, pred, mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_commit",
-           [](GluonOpBuilder &self, Value &barrier) {
-             self.create<ttng::TCGen5CommitOp>(barrier);
+           [](GluonOpBuilder &self, Value &barrier, Value &pred, bool twoCTAs) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, twoCTAs);
            })
 
       .def("create_async_tma_copy_global_to_local",
@@ -812,6 +819,11 @@ void init_gluon_ir(py::module &&m) {
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);
+           })
+      .def("create_cluster_sync",
+           [](GluonOpBuilder &self) {
+             self.create<ttng::ClusterArriveOp>(/*relaxed=*/false);
+             self.create<ttng::ClusterWaitOp>();
            })
 
       .def("create_broadcast",
