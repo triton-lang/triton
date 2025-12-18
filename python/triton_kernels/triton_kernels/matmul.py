@@ -342,6 +342,10 @@ def matmul(a, b, bias,
     # fused activation
     matmul_fused_activation = fused_activation
     reduce_fused_activation = FusedActivation()
+    if fused_activation is not None and gammas is not None and opt_flags.split_k > 1:
+        # split_k applies activation in the reduce stage, but gammas are applied
+        # inside the matmul kernel, which flips the intended order.
+        raise NotImplementedError("gamma with fused activation is not supported when split_k > 1")
     if opt_flags.split_k > 1:
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory

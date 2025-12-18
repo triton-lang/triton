@@ -19,6 +19,7 @@ from triton_kernels.testing import assert_close, make_random_tensor
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
+from triton_kernels.unary_geglu import unary_geglu_fn, unary_geglu_torch
 from triton_kernels.tensor_details import layout
 # ---------------
 # numerics stuff
@@ -80,7 +81,7 @@ class Case:
     b_transpose: bool = False
     c_transpose: bool = False
     colmajor_mxfp_weight: bool = True
-    swiglu_opts: tuple[float, float] = None
+    activation: tuple[str, tuple] = None
 
     def __post_init__(self):
         if self.n_slices is None:
@@ -171,27 +172,49 @@ def _build_test_op_cases():
     ])
     # swiglu
     test_cases.extend([
-        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, swiglu_opts=(1.1, 1.4))
+        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, activation=("swiglu", (1.1, 1.4)))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
     test_cases.extend([
-        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, swiglu_opts=(1.1, 1.4))
+        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, activation=("swiglu", (1.1, 1.4)))
         for val in (1, 2, 4)
     ])
     # swiglu together with mxfp8 downcastepilogue
     test_cases.extend([
-        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
+        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, activation=("swiglu", (1.1, 7)))
+     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    ])
+    # unary geglu
+    test_cases.extend([
+        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, activation=("unary_geglu", (1.1,)))
+     for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
+    ])
+    test_cases.extend([
+        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, activation=("unary_geglu", (1.1,)))
+        for val in (1, 2, 4)
+    ])
+    # unary geglu together with mxfp8 downcast epilogue
+    test_cases.extend([
+        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, activation=("unary_geglu", (1.1,)))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
 
     return test_cases
 
+
+_TEST_CASES = _build_test_op_cases()
+_TEST_CASE_IDS = [
+    f"{case.activation[0] if case.activation is not None else 'noact'}_{idx}"
+    for idx, case in enumerate(_TEST_CASES)
+]
+
 @pytest.mark.parametrize(
     ", ".join(f.name for f in fields(Case)),
     [
         tuple(getattr(case, f.name) for f in fields(Case))
-        for case in _build_test_op_cases()
+        for case in _TEST_CASES
     ],
+    ids=_TEST_CASE_IDS,
 )
 @pytest.mark.parametrize("block_m", [16, 128])
 @pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
@@ -207,7 +230,7 @@ def _build_test_op_cases():
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            swiglu_opts, device, opt_flags_scope):
+            activation, device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
@@ -215,7 +238,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
-                 swiglu_opts, device, opt_flags_scope)
+                 activation, device, opt_flags_scope)
     except pytest.skip.Exception as e:
         skip_message = str(e)
 
@@ -225,7 +248,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            swiglu_opts, device, opt_flags_scope):
+            activation, device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
@@ -235,8 +258,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
-        if swiglu_opts is not None and do_gamma:
+        if activation is not None and activation[0] == "swiglu" and do_gamma:
             pytest.skip("NYI: swiglu and gamma not supported together")
+        if activation is not None and do_gamma and split_k > 1:
+            pytest.skip("NYI: activation + gamma not supported with split_k > 1")
 
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
@@ -248,8 +273,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         # FIXME: this works on nvidia; looks like some sort of bug on AMD?
-        if do_gamma and swiglu_opts is not None:
+        if do_gamma and activation is not None and activation[0] == "swiglu":
             pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
+        if do_gamma and activation is not None and split_k > 1:
+            pytest.skip("NYI: activation + gamma not supported with split_k > 1")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
@@ -361,8 +388,20 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     # --- create fused activation ---
     fused_activation = None
-    if swiglu_opts is not None:
-        fused_activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), swiglu_opts)
+    if activation is not None:
+        activation_name, activation_opts = activation
+        if activation_name == "swiglu":
+            fused_activation = FusedActivation(
+                FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+                activation_opts,
+            )
+        elif activation_name == "unary_geglu":
+            fused_activation = FusedActivation(
+                FnSpecs("unary_geglu", unary_geglu_fn, ("alpha",)),
+                activation_opts,
+            )
+        else:
+            raise ValueError(f"Unknown activation: {activation_name}")
 
     # --- initialize output ---
     c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
@@ -407,12 +446,29 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
+    ref_scatter_indx = scatter_indx
+    ref_gammas = gammas
+    if activation is not None:
+        ref_gammas = None
+        if scatter_indx is not None:
+            ref_scatter_indx = None
     ref_y = matmul_torch(a, b, bias,  #
                         a_ragged_metadata, b_ragged_metadata,
-                        gather_indx, scatter_indx, precision_opt,
-                        gammas=gammas)
-    if swiglu_opts is not None:
-        ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
+                        gather_indx, ref_scatter_indx, precision_opt,
+                        gammas=ref_gammas)
+    if activation is not None:
+        activation_name, activation_opts = activation
+        if activation_name == "swiglu":
+            ref_y = swiglu(ref_y, alpha=activation_opts[0], precision_config=SwiGLUPrecisionConfig(activation_opts[1]))
+        elif activation_name == "unary_geglu":
+            ref_y = unary_geglu_torch(ref_y, activation_opts[0])
+        if gammas is not None:
+            ref_y = ref_y * gammas[:, None]
+        if scatter_indx is not None:
+            out = torch.zeros((scatter_indx.shape[0], ref_y.shape[-1]), dtype=ref_y.dtype, device=ref_y.device)
+            msk = scatter_indx != -1
+            out[scatter_indx[msk], :] = ref_y[msk, :]
+            ref_y = out
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
