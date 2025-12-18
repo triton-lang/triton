@@ -1241,11 +1241,8 @@ def batched_mxfp_matmul(  #
         a_ptr, b_ptr, output_ptr,  #
         a_scale, b_scale,  #
         M, N, K,  #
-        stride_sfa_bs: tl.constexpr,
-        stride_sfa_m: tl.constexpr,
-        stride_sfb_bs: tl.constexpr,
-        stride_sfb_n: tl.constexpr,
-        stride_ab, stride_am, stride_ak,  #
+        stride_sfa_bs: tl.constexpr, stride_sfa_m: tl.constexpr, stride_sfb_bs: tl.constexpr,
+        stride_sfb_n: tl.constexpr, stride_ab, stride_am, stride_ak,  #
         stride_bb, stride_bk, stride_bn,  #
         stride_cb, stride_cm, stride_cn,  #
         BATCH_SIZE, BLOCK_BATCH_SIZE: tl.constexpr,  #
@@ -1264,23 +1261,15 @@ def batched_mxfp_matmul(  #
     offs_k = tl.arange(0, BLOCK_K)
     offs_scale_k = tl.arange(0, BLOCK_K // 32)
 
-    a_scale_ptr = (a_scale
-                   + offs_batch[:, None, None] * stride_sfa_bs
-                   + offs_am[None, :, None] * stride_sfa_m
-                   + offs_scale_k[None, None, :])
-    b_scale_ptr = (b_scale
-                   + offs_batch[:, None, None] * stride_sfb_bs
-                   + offs_bn[None, :, None] * stride_sfb_n
-                   + offs_scale_k[None, None, :])
+    a_scale_ptr = (a_scale + offs_batch[:, None, None] * stride_sfa_bs + offs_am[None, :, None] * stride_sfa_m +
+                   offs_scale_k[None, None, :])
+    b_scale_ptr = (b_scale + offs_batch[:, None, None] * stride_sfb_bs + offs_bn[None, :, None] * stride_sfb_n +
+                   offs_scale_k[None, None, :])
 
-    a_ptrs = (a_ptr
-              + offs_batch[:, None, None] * stride_ab
-              + offs_am[None, :, None] * stride_am
-              + offs_k[None, None, :] * stride_ak)
-    b_ptrs = (b_ptr
-              + offs_batch[:, None, None] * stride_bb
-              + offs_k[None, :, None] * stride_bk
-              + offs_bn[None, None, :] * stride_bn)
+    a_ptrs = (a_ptr + offs_batch[:, None, None] * stride_ab + offs_am[None, :, None] * stride_am +
+              offs_k[None, None, :] * stride_ak)
+    b_ptrs = (b_ptr + offs_batch[:, None, None] * stride_bb + offs_k[None, :, None] * stride_bk +
+              offs_bn[None, None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
 
@@ -1298,13 +1287,9 @@ def batched_mxfp_matmul(  #
 
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    output_ptrs = (output_ptr
-                   + stride_cb * offs_batch[:, None, None]
-                   + stride_cm * offs_cm[None, :, None]
-                   + stride_cn * offs_cn[None, None, :])
-    c_mask = ((offs_batch[:, None, None] < BATCH_SIZE)
-              & (offs_cm[None, :, None] < M)
-              & (offs_cn[None, None, :] < N))
+    output_ptrs = (output_ptr + stride_cb * offs_batch[:, None, None] + stride_cm * offs_cm[None, :, None] +
+                   stride_cn * offs_cn[None, None, :])
+    c_mask = ((offs_batch[:, None, None] < BATCH_SIZE) & (offs_cm[None, :, None] < M) & (offs_cn[None, None, :] < N))
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
@@ -1313,9 +1298,7 @@ def batched_mxfp_matmul(  #
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
-def test_batched_mxfp(
-    BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device
-):
+def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M, N, K = 1024, 512, 2048
 
     if K % BLOCK_K != 0:
@@ -1349,16 +1332,32 @@ def test_batched_mxfp(
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
 
     out = batched_mxfp_matmul[grid](
-        a, b, output,
-        a_scale, b_scale,
-        M, N, K,
-        a_scale.stride(0), a_scale.stride(1),
-        b_scale.stride(0), b_scale.stride(1),
-        a.stride(0), a.stride(1), a.stride(2),
-        b.stride(0), b.stride(1), b.stride(2),
-        output.stride(0), output.stride(1), output.stride(2),
-        BATCH_SIZE, BLOCK_BATCH_SIZE,
-        BLOCK_M, BLOCK_N, BLOCK_K,
+        a,
+        b,
+        output,
+        a_scale,
+        b_scale,
+        M,
+        N,
+        K,
+        a_scale.stride(0),
+        a_scale.stride(1),
+        b_scale.stride(0),
+        b_scale.stride(1),
+        a.stride(0),
+        a.stride(1),
+        a.stride(2),
+        b.stride(0),
+        b.stride(1),
+        b.stride(2),
+        output.stride(0),
+        output.stride(1),
+        output.stride(2),
+        BATCH_SIZE,
+        BLOCK_BATCH_SIZE,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
         NUM_STAGES=NUM_STAGES,
         num_warps=NUM_WARPS,
         **kernel_kwargs,
