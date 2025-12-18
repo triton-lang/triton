@@ -696,6 +696,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphNodeIdToScopes =
               profiler.correlation.externIdToState[externId]
                   .graphNodeIdToScopes;
+          graphNodeIdToScopes.reserve(graphState.numNodes);
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             const auto baseScopeId =
@@ -703,11 +704,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeScopeId = data->addOp(baseScopeId, callpath);
               for (auto nodeId : nodeIds) {
-                auto isAPI = graphState.apiNodeIds.find(nodeId) !=
-                             graphState.apiNodeIds.end();
-                auto &nodeScopes = graphNodeIdToScopes[nodeId];
-                nodeScopes.isApiExternId = isAPI;
-                nodeScopes.setScopeId(data, nodeScopeId);
+                auto [nodeIt, inserted] =
+                    graphNodeIdToScopes.try_emplace(nodeId);
+                if (inserted) {
+                  nodeIt->second.isApiExternId =
+                      graphState.apiNodeIds.find(nodeId) !=
+                      graphState.apiNodeIds.end();
+                }
+                nodeIt->second.setScopeId(data, nodeScopeId);
               }
             }
           }
