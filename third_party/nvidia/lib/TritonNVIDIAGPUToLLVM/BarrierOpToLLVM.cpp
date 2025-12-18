@@ -348,6 +348,7 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
+  // Parsing arrive ops depends on seeing corresponding barrier init ops.
   patterns.add<ArriveBarrierOpConversion>(
       typeConverter, PatternBenefit(benefit.getBenefit() + 1));
 }

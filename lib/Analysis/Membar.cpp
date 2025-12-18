@@ -8,9 +8,6 @@
 #include <deque>
 
 namespace mlir {
-namespace ttng = mlir::triton::nvidia_gpu;
-
-using namespace mlir;
 
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval)
@@ -293,9 +290,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     }
     // If this op is may be signalling other threads asynchronously, make sure
     // all shared memory transactions are complete beforehand.
-    if (isa<ttng::ArriveBarrierOp>(op)) {
-      if (!ttng::isMultiThreadedArriveBarrier(
-              dyn_cast<ttng::ArriveBarrierOp>(op))) {
+    if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
+      if (!triton::nvidia_gpu::isMultiThreadedArriveBarrier(
+              dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(op))) {
         Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
         auto allMemorySlice = AllocationSlice(allIntervals);
         curBlockInfo.syncWriteSlices[allMemorySlice].insert(op);

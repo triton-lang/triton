@@ -462,8 +462,8 @@ bool isMultiThreadedArriveBarrier(ArriveBarrierOp op) {
   if (!definingOp) {
     return false;
   }
-
   Value rootAlloc = definingOp.getSrc();
+
   // Non-default partition allocations are passed as arguments to the WS op.
   if (auto blockArg = dyn_cast<BlockArgument>(rootAlloc)) {
     Operation *parentOp = blockArg.getOwner()->getParentOp();
@@ -481,6 +481,8 @@ bool isMultiThreadedArriveBarrier(ArriveBarrierOp op) {
     for (Operation *user : rootAlloc.getUsers()) {
       if (auto indexOp = dyn_cast<gpu::MemDescIndexOp>(user)) {
         for (Operation *memDescUser : indexOp.getResult().getUsers()) {
+          // Aref lowering pass ensures that all barriers with the same alloc
+          // have the same value for the dependentPartitionIds attribute.
           if (auto initOp = dyn_cast<InitBarrierOp>(memDescUser)) {
             if (initOp.getDependentPartitionIds()) {
               return true;
