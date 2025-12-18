@@ -36,6 +36,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_copy,
     float2,
 )
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -1865,3 +1866,20 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@gluon.jit
+def descriptor_shape_kernel(desc, expect_shape):
+    for i in ttgl.static_range(len(expect_shape)):
+        ttgl.device_assert(desc.shape[i] == expect_shape[i])
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_descriptor_shape():
+    t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
+
+    for fp4_padded in [True]:
+        layout = ttgl.NVMMASharedLayout.get_default_for([128, 64], ttgl.uint8, fp4_padded=fp4_padded)
+        desc = TensorDescriptor.from_tensor(t, [128, 64], layout)
+        descriptor_shape_kernel[(1, )](desc, t.shape, num_warps=1, debug=True)
+        torch.cuda.synchronize()

@@ -374,6 +374,10 @@ class NVMMASharedLayout(SharedLayout):
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
 
+        if self.fp4_padded:
+            assert self.swizzle_byte_width == 128, "fp4_padded only supports 128 byte swizzling"
+            assert self.element_bitwidth == 8, "fp4_padded is only supported for element_bitwidth=8"
+
     def _to_ir(self, builder):
         return builder.get_nvmma_shared_layout(
             self.swizzle_byte_width,

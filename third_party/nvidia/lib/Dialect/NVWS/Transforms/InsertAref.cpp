@@ -546,7 +546,7 @@ public:
     SmallVector<scf::ForOp> loops;
     func.walk([&](scf::ForOp loop) {
       auto func = loop->getParentOfType<triton::FuncOp>();
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName) && hasPartition(loop))
         loops.push_back(loop);
     });
 
