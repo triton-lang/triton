@@ -418,7 +418,7 @@ struct TMEMAref {
     buffer = {};
   }
   void release(OpBuilder &b, Location loc) {
-    assert(asyncOp);
+    assert(asyncOp[partitionId]);
     StageCluster stageCluster;
     if (partitionId)
       stageCluster = stageClusters[*partitionId];
@@ -426,13 +426,13 @@ struct TMEMAref {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp)}));
+              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp)}));
+              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
       kind = PUT;
     }
   }
@@ -462,7 +462,7 @@ struct TMEMAref {
   Value token;
   Kind kind;
   std::optional<PartitionId> partitionId;
-  std::optional<AsyncOp> asyncOp;
+  llvm::MapVector<std::optional<PartitionId>, std::optional<AsyncOp>> asyncOp;
   DenseMap<PartitionId, StageCluster> stageClusters;
 };
 
@@ -526,9 +526,9 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   }
 
   if (isa<MMAv5OpInterface>(node->op)) {
-    state.asyncOp = AsyncOp::TC5MMA;
+    state.asyncOp[node->partitionId] = AsyncOp::TC5MMA;
   } else if (isa<TMEMLoadOp, TMEMStoreOp>(node->op)) {
-    state.asyncOp = AsyncOp::NONE;
+    state.asyncOp[node->partitionId] = AsyncOp::NONE;
   }
 
   OpBuilder b(node->op);
@@ -730,7 +730,7 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
 
   if (auto src = allocOp.getSrc()) {
     auto buffer = state.getBuffer(b, partitionId, allocOp);
-    state.asyncOp = AsyncOp::NONE;
+    state.asyncOp[partitionId] = AsyncOp::NONE;
     auto vTrue = createInto<arith::ConstantIntOp>(
         b, allocOp.getLoc(), {partitionId, stageCluster}, true, 1);
     createInto<TMEMStoreOp>(b, allocOp.getLoc(), {partitionId, stageCluster},
