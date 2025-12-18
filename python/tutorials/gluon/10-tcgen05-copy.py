@@ -461,5 +461,5 @@ def test_matmul_accumulate(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, dtyp
 # doesn't support all layouts, but should support typical NVMMASharedLayouts.
 # The instruction is useful in specific cases to copy data from shared to tensor
 # memory without round-tripping the data through registers, which increases
-# register pressure and is slow, and it is asynchronous and can be implicitly
+# register pressure and is slow. It is also asynchronous and can be implicitly
 # pipelined with other `tcgen05` instructions.
