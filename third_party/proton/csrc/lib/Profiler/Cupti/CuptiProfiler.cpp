@@ -293,8 +293,9 @@ struct GraphState {
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation
   std::map<uint64_t, NodeState> nodeIdToState;
-  // Identify whether a node is a metric kernel node
-  std::unordered_set<uint64_t> metricKernelNodeIds;
+  // Identify whether a node is a metric kernel node.
+  // NOTE: This set has to be ordered to match the node creation order.
+  std::set<uint64_t> metricKernelNodeIds;
   // Identify if a node is launched by an API call or triton
   std::unordered_set<uint64_t> apiNodeIds;
   // If the graph is launched after profiling started,
@@ -688,7 +689,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphNodeIdToScopes =
               profiler.correlation.externIdToState[externId]
                   .graphNodeIdToScopes;
-          graphNodeIdToScopes.reserve(graphState.numNodes);
+          graphNodeIdToScopes.reserve(graphState.numNodes * 2);
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             const auto baseScopeId =
