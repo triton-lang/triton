@@ -328,8 +328,13 @@ def _matmul(
             mask_k_x = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR // 2 < w_k_limit
+                # dividing by W_K_DIVISOR because w_k_limit is also already
+                # divided by W_K_DIVISOR (2 for mxfp4 wehre 2 fp4 values are
+                # packed per Byte along K)
+                mask_k_scale = offs_k_scale * (MX_PACK_DIVISOR // W_K_DIVISOR) < w_k_limit
             if is_x_microscaled:
+                # No need to divide because we only support mxfp8 for x (we
+                # don't have divisor for x)
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
