@@ -2138,6 +2138,8 @@ NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                 CGAEncodingAttr CGALayout) {
   if (elementBitWidth == 0)
     return emitError() << "elementBitWidth must be non-zero";
+  if (!llvm::is_contained({0, 32, 64, 128}, swizzlingByteWidth))
+    return emitError() << "swizzlingByteWidth must be 0, 32, 64, or 128";
   return success();
 }
 
