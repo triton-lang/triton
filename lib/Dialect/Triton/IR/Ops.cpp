@@ -359,6 +359,8 @@ bool DotScaledOp::verifyOutputDims() {
 LogicalResult DotScaledOp::verify() {
   auto aShape = this->getA().getType().getShape();
   int64_t rank = aShape.size();
+  if (rank < 2)
+    return this->emitError("operands must be at least 2D");
 
   auto k = aShape[rank - 1];
   if (this->getAElemType() == ScaleDotElemType::E2M1) {
