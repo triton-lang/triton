@@ -19,8 +19,8 @@ instructions which fuse the operand dequantization and MMA into a single
 instruction.
 
 `tcgen05_mma_scaled` supports specific block-scaled quantization schemes:
-- nvfp4: NVIDIA-specific fp4 quantization scheme using float8_e4m3fn scales,
-  using VEC_SIZE=16
+- nvfp4: NVIDIA-specific fp4 quantization scheme using VEC_SIZE=16 and
+  float8_e4m3fn scales
 - mxfp4/mxfp6/mxfp6: Open Compute Project (OCP) microscaling format (MX) for
   fp4/fp6/fp8, using VEC_SIZE=32 and fp8e8m0 scales
 
@@ -266,7 +266,7 @@ def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MI
     IS_MIXED_PREC_FP4 = MIXED_PREC and IS_FP4
     layout = gl.NVMMASharedLayout.get_default_for(
         [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE],
-        gl.float8e4nv,
+        gl.uint8 if IS_FP4 else gl.float8e4nv,
         fp4_padded=IS_MIXED_PREC_FP4,
     )
     return TensorDescriptor.from_tensor(value, [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE], layout)
@@ -435,7 +435,7 @@ if __name__ == "__main__":
 # that each [BLOCK_M, BLOCK_K // VEC_SIZE] block is contiguous in global memory.
 #
 # One naive way to do that is layout the scale tensor as
-# [M // BLOCK_K, K // BLOCK_K // (BLOCK_K // VEC_SIZE), BLOCK_M, BLOCK_K // VEC_SIZE]
+# [M // BLOCK_M, K // (BLOCK_K * BLOCK_K // VEC_SIZE), BLOCK_M, BLOCK_K // VEC_SIZE]
 # with order=[?, ?, 1, 0], i.e. contiguous along the dim=3 and then dim=2.
 #
 # dim=0 is the block index along the M dimension and dim=1 is the block index
@@ -676,7 +676,8 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     # messages as with 32x16xu8.
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
-    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.uint8)
+    IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8)
     return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 
@@ -967,6 +968,14 @@ if __name__ == "__main__":
 # shared memory layout to have non-zero `swizzle_byte_width`, the unswizzled layout
 # would trigger the same error. I.e. for NVMMASharedLayout, we have to turn off swizzling
 # to use `tcgen05_copy`.
+#
+# This packed block layout for the scale factors was specifically designed to be
+# compatible with TMAs and, when unswizzled in shared memory, produces a layout
+# that is compatible with `tcgen05_copy`.
+#
+# For more detailed information on the scale factor layout, see
+#  1. https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+#  2. https://docs.nvidia.com/cuda/cublas/#d-block-scaling-factors-layout
 #
 # With this information, we can rewrite the kernel to use `tcgen05_copy`.
 
