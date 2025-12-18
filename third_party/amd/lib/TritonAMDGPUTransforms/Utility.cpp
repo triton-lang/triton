@@ -22,11 +22,13 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
   int count = 0;
   for (auto op = beginOp; op != endOp; op = op->getNextNode()) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
-      assert(!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty());
+      assert(!ifOp.getThenRegion().empty());
       auto minThen =
           deduceMinCountInBlock(ifOp.getThenRegion().front(), countFunc);
-      auto minElse =
-          deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
+      int minElse = 0;
+      if (!ifOp.getElseRegion().empty())
+        minElse =
+            deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
       count += std::min(minThen, minElse);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
       if (std::optional<APInt> tripCount = forOp.getStaticTripCount()) {
