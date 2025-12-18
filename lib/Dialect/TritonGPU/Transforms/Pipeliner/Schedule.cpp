@@ -301,7 +301,7 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
     scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
     : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false),
-      maxStages(schedule.getNumStages() + 1) {
+      maxStages(schedule.getNumStages()) {
   clusterBegin = schedule.clusters.begin();
   clusterEnd = schedule.clusters.end();
   opIt = forOp.getBody()->without_terminator().begin();
