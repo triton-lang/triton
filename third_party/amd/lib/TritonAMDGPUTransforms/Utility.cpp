@@ -22,6 +22,9 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
   int count = 0;
   for (auto op = beginOp; op != endOp; op = op->getNextNode()) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
+      if (ifOp.getElseRegion().empty())
+        continue;
+
       assert(!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty());
       auto minThen =
           deduceMinCountInBlock(ifOp.getThenRegion().front(), countFunc);
