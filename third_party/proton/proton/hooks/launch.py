@@ -45,9 +45,7 @@ class LaunchHook(Hook):
             set_metric_kernels()
         scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
         libproton.enter_op(id.get(), lazy_metadata["name"])
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
         libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
-        exit_state()
 
     def exit(self, metadata: LazyDict) -> None:
         libproton.exit_op(id.get(), op_name.get())
