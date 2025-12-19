@@ -484,7 +484,19 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   if (op.getNumOperands() != op.getNumResults()) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
-
+  auto axis = op.getAxis();
+  auto firstRank = 0;
+  for (auto tensorTy : op.getInputTypes()) {
+    int64_t rank = tensorTy.getRank();
+    if (axis < 0 || axis >= rank)
+      return op.emitOpError() << "axis out of bounds for operand rank " << rank;
+    if (firstRank == 0)
+      firstRank = rank;
+    else if (rank != firstRank)
+      return op.emitOpError()
+             << "all operands must have the same rank, but got ranks "
+             << firstRank << " and " << rank;
+  }
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
     if (opElemTy != getElementTypeOrSelf(resTy)) {

@@ -122,6 +122,18 @@ tt.func public @fn(%v: tensor<4x128xf64>) {
 
 // -----
 
+tt.func public @fn(%v: tensor<4x128xf32>) {
+    // expected-error @+1 {{axis out of bounds}}
+    %a = "tt.reduce" (%v) ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %add = arith.addf %arg0, %arg1 : f32
+      tt.reduce.return %add : f32
+    }) {axis = 2 : i32}  : (tensor<4x128xf32>) -> tensor<4xf32>
+    tt.return
+}
+
+// -----
+
 tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
     // expected-error @below {{op requires the same shape for all operands}}
     %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
