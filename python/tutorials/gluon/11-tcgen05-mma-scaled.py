@@ -439,7 +439,7 @@ if __name__ == "__main__":
 # with order=[?, ?, 1, 0], i.e. contiguous along the dim=3 and then dim=2.
 #
 # The first two dimensions correspond to the grid index along the M and K dimensions
-# respectively, and the last two are the scales for a single program. 
+# respectively, and the last two are the scales for a single program.
 #
 # We achieve this by dividing the block shape into the original shape by reshaping the tensor into
 # [M // BLOCK_M, BLOCK_M, (K // BLOCK_K) // (BLOCK_K // VEC_SIZE), BLOCK_K // VEC_SIZE]
