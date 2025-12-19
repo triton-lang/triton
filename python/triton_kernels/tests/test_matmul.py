@@ -19,7 +19,7 @@ from triton_kernels.testing import assert_close, make_random_tensor
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.unary_geglu import unary_geglu_fn, unary_geglu_torch
+from triton_kernels.unary_swiglu import unary_swiglu_fn, unary_swiglu_torch
 from triton_kernels.tensor_details import layout
 # ---------------
 # numerics stuff
@@ -184,18 +184,18 @@ def _build_test_op_cases():
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, activation=("swiglu", (1.1, 7)))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
-    # unary geglu
+    # unary swiglu
     test_cases.extend([
-        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, activation=("unary_geglu", (1.1,)))
+        Case(*shape, mode, "bfloat16", "bfloat16", split_k=split_k, activation=("unary_swiglu", (1.1,)))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
     test_cases.extend([
-        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, activation=("unary_geglu", (1.1,)))
+        Case(*even_shape, "ragged", "bfloat16", "bfloat16", epilogue_subtile=val, activation=("unary_swiglu", (1.1,)))
         for val in (1, 2, 4)
     ])
-    # unary geglu together with mxfp8 downcast epilogue
+    # unary swiglu together with mxfp8 downcast epilogue
     test_cases.extend([
-        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, activation=("unary_geglu", (1.1,)))
+        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, activation=("unary_swiglu", (1.1,)))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
 
@@ -395,9 +395,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                 FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
                 activation_opts,
             )
-        elif activation_name == "unary_geglu":
+        elif activation_name == "unary_swiglu":
             fused_activation = FusedActivation(
-                FnSpecs("unary_geglu", unary_geglu_fn, ("alpha",)),
+                FnSpecs("unary_swiglu", unary_swiglu_fn, ("alpha",)),
                 activation_opts,
             )
         else:
@@ -460,8 +460,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         activation_name, activation_opts = activation
         if activation_name == "swiglu":
             ref_y = swiglu(ref_y, alpha=activation_opts[0], precision_config=SwiGLUPrecisionConfig(activation_opts[1]))
-        elif activation_name == "unary_geglu":
-            ref_y = unary_geglu_torch(ref_y, activation_opts[0])
+        elif activation_name == "unary_swiglu":
+            ref_y = unary_swiglu_torch(ref_y, activation_opts[0])
         if gammas is not None:
             ref_y = ref_y * gammas[:, None]
         if scatter_indx is not None:
