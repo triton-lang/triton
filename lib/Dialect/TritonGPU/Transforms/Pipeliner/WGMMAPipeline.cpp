@@ -348,7 +348,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
         dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
     dots.push_back(dot);
     C = dot.getResult();
-    useC = mlir::arith::ConstantIntOp::create(builder, loc, 1, 1);
+    useC = {};
   }
   dotOp.replaceAllUsesWith(dots.back().getResult());
   dotOp.erase();
@@ -588,42 +588,62 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   // Insert waits before the users of the properly async dots other than loop
   // yield.
   for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
-    // If the dot takes the LHS on registers i, we add a wait for the number
-    // of properly async dots in the loop minus one.
-    // This makes sure that the dot will wait until itself from the previous
-    // iteration has completed, as to avoid rewriting the registers.
-    if (rsDotNeedsWait(asyncDot, forOp)) {
-      OpBuilder builder(asyncDot);
-      builder.setInsertionPointAfter(asyncDot);
-      auto newWait = ttng::WarpGroupDotWaitOp::create(
-          builder, asyncDot->getLoc(), ArrayRef<Value>{},
-          properlyAsyncDots.size() - 1);
-      SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
-      threadValuesThroughWait(newWait, waitOperands);
-      continue;
-    }
-
-    SmallVector<OpOperand *> uses;
+    DenseMap<Block *, SmallVector<OpOperand *>> blockToUses;
     for (auto &use : asyncDot->getUses()) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
         continue;
       }
-      uses.push_back(&use);
+
+      auto block = use.getOwner()->getBlock();
+      blockToUses[block].push_back(&use);
     }
 
-    DenseMap<Block *, SmallVector<Value>> blockToUsers;
-    for (auto use : uses) {
-      auto block = use->getOwner()->getBlock();
-      blockToUsers[block].push_back(use->get());
-    }
+    for (auto [block, uses] : blockToUses) {
+      // Insert a wait before the first use in the block
+      std::sort(uses.begin(), uses.end(), [](OpOperand *lhs, OpOperand *rhs) {
+        Operation *lhsOp = lhs->getOwner();
+        Operation *rhsOp = rhs->getOwner();
+        return lhsOp->isBeforeInBlock(rhsOp);
+      });
 
-    for (auto [block, users] : blockToUsers) {
-      OpBuilder builder(block, block->begin());
+      // If a wgmma uses the same accumulator registers, it will be implicitly
+      // pipelined by the hardware and doesn't need a wait.
+      auto firstUse =
+          std::find_if_not(uses.begin(), uses.end(), [](OpOperand *operand) {
+            return (isa<ttng::WarpGroupDotOp>(operand->getOwner()) &&
+                    operand->getOperandNumber() == 2);
+          });
+      if (firstUse == uses.end()) {
+        continue;
+      }
+
+      OpBuilder builder((*firstUse)->getOwner());
       auto newWait = ttng::WarpGroupDotWaitOp::create(
           builder, asyncDot->getLoc(), ArrayRef<Value>{}, 0);
 
+      SmallVector<Value> users;
+      for (; firstUse != uses.end(); ++firstUse) {
+        users.push_back((*firstUse)->get());
+      }
       threadValuesThroughWait(newWait, users);
     }
+  }
+
+  for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
+    // If the dot takes the LHS on registers i, we add a wait for the number
+    // of properly async dots in the loop minus one.
+    // This makes sure that the dot will wait until itself from the previous
+    // iteration has completed, as to avoid rewriting the registers.
+    if (!rsDotNeedsWait(asyncDot, forOp))
+      continue;
+
+    OpBuilder builder(asyncDot);
+    builder.setInsertionPointAfter(asyncDot);
+    auto newWait = ttng::WarpGroupDotWaitOp::create(
+        builder, asyncDot->getLoc(), ArrayRef<Value>{},
+        properlyAsyncDots.size() - 1);
+    SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
+    threadValuesThroughWait(newWait, waitOperands);
   }
 
   // Add the wait right after the last properly-async dot.  This only needs to
@@ -719,8 +739,25 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     waitOperands.push_back(forOp.getResult(iterArgIdx));
   }
-  // Wait until there are 0 outstanding async dot ops.
-  builder.setInsertionPointAfter(forOp);
+
+  // Insert a wait(0) before the first use outside the loop
+  auto curBlock = forOp->getBlock();
+  Operation *firstUse = nullptr;
+  for (auto accVal : waitOperands) {
+    for (auto user : accVal.getUsers()) {
+      auto target = curBlock->findAncestorOpInBlock(*user);
+      if (!target)
+        continue;
+      if (!firstUse || target->isBeforeInBlock(firstUse))
+        firstUse = target;
+    }
+  }
+
+  if (firstUse) {
+    builder.setInsertionPoint(firstUse);
+  } else {
+    builder.setInsertionPoint(curBlock->getTerminator());
+  }
   auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
       builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);

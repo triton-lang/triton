@@ -711,6 +711,44 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
 }
 
 //===----------------------------------------------------------------------===//
+// AsyncCopyLocalToGlobalOp
+//===----------------------------------------------------------------------===//
+
+def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
+  OptionalTypesMatchWith<"infer mask type from dst type",
+                 "dst", "mask", "getI1SameShape($_self)">,
+]> {
+  let summary = "copy data from local memory to global memory asynchronously";
+
+  let hasVerifier = 1;
+  let description = [{
+    This operation copies data from local memory to global memory asynchronously.
+    This is analogue to tt.store except the data are copied from local memory pointed
+    to by the memory descriptor instead of a distributed tensor.
+    Contiguity is the maximum number of elements that can be stored in a single vector with
+    the given layout and mask.
+    This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
+    Optional<I1Tensor>:$mask,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    DefaultValuedAttr<I32Attr, "1">:$contiguity
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $src `,` $dst (`mask` $mask^)?
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    attr-dict `:` qualified(type($src)) `->` type($dst)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // AsyncTDMCopyGlobalToLocalOp
 //===----------------------------------------------------------------------===//
 

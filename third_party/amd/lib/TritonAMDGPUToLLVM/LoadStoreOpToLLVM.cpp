@@ -289,59 +289,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // direct to lds loads do not support per lane shared offsets. We need to
-  // ensure that we write coalesced into shared memory. This means we cannot
-  // exceed the supported load width because splitting them would cause strided
-  // (non coalesced) writes. Additionally:
-  //   1) For *non* swizzled shared encodings we check if they result in
-  //      coalesced writes and can then lower them directly to the intrinsics.
-  //   2) For swizzled shared encodings we need to transfer the swizzling to the
-  //      source pointers. For now this is done by swizzling the pointers
-  //      between the lane of a warp via permute. This only works if the swizzle
-  //      pattern does not exchange elements between warps which holds for all
-  //      our swizzle patterns. There is still a check performed to not silently
-  //      produce wrong results if we invalidate the condition in the future
-  LogicalResult canWriteCoalesced(RewriterBase &rewriter, Operation *op,
-                                  RankedTensorType srcTy, MemDescType dstTy,
-                                  unsigned vectorSize,
-                                  bool requiresSrcPtrSwizzling) const {
-    if (targetInfo.supportsDirectToLDSScattering()) {
-      return success();
-    }
-
-    int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
-    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      LDBG(*op << " results in unsupported load bitwidth: " << vecBits);
-      return failure();
-    }
-    // Compute the blocked -> shared linear layout to check preconditions
-    LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
-    LinearLayout sharedLayout;
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            dstTy.getEncoding())) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(dstTy);
-    }
-    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-
-    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!requiresSrcPtrSwizzling &&
-        !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
-      LDBG(*op << " does not write coalesced into LDS and is not swizzled");
-      return failure();
-    }
-
-    if (requiresSrcPtrSwizzling &&
-        !LLVM::AMD::doesSwizzleInsideWarp(rewriter, srcToSharedLayout,
-                                          threadsPerWarp)) {
-      LDBG(*op << " does swizzle across warp boundaries");
-      return failure();
-    }
-    return success();
-  }
-
   // For each load emit the computation to get the lane id offset which holds
   // the source pointers/offsets we need to store to shared memory
   SmallVector<Value>
@@ -412,11 +359,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return b.trunc(i1_ty, bitMask);
   }
 
-  SmallVector<Value> zipLoadValues(RewriterBase &rewriter, Location loc,
-                                   unsigned vec, ArrayRef<Value> srcElems,
-                                   Type srcTy, ArrayRef<Value> maskElems,
-                                   ArrayRef<Value> otherElems, Type otherTy,
-                                   ArrayRef<Value> swizzledLaneOffsets) const {
+  SmallVector<Value>
+  zipAsyncCopyValues(RewriterBase &rewriter, Location loc, unsigned vec,
+                     ArrayRef<Value> srcElems, Type srcTy,
+                     ArrayRef<Value> maskElems, ArrayRef<Value> otherElems,
+                     Type otherTy, ArrayRef<Value> swizzledLaneOffsets) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     SmallVector<Value> loadVals;
     auto structTy = LLVM::LLVMStructType::getLiteral(
@@ -442,9 +389,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return loadVals;
   }
 
-  auto unzipLoadValues(RewriterBase &rewriter, Location loc, int startIdx,
-                       ArrayRef<Value> values, Type srcTy, Type otherTy,
-                       bool hasOther, unsigned vec) const {
+  auto unzipAsyncCopyValues(RewriterBase &rewriter, Location loc, int startIdx,
+                            ArrayRef<Value> values, Type srcTy, Type otherTy,
+                            bool hasOther, unsigned vec) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto structElem = values[startIdx];
     Value offsetElem = b.extract_val(srcTy, structElem, 0);
@@ -479,10 +426,21 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
   }
 
-  LogicalResult lowerDirectToLDSLoad(
-      RewriterBase &rewriter, Location loc, RankedTensorType srcTy,
-      MemDescType dstTy, SmallVector<Value> loadVals, Value llDst,
-      Type resElemTy, unsigned vec, int numCTAs,
+  // Unified helper for async copy between global and shared memory.
+  // Works for both load (global→shared) and store (shared→global).
+  // Parameters:
+  //   globalTy: The global memory tensor type (src for load, dst for store)
+  //   sharedTy: The shared memory descriptor type (dst for load, src for store)
+  //   vals: Values to process (packed pointers/masks)
+  //   llShared: LLVM value for shared memory struct
+  //   isLoad: true for global→shared, false for shared→global
+  //   numCTAs: Number of CTAs (only used for load multicast)
+  //   isaFamily: ISA family (only used for load multicast)
+  //   lowerInst: Callback to emit the actual load/store instruction
+  LogicalResult lowerDirectLDSAsyncCopy(
+      RewriterBase &rewriter, Location loc, RankedTensorType globalTy,
+      MemDescType sharedTy, SmallVector<Value> vals, Value llShared,
+      Type resElemTy, unsigned vec, bool isLoad, int numCTAs,
       triton::AMD::ISAFamily isaFamily,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType,
@@ -491,47 +449,51 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto *ctx = rewriter.getContext();
 
-    // Build src to shared layout and remove broadcasted registers
-    auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    srcLayout = removeBroadcastSrc.apply(srcLayout);
-    loadVals = removeBroadcastSrc.apply(loadVals);
+    // Build global to shared layout and remove broadcasted registers
+    auto globalLayout = triton::gpu::toLinearLayout(globalTy);
+    auto removeBroadcast = actionRemoveBroadcastedRegs(globalLayout);
+    globalLayout = removeBroadcast.apply(globalLayout);
+    vals = removeBroadcast.apply(vals);
 
     LinearLayout sharedLayout;
     if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            dstTy.getEncoding())) {
+            sharedTy.getEncoding())) {
       sharedLayout = paddedEnc.getLinearComponent();
     } else {
-      sharedLayout = triton::gpu::toLinearLayout(dstTy);
+      sharedLayout = triton::gpu::toLinearLayout(sharedTy);
     }
-    auto cvt = srcLayout.invertAndCompose(sharedLayout);
+    auto cvt = globalLayout.invertAndCompose(sharedLayout);
     if (!cvt.isTrivialOver({str_attr("block")})) {
-      return emitError(
-          loc,
-          "direct to lds loads do not support non-trivial block dimension");
+      return emitError(loc, isLoad ? "direct to lds loads do not support "
+                                     "non-trivial block dimension"
+                                   : "direct from lds stores do not support "
+                                     "non-trivial block dimension");
     }
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
 
+    // Multicast is only supported for loads
     Value ctaMulticastMask;
-    if (numCTAs > 1 && isaFamily == ISAFamily::GFX1250) {
+    if (isLoad && numCTAs > 1 && isaFamily == ISAFamily::GFX1250) {
       ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
-          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), srcLayout);
+          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
+          globalLayout);
     }
 
-    auto smemObj =
-        LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
-    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
-    auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, llShared,
+                                                         resElemTy, rewriter);
+    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, sharedTy);
+    auto maskSpanAffineOffset =
+        SharedMemoryObject::getMaskSpanOffsets(sharedTy);
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     auto calcPaddedOffset = [&](Value smemOffset) {
       TritonLLVMOpBuilder b(loc, rewriter);
-      auto bitwidth = dstTy.getElementTypeBitWidth();
+      auto bitwidth = sharedTy.getElementTypeBitWidth();
       if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-              dstTy.getEncoding())) {
+              sharedTy.getEncoding())) {
         // Apply the offset needed for padding.
         Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
                                       smemOffset, /*offsetInBytes=*/true);
@@ -547,10 +509,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                            ctaMulticastMask);
         };
 
-    // If we do not support scattering (GFX9) the address should be the start
-    // address (scalar) of the warp
-    laneId = targetInfo.supportsDirectToLDSScattering() ? laneId : b.i32_val(0);
-    lowerLdSt(loc, ctx, cvt, loadVals, resElemTy, smemObj.getBase(),
+    // For loads on GFX9 (no scattering support), the address should be the
+    // start address (scalar) of the warp
+    if (isLoad && !targetInfo.supportsDirectToLDSScattering()) {
+      laneId = b.i32_val(0);
+    }
+
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
               calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
               warpId, rewriter, targetInfo, vec, lowerInstForwardMulticastMask);
     return success();
@@ -819,17 +784,7 @@ struct BufferLoadToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings restrict vec by the min interval
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
-    }
-
-    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
-    if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
-                                 requiresSrcPtrSwizzling))) {
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrType, dstEnc, vec)) {
       return failure();
     }
 
@@ -838,6 +793,10 @@ struct BufferLoadToLocalOpConversion
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
 
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool requiresSrcPtrSwizzling =
+        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
+        maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
@@ -856,8 +815,8 @@ struct BufferLoadToLocalOpConversion
     auto otherTy = hasOther ? otherElems[0].getType() : i1_ty;
     // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
     auto loadVals =
-        zipLoadValues(rewriter, loc, vec, offsetElems, offsetTy, maskElems,
-                      otherElems, otherTy, swizzledLaneOffsets);
+        zipAsyncCopyValues(rewriter, loc, vec, offsetElems, offsetTy, maskElems,
+                           otherElems, otherTy, swizzledLaneOffsets);
 
     // Create the resource descriptor and then emit the buffer_loads to lds
     // based on the collected shared addresses and vector size
@@ -874,8 +833,8 @@ struct BufferLoadToLocalOpConversion
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value multicastMask) -> SmallVector<Value> {
       auto [offsetElem, maskElem, otherElems, swizzleLaneOffset] =
-          unzipLoadValues(rewriter, loc, startIdx, loadVals, offsetTy, otherTy,
-                          hasOther, vecTy.getNumElements());
+          unzipAsyncCopyValues(rewriter, loc, startIdx, loadVals, offsetTy,
+                               otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
       Value vecBytesVal = b.i32_val(vecBits / 8);
@@ -911,9 +870,9 @@ struct BufferLoadToLocalOpConversion
     };
 
     int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
-    auto res = lowerDirectToLDSLoad(
+    auto res = lowerDirectLDSAsyncCopy(
         rewriter, loc, ptrType, flatDstTy, loadVals, llDst, resElemTy, vec,
-        numCTAs, targetInfo.getISAFamily(), emitBufferLoadLds);
+        /*isLoad=*/true, numCTAs, targetInfo.getISAFamily(), emitBufferLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -968,18 +927,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings restrict vec by the min interval
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
-    }
-
-    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
-
-    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, vec,
-                                 requiresSrcPtrSwizzling))) {
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc, vec)) {
       return failure();
     }
 
@@ -987,6 +935,10 @@ struct AsyncCopyGlobalToLocalOpConversion
     // the LDS addresses since we gather into LDS
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool requiresSrcPtrSwizzling =
+        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
+        maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
@@ -1002,8 +954,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     Type otherTy = hasOther ? otherElems[0].getType() : i1_ty;
     // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
     SmallVector<Value> loadVals =
-        zipLoadValues(rewriter, loc, vec, srcElems, srcPtrTy, maskElements,
-                      otherElems, otherTy, swizzledLaneOffsets);
+        zipAsyncCopyValues(rewriter, loc, vec, srcElems, srcPtrTy, maskElements,
+                           otherElems, otherTy, swizzledLaneOffsets);
 
     auto freeVarMasks = getFreeVariableMasks(srcTy);
     // We load redundant data on different CTAs so each CTA has a copy in its
@@ -1021,8 +973,8 @@ struct AsyncCopyGlobalToLocalOpConversion
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value multicastMask) -> SmallVector<Value> {
       auto [srcElem, maskElem, otherElems, swizzleLaneOffset] =
-          unzipLoadValues(rewriter, loc, startIdx, loadValues, srcPtrTy,
-                          otherTy, hasOther, vecTy.getNumElements());
+          unzipAsyncCopyValues(rewriter, loc, startIdx, loadValues, srcPtrTy,
+                               otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
       Value maybeSwizzledMaskElem = maskElem;
@@ -1050,9 +1002,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     };
 
     int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
-    auto res = lowerDirectToLDSLoad(
+    auto res = lowerDirectLDSAsyncCopy(
         rewriter, loc, srcTy, flatDstTy, loadVals, llDst, resElemTy, vec,
-        numCTAs, targetInfo.getISAFamily(), emitGlobalLoadLds);
+        /*isLoad=*/true, numCTAs, targetInfo.getISAFamily(), emitGlobalLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1100,6 +1052,122 @@ struct AsyncCopyGlobalToLocalOpConversion
             {srcPtr, shmemAddr, b.i32_val(0), b.i32_val(cacheModifiers)});
       }
     }
+  }
+};
+
+struct AsyncCopyLocalToGlobalOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncCopyLocalToGlobalOp>,
+      public DirectToLdsLoadConversionBase {
+  AsyncCopyLocalToGlobalOpConversion(LLVMTypeConverter &converter,
+                                     const AMD::TargetInfo &targetInfo,
+                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                     PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Only supported on GFX1250
+    if (targetInfo.getISAFamily() != ISAFamily::GFX1250) {
+      return rewriter.notifyMatchFailure(
+          op, "async_copy_local_to_global only supported on GFX1250");
+    }
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto srcTy = op.getSrc().getType();
+
+    auto dstTy = op.getDst().getType();
+    auto resElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    Value llSrc = adaptor.getSrc();
+
+    // We can store N elements at a time if:
+    //  1. Every group of N destination pointers are contiguous.
+    //  2. The mask (if present) has "alignment" N.
+    unsigned vec = getVectorSize(op.getDst(), axisAnalysisPass);
+    auto maskElements = getMaskElemsAndUpdateVeclen(
+        rewriter, loc, adaptor.getMask(), op.getMask(), vec);
+
+    auto dstElems = unpackLLElements(loc, adaptor.getDst(), rewriter);
+
+    // If the op has a contiguity hint use it to increase the vector size.
+    vec = std::max(vec, op.getContiguity());
+
+    // For padded encodings restrict vec by the min interval
+    auto srcEnc = srcTy.getEncoding();
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+      vec = std::min(vec, padEnc.getMinInterval());
+    }
+
+    Type dstPtrTy = dstElems[0].getType();
+    // Zip dst_ptr, mask for lowerLdSt
+    SmallVector<Value> storeVals = zipAsyncCopyValues(
+        rewriter, loc, vec, dstElems, dstPtrTy, maskElements, {}, i1_ty, {});
+
+    auto freeVarMasks = getFreeVariableMasks(dstTy);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto emitGlobalStoreLds =
+        [this, &op, &b, threadPred, dstPtrTy](
+            RewriterBase &rewriter, Location loc, ArrayRef<Value> storeValues,
+            Value shmemAddr, int startIdx, VectorType vecTy,
+            Value /*multicastMask*/) -> SmallVector<Value> {
+      auto [dstElem, maskElem, unused1, unused2] =
+          unzipAsyncCopyValues(rewriter, loc, startIdx, storeValues, dstPtrTy,
+                               i1_ty, false, vecTy.getNumElements());
+      int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+
+      // Predicate store based on threadPred && mask
+      auto cond = b.and_(threadPred, maskElem);
+      auto [storeBlock, afterStoreBlock] = emitBranch(rewriter, loc, cond);
+
+      emitAsyncStore(rewriter, loc, targetInfo, vecBits, dstElem, shmemAddr,
+                     op.getCache());
+
+      rewriter.setInsertionPointToStart(afterStoreBlock);
+
+      return {};
+    };
+
+    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
+    auto res = lowerDirectLDSAsyncCopy(
+        rewriter, loc, dstTy, srcTy, storeVals, llSrc, resElemTy, vec,
+        /*isLoad=*/false, numCTAs, targetInfo.getISAFamily(),
+        emitGlobalStoreLds);
+    if (failed(res)) {
+      return failure();
+    }
+
+    // Drop the result token.
+    Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
+                                          IntegerType::get(op.getContext(), 32),
+                                          rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
+    return success();
+  }
+
+  void emitAsyncStore(RewriterBase &rewriter, Location loc,
+                      AMD::TargetInfo targetInfo, int vecBits, Value dstPtr,
+                      Value shmemAddr, triton::CacheModifier cacheMod) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    assert(targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits));
+    int32_t cacheModifiers =
+        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            cacheMod, /*isLoad=*/false, targetInfo);
+
+    if (cacheMod != triton::CacheModifier::NONE) {
+      emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
+    }
+    std::string intrinsic =
+        "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(vecBits);
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, intrinsic, {},
+        {dstPtr, shmemAddr, b.i32_val(0), b.i32_val(cacheModifiers)});
   }
 };
 
@@ -2111,14 +2179,14 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns
-      .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-           StoreOpConversion, BufferLoadOpConversion,
-           BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-           BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
-           BufferAtomicCASOpConversion, AsyncTDMCopyGlobalToLocalOpConversion,
-           AsyncTDMCopyLocalToGlobalOpConversion>(typeConverter, targetInfo,
-                                                  axisInfoAnalysis, benefit);
+  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+               StoreOpConversion, BufferLoadOpConversion,
+               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
+               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
+               AsyncCopyLocalToGlobalOpConversion, BufferAtomicCASOpConversion,
+               AsyncTDMCopyGlobalToLocalOpConversion,
+               AsyncTDMCopyLocalToGlobalOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
