@@ -99,7 +99,7 @@ jobs:
         df -h
         echo "Removing large packages"
         sudo apt-get remove -y 'php.*'
-        sudo apt-get remove -y azure-cli google-chrome-stable firefox powershell mono-devel
+        sudo apt-get remove -y google-chrome-stable firefox powershell mono-devel
         sudo apt-get autoremove -y
         sudo apt-get clean
         df -h
