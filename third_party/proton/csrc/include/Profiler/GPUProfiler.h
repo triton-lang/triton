@@ -51,33 +51,27 @@ public:
           singleScopeId = scopeId;
           return;
         }
-        if (multiDataToScopeId.empty()) {
+        if (multiDataToScopeId.empty())
           multiDataToScopeId.reserve(2);
-        }
         multiDataToScopeId[data] = scopeId;
       }
 
       const size_t *findScopeId(Data *data) const {
-        if (singleData == data) {
+        if (singleData == data)
           return &singleScopeId;
-        }
-        if (multiDataToScopeId.empty()) {
+        if (multiDataToScopeId.empty())
           return nullptr;
-        }
         auto it = multiDataToScopeId.find(data);
-        if (it == multiDataToScopeId.end()) {
+        if (it == multiDataToScopeId.end())
           return nullptr;
-        }
         return &it->second;
       }
 
       template <typename FnT> void forEachScopeId(FnT &&fn) const {
-        if (singleData != nullptr) {
+        if (singleData != nullptr)
           fn(singleData, singleScopeId);
-        }
-        for (const auto &[data, scopeId] : multiDataToScopeId) {
+        for (const auto &[data, scopeId] : multiDataToScopeId)
           fn(data, scopeId);
-        }
       }
 
     private:

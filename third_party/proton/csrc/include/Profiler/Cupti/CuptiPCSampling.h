@@ -5,7 +5,6 @@
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
 #include "Utility/Map.h"
-#include "Utility/Set.h"
 #include "Utility/Singleton.h"
 #include <atomic>
 #include <mutex>

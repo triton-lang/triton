@@ -83,9 +83,8 @@ public:
 
   size_t addNode(const Context &context, size_t parentId) {
     auto &parent = treeNodeMap.at(parentId);
-    if (parent.hasChild(context)) {
+    if (parent.hasChild(context))
       return parent.getChild(context);
-    }
     auto id = nextContextId++;
     treeNodeMap.try_emplace(id, id, parentId, context.name);
     parent.addChild(context, id);
@@ -226,12 +225,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 kernelMetric->getValue(KernelMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceType));
-            if (deviceType >= static_cast<uint64_t>(DeviceType::COUNT)) {
-              throw std::runtime_error(
-                  "[PROTON] DeviceType " + std::to_string(deviceType) +
-                  " exceeds DeviceType::COUNT " +
-                  std::to_string(static_cast<uint64_t>(DeviceType::COUNT)));
-            }
             if (deviceId < kMaxRegisteredDeviceIds) {
               deviceIdMasks[static_cast<size_t>(deviceType)] |=
                   (1u << static_cast<uint32_t>(deviceId));
@@ -278,17 +271,15 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                 cycleMetric->getValue(CycleMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::DeviceType));
-            if (deviceType < static_cast<uint64_t>(DeviceType::COUNT)) {
-              if (deviceId < kMaxRegisteredDeviceIds) {
-                deviceIdMasks[static_cast<size_t>(deviceType)] |=
-                    (1u << static_cast<uint32_t>(deviceId));
-              } else {
-                throw std::runtime_error(
-                    "[PROTON] DeviceId " + std::to_string(deviceId) +
-                    " exceeds MaxRegisteredDeviceIds " +
-                    std::to_string(kMaxRegisteredDeviceIds) +
-                    " for deviceType " + std::to_string(deviceType));
-              }
+            if (deviceId < kMaxRegisteredDeviceIds) {
+              deviceIdMasks[static_cast<size_t>(deviceType)] |=
+                  (1u << static_cast<uint32_t>(deviceId));
+            } else {
+              throw std::runtime_error(
+                  "[PROTON] DeviceId " + std::to_string(deviceId) +
+                  " exceeds MaxRegisteredDeviceIds " +
+                  std::to_string(kMaxRegisteredDeviceIds) + " for deviceType " +
+                  std::to_string(deviceType));
             }
             const auto &durationName =
                 cycleMetric->getValueName(CycleMetric::Duration);

@@ -8,6 +8,7 @@
 
 namespace proton {
 
+// See https://msgpack.org/index.html for the specification.
 class MsgPackWriter {
 public:
   void reserve(size_t bytes);

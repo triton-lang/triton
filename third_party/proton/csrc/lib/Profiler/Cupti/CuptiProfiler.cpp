@@ -473,9 +473,6 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
         auto scopeId = scopeIds[i].second;
-        if (scopeId == Scope::DummyScopeId) {
-          continue;
-        }
         switch (metricTypeIndex) {
         case variant_index_v<uint64_t, MetricValueType>: {
           uint64_t typedValue{};
@@ -552,11 +549,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
           // only increase the numNodes in CREATED callback
-          if (!pImpl->graphStates.contain(graphId)) {
+          if (!pImpl->graphStates.contain(graphId))
             pImpl->graphStates[graphId] = GraphState();
-          } else {
+          else
             pImpl->graphStates[graphId].numNodes++;
-          }
           if (profiler.isOpInProgress()) {
             auto &graphState = pImpl->graphStates[graphId];
             for (auto *data : dataSet) {
