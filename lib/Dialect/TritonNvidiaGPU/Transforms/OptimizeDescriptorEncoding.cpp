@@ -179,8 +179,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
 
   switch (cgaLayouts.size()) {
   case 2:
-    // if we find clashing CGALayouts, arbitrarily resolve to use the left hand
-    // side one
+    // if we find clashing CGALayouts, fallback to default
     result.cgaLayout = getDefaultLayout(lhs.cgaLayout);
     break;
   case 1:
