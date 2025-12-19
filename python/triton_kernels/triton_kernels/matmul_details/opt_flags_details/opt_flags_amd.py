@@ -23,7 +23,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     if get_cdna_version() == 4 and block_m == 128:
         block_n = 512
 
-    if get_rdna_version() != -1 and block_m == 64:
+    if get_rdna_version() in (3, 4) and block_m == 64:
         block_n = 256
 
     # block_k needs to match the cacheline size (128B)
@@ -31,9 +31,10 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
 
     # TODO: block_k = 128 seems to work better for now.
     #       perhaps due to increased number of k loops to pipeline
-    if precision_config.b_mx_scale is not None and get_cdna_version() != 4:
-        block_k = 128
+    if precision_config.b_mx_scale is not None:
+        if get_cdna_version() != 4:
+            block_k = 128
 
-    if precision_config.b_mx_scale is not None and get_rdna_version() != -1 and block_m == 64:
-        block_k = 64
+        if get_rdna_version() in (3, 4) and block_m == 64:
+            block_k = 64
     return block_n, block_k

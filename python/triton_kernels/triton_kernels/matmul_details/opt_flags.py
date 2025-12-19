@@ -83,7 +83,7 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
-    elif get_rdna_version() != -1 and m >= 512:
+    elif get_rdna_version() in (3, 4) and m >= 512:
         block_m = 64
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
