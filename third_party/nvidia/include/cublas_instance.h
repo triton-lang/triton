@@ -186,42 +186,6 @@ private:
       successOrExit(cublasLtMatmulDescDestroy(matmulDesc));
   }
 
-public:
-  CublasLtInstance(uint64_t workspace, size_t workspaceSize)
-      : workspace((void *)workspace), workspaceSize(workspaceSize) {
-    loadCublasDylib();
-    cublasLtCreate(&ltHandle);
-
-    successOrExit(cublasLtMatmulPreferenceCreate(&preference));
-    successOrExit(cublasLtMatmulPreferenceSetAttribute(
-        preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize,
-        sizeof(workspaceSize)));
-  }
-  ~CublasLtInstance() {
-    if (preference)
-      successOrExit(cublasLtMatmulPreferenceDestroy(preference));
-
-    cublasLtDestroy(ltHandle);
-    unloadCublasDylib();
-  }
-
-  // C = A * B
-  // Matrix B needs to be transposed, while matrix A does not. The function
-  // *will-not* transpose the matrices, so the caller is responsible for
-  // ensuring that the matrices are in the correct format and have the correct
-  // dimensions.
-  void matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
-              cudaDataType_t dtype) {
-    // CUDA is column-major, while triton is row-major, therefore we need to
-    // reverse the order of the matrices ( A * B = (B^T * A^T)^T ).
-    gemm_impl(n, m, k, B, A, 0, C, dtype, 1.0f, 0.0f);
-  }
-
-  void gemm(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C, uint64_t D,
-            cudaDataType_t dtype, float alpha, float beta) {
-    gemm_impl(n, m, k, B, A, C, D, dtype, alpha, beta);
-  }
-
   // Block-scaled matmul: D = (A * scale_A) @ (B * scale_B)
   //
   // Supports two modes via is_mxfp8 parameter:
@@ -343,7 +307,42 @@ public:
       successOrExit(cublasLtMatmulDescDestroy(matmulDesc));
   }
 
-  // Convenience wrappers for backward compatibility
+public:
+  CublasLtInstance(uint64_t workspace, size_t workspaceSize)
+      : workspace((void *)workspace), workspaceSize(workspaceSize) {
+    loadCublasDylib();
+    cublasLtCreate(&ltHandle);
+
+    successOrExit(cublasLtMatmulPreferenceCreate(&preference));
+    successOrExit(cublasLtMatmulPreferenceSetAttribute(
+        preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize,
+        sizeof(workspaceSize)));
+  }
+  ~CublasLtInstance() {
+    if (preference)
+      successOrExit(cublasLtMatmulPreferenceDestroy(preference));
+
+    cublasLtDestroy(ltHandle);
+    unloadCublasDylib();
+  }
+
+  // C = A * B
+  // Matrix B needs to be transposed, while matrix A does not. The function
+  // *will-not* transpose the matrices, so the caller is responsible for
+  // ensuring that the matrices are in the correct format and have the correct
+  // dimensions.
+  void matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
+              cudaDataType_t dtype) {
+    // CUDA is column-major, while triton is row-major, therefore we need to
+    // reverse the order of the matrices ( A * B = (B^T * A^T)^T ).
+    gemm_impl(n, m, k, B, A, 0, C, dtype, 1.0f, 0.0f);
+  }
+
+  void gemm(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C, uint64_t D,
+            cudaDataType_t dtype, float alpha, float beta) {
+    gemm_impl(n, m, k, B, A, C, D, dtype, alpha, beta);
+  }
+
   void block_scaled_matmul_mxfp8(int m, int n, int k, uint64_t A, uint64_t B,
                                  uint64_t D_out, uint64_t scale_A,
                                  uint64_t scale_B) {
