@@ -250,7 +250,8 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
     if USE_TCGEN05:
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
-        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
+        nbarriers: ttgl.constexpr = ttgl.num_ctas() // (2 if two_ctas else 1)
+        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [nbarriers], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
         # Need to synchronise all the CTAs after the mbarrier initialisation
         # so that they all see it
@@ -693,7 +694,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         barrier_cga_layout = []
         if two_ctas:
             barrier_cga_layout.append([0])
-        barrier_cga_layout.extend([2**i] for i in range(num_ctas // (2 if two_ctas else 1)))
+        barrier_cga_layout.extend([2**i] for i in range(log2_int(num_ctas // (2 if two_ctas else 1))))
         mma_barrier_layout = mbarrier.MBarrierLayout(cga_layout=barrier_cga_layout)
     torch.manual_seed(0)
 

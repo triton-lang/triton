@@ -202,7 +202,7 @@ private:
     auto kOffset = str_attr("offset");
 
     // Any CGALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CGALayout = triton::gpu::CGAEncodingAttr::getDefault(ctx, 2);
+    auto CGALayout = triton::gpu::CGAEncodingAttr::get1CTALayout(ctx, 2);
 
     for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
                                          : SmallVector<bool>({false}))) {

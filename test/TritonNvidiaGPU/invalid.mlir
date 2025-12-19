@@ -52,7 +52,7 @@ tt.func @async_tma_gather(%desc: !tt.tensordesc<tensor<1x128xbf16, #shared>>, %x
                           %bar: !ttg.memdesc<2xi32, #shared1, #ttg.shared_memory, mutable>,
                           %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
                           %pred: i1) {
-  // expected-error @below {{barrier allocation must be a descriptor of 1xi64 type}}
+  // expected-error @below {{barrier allocation must be a descriptor of Nxi64 type with N <= number of CTAs}}
   ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.tensordesc<tensor<1x128xbf16, #shared>>, tensor<32xi32, #blocked>, i32, !ttg.memdesc<2xi32, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
   tt.return
 }

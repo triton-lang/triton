@@ -293,8 +293,8 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #blocked2>) {
 // -----
 
 // Valid op with shared encoding.
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0]}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0], CGALayout = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3], CGALayout = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]}>
 #shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0], [0, 1], [0, 2]]}>
 #shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1], [1, 0], [2, 0]]}>
 #smem = #ttg.shared_memory

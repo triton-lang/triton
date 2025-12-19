@@ -408,12 +408,19 @@ CGAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
-CGAEncodingAttr CGAEncodingAttr::getDefault(MLIRContext *ctx, int rank) {
+CGAEncodingAttr CGAEncodingAttr::get1CTALayout(MLIRContext *ctx, int rank) {
   auto kBlock = StringAttr::get(ctx, "block");
   LinearLayout::BasesT bases;
   bases[kBlock] = {};
   auto dims = standardOutDimNames(ctx, rank);
   return get(ctx, LinearLayout(std::move(bases), dims));
+}
+
+CGAEncodingAttr CGAEncodingAttr::get1DLayout(MLIRContext *ctx, int numCTAs) {
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dims = standardOutDimNames(ctx, /*rank=*/1);
+  auto layout = LinearLayout::identity1D(numCTAs, kBlock, dims[0]);
+  return get(ctx, std::move(layout));
 }
 
 CGAEncodingAttr CGAEncodingAttr::fromSplitParams(MLIRContext *ctx,
@@ -737,8 +744,8 @@ static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
 // non-trivial.
 static void maybePrintCGALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer,
-                                CGAEncodingAttr layout, unsigned rank) {
-  if (layout == CGAEncodingAttr::getDefault(context, rank))
+                                CGAEncodingAttr layout) {
+  if (layout.getLinearLayout().getTotalInDimSize() == 1)
     return;
 
   auto kBlock = StringAttr::get(context, "block");
@@ -775,7 +782,7 @@ static void maybePrintCGALayout(mlir::MLIRContext *context,
 std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
                                             unsigned rank) {
   if (!attr)
-    return CGAEncodingAttr::getDefault(parser.getContext(), rank);
+    return CGAEncodingAttr::get1CTALayout(parser.getContext(), rank);
 
   auto array = llvm::dyn_cast<ArrayAttr>(attr);
   if (!array) {
@@ -874,8 +881,7 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
           << ", order = [" << getOrder() << "]";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getSizePerThread().size());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
 
   printer << "}>";
 }
@@ -1238,8 +1244,7 @@ void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", versionMinor = " << getVersionMinor() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getRank());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
 
   printer << ", instrShape = [" << getInstrShape() << "]}>";
 }
@@ -1318,8 +1323,7 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
 
   printer << ", isTransposed = " << getIsTransposed();
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getRank());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
 
   auto tilesPerWarp = getTilesPerWarp();
   if (!hasUnitTilesPerWarp())
@@ -1429,8 +1433,7 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", isTranspose = " << getIsTransposed() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getWarpsPerCTA().size());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
 
   auto tilesPerWarp = getTilesPerWarp();
   if (!hasUnitTilesPerWarp())
@@ -1613,8 +1616,7 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getOrder().size());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
   printer << "}>";
 }
 
@@ -1859,7 +1861,7 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
     maybeLL = identityStandardND(kOffset, shape, order);
     maybeLL = combineCtaCgaWithShape(
         *maybeLL,
-        CGAEncodingAttr::getDefault(parser.getContext(), shape.size()),
+        CGAEncodingAttr::get1CTALayout(parser.getContext(), shape.size()),
         SmallVector<int64_t>(ArrayRef(shape)));
   }
 
@@ -2122,11 +2124,11 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   }
   unsigned rank = getCGALayout().getCTAOrder().size();
   auto *ctx = getContext();
-  auto defaultLayout = CGAEncodingAttr::getDefault(ctx, rank);
+  auto defaultLayout = CGAEncodingAttr::get1CTALayout(ctx, rank);
   if (getCGALayout() == defaultLayout && rank != 2) {
     printer << ", rank = " << rank;
   } else {
-    maybePrintCGALayout(ctx, printer, getCGALayout(), rank);
+    maybePrintCGALayout(ctx, printer, getCGALayout());
   }
   printer << "}>";
 }
@@ -2179,8 +2181,7 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
-  maybePrintCGALayout(getContext(), printer, getCGALayout(),
-                      /*rank=*/getOrder().size());
+  maybePrintCGALayout(getContext(), printer, getCGALayout());
   printer << "}>";
 }
 
@@ -3028,7 +3029,7 @@ struct TritonGPUInferLayoutInterface
 
     // CGALayout can be all 1's because we bailed on multi-CGA layouts above.
     auto CGALayout =
-        CGAEncodingAttr::getDefault(src.getContext(), dstShape.size());
+        CGAEncodingAttr::get1CTALayout(src.getContext(), dstShape.size());
 
     dstEnc = BlockedEncodingAttr::get(src.getContext(), dstSizePerThread,
                                       dstThreadsPerWarp, dstWarpsPerCTA,
@@ -3326,6 +3327,34 @@ struct TritonGPUVerifyTensorLayoutInterface
     int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
     if (ll.getInDimSize(kBlock) != moduleCTAsPerCGA) {
       return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kBlock)
+                       << " CTAs per CGA, but the context requires "
+                       << moduleCTAsPerCGA << " CTAs per CGA.";
+    }
+    return success();
+  }
+
+  LogicalResult verifyMemDescLayout(
+      Attribute layout, Type type, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    auto memDescTy = dyn_cast<triton::gpu::MemDescType>(type);
+    if (!memDescTy)
+      return makeErr() << "Non-memdesc layout is not allowed in memdesc type.";
+
+    // It'd be nice to be able to do toLinearLayout, but the multibuffering
+    // dimension breaks this left right and centre
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    int nCTAsLayout;
+    if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+      nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
+    } else {
+      nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+    }
+
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    // Number of CTAs per CGA.
+    int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
+    if (nCTAsLayout != moduleCTAsPerCGA) {
+      return makeErr() << layout << ".\nLayout has " << nCTAsLayout
                        << " CTAs per CGA, but the context requires "
                        << moduleCTAsPerCGA << " CTAs per CGA.";
     }

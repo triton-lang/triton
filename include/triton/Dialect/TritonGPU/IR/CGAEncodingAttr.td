@@ -20,7 +20,10 @@ tensor dimensions. The `LinearLayout` maps from `block` into `dim0`, `dim1`...
   }];
 
   let extraClassDeclaration = [{
-    static CGAEncodingAttr getDefault(MLIRContext *context, int rank);
+    // Map with empty bases and dims [dim0, dim1, ...]
+    static CGAEncodingAttr get1CTALayout(MLIRContext *context, int rank);
+    // Map with bases = [[1,], [2,], ..., [numCTAs/2]] into dim0
+    static CGAEncodingAttr get1DLayout(MLIRContext *context, int numCTAs);
     // Legacy, we should kill this! Note that it is not true in general that
     // fromSplitParams(enc.getCTAsPerCGA(), enc.getCTASplitNum(), enc.getCTAOrder()) == enc!!
     static CGAEncodingAttr fromSplitParams(MLIRContext *context,
