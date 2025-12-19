@@ -5477,6 +5477,15 @@ def test_constexpr_assignment(literal, tensor_ty):
     kernel_patched[(1, )](literal, tensor_ty)
 
 
+def test_constexpr_arg_str_attr():
+
+    @triton.jit
+    def cst_str_attr(c_s_arg: tl.constexpr):
+        pass
+
+    cst_str_attr.warmup('SD', grid=(1, ))
+
+
 @triton.jit
 def return_poison(x):
     a = False
