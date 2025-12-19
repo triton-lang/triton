@@ -81,15 +81,15 @@ def create_tensor_descriptors(a_ptr, b_ptr, off_am, off_bn, stride_am, stride_ak
 
 @gluon.jit
 def issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
-                NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
+                NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, pred=True):
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K],  #
-                                    a_buffer.index(producer % NUM_BUFFERS))
+                                    a_buffer.index(producer % NUM_BUFFERS), pred=pred)
     if not TRANSPOSE_B:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn],  #
-                                        b_buffer.index(producer % NUM_BUFFERS))
+                                        b_buffer.index(producer % NUM_BUFFERS), pred=pred)
     else:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K],  #
-                                        b_buffer.index(producer % NUM_BUFFERS))
+                                        b_buffer.index(producer % NUM_BUFFERS), pred=pred)
     producer += 1
     return producer
 
@@ -257,9 +257,8 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
 
         producer = 0
         for i in ttgl.static_range(NUM_BUFFERS - 1):
-            if tile_idx + 1 < num_tiles:
-                producer = issue_loads(producer, a_desc, b_desc, off_am_next, off_bn_next, a_buffer, b_buffer, BLOCK_K,
-                                       NUM_BUFFERS, TRANSPOSE_B)
+            producer = issue_loads(producer, a_desc, b_desc, off_am_next, off_bn_next, a_buffer, b_buffer, BLOCK_K,
+                                   NUM_BUFFERS, TRANSPOSE_B, pred=tile_idx + 1 < num_tiles)
             consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                                accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
@@ -393,9 +392,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         # SubIteration1
         # TDM load for next tile
         # If we are in epilogue, we have already issued our tile loads
-        if i < epilogue_lb:
-            producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
-                                   TRANSPOSE_B)
+        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
+                               pred=i < epilogue_lb)
         # LDS load SubIteration2
         a2, b2 = lds_subtile_load(consumer, 2 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
