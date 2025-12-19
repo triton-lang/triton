@@ -607,17 +607,15 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
       LinearLayout::identity1D(contig, kReg, kOffset) *
       LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
 
-  LDBG("srcToSharedLayout: " << srcToSharedLayout);
-  LDBG("coalescedLayout: " << coalescedLayout);
-
   return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
 }
 
-// On gfx9, direct to LDS loads do not support per lane shared offsets. We need
-// to ensure that we write coalesced into shared memory. This means we cannot
+// On architectures supporting scattering into LDS we are only constraint by the
+// minimal vector size. On architectures not support scattering, e.g. gfx9,
+// direct to LDS loads do not support per lane shared offsets. We need to ensure
+// that each warp writes coalesced into shared memory. This means we cannot
 // exceed the supported load width because splitting them would cause strided
 // (non coalesced) writes. Additionally:
-//
 // 1. For *non* swizzled shared encodings we check if they result in coalesced
 //    writes and can then lower them directly to the intrinsics.
 // 2. For swizzled shared encodings we need to transfer the swizzling to the
@@ -634,11 +632,12 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (paddedEnc)
     vectorSize = std::min(vectorSize, paddedEnc.getMinInterval());
 
+  // Check that vectorSize is not smaller than the minimal supported vector size
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
-  int vectorBits = vectorSize * elemBitWidth;
-
-  if (vectorBits < 32) {
-    LDBG("vectorBits < 32, not support for loads directly to LDS");
+  auto vectorBits = vectorSize * elemBitWidth;
+  if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
+    LDBG("vectorBits (" << vectorBits
+                        << ") is too small for loads directly to LDS");
     return false;
   }
 
@@ -646,7 +645,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (targetInfo.supportsDirectToLDSScattering())
     return true;
 
-  // We cannot stride when loading directly to LDS
+  // Must support the full vector width; splitting would cause strided writes.
   if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
     return false;
 
