@@ -488,7 +488,8 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
-            reg_alloc = ['--regAllocOptLevel=2']
+            ptx_version = get_ptx_version_from_options(opt, self.target.arch)
+            reg_alloc = ['--regAllocOptLevel=2'] if ptx_version >= 90 else []
 
             ptxas_cmd = [
                 ptxas, *debug_info, *fmad, '-v', *disable_opt, *reg_alloc, *ptx_extra_options, f'--gpu-name={arch}',
