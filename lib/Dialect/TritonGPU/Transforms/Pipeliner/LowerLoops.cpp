@@ -745,10 +745,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   // in the linearized schedule. This is either the first op to appear
   // after the MMA or the first op
   auto linearizedSchedule = schedule.linearized(forOp, mma);
-  std::optional<Operation *> latestSyncPoint =
-      schedule.linearized(forOp, mma).findNext([&](Operation *op) {
-        return syncCandidates.contains(op);
-      });
+  std::optional<Operation *> latestSyncPoint = linearizedSchedule.findNext(
+      [&](Operation *op) { return syncCandidates.contains(op); });
 
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
