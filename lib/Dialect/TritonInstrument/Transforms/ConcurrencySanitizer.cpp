@@ -427,11 +427,26 @@ private:
 
   std::optional<MemEffectsOpInfo> getMemEffectsOpInfo(Operation *op) {
     std::optional<MemEffectsOpInfo> info;
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+      // TODO: For async TMA barriers, the barrier "arrive" corresponding to the
+      // completion mechanism is modeled by barrier_expect. Individual
+      // async_tma_copy ops should not decrement the barrier state, otherwise
+      // multiple copies using the same barrier would incorrectly advance the
+      // phase multiple times. This should be improved bu tracking the barrier
+      // expected byte count, and "arriving" the barrier when the expected byte
+      // count is reached.
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->pred = expectOp.getPred();
+      info->barriers.push_back({expectOp.getAlloc(), nullptr, /*count=*/1});
+    }
     if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = copyOp.getPred();
-      info->barriers.push_back({copyOp.getBarrier(), nullptr, 1});
+      // Only track visible accesses against the barrier; do not update the
+      // barrier state here (see BarrierExpectOp handling above).
+      info->barriers.push_back({copyOp.getBarrier(), nullptr, /*count=*/0});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getResult());
     }
@@ -447,7 +462,9 @@ private:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = gatherOp.getPred();
-      info->barriers.push_back({gatherOp.getBarrier(), nullptr, 1});
+      // Only track visible accesses against the barrier; do not update the
+      // barrier state here (see BarrierExpectOp handling above).
+      info->barriers.push_back({gatherOp.getBarrier(), nullptr, /*count=*/0});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         gatherOp.getResult());
     }

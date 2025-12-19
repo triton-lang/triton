@@ -194,6 +194,9 @@ OpPrintingFlags getOpPrintingFlags() {
 }
 
 py::list getTensorDescMetadata(ModuleOp &mod) {
+  TritonSourceMgrDiagnosticHandler handler =
+      setupTritonDiagnosticHandler(mod.getContext());
+
   py::list result;
   triton::FuncOp kernelFunc;
   mod.walk([&](triton::FuncOp func) {
@@ -205,8 +208,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   });
   assert(kernelFunc);
 
-  for (auto [i, argTy] : llvm::enumerate(kernelFunc.getArgumentTypes())) {
-    auto descTy = dyn_cast<TensorDescType>(argTy);
+  for (auto [i, arg] : llvm::enumerate(kernelFunc.getArguments())) {
+    auto descTy = dyn_cast<TensorDescType>(arg.getType());
     if (!descTy)
       continue;
 
@@ -216,10 +219,10 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-      auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
-      auto elemType = ttng::getTMAElementType(nullptr, descTy);
-      assert(swizzle.has_value());
-      assert(elemType.has_value());
+      auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
+      auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
+      if (failed(swizzle) || failed(elemType))
+        throw py::type_error("invalid TMA descriptor type");
       auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =

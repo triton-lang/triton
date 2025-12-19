@@ -13,7 +13,6 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    threadfence_system,
     compute_pids,
 )
 
@@ -76,7 +75,8 @@ def _matmul(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
              pYPtrs=None,
-             ScatterShardIndx=None,
+             map_dst_coord=None,
+             all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
              ):
@@ -181,6 +181,8 @@ def _matmul(
     total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
 
     if padding_m > 0 and pid >= total_actual_tiles:
+        if pYPtrs is not None:
+            all_writes_issued.fn(*all_writes_issued.captured)
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
@@ -308,7 +310,7 @@ def _matmul(
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     # compute output
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
 
@@ -326,8 +328,13 @@ def _matmul(
             mask_k_x = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR // 2 < w_k_limit
+                # dividing by W_K_DIVISOR because w_k_limit is also already
+                # divided by W_K_DIVISOR (2 for mxfp4 wehre 2 fp4 values are
+                # packed per Byte along K)
+                mask_k_scale = offs_k_scale * (MX_PACK_DIVISOR // W_K_DIVISOR) < w_k_limit
             if is_x_microscaled:
+                # No need to divide because we only support mxfp8 for x (we
+                # don't have divisor for x)
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
@@ -360,13 +367,10 @@ def _matmul(
                 # Handshake with the swizzling code
                 tl.static_assert(x_format == "bf16")
                 tl.static_assert(w_format == "e2m1")
-                w = mxfp4_to_bf16_triton(w.trans(), w_scales, 1)
-                tl.static_assert(w.dtype == tl.bfloat16)
-                acc = acc.trans()
-                x = x.trans()
-                # w = w.trans()
-                acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-                acc = acc.trans()
+                tl.static_assert(SWAP_XW)
+                wT = mxfp4_to_bf16_triton(w.T, w_scales, mx_axis=1)
+                tl.static_assert(wT.dtype == tl.bfloat16)
+                acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
             else:
                 rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
                 acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
@@ -409,6 +413,8 @@ def _matmul(
         w_scale = load_scale(WScale + expt_id)
     else:
         w_scale = load_scale(WScale)
+    if SWAP_XW:
+        acc = acc.trans()
     acc *= x_scale * w_scale
     acc = acc + bias[None, :] * betas[:, None]
     if out_alpha is not None:
@@ -474,22 +480,26 @@ def _matmul(
         tl.store(YPtrs, out, mask=mask)
     else:
         tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
-        if ScatterShardIndx is not None:
-            dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
-            for i in tl.static_range(n_reduce_shards):
+        dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
+            off_m if WriteBackIndx is None else None, offs_y_m,
+            OUT_BLOCK_N * pid_n, offs_y_n,
+            *map_dst_coord.captured)
+        offs_mn = (
+            dst_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m +
+            dst_y_n[None, :] * stride_y_n
+        )
+        for i in tl.static_range(n_reduce_shards):
+            if dst_shard_idx is not None:
                 peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
-                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
-                tl.multiple_of(peer_Y_ptr, 16)
-                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
-                tl.store(peer_Y_ptr[:, None] + offs_y_mn, out, mask=mask)
-        else:
-            # full all gather
-            for i in tl.static_range(n_reduce_shards):
+            else:
                 peer = (reduce_rank + i) % n_reduce_shards
-                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+            peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+            if len(peer_Y_ptr.shape) == 0:
                 tl.multiple_of(peer_Y_ptr, 16)
-                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
-                tl.store(peer_Y_ptr + offs_y_mn, out, mask=mask)
+            else:
+                tl.multiple_of(peer_Y_ptr, [16, 16])
+            tl.store(peer_Y_ptr + offs_mn, out, mask=mask)
+
 
     if pYPtrs is not None:
-        threadfence_system()
+        all_writes_issued.fn(*all_writes_issued.captured)
