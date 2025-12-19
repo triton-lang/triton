@@ -24,9 +24,10 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
@@ -34,6 +35,58 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+
+// Find the WarpSpecializeOp that uses the given allocation.
+// The allocation is passed as an operand to the warp_specialize op.
+static triton::gpu::WarpSpecializeOp
+findAssociatedWarpSpecializeOp(Value barrierAlloc) {
+  Value rootAlloc =
+      barrierAlloc.getDefiningOp<triton::gpu::MemDescIndexOp>().getSrc();
+
+  for (Operation *user : rootAlloc.getUsers()) {
+    if (auto wsOp = dyn_cast<triton::gpu::WarpSpecializeOp>(user)) {
+      return wsOp;
+    }
+  }
+  return nullptr;
+}
+
+// Calculate the barrier count from dependentPartitionIds by summing
+// the warp counts of the specified partitions and multiplying by 32.
+static std::optional<int>
+calculateBarrierCount(triton::nvidia_gpu::InitBarrierOp op) {
+  auto partitionAttr = op.getDependentPartitionIds();
+  if (!partitionAttr)
+    return std::nullopt;
+
+  auto wsOp = findAssociatedWarpSpecializeOp(op.getAlloc());
+  if (!wsOp) {
+    op.emitError(
+        "could not find associated warp_specialize op for mbarrier init");
+    return std::nullopt;
+  }
+
+  auto partitionNumWarps = wsOp.getPartitionNumWarps();
+  int numWarps = 0;
+  for (int32_t partitionId : *partitionAttr) {
+    if (partitionId < 0 ||
+        partitionId >= static_cast<int>(partitionNumWarps.size())) {
+      op.emitError("dependentPartitionId ")
+          << partitionId
+          << " is out of range (max: " << partitionNumWarps.size() - 1 << ")";
+      return std::nullopt;
+    }
+    if (partitionId == 0) {
+      auto mod = op->getParentOfType<ModuleOp>();
+      numWarps += mlir::triton::gpu::lookupNumWarps(mod);
+    } else {
+      numWarps += partitionNumWarps[partitionId - 1];
+    }
+  }
+
+  return numWarps * 32;
+}
+
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -66,11 +119,28 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
+    // Determine the barrier count. If dependentPartitionIds is specified,
+    // calculate the count from the associated WarpSpecializeOp's partition
+    // warp counts. Otherwise, use the count attribute directly.
+    int barrierCount;
+    if (op.getDependentPartitionIds()) {
+      auto calculatedCount = calculateBarrierCount(op);
+      if (!calculatedCount) {
+        return op.emitError(
+            "failed to calculate barrier count from dependentPartitionIds: "
+            "could not find associated warp_specialize op");
+      }
+      barrierCount = *calculatedCount;
+    } else {
+      // count must be set (verified by op verifier)
+      barrierCount = *op.getCount();
+    }
+
     auto id = getThreadId(rewriter, loc);
     auto pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(op.getCount()) + ";";
+                            std::to_string(barrierCount) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -234,25 +304,32 @@ struct ArriveBarrierOpConversion
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Add phase result as needed.
-    std::stringstream ptxAsm;
-    ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
-    }
-    ptxAsm << ";";
-
-    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value id = getThreadId(rewriter, op.getLoc());
-    Value pred = b.icmp_eq(id, b.i32_val(0));
-    if (op.getPred())
-      pred = b.and_(pred, adaptor.getPred());
-
     PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
-        ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+    std::string ptxAsm = "mbarrier.arrive.shared::cta.b64 _, [$0]";
+    SmallVector<PTXBuilder::Operand *> operands;
 
-    auto arriveOp = *ptxBuilder.create(ptxAsm.str());
+    std::optional<Value> pred;
+    if (!nvidia_gpu::isMultiThreadedArriveBarrier(op)) {
+      TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+      Value id = getThreadId(rewriter, op.getLoc());
+      pred = b.icmp_eq(id, b.i32_val(0));
+      if (op.getPred())
+        pred = b.and_(*pred, adaptor.getPred());
+    } else if (op.getPred()) {
+      pred = adaptor.getPred();
+    }
+
+    if (pred) {
+      ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
+      operands.push_back(ptxBuilder.newOperand(*pred, "b"));
+    }
+
+    if (op.getCount() > 1)
+      ptxAsm += ", " + std::to_string(op.getCount());
+    ptxAsm += ";";
+
+    operands.push_back(ptxBuilder.newOperand(adaptor.getAlloc(), "r"));
+    auto arriveOp = *ptxBuilder.create(ptxAsm);
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(getContext());
     ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
@@ -271,5 +348,7 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  // Parsing arrive ops depends on seeing corresponding barrier init ops.
+  patterns.add<ArriveBarrierOpConversion>(
+      typeConverter, PatternBenefit(benefit.getBenefit() + 1));
 }

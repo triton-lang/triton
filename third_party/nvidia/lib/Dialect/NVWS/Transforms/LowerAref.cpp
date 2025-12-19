@@ -151,6 +151,10 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
 struct BarrierCount {
   int producerPendingCount{0};
   int consumerPendingCount{0};
+  SetVector<int> producerPartitionIds;
+  SetVector<int> consumerPartitionIds;
+  bool consumerMultiThreaded{false};
+  bool producerMultiThreaded{false};
 };
 
 SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
@@ -177,11 +181,15 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
+      count.producerPartitionIds.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
+          count.producerPendingCount += 1;
+          break;
         case AsyncOp::NONE:
+          count.producerMultiThreaded = true;
           count.producerPendingCount += 1;
           break;
         default:
@@ -193,11 +201,15 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       consumerGroups.insert(partitionIds.front());
+      count.consumerPartitionIds.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
+          count.consumerPendingCount += 1;
+          break;
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
+          count.consumerMultiThreaded = true;
           count.consumerPendingCount += 1;
           break;
         default:
@@ -217,11 +229,19 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 }
 
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount) {
+                     int numBarriers, int arrivalCount,
+                     SetVector<int> dependentPartitionIds, bool multiThreaded) {
   Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    InitBarrierOp::create(b1, barrierView, arrivalCount);
+    if (dependentPartitionIds.empty() || !multiThreaded) {
+      InitBarrierOp::create(b1, barrierView, arrivalCount);
+    } else {
+      InitBarrierOp::create(
+          b1, barrierView,
+          DenseI32ArrayAttr::get(b1.getContext(),
+                                 llvm::to_vector(dependentPartitionIds)));
+    }
   }
   // Invalidate and deallocate the barriers.
   for (unsigned i = 0; i < numBarriers; i++) {
@@ -249,8 +269,12 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
-  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto emptyMbars =
+      createBarriers(b1, b2, depth, count.consumerPendingCount,
+                     count.consumerPartitionIds, count.consumerMultiThreaded);
+  auto fullMbars =
+      createBarriers(b1, b2, depth, count.producerPendingCount,
+                     count.producerPartitionIds, count.producerMultiThreaded);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
@@ -485,7 +509,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1);
+      arriveOp =
+          nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1, nullptr);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
