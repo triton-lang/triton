@@ -318,3 +318,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_one_row_into_subslice
+  tt.func public @async_copy_one_row_into_subslice(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<32x128xf32, #shared, #smem, mutable>) {
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>, #blocked>
+    %2 = ttg.memdesc_subslice %arg2 [0, 0]  : !ttg.memdesc<32x128xf32, #shared, #smem, mutable> -> !ttg.memdesc<32x64xf32, #shared, #smem, mutable, 32x128>
+    // We slice in the fastest dim but each warp loads one row, therefore we can write coalesced into LDS
+    // CHECK: rocdl.global.load.lds
+    %3 = ttg.async_copy_global_to_local %1, %2 : tensor<32x64x!tt.ptr<f32>, #blocked> -> <32x64xf32, #shared, #smem, mutable, 32x128>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_into_slowest_dim_subslice
+  tt.func public @async_copy_into_slowest_dim_subslice(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<64x32xf32, #shared, #smem, mutable>) {
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    %2 = ttg.memdesc_subslice %arg2 [0, 0]  : !ttg.memdesc<64x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable, 64x32>
+    // We slice into the slowest dim which does not break coalesced writes into LDS
+    // CHECK: rocdl.global.load.lds
+    %3 = ttg.async_copy_global_to_local %1, %2 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable, 64x32>
+    tt.return
+  }
+}

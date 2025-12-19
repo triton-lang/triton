@@ -607,6 +607,9 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
       LinearLayout::identity1D(contig, kReg, kOffset) *
       LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
 
+  LDBG("srcToSharedLayout: " << srcToSharedLayout);
+  LDBG("coalescedLayout: " << coalescedLayout);
+
   return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
 }
 
