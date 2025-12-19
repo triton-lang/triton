@@ -94,12 +94,13 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       if (!isPtrTensor)
         return;
       int numWarps = lookupNumWarps(curr);
-      int numCTAs = lookupNumCTAs(curr);
 
       auto tensorType = cast<RankedTensorType>(ptr.getType());
+      CGAEncodingAttr cgaLayout = getCGALayout(tensorType.getEncoding());
+      SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
       auto layout = buildCoalescedEncoding(&getContext(), axisInfoAnalysis,
                                            curr, numWarps, threadsPerWarp,
-                                           numCTAs, tensorType.getShape());
+                                           cgaLayout, shapePerCTA);
       layoutMap[curr] = layout;
     });
 

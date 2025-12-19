@@ -13,11 +13,10 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
-BlockedEncodingAttr
-buildCoalescedEncoding(MLIRContext *context,
-                       ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                       int numWarps, int threadsPerWarp, int numCTAs,
-                       ArrayRef<int64_t> shape) {
+BlockedEncodingAttr buildCoalescedEncoding(
+    MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    Operation *op, int numWarps, int threadsPerWarp,
+    triton::gpu::CGAEncodingAttr cgaLayout, SmallVector<int64_t> shapePerCTA) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -55,20 +54,20 @@ buildCoalescedEncoding(MLIRContext *context,
     }
   }
 
-  LDBG("shape=[" << triton::join(shape, ", ") << "]");
+  LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
-  int numElems = product<int64_t>(shape);
-  int numThreads = numCTAs * numWarps * threadsPerWarp;
+  int numElems = product<int64_t>(shapePerCTA);
+  int numThreads = numWarps * threadsPerWarp;
 
   unsigned perThread =
-      getNumElementsPerThread(op, order, axisInfoAnalysis, shape);
+      getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
   LDBG("perThread for op: " << perThread);
 
   for (Operation *opSameOrder : memAccessesSameOrder) {
     if (opSameOrder == op)
       continue;
-    unsigned currPerThread =
-        getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis, shape);
+    unsigned currPerThread = getNumElementsPerThread(
+        opSameOrder, order, axisInfoAnalysis, shapePerCTA);
     LDBG("perThread for opSameOrder: " << currPerThread);
     perThread = std::max(perThread, currPerThread);
   }
@@ -84,12 +83,13 @@ buildCoalescedEncoding(MLIRContext *context,
     // For loads, we can expect that the gaps won't matter due to the L1
     // cache.
     perThread = std::min<int>(
-        perThread, getNumElementsPerThread(op, order, axisInfoAnalysis, shape));
+        perThread,
+        getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA));
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;
   return BlockedEncodingAttr::get(context, refTensorType.getShape(),
                                   sizePerThread, order, numWarps,
-                                  threadsPerWarp, numCTAs);
+                                  threadsPerWarp, cgaLayout);
 }
 } // namespace mlir::triton::gpu
