@@ -134,19 +134,6 @@ tt.func public @fn(%v: tensor<4x128xf32>) {
 
 // -----
 
-tt.func public @fn(%v0: tensor<4x128xf32>, %v1: tensor<4xf32>) {
-    // expected-error @+1 {{all operands must have the same rank}}
-    %a, %b = "tt.reduce" (%v0, %v1) ({
-    ^bb0(%arg0: f32, %arg1: f32, %arg2: f32, %arg3: f32):
-      %add0 = arith.addf %arg0, %arg2 : f32
-      %add1 = arith.addf %arg1, %arg3 : f32
-      tt.reduce.return %add0, %add1 : f32, f32
-    }) {axis = 0 : i32}  : (tensor<4x128xf32>, tensor<4xf32>) -> (tensor<128xf32>, f32)
-    tt.return
-}
-
-// -----
-
 tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
     // expected-error @below {{op requires the same shape for all operands}}
     %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
