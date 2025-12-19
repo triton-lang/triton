@@ -1,10 +1,12 @@
 #include "Data/TraceData.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/Errors.h"
+#include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 using json = nlohmann::json;
@@ -229,7 +231,22 @@ void TraceData::addMetrics(
   }
 }
 
-std::string TraceData::toJsonString() const { throw NotImplemented(); }
+std::string TraceData::toJsonString() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::ostringstream os;
+  dumpChromeTrace(os);
+  return os.str();
+}
+
+std::vector<uint8_t> TraceData::toMsgPack() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::ostringstream os;
+  dumpChromeTrace(os);
+  // TODO: optimize this by writing directly to MsgPackWriter
+  MsgPackWriter writer;
+  writer.packStr(os.str());
+  return std::move(writer).take();
+}
 
 void TraceData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
