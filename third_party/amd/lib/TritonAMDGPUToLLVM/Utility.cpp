@@ -8,6 +8,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
@@ -591,7 +592,7 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
                                       unsigned threadsPerWarp,
                                       unsigned vecSize) {
@@ -603,7 +604,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     return false;
   }
 
-  StringAttr kLane = rewriter.getStringAttr("lane");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
     unsigned expected = contig * (1 << inLane);
@@ -621,7 +622,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
   assert(llvm::isPowerOf2_32(threadsPerWarp));
   assert(llvm::isPowerOf2_32(contig));
   unsigned mask = (threadsPerWarp * contig) - 1;
-  StringAttr kWarp = rewriter.getStringAttr("warp");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
   for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
     auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
     if ((basis & mask) != 0) {
@@ -635,7 +636,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
   return true;
 }
 
-bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+bool doesSwizzleInsideWarp(MLIRContext *ctx,
                            const LinearLayout &srcToSharedLayout,
                            unsigned threadsPerWarp) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
@@ -644,7 +645,7 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
   assert(llvm::isPowerOf2_32(threadsPerWarp));
   unsigned upperLimit = threadsPerWarp * contig;
 
-  StringAttr kLane = rewriter.getStringAttr("lane");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
     if (basis >= upperLimit) {
@@ -654,16 +655,63 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
   return true;
 }
 
-bool isUsedByDotScaledOp(Operation *op) {
-  const ForwardSliceOptions fwdOpt;
-  SetVector<mlir::Operation *> forwardSliceSet;
-  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+// On gfx9, direct to LDS loads do not support per lane shared offsets. We need
+// to ensure that we write coalesced into shared memory. This means we cannot
+// exceed the supported load width because splitting them would cause strided
+// (non coalesced) writes. Additionally:
+//
+// 1. For *non* swizzled shared encodings we check if they result in coalesced
+//    writes and can then lower them directly to the intrinsics.
+// 2. For swizzled shared encodings we need to transfer the swizzling to the
+//    source pointers. For now this is done by swizzling the pointers
+//    between the lane of a warp via permute. This only works if the swizzle
+//    pattern does not exchange elements between warps which holds for all
+//    our swizzle patterns. There is still a check performed to not silently
+//    produce wrong results if we invalidate the condition in the future
+bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
+                        RankedTensorType srcTy, Attribute dstEnc,
+                        unsigned &vectorSize) {
+  // For padded encodings restrict vec by the min interval
+  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
+  if (paddedEnc)
+    vectorSize = std::min(vectorSize, paddedEnc.getMinInterval());
 
-  return std::any_of(
-      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
-        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
-            operation);
-      });
+  int elemBitWidth = tt::getPointeeBitWidth(srcTy);
+  int vectorBits = vectorSize * elemBitWidth;
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
+    return false;
+
+  if (targetInfo.supportsDirectToLDSScattering())
+    return true;
+
+  // Compute the blocked -> shared linear layout to check preconditions
+  LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout sharedLayout;
+  if (paddedEnc) {
+    sharedLayout = paddedEnc.getLinearComponent();
+  } else {
+    sharedLayout = triton::gpu::toLinearLayout(srcTy.getShape(), dstEnc);
+  }
+  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+
+  auto swizzledEnc = dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
+  bool requiresSrcPtrSwizzling = swizzledEnc && swizzledEnc.getMaxPhase() != 1;
+  unsigned warpSize = targetInfo.getWarpSize();
+
+  if (!requiresSrcPtrSwizzling &&
+      !canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
+                                        warpSize, vectorSize)) {
+    LDBG("Does not write coalesced into LDS");
+    return false;
+  }
+
+  if (requiresSrcPtrSwizzling &&
+      !doesSwizzleInsideWarp(srcTy.getContext(), srcToSharedLayout, warpSize)) {
+    LDBG("Swizzles across warp boundaries");
+    return false;
+  }
+
+  return true;
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
