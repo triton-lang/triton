@@ -601,12 +601,6 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
   auto kOffset = StringAttr::get(ctx, "offset");
 
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vecSize != contig) {
-    LDBG("Load vectorization ("
-         << vecSize << ") and contiguity (" << contig
-         << ") do not match resulting in strided writes");
-    return false;
-  }
 
   // Create a coalesced/identity layout and see if it divides srcToShared
   auto coalescedLayout =
@@ -614,26 +608,6 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
       LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
 
   return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
-}
-
-bool doesSwizzleInsideWarp(MLIRContext *ctx,
-                           const LinearLayout &srcToSharedLayout,
-                           unsigned threadsPerWarp) {
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kOffset = StringAttr::get(ctx, "offset");
-
-  // Extract the base tile for one instruction based on contiguity
-  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  auto baseTile = srcToSharedLayout.sublayout({kReg, kLane}, {kOffset});
-  baseTile = baseTile.resizeInDim(kReg, contig);
-
-  // Resize the output dimension to the total number of elements a warp loads
-  // with a single instruction
-  baseTile = baseTile.resizeOutDim(kOffset, threadsPerWarp * contig);
-  // If the resulting layout is invertible we know that we have no broadcasting
-  // and every warp writes coalesced into LDS (ignoring swizzling between lanes)
-  return baseTile.isInvertible();
 }
 
 // On gfx9, direct to LDS loads do not support per lane shared offsets. We need
@@ -680,33 +654,29 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     sharedLayout = paddedEnc.getLinearComponent();
   } else {
     sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
+
+    // Use a non swizzled layout since we apply swizzling to the src pointers
+    auto swizzledEnc =
+        dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
+    if (swizzledEnc && swizzledEnc.getMaxPhase() != 1) {
+      auto flatSharedEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
+          srcTy.getContext(), swizzledEnc.getVec(), 1, 1,
+          swizzledEnc.getOrder(), swizzledEnc.getCGALayout());
+      sharedLayout = tt::gpu::toLinearLayout(dstAllocShape, flatSharedEnc);
+    }
   }
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
-  auto swizzledEnc = dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
-  bool requiresSrcPtrSwizzling = swizzledEnc && swizzledEnc.getMaxPhase() != 1;
-  unsigned warpSize = targetInfo.getWarpSize();
-
-  // Check that we only exchange elements within a warp
-  if (!doesSwizzleInsideWarp(srcTy.getContext(), srcToSharedLayout, warpSize)) {
-    LDBG("Swizzles across warp boundaries");
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  if (vectorSize != contig) {
+    LDBG("Load vectorization ("
+         << vectorSize << ") and contiguity (" << contig
+         << ") do not match resulting in strided writes");
     return false;
   }
 
-  // Check that each warp writes into one contiguous block of LDS. For swizzled
-  // layouts, we need to check for the non swizzled layout since we apply the
-  // swizzling to the src pointers instead
-  if (requiresSrcPtrSwizzling) {
-    auto flatSharedEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
-        srcTy.getContext(), swizzledEnc.getVec(), 1, 1, swizzledEnc.getOrder(),
-        swizzledEnc.getCGALayout());
-    auto flatSharedLayout =
-        tt::gpu::toLinearLayout(dstAllocShape, flatSharedEnc);
-    srcToSharedLayout = srcLayout.invertAndCompose(flatSharedLayout);
-  }
-
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
-                                        warpSize, vectorSize)) {
+                                        targetInfo.getWarpSize(), vectorSize)) {
     LDBG("Does not write coalesced into LDS");
     return false;
   }
