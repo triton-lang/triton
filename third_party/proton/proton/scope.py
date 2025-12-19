@@ -5,7 +5,6 @@ from typing import Optional, Union, Any
 
 from .flags import flags
 from .metric import transform_tensor_metrics, set_metric_kernels
-from .state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
 from triton._C.libproton import proton as libproton
 
 thread_local_scopes = threading.local()
