@@ -735,10 +735,10 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert foo_test_frame["metrics"]["count"] == 10
     assert scope_a_frame is not None
     assert scope_a_frame["metrics"]["bytes"] == 160
-    assert scope_a_frame["metrics"]["count"] == 10
+    assert "count" not in scope_a_frame["metrics"]
     assert scope_b_frame is not None
     assert scope_b_frame["metrics"]["sum"] == 40.0
-    assert scope_b_frame["metrics"]["count"] == 10
+    assert "count" not in scope_b_frame["metrics"]
 
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
