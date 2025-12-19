@@ -2,7 +2,6 @@ import torch
 
 from .unary_geglu_details._unary_geglu import _unary_geglu_fn
 
-
 unary_geglu_fn = _unary_geglu_fn
 
 
