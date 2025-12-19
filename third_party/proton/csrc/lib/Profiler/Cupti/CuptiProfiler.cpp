@@ -699,10 +699,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeScopeId = data->addOp(baseScopeId, callpath);
               for (auto nodeId : nodeIds) {
-                auto [nodeIt, inserted] = graphNodeIdToScopes.emplace(nodeId);
-                nodeIt->second.isApiNode =
-                    graphState.apiNodeIds.find(nodeId) !=
-                    graphState.apiNodeIds.end();
+                auto [nodeIt, inserted] =
+                    graphNodeIdToScopes.try_emplace(nodeId);
+                nodeIt->second.isApiNode = graphState.apiNodeIds.find(nodeId) !=
+                                           graphState.apiNodeIds.end();
                 nodeIt->second.isMetricNode =
                     graphState.metricKernelNodeIds.find(nodeId) !=
                     graphState.metricKernelNodeIds.end();
