@@ -398,3 +398,4 @@ def test_finalize_within_scope(tmp_path: pathlib.Path):
     proton.start(str(temp_file1.with_suffix("")))
     depth = proton.context.depth()
     assert depth == 0
+    proton.finalize()
