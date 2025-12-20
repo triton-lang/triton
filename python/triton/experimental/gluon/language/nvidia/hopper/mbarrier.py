@@ -1,22 +1,22 @@
-from ..ampere.mbarrier import MBarrierLayout, init, invalidate, wait
+from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, invalidate, wait
 from ..._core import _unwrap_if_constexpr, builtin
 
-__all__ = ["arrive", "expect", "init", "invalidate", "MBarrierLayout", "wait"]
+__all__ = ["allocate_mbarrier", "arrive", "expect", "init", "invalidate", "MBarrierLayout", "wait"]
 
 
 @builtin
-def expect(mbarrier, bytes, pred=True, _semantic=None):
+def expect(mbarrier, bytes_per_cta=None, pred=True, _semantic=None):
     """
     Expect a specific number of bytes being copied. When they are copied, the barrier is signaled.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier that will be signaled when the operation is complete.
-        bytes (int): Expected byte count.
+        bytes_per_cta (int): Expected byte count per CTA.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
     """
-    bytes = _unwrap_if_constexpr(bytes)
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_expect(mbarrier.handle, bytes, pred.handle)
+    bytes_per_cta = _unwrap_if_constexpr(bytes_per_cta)
+    _semantic.builder.create_mbarrier_expect(mbarrier.handle, bytes_per_cta, pred.handle)
 
 
 @builtin
