@@ -395,7 +395,7 @@ def test_finalize_within_scope(tmp_path: pathlib.Path):
         proton.finalize()
     assert temp_file.exists()
     temp_file1 = tmp_path / "test_finalize_within_scope1.hatchet"
-    proton.start(str(temp_file1.with_suffix("")))
-    depth = proton.context.depth()
+    session_id = proton.start(str(temp_file1.with_suffix("")))
+    depth = proton.context.depth(session_id)
     assert depth == 0
     proton.finalize()
