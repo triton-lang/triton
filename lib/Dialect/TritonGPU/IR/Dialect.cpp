@@ -3345,12 +3345,15 @@ struct TritonGPUVerifyTensorLayoutInterface
     auto kBlock = StringAttr::get(op->getContext(), "block");
     int nCTAsLayout;
     int tensorSize = 1;
+    int tensorRank = 0;
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
       tensorSize = sharedLinearEnc.getLinearLayout().getTotalOutDimSize();
+      tensorRank = sharedLinearEnc.getLinearLayout().getNumOutDims();
     } else {
       nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
       tensorSize = getCGALayout(layout).getLinearLayout().getTotalOutDimSize();
+      tensorRank = getCGALayout(layout).getLinearLayout().getNumOutDims();
     }
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
@@ -3361,7 +3364,8 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << " CTAs per CGA, but the context requires "
                        << moduleCTAsPerCGA << " CTAs per CGA.";
     }
-    if (tensorSize > memDescTy.getNumElements()) {
+    // Use the tensor rank to ignore the multibuffering dimension
+    if (tensorSize > product(memDescTy.getShape().take_back(tensorRank))) {
       return makeErr() << layout << ".\nCGALayout has tensor size "
                        << tensorSize << ", but the memdesc type has "
                        << memDescTy.getNumElements() << " elements.";
