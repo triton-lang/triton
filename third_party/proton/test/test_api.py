@@ -390,12 +390,13 @@ def test_profile_disable(disable, fresh_knobs, tmp_path: pathlib.Path):
 
 def test_finalize_within_scope(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_finalize_within_scope.hatchet"
-    proton.start(str(temp_file.with_suffix("")))
+    session_id0 = proton.start(str(temp_file.with_suffix("")))
     with proton.scope("test0"):
+        assert proton.context.depth(session_id0) == 1
         proton.finalize()
     assert temp_file.exists()
     temp_file1 = tmp_path / "test_finalize_within_scope1.hatchet"
-    session_id = proton.start(str(temp_file1.with_suffix("")))
-    depth = proton.context.depth(session_id)
+    session_id1 = proton.start(str(temp_file1.with_suffix("")))
+    depth = proton.context.depth(session_id1)
     assert depth == 0
     proton.finalize()
