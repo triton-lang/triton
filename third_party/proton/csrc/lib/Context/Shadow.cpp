@@ -38,6 +38,7 @@ void ShadowContextSource::exitScope(const Scope &scope) {
 }
 
 void ShadowContextSource::clear() {
+  ContextSource::clear();
   threadContextStack[this].clear();
   threadContextInitialized[this] = false;
 }

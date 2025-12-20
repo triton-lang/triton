@@ -12,8 +12,6 @@ public:
 
   size_t getDepth() override;
 
-  void clear() override {}
-
 private:
   std::vector<Context> getContextsImpl() override;
 };
