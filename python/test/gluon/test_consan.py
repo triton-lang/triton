@@ -175,6 +175,58 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
+def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_async_tma_kernel_2bufs_1bar, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(a_desc, b_desc, out, FAILURE: ttgl.constexpr):
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        a_smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], a_desc.layout)
+        b_smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], b_desc.layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, 2 * XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+        tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
+        tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
+        mbarrier.wait(bar, 0, pred=(not FAILURE))
+        val = a_smem.load(blocked_layout)
+        val = val + b_smem.load(blocked_layout)
+        mbarrier.wait(bar, 0, pred=FAILURE)
+        mbarrier.invalidate(bar)
+
+        out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
+        out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+        out_ptr = out + out_m * XBLOCK + out_n
+        ttgl.store(out_ptr, val)
+
+    a = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    b = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [XBLOCK.value, XBLOCK.value], shared_layout)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](a_desc, b_desc, output, FAILURE=FAILURE, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, False, monkeypatch))
@@ -1711,3 +1763,174 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
         ], [4], [32])
 
     kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("MISSING_BAR", [True, False])
+@pytest.mark.parametrize("OVERLAP", [True, False])
+def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_aliasing_shared_visibility_outstanding_write,
+                                (MISSING_BAR, OVERLAP, device, False, monkeypatch))
+        if MISSING_BAR and OVERLAP:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def writer(alias0: ttgl.constexpr, bar: ttgl.constexpr, OVERLAP: ttgl.constexpr, blocked_layout: ttgl.constexpr):
+        SIZE_N: ttgl.constexpr = XBLOCK * 2 if OVERLAP else XBLOCK
+        vals = ttgl.full([XBLOCK, SIZE_N], 42.0, ttgl.float16, blocked_layout)
+        alias0.store(vals)
+        mbarrier.arrive(bar.index(0), count=1)
+
+    @gluon.jit
+    def reader(alias1: ttgl.constexpr, dummy: ttgl.constexpr, bar: ttgl.constexpr, MISSING_BAR: ttgl.constexpr,
+               blocked_layout: ttgl.constexpr):
+        if not MISSING_BAR:
+            mbarrier.wait(bar.index(0), phase=0)
+        val = alias1.load(blocked_layout)
+        dummy.store(val)  # keep the load alive
+
+    @gluon.jit
+    def kernel(MISSING_BAR: ttgl.constexpr, OVERLAP: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK * 2], smem_layout)
+        smem2 = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        alias0 = smem if OVERLAP else smem.slice(0, XBLOCK, dim=1)
+        alias1 = smem.slice(XBLOCK, XBLOCK, dim=1)
+
+        ttgl.warp_specialize([(writer, (alias0, bar, OVERLAP, blocked_layout)),
+                              (reader, (alias1, smem2, bar, MISSING_BAR, blocked_layout))], [4], [32])
+
+    kernel[(1, )](MISSING_BAR=MISSING_BAR, OVERLAP=OVERLAP, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_aliasing_tensor_visibility_outstanding_read, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            # outstanding reads or writes depends on the timing of the operations.
+            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def reader(alias0: ttgl.constexpr, smem: ttgl.constexpr, bar: ttgl.constexpr, blocked_layout: ttgl.constexpr):
+        val = alias0.load(blocked_layout)
+        smem.store(val)  # keep the load alive
+        mbarrier.arrive(bar.index(0), count=1)
+
+    @gluon.jit
+    def writer(alias1: ttgl.constexpr, bar: ttgl.constexpr, FAILURE: ttgl.constexpr, blocked_layout: ttgl.constexpr):
+        if not FAILURE:
+            mbarrier.wait(bar.index(0), phase=0)
+        alias1.store(ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, blocked_layout))
+
+    @gluon.jit
+    def kernel(FAILURE: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
+        tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK * 2], col_stride=1)
+        tmem = blackwell.allocate_tensor_memory(ttgl.float32, [XBLOCK, XBLOCK * 2], tmem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        alias0 = tmem.slice(0, XBLOCK)
+        alias1 = tmem.slice(XBLOCK // 2, XBLOCK)
+
+        ttgl.warp_specialize([(reader, (alias0, smem, bar, blocked_layout)),
+                              (writer, (alias1, bar, FAILURE, blocked_layout))], [4], [32])
+
+    kernel[(1, )](FAILURE=FAILURE, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("MISSING_WAIT", [True, False])
+@pytest.mark.parametrize("OVERLAP", [True, False])
+def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_aliasing_commit_tracking, (MISSING_WAIT, OVERLAP, device, False, monkeypatch))
+        if MISSING_WAIT and OVERLAP:
+            assert "device-side assert" in str(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def producer(input, alias0, bar, MISSING_WAIT: ttgl.constexpr, OVERLAP: ttgl.constexpr,
+                 blocked_layout: ttgl.constexpr):
+        SIZE_N: ttgl.constexpr = XBLOCK * 2 if OVERLAP else XBLOCK
+        offs_m = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
+        offs_n = ttgl.arange(0, SIZE_N, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
+        offs = offs_m * XBLOCK + offs_n
+        ampere.async_copy.async_copy_global_to_shared(alias0, input + offs)
+        ampere.async_copy.commit_group()
+        if not MISSING_WAIT:
+            ampere.async_copy.wait_group(0)
+        mbarrier.arrive(bar.index(0), count=1)
+
+    @gluon.jit
+    def consumer(alias1, bar, blocked_layout: ttgl.constexpr):
+        mbarrier.wait(bar.index(0), phase=0)
+        alias1.store(ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, blocked_layout))
+
+    @gluon.jit
+    def kernel(input, MISSING_WAIT: ttgl.constexpr, OVERLAP: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK * 2], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+
+        alias0 = smem if OVERLAP else smem.slice(0, XBLOCK, dim=1)
+        alias1 = smem.slice(XBLOCK, XBLOCK, dim=1)
+
+        ttgl.warp_specialize([(producer, (input, alias0, bar, MISSING_WAIT, OVERLAP, blocked_layout)),
+                              (consumer, (alias1, bar, blocked_layout))], [4], [32])
+
+    input = torch.randn((XBLOCK, ), device=device, dtype=torch.float32)
+    kernel[(1, )](input, MISSING_WAIT=MISSING_WAIT, OVERLAP=OVERLAP, num_warps=4)

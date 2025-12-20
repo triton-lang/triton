@@ -561,4 +561,4 @@ def test_dot_scaled_shape_verification(fresh_triton_cache):
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
-    assert str(e.value.__cause__) == "lhs_scale must be a tensor of shape [32, 2]. Got ['32', '4']"
+    assert str(e.value.__cause__) == "lhs_scale must be a tensor of shape [..., 32, 2]. Got ['32', '4']"

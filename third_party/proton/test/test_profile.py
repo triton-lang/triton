@@ -142,8 +142,10 @@ def test_cudagraph(tmp_path: pathlib.Path):
             assert child["frame"]["name"] == "<captured_at>"
             # 0...9 iterations
             assert len(child["children"]) == 10
-            # check one of the iterations
-            assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+            # check all iterations
+            for i in range(10):
+                assert child["children"][i]["frame"]["name"] == f"iter_{i}"
+                assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
@@ -227,11 +229,44 @@ def test_get_data(tmp_path: pathlib.Path):
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
     ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
 
-    proton.finalize()
     assert len(foo_frame) == 1
     assert int(foo_frame["count"].values[0]) == 2
     assert len(ones_frame) == 1
     assert int(ones_frame["count"].values[0]) == 1
+
+    import msgpack
+    msgpack_data = proton.get_data_msgpack(session)
+    database_unpacked = msgpack.loads(msgpack_data)
+    assert database == database_unpacked
+
+    proton.finalize()
+
+
+def test_clear_data(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_clear_data.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    with proton.scope("test0"):
+        x = torch.ones((2, 2), device="cuda")
+        x + x  # type: ignore
+
+    proton.deactivate(session)
+    proton.clear_data(session)
+    database = proton.get_data(session)
+    assert database[0]["children"] == []
+    assert database[0]["frame"]["name"] == "ROOT"
+
+    proton.activate(session)
+    with proton.scope("test1"):
+        x * x  # type: ignore
+    proton.deactivate(session)
+    database = proton.get_data(session)
+
+    proton.finalize()
+    assert len(database[0]["children"]) == 1
+    assert database[0]["children"][0]["frame"]["name"] == "test1"
+    kernel_frame = database[0]["children"][0]["children"][0]
+    assert "elementwise" in kernel_frame["frame"]["name"]
 
 
 def test_hook_launch(tmp_path: pathlib.Path):

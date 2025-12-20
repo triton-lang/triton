@@ -116,36 +116,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
-                                      int elementBitWidth, int swizzleBytes,
-                                      bool fp4Padded, bool isTransposed,
-                                      bool packedSize) {
-  SmallVector<int64_t> blockShape(shapePerCTA);
-  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
-  if (fp4Padded) {
-    blockShape[contigDim] *= 2;
-  }
-  // All dimensions must be at most 256
-  constexpr int64_t dimMax = 256;
-  for (auto &size : blockShape) {
-    size = std::min(size, dimMax);
-  }
-  // Last dim must equal the swizzle byte size
-  if (swizzleBytes != 0) {
-    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
-    if (blockShape[contigDim] < contigDimSize) {
-      llvm::report_fatal_error("Block shape is too small for the swizzle byte "
-                               "size in NVMMA Shared Layout.");
-    }
-    blockShape[contigDim] = contigDimSize;
-  }
-  if (fp4Padded && packedSize) {
-    blockShape[contigDim] /= 2;
-  }
-  return blockShape;
-}
-
-std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
+FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
   auto encoding = ty.getBlockType().getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
@@ -153,15 +124,18 @@ std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
     auto swizzledEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding);
     if (!swizzledEnc || swizzledEnc.getVec() != 1 ||
         swizzledEnc.getPerPhase() != 1 || swizzledEnc.getMaxPhase() != 1) {
-      if (op)
-        op->emitError("Unhandled encoding type");
-      return std::nullopt;
+      return emitError(loc)
+             << "unhandled shared memory layout for TMA descriptor: "
+             << encoding;
     }
   }
 
   bool fp4Padded = isFp4Padded(encoding);
-  assert(!fp4Padded || swizzleBytes == 128 &&
-                           "elem type .b4x16_p64 supports only 128B swizzling");
+  if (fp4Padded && swizzleBytes != 128) {
+    return emitError(loc) << "fp4 padded operands (elem type .b4x16_p64) only "
+                             "supports 128-byte swizzling, but got "
+                          << swizzleBytes;
+  }
 
   int32_t swizzleMode = 0;
   if (swizzleBytes == 128) {
@@ -196,7 +170,7 @@ enum TMA_ELEMENT_TYPES {
   TMA_B6P2X16 = 15,
 };
 
-std::optional<int> getTMAElementType(Operation *op, TensorDescType ty) {
+FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
   auto encoding = ty.getBlockType().getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = isFp4Padded(encoding);
@@ -228,12 +202,9 @@ std::optional<int> getTMAElementType(Operation *op, TensorDescType ty) {
   default:
     break;
   }
-  if (op) {
-    op->emitError()
-        << "Tensor descriptor element type must have size 1, 2, or 4 but got "
-        << elemSize;
-  }
-  return std::nullopt;
+  return emitError(loc)
+         << "Tensor descriptor element type must have size 1, 2, or 4 but got "
+         << elemSize;
 }
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
@@ -279,8 +250,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
     }
   }
 
-  auto maybeSwizzleMode = getTMASwizzleMode(op, op.getType());
-  if (!maybeSwizzleMode)
+  auto maybeSwizzleMode = getTMASwizzleMode(loc, op.getType());
+  if (failed(maybeSwizzleMode))
     return failure();
   auto swizzleMode = *maybeSwizzleMode;
 
@@ -305,10 +276,9 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
     globalStride[i] =
         arith::MulIOp::create(builder, loc, globalStride[i], elemSizeVal);
 
-  auto elemTypeEnum = getTMAElementType(op, op.getType());
-  if (!elemTypeEnum) {
+  auto elemTypeEnum = getTMAElementType(loc, op.getType());
+  if (failed(elemTypeEnum))
     return failure();
-  }
 
   auto fillMode = (op.getPadding() == triton::PaddingOption::PAD_NAN) ? 1 : 0;
 

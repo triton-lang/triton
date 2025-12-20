@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
         case AsyncOp::NONE:
-          count.consumerPendingCount += 1;
+          count.producerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
@@ -198,7 +198,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          count.producerPendingCount += 1;
+          count.consumerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported consumer kind");
@@ -208,10 +208,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   }
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
-  if (count.producerPendingCount == 0)
-    count.producerPendingCount = 1;
   if (count.consumerPendingCount == 0)
     count.consumerPendingCount = 1;
+  if (count.producerPendingCount == 0)
+    count.producerPendingCount = 1;
 
   return count;
 }
@@ -249,8 +249,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
-  auto emptyMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
+  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
+  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};

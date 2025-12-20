@@ -5,22 +5,20 @@
 
 # Triton Conference 2025
 
-![Triton Registration Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+![Triton Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
 
-### Registration
+The 3rd Triton Developer Conference took place on October 21, 2025 at the Microsoft Silicon Valley Campus in Mountain View, California.
 
-The 3rd Triton conference is scheduled to take place on October 21, 2025. Click [here](https://tritonconference.eventbuilder.com/TritonDeveloperConference) to register!
+### Conference Materials
 
-### Poster Submission
+Conference recordings and materials are now available online:
 
-We invite members of the Triton community who are attending the Triton Developer Conference to present posters about their Triton-related technical work.
+- **Conference Videos:** [YouTube Playlist](https://www.youtube.com/playlist?list=PLc_vA1r0qoiQqCdWFDUDqI90oY5EjfGuO)
+- **Conference Slides:** [Google Drive Folder](https://drive.google.com/drive/folders/1KB6tD3UM1J0_eUp-F-JSlGrargLBawIr)
 
-Please submit basic information of your poster, including author information and abstract using this [form](https://forms.gle/QfgTF8o1CWNENAnA7).
-
-**Important Dates**
-- Submission: 10/1/2025
-- Author notification: 10/7/2025
-- Final version (PDF): 10/14/2025
+For previous conference materials, see:
+- [2024 Conference Materials](docs/meetups/dev_conference_2024.md)
+- [2023 Conference Materials](docs/meetups/dev-meetup-2023.md)
 
 # Triton
 

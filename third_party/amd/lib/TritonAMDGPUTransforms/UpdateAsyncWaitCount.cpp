@@ -50,52 +50,60 @@ namespace mlir {
 
 namespace {
 
-// Returns the number of individual async load memory transactions required when
-// copying data from |srcTy| to |dstTy|, accounting for data contiguity, mask
-// alignment, and the layout mapping from global to shared memory addresses.
-int getNumberOfLoadInstructions(RankedTensorType srcTy, ttg::MemDescType dstTy,
-                                Value mask, int contig,
-                                ModuleAxisInfoAnalysis &axisInfo) {
-  LinearLayout srcLayout = tt::gpu::toLinearLayout(srcTy);
+// Returns the number of async copy instructions for global↔shared transfers.
+// Works for both load (global→shared) and store (shared→global) operations.
+// The calculation is based on data contiguity, mask alignment, and the layout
+// mapping between global and shared memory addresses.
+int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
+                                     ttg::MemDescType sharedType, Value mask,
+                                     int contig,
+                                     ModuleAxisInfoAnalysis &axisInfo) {
+  LinearLayout globalLayout = tt::gpu::toLinearLayout(globalType);
   LinearLayout sharedLayout;
   if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-          dstTy.getEncoding())) {
+          sharedType.getEncoding())) {
     sharedLayout = paddedEnc.getLinearComponent();
   } else {
-    sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    sharedLayout = triton::gpu::toLinearLayout(sharedType);
   }
-  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-  contig = std::min(contig, srcToSharedLayout.getNumConsecutiveInOut());
+  LinearLayout globalToSharedLayout =
+      globalLayout.invertAndCompose(sharedLayout);
+  contig = std::min(contig, globalToSharedLayout.getNumConsecutiveInOut());
 
   if (mask)
     contig = std::min<int>(contig, axisInfo.getMaskAlignment(mask));
 
   // Divide number of registers by contig to get the number of async intrinsics
-  int numberOfRegisters = srcToSharedLayout.getInDimSize(
-      StringAttr::get(srcTy.getContext(), "register"));
-  int loadInstructionCount = std::max(1, numberOfRegisters / contig);
-  return loadInstructionCount;
+  int numberOfRegisters = globalToSharedLayout.getInDimSize(
+      StringAttr::get(globalType.getContext(), "register"));
+  return std::max(1, numberOfRegisters / contig);
 }
 
 // Return the number of generated intrinsics for async ops; 0 otherwise
 // If emitRemarkOnNonAsyncOp is set for any non async op having a side effect on
 // GlobalMemory an performance remark will be emitted
-int getOpNumberOfAsyncLoadInstructions(Operation *op,
+int getOpNumberOfAsyncCopyInstructions(Operation *op,
                                        AMD::TargetInfo targetInfo,
                                        ModuleAxisInfoAnalysis &axisInfo,
                                        bool emitRemarkOnNonAsyncOp) {
   if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getSrc(), axisInfo);
-    return getNumberOfLoadInstructions(copyOp.getSrc().getType(),
-                                       copyOp.getResult().getType(),
-                                       copyOp.getMask(), contig, axisInfo);
+    return getNumberOfAsyncCopyInstructions(copyOp.getSrc().getType(),
+                                            copyOp.getResult().getType(),
+                                            copyOp.getMask(), contig, axisInfo);
   } else if (auto bufferOp = dyn_cast<amdgpu::BufferLoadToLocalOp>(op)) {
     auto ptrType = cast<RankedTensorType>(LLVM::AMD::getPointerTypeWithShape(
         bufferOp.getPtr(), bufferOp.getOffsets()));
     int contig = LLVM::AMD::getVectorSize(bufferOp.getPtr(),
                                           bufferOp.getOffsets(), axisInfo);
-    return getNumberOfLoadInstructions(ptrType, bufferOp.getDest().getType(),
-                                       bufferOp.getMask(), contig, axisInfo);
+    return getNumberOfAsyncCopyInstructions(
+        ptrType, bufferOp.getDest().getType(), bufferOp.getMask(), contig,
+        axisInfo);
+  } else if (auto copyOp = dyn_cast<amdgpu::AsyncCopyLocalToGlobalOp>(op)) {
+    int contig = LLVM::AMD::getVectorSize(copyOp.getDst(), axisInfo);
+    return getNumberOfAsyncCopyInstructions(copyOp.getDst().getType(),
+                                            copyOp.getSrc().getType(),
+                                            copyOp.getMask(), contig, axisInfo);
   } else if (emitRemarkOnNonAsyncOp) {
     SmallVector<mlir::MemoryEffects::EffectInstance> effects;
     if (auto memEffectIface = dyn_cast<MemoryEffectOpInterface>(op))
@@ -348,7 +356,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       if (found != intrinsicCountCache.end()) {
         return found->second;
       }
-      auto v = getOpNumberOfAsyncLoadInstructions(op, targetInfo, axisInfo,
+      auto v = getOpNumberOfAsyncCopyInstructions(op, targetInfo, axisInfo,
                                                   !supportsAsyncLoads);
       intrinsicCountCache[op] = v;
       return v;

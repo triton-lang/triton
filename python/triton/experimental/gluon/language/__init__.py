@@ -81,7 +81,7 @@ from ._core import (
     static_range,
     store,
     sub,
-    thread_barrier,
+    barrier,
     to_linear_layout,
     to_tensor,
     warp_specialize,

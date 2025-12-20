@@ -3,7 +3,7 @@ from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group
 
-__all__ = ["global_to_shared", "commit_group", "wait_group", "mbarrier_arrive"]
+__all__ = ["global_to_shared", "shared_to_global", "commit_group", "wait_group", "mbarrier_arrive"]
 
 
 @builtin
@@ -39,6 +39,33 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
     other_handle = other.handle if other is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, other_handle,
                                                         cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
+
+
+@builtin
+def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None):
+    """
+    Asynchronously copy elements from shared memory to global memory. Requires manual syncronization via `wait_group` before accessing the stored data.
+
+    Args:
+        pointer (tensor): Destination pointer tensor.
+        smem (shared_memory_descriptor): Source shared memory descriptor.
+        mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
+        cache_modifier (str): Cache modifier specifier. Defaults to "".
+    """
+    _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
+    _check(isinstance(pointer.type.layout, DistributedLayout),
+           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
+    _check(
+        smem.shape == pointer.shape, lambda:
+        f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
+    )
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
+    mask_handle = mask.handle if mask is not None else ir.value()
+    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_modifier,
+                                                        ir.EVICTION_POLICY.NORMAL)
 
 
 @builtin

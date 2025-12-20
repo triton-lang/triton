@@ -301,7 +301,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::optional<int> getWarpGroupStartThreadId(Block *block) {
+std::optional<int> getWarpGroupStartWarpId(Block *block) {
   using namespace triton::gpu;
 
   // Look for an enclosing `ttg.warp_specialize` op.
@@ -317,9 +317,19 @@ std::optional<int> getWarpGroupStartThreadId(Block *block) {
   std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
   assert(startIds && "cannot get warp group ID before warp group allocation");
   int32_t warpStartId = (*startIds)[idx];
-  int threadsPerWarp =
-      TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
-  return warpStartId * threadsPerWarp;
+  return warpStartId;
+}
+
+std::optional<int> getWarpGroupStartThreadId(Block *block) {
+  using namespace triton::gpu;
+
+  std::optional<int> warpStartId = getWarpGroupStartWarpId(block);
+  if (!warpStartId)
+    return {};
+
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+      block->getParentOp()->getParentOfType<ModuleOp>());
+  return *warpStartId * threadsPerWarp;
 }
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {
