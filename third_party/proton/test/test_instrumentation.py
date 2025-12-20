@@ -979,7 +979,7 @@ def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
     inp = torch.randn((M, N), device="cuda", dtype=torch.float32)
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
-    temp_file = tmp_path / "test_tensor_descriptor.hatchet"
+    temp_file = tmp_path / "test_tensor_descriptor.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
 
     kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
