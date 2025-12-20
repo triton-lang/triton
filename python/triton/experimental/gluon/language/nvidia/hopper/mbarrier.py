@@ -5,7 +5,7 @@ __all__ = ["allocate_mbarrier", "arrive", "expect", "init", "invalidate", "MBarr
 
 
 @builtin
-def expect(mbarrier, bytes_per_cta=None, descs=None, pred=True, _semantic=None):
+def expect(mbarrier, bytes_per_cta=None, *, descs=None, pred=True, _semantic=None):
     """
     Expect a specific number of bytes being copied. When they are copied, the barrier is signaled.
 

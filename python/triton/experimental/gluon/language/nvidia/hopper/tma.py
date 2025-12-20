@@ -98,7 +98,7 @@ class tensor_descriptor(base_value):
 
 
 @builtin
-def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_copy_global_to_shared(tensor_desc, coord, barrier, result, *, pred=True, multicast=False, _semantic=None):
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
