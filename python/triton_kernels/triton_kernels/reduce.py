@@ -238,7 +238,7 @@ def reduce_forward(
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                                 postprocess_fn2=postprocess_fn2.specs)._reduce_forward
-    pgm = reduce_kernel[grid](
+    reduce_kernel[grid](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
         y_flex.reinterpret(y), y.stride(0), y.stride(1),  #
