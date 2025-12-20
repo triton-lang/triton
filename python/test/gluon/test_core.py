@@ -117,7 +117,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
     ttgl.barrier(cluster=True)
 
-    mbarrier.expect(bar, descs=[in_desc])
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
     tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
@@ -212,7 +212,7 @@ def test_device_tma_load():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, descs=[input_desc])
+        mbarrier.expect(bar, input_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0)
         mbarrier.invalidate(bar)
@@ -399,7 +399,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, M: ttgl.constexpr, N: 
 
     for k in range(NUM_K_TILES):
         mbarrier.init(tma_bar, count=1)
-        mbarrier.expect(tma_bar, descs=[a_desc, b_desc])
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(a_desc, [0, k * BLOCK_K], tma_bar, smem_a)
         tma.async_copy_global_to_shared(b_desc, [0, k * BLOCK_K], tma_bar, smem_b)
         mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
@@ -1400,7 +1400,7 @@ def test_tma_slice():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, descs=[in_desc])
+        mbarrier.expect(bar, in_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem_slice1)
         mbarrier.wait(bar, phase=0)
 
