@@ -29,7 +29,8 @@ public:
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
     Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-    auto barrierCGALayout = ttg::CGAEncodingAttr::getDefault(ctx, 1);
+    auto barrierCGALayout =
+        ttg::CGAEncodingAttr::get1DLayout(ctx, gpu::lookupNumCTAs(op));
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
         ctx, 1, 1, 1, {0}, barrierCGALayout);
     ttg::MemDescType barrierMemDescType =

@@ -36,6 +36,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_copy,
     float2,
 )
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -249,8 +250,13 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
     if USE_TCGEN05:
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
-        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
+        nbarriers: ttgl.constexpr = ttgl.num_ctas() // (2 if two_ctas else 1)
+        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [nbarriers], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
+        # Need to synchronise all the CTAs after the mbarrier initialisation
+        # so that they all see it
+        if two_ctas:
+            ttgl.barrier(cluster=True)
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
@@ -688,7 +694,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         barrier_cga_layout = []
         if two_ctas:
             barrier_cga_layout.append([0])
-        barrier_cga_layout.extend([2**i] for i in range(num_ctas // (2 if two_ctas else 1)))
+        barrier_cga_layout.extend([2**i] for i in range(log2_int(num_ctas // (2 if two_ctas else 1))))
         mma_barrier_layout = mbarrier.MBarrierLayout(cga_layout=barrier_cga_layout)
     torch.manual_seed(0)
 
@@ -1865,3 +1871,20 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@gluon.jit
+def descriptor_shape_kernel(desc, expect_shape):
+    for i in ttgl.static_range(len(expect_shape)):
+        ttgl.device_assert(desc.shape[i] == expect_shape[i])
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_descriptor_shape():
+    t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
+
+    for fp4_padded in [True]:
+        layout = ttgl.NVMMASharedLayout.get_default_for([128, 64], ttgl.uint8, fp4_padded=fp4_padded)
+        desc = TensorDescriptor.from_tensor(t, [128, 64], layout)
+        descriptor_shape_kernel[(1, )](desc, t.shape, num_warps=1, debug=True)
+        torch.cuda.synchronize()

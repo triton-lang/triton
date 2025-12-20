@@ -7,8 +7,8 @@
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
-#shared4 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared4 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
@@ -273,16 +273,16 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
   %cst = arith.constant dense<0> : !ty
   // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[K:%.*]] = {{.*}})
   scf.for %i = %lb to %ub step %step iter_args(%k = %cst) -> (!ty) : i32 {
-    // CHECK-NEXT: [[BUF:%.*]], [[TOKEN:%.*]] = nvws.aref.put.enter [[AREF]] {ttg.partition = array<i32: 0>}
-    // CHECK-NEXT: ttg.local_store [[K]], [[BUF]] {ttg.partition = array<i32: 0>}
-    // CHECK-NEXT: nvws.aref.put.exit [[AREF]], [[TOKEN]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>}
-    %0 = "op_a"() {ttg.partition = array<i32: 0>} : () -> !ty
+    // CHECK-NEXT: [[BUF:%.*]], [[TOKEN:%.*]] = nvws.aref.put.enter [[AREF]] {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: ttg.local_store [[K]], [[BUF]] {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF]], [[TOKEN]] [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>}
+    %0 = "op_a"() {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>} : () -> !ty
     // CHECK: [[VAL:%.*]] = "op_a"
     // CHECK-NEXT: [[BUF:%.*]], [[TOKEN:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 1>}
     // CHECK-NEXT: [[VAL:%.*]] = ttg.local_load [[BUF]] {ttg.partition = array<i32: 1>}
     // CHECK-NEXT: nvws.aref.get.exit [[AREF]], [[TOKEN]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>}
     // CHECK-NEXT: "op_b"([[VAL]])
-    "op_b"(%k) {ttg.partition = array<i32: 1>} : (!ty) -> ()
+    "op_b"(%k) {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 1>} : (!ty) -> ()
 
     scf.yield {ttg.partition = array<i32: 0, 1>} %0 : !ty
   } {tt.warp_specialize, ttg.partition.stages = [0, 0], ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0>], ttg.warp_specialize.tag = 0 : i32}

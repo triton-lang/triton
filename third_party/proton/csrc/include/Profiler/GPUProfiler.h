@@ -7,13 +7,12 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/Set.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace proton {
 
@@ -28,21 +27,70 @@ public:
   virtual ~GPUProfiler() = default;
 
   using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t,
-                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
-                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
+      ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
+                    std::unordered_map<uint64_t, size_t>>;
+
+  struct ExternIdState {
+    // ----non-graph launch fields----
+    // If graphNodeIdToScopes is empty, this externId is non-graph launch.
+    // For non-graph launches, we only need to track whether the externId
+    // itself is API-originated.
+    bool isApiExternId{false};
+    // ----graph launch fields----
+    // For graph launches, the launch correlation id fans out into multiple
+    // kernel activity records. We track the expected fanout here and keep
+    // updating it when we have processed each kernel activity record.
+    size_t numNodes{1};
+
+    struct GraphNodeScopes {
+      bool isApiExternId{false};
+
+      void setScopeId(Data *data, size_t scopeId) {
+        if (singleData == nullptr || singleData == data) {
+          singleData = data;
+          singleScopeId = scopeId;
+          return;
+        }
+        if (multiDataToScopeId.empty())
+          multiDataToScopeId.reserve(2);
+        multiDataToScopeId[data] = scopeId;
+      }
+
+      const size_t *findScopeId(Data *data) const {
+        if (singleData == data)
+          return &singleScopeId;
+        if (multiDataToScopeId.empty())
+          return nullptr;
+        auto it = multiDataToScopeId.find(data);
+        if (it == multiDataToScopeId.end())
+          return nullptr;
+        return &it->second;
+      }
+
+      template <typename FnT> void forEachScopeId(FnT &&fn) const {
+        if (singleData != nullptr)
+          fn(singleData, singleScopeId);
+        for (const auto &[data, scopeId] : multiDataToScopeId)
+          fn(data, scopeId);
+      }
+
+    private:
+      // In most cases, a graph node is only associated with one Data object.
+      // So we optimize the hot path here.
+      Data *singleData{nullptr};
+      size_t singleScopeId{0};
+      std::unordered_map<Data *, size_t> multiDataToScopeId;
+    };
+
+    // graphNodeId -> (per-Data scopeId + API-originated flag)
+    std::unordered_map<uint64_t, GraphNodeScopes> graphNodeIdToScopes;
+  };
+
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
   // issue.
-  using ExternIdToGraphNodeScopeIdMap = ThreadSafeMap<
-      size_t, /*extern_id*/
-      std::map<Data *,
-               std::unordered_map<uint64_t, std::pair<bool, size_t>>>, /*<data,
-                                                         node_id, <is_api,
-                                                         scope_id>>*/
-      std::unordered_map<
-          size_t, std::map<Data *, std::unordered_map<
-                                       uint64_t, std::pair<bool, size_t>>>>>;
-  using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
+  using ExternIdToStateMap =
+      ThreadSafeMap<size_t, ExternIdState,
+                    std::unordered_map<size_t, ExternIdState>>;
 
 protected:
   // OpInterface
@@ -71,38 +119,38 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope>
-        scopeStack; // Used for nvtx range tracking or triton op tracking
     size_t opId{Scope::DummyScopeId};
+    std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
+    bool isApiExternId{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp() {
-      if (profiler.isOpInProgress())
+      if (profiler.isOpInProgress()) // Already in a triton op
         return;
+      // Enter a new GPU API op
+      isApiExternId = true;
       opId = Scope::getNewScopeId();
       profiler.enterOp(Scope(opId));
-      profiler.correlation.apiExternIds.insert(opId);
+      profiler.correlation.setApiExternId(opId);
     }
 
     void exitOp() {
-      if (!profiler.isOpInProgress())
+      if (!profiler.isOpInProgress() || !isApiExternId)
         return;
       profiler.exitOp(Scope(opId));
+      isApiExternId = false;
     }
 
     void enterScope(const std::string &name) {
-      auto scope = Scope(name);
+      Scope scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
 
     void exitScope() {
-      if (scopeStack.empty()) {
-        return;
-      }
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
@@ -113,12 +161,8 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from an external id to a mapping of graph node id to scope id.
-    ExternIdToGraphNodeScopeIdMap externIdToGraphNodeScopeId;
-    // A set of kernels triggered by GPU runtime APIs (e.g., torch
-    // kernels) other than Triton.
-    // It stores a subset of external ids in corrIdToExternId.
-    ApiExternIdSet apiExternIds;
+    // Mapping from an external id to graph-node scopes + API-extern-id flags.
+    ExternIdToStateMap externIdToState;
     static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
@@ -136,20 +180,36 @@ protected:
     void popExternId() { externIdQueue.pop_front(); }
 
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t numInstances = 1) {
+    void correlate(uint64_t correlationId, size_t numNodes) {
       if (externIdQueue.empty())
         return;
-      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
+      const auto externId = externIdQueue.back();
+      corrIdToExternId.insert(correlationId, externId);
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.numNodes = numNodes; });
+    }
+
+    bool isApiExternId(size_t externId) const {
+      bool isApi = false;
+      externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        isApi = state.isApiExternId;
+      });
+      return isApi;
+    }
+
+    void setApiExternId(size_t externId) {
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.isApiExternId = true; });
     }
 
     template <typename FlushFnT>
-    void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
+    void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
       auto submittedId = maxSubmittedCorrelationId.load();
       auto completedId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
       while ((completedId < submittedId) && retries > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
+        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         flushFn();
         completedId = maxCompletedCorrelationId.load();
         --retries;

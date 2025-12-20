@@ -644,12 +644,7 @@ bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return true;
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return false;
   default:
-    llvm::report_fatal_error(
-        "Unsupported architecture for direct to lds loads");
     return false;
   }
 }
@@ -690,6 +685,13 @@ bool TargetInfo::supportsMultiCTALaunch() const {
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
     return llvm::is_contained({32, 64, 128}, biwWidth);
+  }
+  return false;
+}
+
+bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
 }
