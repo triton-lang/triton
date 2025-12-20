@@ -993,11 +993,11 @@ def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
         trace_events = data["traceEvents"]
         if num_ctas == 1:
             assert len(trace_events) == 4
-            num_cta0_events = sum(1 for e in trace_events if "CTA0 " in e["pid"])
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
             assert num_cta0_events == 4
         else:
             assert len(trace_events) == 8
-            num_cta0_events = sum(1 for e in trace_events if "CTA0 " in e["pid"])
-            num_cta1_events = sum(1 for e in trace_events if "CTA1 " in e["pid"])
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
+            num_cta1_events = sum(1 for e in trace_events if "CTA1" in e["pid"])
             assert num_cta0_events == 4
             assert num_cta1_events == 4
