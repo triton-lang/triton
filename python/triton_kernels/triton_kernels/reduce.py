@@ -54,7 +54,8 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     YMx, stride_ymx0, stride_ymx1,  # y mx scale
                     Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
                     Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
-                    K: tl.constexpr, S0, X_S1, Y_S1,  # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
+                    # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
+                    K: tl.constexpr, S0, X_S1, Y_S1,  #
                     POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
                     POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
                     XFlex,  # x flex (global) scale
@@ -260,7 +261,7 @@ def reduce_forward(
         BLOCK_S0=BLOCK_S0,  #
         BLOCK_X_S1=BLOCK_X_S1,  #
         BLOCK_Y_S1=BLOCK_Y_S1,  #
-        DIM=dim,
+        DIM=dim,  #
         num_warps=4  #
     )
     return y, y_mxscale
