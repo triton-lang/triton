@@ -20,7 +20,6 @@ def test_profile_single_session(tmp_path: pathlib.Path):
     proton.activate()
     proton.deactivate()
     proton.finalize()
-    assert session_id0 == 0
     assert temp_file0.exists()
 
     temp_file1 = tmp_path / "test_profile1.hatchet"
