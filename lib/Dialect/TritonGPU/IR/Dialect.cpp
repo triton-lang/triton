@@ -3344,10 +3344,13 @@ struct TritonGPUVerifyTensorLayoutInterface
     // dimension breaks this left right and centre
     auto kBlock = StringAttr::get(op->getContext(), "block");
     int nCTAsLayout;
+    int tensorSize = 1;
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
+      tensorSize = sharedLinearEnc.getLinearLayout().getTotalOutDimSize();
     } else {
       nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+      tensorSize = getCGALayout(layout).getLinearLayout().getTotalOutDimSize();
     }
 
     ModuleOp module = op->getParentOfType<ModuleOp>();
@@ -3357,6 +3360,11 @@ struct TritonGPUVerifyTensorLayoutInterface
       return makeErr() << layout << ".\nLayout has " << nCTAsLayout
                        << " CTAs per CGA, but the context requires "
                        << moduleCTAsPerCGA << " CTAs per CGA.";
+    }
+    if (tensorSize > memDescTy.getNumElements()) {
+      return makeErr() << layout << ".\nCGALayout has tensor size "
+                       << tensorSize << ", but the memdesc type has "
+                       << memDescTy.getNumElements() << " elements.";
     }
     return success();
   }
