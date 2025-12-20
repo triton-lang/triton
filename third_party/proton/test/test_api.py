@@ -386,3 +386,15 @@ def test_profile_disable(disable, fresh_knobs, tmp_path: pathlib.Path):
         assert not temp_file.exists()
     else:
         assert temp_file.exists()
+
+
+def test_finalize_within_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_finalize_within_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    with proton.scope("test0"):
+        proton.finalize()
+    assert temp_file.exists()
+    temp_file1 = tmp_path / "test_finalize_within_scope1.hatchet"
+    proton.start(str(temp_file1.with_suffix("")))
+    depth = proton.context.depth()
+    assert depth == 0
