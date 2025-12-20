@@ -3340,17 +3340,18 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!memDescTy)
       return makeErr() << "Non-memdesc layout is not allowed in memdesc type.";
 
-    // It'd be nice to be able to do toLinearLayout, but the multibuffering
-    // dimension breaks this left right and centre
     auto kBlock = StringAttr::get(op->getContext(), "block");
     int nCTAsLayout;
     int tensorSize = 1;
     int tensorRank = 0;
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
-      nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
-      tensorSize = sharedLinearEnc.getLinearLayout().getTotalOutDimSize();
-      tensorRank = sharedLinearEnc.getLinearLayout().getNumOutDims();
+      const auto &ll = sharedLinearEnc.getLinearLayout();
+      nCTAsLayout = ll.getInDimSize(kBlock);
+      tensorSize = ll.getTotalOutDimSize();
+      tensorRank = ll.getNumOutDims();
     } else {
+      // It'd be nice to be able to do toLinearLayout, but the multibuffering
+      // dimension breaks this left right and centre
       nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
       tensorSize = getCGALayout(layout).getLinearLayout().getTotalOutDimSize();
       tensorRank = getCGALayout(layout).getLinearLayout().getNumOutDims();
@@ -3365,10 +3366,11 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << moduleCTAsPerCGA << " CTAs per CGA.";
     }
     // Use the tensor rank to ignore the multibuffering dimension
-    if (tensorSize > product(memDescTy.getShape().take_back(tensorRank))) {
-      return makeErr() << layout << ".\nCGALayout has tensor size "
+    auto numElements = product(memDescTy.getAllocShape().take_back(tensorRank));
+    if (tensorSize > numElements) {
+      return makeErr() << layout << ".\nLayout has tensor size at least "
                        << tensorSize << ", but the memdesc type has "
-                       << memDescTy.getNumElements() << " elements.";
+                       << numElements << " elements.";
     }
     return success();
   }
