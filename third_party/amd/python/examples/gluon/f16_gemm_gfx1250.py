@@ -149,7 +149,7 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                          BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
                                          NUM_BUFFERS: ttgl.constexpr,  #
                                          TRANSPOSE_B: ttgl.constexpr,  #
-                                         NUM_WARPS: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+                                         WARP_BASES: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -211,7 +211,7 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
                                                       BLOCK_K: ttgl.constexpr,  #
                                                       NUM_BUFFERS: ttgl.constexpr,  #
                                                       TRANSPOSE_B: ttgl.constexpr,  #
-                                                      NUM_WARPS: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+                                                      WARP_BASES: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -282,7 +282,7 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
                               NUM_BUFFERS: ttgl.constexpr,  #
                               TRANSPOSE_B: ttgl.constexpr,  #
-                              NUM_WARPS: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+                              WARP_BASES: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -340,7 +340,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
                                                             BLOCK_K: ttgl.constexpr,  #
                                                             NUM_BUFFERS: ttgl.constexpr,  #
                                                             TRANSPOSE_B: ttgl.constexpr,  #
-                                                            NUM_WARPS: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+                                                            WARP_BASES: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -464,7 +464,7 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
             stride_bk, stride_bn,  #
             stride_cm, stride_cn,  #
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=num_warps,  #
+            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
             num_warps=num_warps, WARP_BASES=warp_bases, waves_per_eu=num_warps // 4)
     else:
         # num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
@@ -479,7 +479,7 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 stride_bk, stride_bn,  #
                 stride_cm, stride_cn,  #
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=num_warps,  #
+                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
                 num_warps=num_warps, WARP_BASES=warp_bases, waves_per_eu=num_warps // 4)
         else:
             persistent_gemm_tdm_pipelined_kernel[grid](
@@ -489,8 +489,8 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 stride_bk, stride_bn,  #
                 stride_cm, stride_cn,  #
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=num_warps,  #
-                num_warps=num_warps, WARP_BASES=warp_bases, waves_per_eu=num_warps // 4)
+                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, num_warps=num_warps, WARP_BASES=warp_bases,
+                waves_per_eu=num_warps // 4)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ (b.to(torch.float32) if not TRANSPOSE_B else b.T.to(torch.float32))
@@ -532,7 +532,7 @@ def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=num_warps,  #
+        NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
         num_warps=num_warps, WARP_BASES=tuple(warp_bases), waves_per_eu=num_warps // 4)
 
     c_triton = c_device.cpu()
@@ -780,13 +780,16 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
                                      BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
                                      NUM_BUFFERS: ttgl.constexpr,  #
                                      TRANSPOSE_B: ttgl.constexpr,  #
-                                     NUM_WARPS: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+                                     WARP_BASES: ttgl.constexpr):
     """Warp specialized GEMM kernel with TDM pipelining."""
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
+
+    NUM_WARPS: ttgl.constexpr = ttgl.num_warps()
+    ttgl.static_assert(2**len(WARP_BASES) == NUM_WARPS)
 
     PRODUCER_WARPS: ttgl.constexpr = NUM_WARPS // 2
     CONSUMER_WARPS: ttgl.constexpr = NUM_WARPS // 2
@@ -862,9 +865,6 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
     a_device = a.cuda()
     b_device = b.cuda()
     c_device = c.cuda()
-    warp_bases = [(0, 1)]
-    for i in range(int(math.log2(NUM_TOTAL_WARPS // 4))):
-        warp_bases.append((1 << i, 0))
 
     if not PERSISTENT:
         warp_bases = [(0, 1)]
@@ -879,7 +879,7 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
             stride_bk, stride_bn,  #
             stride_cm, stride_cn,  #
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=NUM_TOTAL_WARPS,
+            NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
             WARP_BASES=tuple(warp_bases),  #
             num_warps=NUM_TOTAL_WARPS // 2)
     else:

@@ -440,90 +440,20 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
 }
 
-/// Removes contribution of a given output dimension by setting its basis
-/// component to zero for all dimensions.
-LinearLayout projectAwayOutDim(LinearLayout inLayout, StringAttr dim,
-                               MLIRContext *ctx) {
-  const auto rank = static_cast<int>(inLayout.getOutDims().size());
-  auto outDimNames = standardOutDimNames(ctx, rank);
-  inLayout = inLayout.transposeOuts(outDimNames);
-  // Find the index of the output dimension we're removing.
-  int dimIdx = -1;
-  {
-    auto it = llvm::find(outDimNames, dim);
-    if (it != outDimNames.end())
-      dimIdx = static_cast<int>(std::distance(outDimNames.begin(), it));
-  }
-
-  StringAttr kRegister = S("register");
-  LinearLayout::BasesT result;
-
-  for (const auto &[inDim, inDimBases] : inLayout.getBases()) {
-    auto &newInDimBases = result[inDim];
-    newInDimBases.reserve(inDimBases.size());
-
-    for (const auto &basis : inDimBases) {
-      // Copy and zero the dimension’s contribution if valid index found.
-      std::vector<int32_t> newBasis = basis;
-      if (dimIdx >= 0 && dimIdx < static_cast<int>(newBasis.size()))
-        newBasis[dimIdx] = 0;
-
-      newInDimBases.push_back(std::move(newBasis));
+static LinearLayout projectAwayOutDim(const LinearLayout &layout,
+                                      StringAttr dim) {
+  auto ctx = layout.getOutDimNames().begin()->getContext();
+  auto bases = layout.getBases();
+  auto idx = layout.getOutDimIndex(dim);
+  for (auto inDim : layout.getInDimNames()) {
+    auto &inDimBases = bases[inDim];
+    for (auto &basis : inDimBases) {
+      basis[idx] = 0;
     }
   }
 
-  return LinearLayout(std::move(result), outDimNames);
-}
-
-LinearLayout replaceFirstRepWithLane(LinearLayout inLayout, int firstRepInNonK,
-                                     MLIRContext *ctx) {
-  const auto rank = static_cast<int>(inLayout.getOutDims().size());
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  // Normalize layout so outputs are in the standard order.
-  inLayout = inLayout.transposeOuts(outDimNames);
-
-  // We want to "move" the register basis (index firstRepInNonK)
-  // into the fifth lane basis slot (index 4), if present.
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-
-  int kRegisterIndexToRemove = firstRepInNonK;
-  constexpr int kLaneInsertIndex = 4;
-
-  LinearLayout::BasesT result;
-
-  std::vector<int32_t> basisToMove;
-  bool haveBasisToMove = false;
-
-  for (const auto &[inDim, inDimBases] : inLayout.getBases()) {
-    auto &newInDimBases = result[inDim];
-    newInDimBases.reserve(inDimBases.size());
-
-    int idx = 0;
-    for (const auto &basis : inDimBases) {
-      std::vector<int32_t> newBasis = basis;
-
-      // Capture the register basis we want to move and skip it here.
-      if (inDim == kRegister && idx == kRegisterIndexToRemove) {
-        basisToMove = newBasis;
-        haveBasisToMove = true;
-        ++idx;
-        continue;
-      }
-
-      // When we reach the target lane index, insert the moved basis instead.
-      if (inDim == kLane && idx == kLaneInsertIndex && haveBasisToMove) {
-        newInDimBases.push_back(basisToMove);
-      } else {
-        newInDimBases.push_back(std::move(newBasis));
-      }
-
-      ++idx;
-    }
-  }
-
-  return LinearLayout(std::move(result), outDimNames);
+  auto outDimNames = standardOutDimNames(ctx, layout.getOutDims().size());
+  return LinearLayout(std::move(bases), outDimNames);
 }
 
 LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
@@ -737,6 +667,7 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
 LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
   assert(rank == getRank());
+  assert(rank <= 3);
 
   bool hasBatchDim = rank == 3;
   int mIndex = 0 + hasBatchDim;
@@ -883,7 +814,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto ctaLayout = wmmaLayout.getCtaLayout();
   // Zero out M or N dim based on opIdx
-  ctaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
+  ctaLayout = projectAwayOutDim(ctaLayout, dimK);
   // If repetition (aka register basis) iz 0 in all out dims we need to remove
   // it since this repetition doesn't make sense for dotOp layout.
   ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
@@ -1446,14 +1377,12 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // pattern to fill the K dim.
   tileLayout *= LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
 
-  auto firstRepInNonK = tileLayout.getInDimSizeLog2(kRegister);
-
   if (dotOperandIdx == 1) {
     ctaLayout = transposeLinearLayout(ctaLayout, order);
   }
 
   // Zero out M or N dim based on opIdx
-  ctaLayout = projectAwayOutDim(ctaLayout, dimK, ctx);
+  ctaLayout = projectAwayOutDim(ctaLayout, dimK);
   // If repetition (aka register basis) iz 0 in all out dims we need to remove
   // it since this repetition doesn't make sense for dotOp layout.
   ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
@@ -1472,8 +1401,21 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // repetition needs to be moved to lane base that represents lane 16. Since
   // for a single tile thread holds 4 vals, we move register base 2, to lane
   // base 4.
-  auto retLayout = replaceFirstRepWithLane(nonOpSelLayout, firstRepInNonK, ctx);
-  return retLayout;
+
+  // No repetitions, in m/n dim.
+  auto firstRepInNonK = tileLayout.getInDimSizeLog2(kRegister);
+  if (nonOpSelLayout.getInDimSizeLog2(kRegister) <= firstRepInNonK) {
+    return nonOpSelLayout;
+  }
+
+  // We want to "move" the register basis (index firstRepInNonK)
+  // into the fifth lane basis slot (index 4), if present.
+  constexpr int kLaneInsertIndex = 4;
+  auto bases = nonOpSelLayout.getBases();
+  std::swap(bases[kRegister][firstRepInNonK], bases[kLane][kLaneInsertIndex]);
+  bases[kRegister].erase(bases[kRegister].begin() + firstRepInNonK);
+
+  return LinearLayout(std::move(bases), outDimNames);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
