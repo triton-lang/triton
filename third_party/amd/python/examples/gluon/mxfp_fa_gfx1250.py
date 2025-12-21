@@ -1655,7 +1655,8 @@ def attn_fwd_kernel(  #
         SUBTILE: ttgl.constexpr,  #
         PIPELINED: ttgl.constexpr,  #
         P_SCALING: ttgl.constexpr,  #
-        P_K_WIDTH: ttgl.constexpr, WARP_BASES: ttgl.constexpr):
+        P_K_WIDTH: ttgl.constexpr,  #
+        WARP_BASES: ttgl.constexpr):
 
     NUM_WARPS: ttgl.constexpr = ttgl.num_warps()
     NUM_BUFFERS: ttgl.constexpr = 2 if PIPELINED else 1
