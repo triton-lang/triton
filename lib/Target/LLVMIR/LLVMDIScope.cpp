@@ -86,7 +86,6 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       compileUnitAttr = {};
     }
 
-    // TODO: support nested types
     llvm::SmallVector<mlir::LLVM::DITypeAttr> types;
     llvm::SmallVector<std::pair<unsigned, LLVM::DITypeAttr>> typeMap;
     mlir::DataLayout dl(
@@ -98,20 +97,24 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     // If no return type then add a null type as a place holder for that.
     if (types.empty())
       types.push_back(mlir::LLVM::DINullTypeAttr::get(context));
+
+    // Only pointer type and scalar types are supported for now
     for (auto [idx, inTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
       if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
         auto pointeeTy =
             funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
         auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
-        if (pointeeTy && sizeInBits) {
+        // If there is no valid pointee type for this function argument, skip
+        // it.
+        if (pointeeTy) {
           LLVM::DITypeAttr tyAttr =
               convertPtrType(context, ptrTy, pointeeTy.getValue(), sizeInBits);
           types.push_back(tyAttr);
           typeMap.push_back({idx, tyAttr});
         }
-
       } else {
-        // Here assume remained inTy are only scalar types
+        // Here assume remaining inTys are only scalar types
+        assert(inTy.isIntOrFloat() && "Expected scalar types");
         LLVM::DITypeAttr tyAttr = convertType(context, inTy);
         types.push_back(tyAttr);
         typeMap.push_back({idx, tyAttr});
@@ -154,8 +157,8 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
           argTypeAttr, diFlag);
 
       auto exprAttr = LLVM::DIExpressionAttr::get(context);
-      Operation *dbgOp = LLVM::DbgValueOp::create(builder, childLoc, arg,
-                                                  argVarAttr, exprAttr);
+      (void)LLVM::DbgValueOp::create(builder, childLoc, arg, argVarAttr,
+                                     exprAttr);
 
       retainedNodes.push_back(argVarAttr);
     }
