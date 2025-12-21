@@ -1262,8 +1262,7 @@ class tensor(base_value):
 
 
 def _type_for_tuple_values(values, fields=None):
-    return tuple_type([constexpr_type(x) if isinstance(x, (int, float, dtype, list)) else x.type for x in values],
-                      fields)
+    return tuple_type([constexpr_type(x) if isinstance(x, (int, float, dtype)) else x.type for x in values], fields)
 
 
 class tuple(base_value):
