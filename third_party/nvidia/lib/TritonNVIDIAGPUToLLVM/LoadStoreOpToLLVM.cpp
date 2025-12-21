@@ -1383,12 +1383,18 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       barrierPtr = b.inttoptr(barrierPtr.getType(), barrierInt);
     }
 
+    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
+    std::string ctaGroup;
+    if (getModuleTwoCTAs(op)) {
+      ctaGroup = "cta_group::2.";
+    }
+
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
     // We clamp the block size and the codegen will emit multiple copy
     // operations.
-    auto twoCTAs = getModuleTwoCTAs(op);
+
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)
@@ -1408,9 +1414,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
-          "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-          "d.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-          ".shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
+          "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
+          "shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
           ".global.mbarrier::complete_tx::bytes";
       if (multicast)
         tmaInst += ".multicast::cluster";
