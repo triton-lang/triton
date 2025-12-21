@@ -304,9 +304,9 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   barrier = b.ptrtoint(i32_ty, barrier);
   auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
-  std::string opcode;
-  opcode = "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-           ".mbarrier::arrive::one.shared::cluster";
+  std::string opcode =
+      "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+      ".mbarrier::arrive::one.shared::cluster";
   if (mask)
     opcode += ".multicast::cluster";
   opcode += ".b64 [$1]";
