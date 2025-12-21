@@ -18,7 +18,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter  # type: ignore
-from .._C.libtriton import ir as _ir # type: ignore
+from .._C.libtriton import ir as _ir  # type: ignore
 from .._utils import _tuple_create
 
 T = TypeVar("T")
@@ -836,6 +836,7 @@ _MISSING = object()
 interpreter_builder = InterpreterBuilder()
 interpreter_semantic: TritonSemantic = TritonSemantic(interpreter_builder)
 
+
 class _LangPatchScope:
     """Tracks patched attributes so they can be restored."""
 
@@ -918,7 +919,7 @@ class ReduceScanOpInterface:
             ret = np.array([ret], dtype=np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
-    
+
     def apply_impl(self, input):
         raise NotImplementedError("apply_impl must be implemented by subclasses")
 
@@ -1225,11 +1226,10 @@ def _implicit_cvt(arg):
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
         return interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
-                                                shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
-                                               block_shape=[tl.constexpr(b)
-                                                            for b in arg.block_shape], padding_option=arg.padding)
+                                                           shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
+                                                           block_shape=[tl.constexpr(b) for b in arg.block_shape],
+                                                           padding_option=arg.padding)
     return arg
-
 
 
 def _unwrap_tensor(t):
