@@ -130,7 +130,8 @@ public:
       auto warpGroupToOffsetb128 =
           LinearLayout(std::move(bases), warpToOffset.getOutDims(),
                        /*requireSurjective=*/false);
-      Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
+      Value warpId = mlir::triton::gpu::WarpIdOp::create(
+          rewriter, loc, /*emitUniformHint=*/true);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
