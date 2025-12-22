@@ -4,7 +4,11 @@ from triton import knobs
 import os
 import pathlib
 import hashlib
+import pytest
+from triton._internal_testing import is_cuda
 
+
+@pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
 def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     stage_name = 'make_ttgir'
     curr_repro_path = tmp_path / ("repro_prefix." + stage_name + ".repro.mlir")
@@ -18,7 +22,6 @@ def test_inspection(monkeypatch, tmp_path: pathlib.Path):
 
     def get_key():
         return pathlib.Path(__file__).read_text()
-
 
     def get_hash():
         return hashlib.sha256(get_key().encode('utf-8')).hexdigest()

@@ -41,7 +41,6 @@ test-unit: all
 	$(PYTEST) --tb=short -vs python/tutorials/06-fused-attention.py
 	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
-	$(PYTEST) --tb=short -vs python/test/backend/test_stages_inspection.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
