@@ -50,6 +50,7 @@ else:
 # Re-use utilities from the previous tutorial.
 t3 = importlib.import_module("03-async-copy")
 t4 = importlib.import_module("04-tma")
+t7 = importlib.import_module("07-persistence")
 
 
 def is_hopper_or_newer():
@@ -436,8 +437,8 @@ class Counter:
 
     @gluon.must_use_result
     @gluon.jit
-    def next(self):
-        incr = self.index + 1
+    def next(self, pred=True):
+        incr = self.index + gl.where(pred, 1, 0)
         rollover = incr == self.num_barriers
         index = gl.where(rollover, 0, incr)
         phase = gl.where(rollover, self.phase ^ 1, self.phase)
@@ -615,9 +616,6 @@ def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUB
     grid = (min(num_sms, num_pid), )
     matmul_warp_specialized_kernel[grid](a_desc, b_desc, c_desc, SchedulerImpl, num_buffers, SUBTILE_FACTOR,
                                          num_warps=num_warps)
-
-
-t7 = importlib.import_module("07-persistence")
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])

@@ -908,8 +908,8 @@ private:
         nonUniforms.push_back(nonUniformOffset);
       }
     }
-
-    // Accumulate the uniform offsets and non-unform offsets.
+    // Note: uniforms could be empty, and hence subsequent uniformSum could be
+    // none. Accumulate the uniform offsets and non-unform offsets.
     Value uniformSum;
     Value nonUniformSum;
     while (true) {
@@ -945,8 +945,9 @@ private:
       if (splatTensors.empty())
         break;
 
-      bool asScalar =
-          isScalarIntConst(uniformSum) && !isScalarIntZero(uniformSum);
+      bool asScalar = uniformSum && isScalarIntConst(uniformSum) &&
+                      !isScalarIntZero(uniformSum);
+      // To decide if splat(constant) contribute as a scalar or a tensor.
       if (asScalar) {
         // The asScalar was set to true based on heuristic. However, it may be
         // illegal to do so. The condition splatTensors.size() != 0
@@ -971,6 +972,16 @@ private:
 
     LDBG("   -- new uniform offset: " << uniformSum);
     LDBG("   -- new non-uniform offset: " << nonUniformSum);
+
+    // Ensure uniformSum has a value, even if it's just zero
+    if (!uniformSum) {
+      auto offsetType = fatPtrOffset.getType();
+      auto bitness = offsetType.isIntOrIndex()
+                         ? offsetType.getIntOrFloatBitWidth()
+                         : llvm::cast<RankedTensorType>(offsetType)
+                               .getElementTypeBitWidth();
+      uniformSum = arith::ConstantIntOp::create(rewriter, curLoc, 0, bitness);
+    }
 
     // Add uniform and non-uniform quantities together to be a new offset.
     assert(uniformSum && "uniformSum should have value, even if it is 0");

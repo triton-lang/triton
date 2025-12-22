@@ -243,8 +243,8 @@ tt.func @alloc_warp_specialize_explicit_capture() {
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
-#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32} {
@@ -259,12 +259,12 @@ tt.func @mma_lhs_tmem(
 ) {
   // CHECK-COUNT-2: ttng.tmem_alloc {{.*}} tensor_memory_row_offset = 0 : i32
   // CHECK-NOT: tensor_memory_row_offset
-  %a = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
-  %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
+  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
+  %c = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
-    !ttg.memdesc<64x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
-    !ttg.memdesc<64x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
   tt.return
 }
@@ -281,12 +281,12 @@ tt.func @mma_scaled_lhs_tmem(
 ) {
   // CHECK-COUNT-2: ttng.tmem_alloc {{.*}} tensor_memory_row_offset = 0 : i32
   // CHECK-NOT: tensor_memory_row_offset
-  %a = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
-  %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
+  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
+  %c = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
   ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1, %barrier[%barrierPred] {is_async} :
-    !ttg.memdesc<64x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
-    !ttg.memdesc<64x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<128x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<256x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>

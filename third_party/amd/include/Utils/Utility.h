@@ -1,7 +1,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_UTILS_UTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_UTILS_UTILITY_H_
 
-#include "llvm/ADT/ArrayRef.h"
+#include "mlir/Support/LLVM.h"
 #include <cassert>
 #include <vector>
 namespace mlir::LLVM::AMD {

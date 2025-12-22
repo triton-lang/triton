@@ -140,6 +140,14 @@ def supports_block_scaling():
     return (is_cuda() and torch.cuda.get_device_capability()[0] == 10) or is_hip_cdna4()
 
 
+if is_cuda() and torch.cuda.get_device_capability()[0] == 10:
+    from triton._C.libtriton import nvidia
+    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+else:
+    cublas = None
+
+
 def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K = args["M"], args["N"], args["K"]
@@ -266,6 +274,52 @@ def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M
     return output
 
 
+def cublas_block_scaled_matmul(a, a_scale, b, b_scale, block_scale_type="mxfp8"):
+    """
+    cuBLAS block-scaled matmul baseline.
+
+    Args:
+        a: Input matrix A
+            - For mxfp8: (M, K) in FP8 E4M3
+            - For nvfp4: (M, K//2) in uint8 packed FP4 (2 elements per byte)
+        a_scale: Scale factors for A
+            - For mxfp8: E8M0 scales (flattened)
+            - For nvfp4: FP8 E4M3 scales in cublas layout (M, K//16)
+        b: Input matrix B
+            - For mxfp8: (N, K) in FP8 E4M3
+            - For nvfp4: (N, K//2) in uint8 packed FP4 (2 elements per byte)
+        b_scale: Scale factors for B
+            - For mxfp8: E8M0 scales (flattened)
+            - For nvfp4: FP8 E4M3 scales in cublas layout (N, K//16)
+        block_scale_type: Format type ("mxfp8" or "nvfp4")
+
+    Returns:
+        output: Result matrix (M, N) in FP16
+    """
+    M, K_a = a.shape
+    N, K_b = b.shape
+
+    if block_scale_type == "mxfp8":
+        assert K_a == K_b, "K dimensions must match"
+        assert a.dtype == torch.float8_e4m3fn, "Only FP8 E4M3 inputs supported for mxfp8"
+        assert b.dtype == torch.float8_e4m3fn, "Only FP8 E4M3 inputs supported for mxfp8"
+        # MXFP8 cuBLAS outputs FP16
+        output = torch.empty((M, N), dtype=torch.float16, device="cuda")
+        cublas.block_scaled_matmul_mxfp8(a, b, output, a_scale, b_scale)
+    elif block_scale_type == "nvfp4":
+        # For packed FP4, K_a and K_b are in bytes (K = K_a * 2 in elements)
+        assert K_a == K_b, "K dimensions must match"
+        assert a.dtype == torch.uint8, "Only uint8 packed FP4 inputs supported for nvfp4"
+        assert b.dtype == torch.uint8, "Only uint8 packed FP4 inputs supported for nvfp4"
+        # NVFP4 cuBLAS outputs FP16
+        output = torch.empty((M, N), dtype=torch.float16, device="cuda")
+        cublas.block_scaled_matmul_nvfp4(a, b, output, a_scale, b_scale)
+    else:
+        raise ValueError(f"Unsupported block_scale_type: {block_scale_type}")
+
+    return output
+
+
 def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference=False):
     BLOCK_M = 128
     BLOCK_N = 256
@@ -311,6 +365,12 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     epsilon = 1e-8
     a_scale = torch.rand(a_scale_shape, device=device) + epsilon
     b_scale = torch.rand(b_scale_shape, device=device) + epsilon
+
+    # Store original scales for cublas nvfp4 before any layout conversion.
+    # For cublas nvfp4, the scales are in the original 4D layout.
+    a_scale_orig = a_scale.clone()
+    b_scale_orig = b_scale.clone()
+
     if block_scale_type == "nvfp4":
         a_scale = a_scale.to(torch.float8_e4m3fn)
         b_scale = b_scale.to(torch.float8_e4m3fn)
@@ -359,30 +419,69 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
     }
-    return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference
+
+    # Flatten scales for cuBLAS
+    if block_scale_type == "mxfp8":
+        a_scale_cublas = a_scale.contiguous().flatten()
+        b_scale_cublas = b_scale.contiguous().flatten()
+    elif block_scale_type == "nvfp4":
+        a_scale_orig = a_scale_orig.to(torch.float8_e4m3fn)
+        b_scale_orig = b_scale_orig.to(torch.float8_e4m3fn)
+        a_scale_cublas = a_scale_orig.contiguous().flatten()
+        b_scale_cublas = b_scale_orig.contiguous().flatten()
+
+    return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference, a, b, a_scale_cublas, b_scale_cublas
 
 
 def validate_block_scaled(M, N, K, block_scale_type="nvfp4"):
-    a_desc, a_scale, b_desc, b_scale, rep_m, rep_n, rep_k, configs, reference = initialize_block_scaled(
-        M, N, K, block_scale_type, compute_reference=True)
-    output = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=True)
+    a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference = results[:9]
+    a, b, a_scale_cublas, b_scale_cublas = results[9:]
+
+    # Test Triton implementation
+    output = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n,
+                                 rep_k, configs)
     torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
-    print(f"✅ (pass {block_scale_type})")
+
+    # Test cuBLAS implementation if available (available for mxfp8 and nvfp4 only as of 13.1)
+    if cublas and block_scale_type in ["mxfp8", "nvfp4"]:
+        cublas_output = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas,
+                                                   block_scale_type=block_scale_type)
+        torch.testing.assert_close(reference, cublas_output.to(torch.float32), atol=1e-3, rtol=1e-3)
+        print(f"✅ (pass {block_scale_type} - Triton and cuBLAS)")
+    else:
+        print(f"✅ (pass {block_scale_type} - Triton only)")
 
 
-def bench_block_scaled(K, block_scale_type="nvfp4", reps=10):
+def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
     assert K % 128 == 0
     M = 8192
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
-    a_desc, a_scale, b_desc, b_scale, rep_m, rep_n, rep_k, configs, _ = initialize_block_scaled(
-        M, N, K, block_scale_type, compute_reference=False)
-    _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=False)
+    a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, _ = results[:9]
+    a, b, a_scale_cublas, b_scale_cublas = results[9:]
 
+    # Warmup
+    for _ in range(warmup_reps):
+        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
+                                configs)
+        if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
+            _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
+
+    # Benchmark
     proton.activate(0)
     for _ in range(reps):
-        _ = block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, torch.float16, M, N, K, rep_m, rep_n, rep_k, configs)
+        _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
+                                configs)
+        if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
+            bytes_per_elem = a.element_size()
+            # For nvfp4, K is in elements but a.shape[1] is in bytes, so use K/2 for byte calculation
+            K_bytes = K if block_scale_type == "mxfp8" else K // 2
+            with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
+                              {"bytes": bytes_per_elem * (M * K_bytes + N * K_bytes + M * N), "flops": 2. * M * N * K}):
+                _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
     proton.deactivate(0)
     print("Done benchmarking")
 
