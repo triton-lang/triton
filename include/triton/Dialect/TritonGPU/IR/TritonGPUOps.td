@@ -622,12 +622,11 @@ def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
     This operation returns the GPU warp ID. This can translate to reading
     hardware registers if there are, or just thread ID divided by warp size.
 
-    The `emitUniformHint` attribute is indicating in NVIDIA backend whether to
-    emit nvvm.shfl.sync idx 0 for LLVM to better deduce that the generated
-    value is uniform across the warp.
+    The `omitUniformHint` attribute is indicating in NVIDIA backend whether to
+    omit emitting nvvm.shfl.sync idx 0 for LLVM.
   }];
 
-  let arguments = (ins UnitAttr:$emitUniformHint);
+  let arguments = (ins UnitAttr:$omitUniformHint);
   let results = (outs I32:$result);
 
   let assemblyFormat = "attr-dict";
