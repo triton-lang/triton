@@ -148,16 +148,19 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
 @builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                _semantic=None) -> None:
+                mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     Args:
         dest (tensor_descriptor): the destination tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         src (shared_memory_descriptor): the shared memory source to load the data.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle)
+    mbarrier = _unwrap_if_constexpr(mbarrier)
+    mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle)
 
 
 @builtin

@@ -35,13 +35,30 @@ public:
   /// Add a single metric to the data.
   virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
 
+  /// Add an op and a metric with one call.
+  /// The default implementation forwards to addOp + addMetric.
+  virtual void addOpAndMetric(size_t scopeId, const std::string &opName,
+                              std::shared_ptr<Metric> metric) {
+    scopeId = this->addOp(scopeId, opName);
+    this->addMetric(scopeId, metric);
+  }
+
   /// Add multiple metrics to the data.
   virtual void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Clear all caching data.
+  /// Clear all non-persistent data.
   virtual void clear() = 0;
+
+  /// Clear caching data only.
+  virtual void clearCache() = 0;
+
+  /// To Json
+  virtual std::string toJsonString() const = 0;
+
+  /// To MsgPack
+  virtual std::vector<uint8_t> toMsgPack() const = 0;
 
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);

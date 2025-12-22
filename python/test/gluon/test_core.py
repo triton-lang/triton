@@ -10,8 +10,8 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
-    is_hip_gfx11,
-    is_hip_gfx12,
+    is_hip_rdna3,
+    is_hip_rdna4,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -36,6 +36,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_copy,
     float2,
 )
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -107,6 +108,61 @@ def test_tma():
 
 
 @gluon.jit
+def tma_multicast_copy_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    # Need to synchronise all the CTAs after the mbarrier initialisation
+    # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
+    ttgl.barrier(cluster=True)
+
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+
+    mbarrier.invalidate(bar)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
+def test_tma_multicast_copy(ctas_per_cga):
+    from triton._C.libtriton.gluon_ir import make_cga_layout
+    cga_split_num = [min(ctas_per_cga[0], 2), min(ctas_per_cga[1], 2)]
+    cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
+
+    BLOCK_M, BLOCK_N = 16, 16
+    BLOCK_M *= cga_split_num[0]
+    BLOCK_N *= cga_split_num[1]
+
+    inp = torch.randn((BLOCK_M, BLOCK_N), dtype=torch.float16, device="cuda")
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_M, BLOCK_N],
+        ttgl.float16,
+        cga_layout=cga_layout,
+    )
+
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [BLOCK_M, BLOCK_N], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [BLOCK_M, BLOCK_N], layout)
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    compiled = tma_multicast_copy_kernel[(1, )](
+        in_desc,
+        out_desc,
+        num_warps=4,
+        num_ctas=num_ctas,
+    )
+    expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
+    assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@gluon.jit
 def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
                                        ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
@@ -156,7 +212,7 @@ def test_device_tma_load():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, input_desc.block_type.nbytes)
+        mbarrier.expect(bar, input_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0)
         mbarrier.invalidate(bar)
@@ -249,8 +305,13 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
     if USE_TCGEN05:
         assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
-        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
+        nbarriers: ttgl.constexpr = ttgl.num_ctas() // (2 if two_ctas else 1)
+        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [nbarriers], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
+        # Need to synchronise all the CTAs after the mbarrier initialisation
+        # so that they all see it
+        if two_ctas:
+            ttgl.barrier(cluster=True)
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
@@ -338,7 +399,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, M: ttgl.constexpr, N: 
 
     for k in range(NUM_K_TILES):
         mbarrier.init(tma_bar, count=1)
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(a_desc, [0, k * BLOCK_K], tma_bar, smem_a)
         tma.async_copy_global_to_shared(b_desc, [0, k * BLOCK_K], tma_bar, smem_b)
         mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
@@ -583,8 +644,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         if M * N // 128 // num_ctas > MAX_ROWS:
             N //= (M * N // 128 // num_ctas // MAX_ROWS)
 
-    if two_ctas and warps != [8, 1] and (shape_m, shape_n, shape_k) == (2, 4, 1):
-        pytest.skip("FIXME: Fails with wrong answer. Need to investigate")
+    if two_ctas and N // ctas_per_cga[1] == 512:
+        # grep for [Note: numRepN > 1 and two_ctas]
+        pytest.skip("grep for [Note: numRepN > 1 and two_ctas]")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 
@@ -671,7 +733,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, cga_layout=cga_layout_b)
     if use_tcgen05:
-        tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
+        tmem_shape = (min(M // ctas_per_cga[0], 128), min(N // ctas_per_cga[1], 256))
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
@@ -687,7 +749,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         barrier_cga_layout = []
         if two_ctas:
             barrier_cga_layout.append([0])
-        barrier_cga_layout.extend([2**i] for i in range(num_ctas // (2 if two_ctas else 1)))
+        barrier_cga_layout.extend([2**i] for i in range(log2_int(num_ctas // (2 if two_ctas else 1))))
         mma_barrier_layout = mbarrier.MBarrierLayout(cga_layout=barrier_cga_layout)
     torch.manual_seed(0)
 
@@ -787,7 +849,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.skipif(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
+@pytest.mark.skipif(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 def test_amd_wmma(M, N, K, in_dtype):
@@ -837,8 +899,8 @@ def test_amd_wmma(M, N, K, in_dtype):
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
 
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    wmma_version = 1 if is_hip_gfx11() else 2
-    k_width = 16 if is_hip_gfx11() else 8
+    wmma_version = 1 if is_hip_rdna3() else 2
+    k_width = 16 if is_hip_rdna3() else 8
     wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
@@ -1338,7 +1400,7 @@ def test_tma_slice():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
-        mbarrier.expect(bar, in_desc.block_type.nbytes)
+        mbarrier.expect(bar, in_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem_slice1)
         mbarrier.wait(bar, phase=0)
 
@@ -1864,3 +1926,20 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@gluon.jit
+def descriptor_shape_kernel(desc, expect_shape):
+    for i in ttgl.static_range(len(expect_shape)):
+        ttgl.device_assert(desc.shape[i] == expect_shape[i])
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_descriptor_shape():
+    t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
+
+    for fp4_padded in [True]:
+        layout = ttgl.NVMMASharedLayout.get_default_for([128, 64], ttgl.uint8, fp4_padded=fp4_padded)
+        desc = TensorDescriptor.from_tensor(t, [128, 64], layout)
+        descriptor_shape_kernel[(1, )](desc, t.shape, num_warps=1, debug=True)
+        torch.cuda.synchronize()

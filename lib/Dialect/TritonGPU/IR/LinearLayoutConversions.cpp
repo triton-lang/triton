@@ -1077,7 +1077,8 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
       std::swap(bases[kRow].back(), bases[kCol].back());
-      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+      ret =
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective());
     }
     auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     return ret * split;
@@ -1103,7 +1104,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
-    tile = LinearLayout(bases, dims);
+    tile = LinearLayout(std::move(bases), dims);
   } else {
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
             LinearLayout::identity1D(blockN, kCol, dims[1]);
@@ -1251,7 +1252,8 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(layout.hasInDim(kBlock));
   auto bases = layout.getBases();
   bases[kBlock] = {};
-  return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector<4>(layout.getOutDimNames()));
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
@@ -1402,8 +1404,9 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  return combineCtaCgaWithShape(
-      ctaLayout, CGAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+  return combineCtaCgaWithShape(ctaLayout,
+                                CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2),
+                                dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1533,7 +1536,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, 2);
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(ctx, 2);
   auto finalLay = combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
   return finalLay;
 }

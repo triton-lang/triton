@@ -101,8 +101,8 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            rewriter, regToSharedLayout, threadsPerWarp, loadContig)) {
+    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
+                                      dstTy.getAllocShape(), loadContig)) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
 
@@ -185,7 +185,7 @@ struct CoalesceAsyncCopyWrites
                     "component of the padded encoding");
       }
 
-      newDistEnc = ttg::LinearEncodingAttr::get(ctx, newRegLayout);
+      newDistEnc = ttg::LinearEncodingAttr::get(ctx, std::move(newRegLayout));
     } else {
       assert(false && "Unsupported layout");
     }

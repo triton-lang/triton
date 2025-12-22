@@ -85,7 +85,7 @@ protected:
   mlir::triton::gpu::NvidiaMmaEncodingAttr mma(ArrayRef<unsigned> version,
                                                ArrayRef<unsigned> warpsPerCTA,
                                                ArrayRef<unsigned> instrShape) {
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::getDefault(
+    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
         &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::NvidiaMmaEncodingAttr::get(
         &ctx, version[0], version[1], warpsPerCTA, cta, instrShape);
@@ -303,13 +303,13 @@ TEST_F(BankConflictTest, bankConflicts) {
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CGAEncodingAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 1)),
        {32},
        32},
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CGAEncodingAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 1)),
        {32},
        16},
       {mmaV3,

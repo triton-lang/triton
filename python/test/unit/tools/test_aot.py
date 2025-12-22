@@ -63,7 +63,9 @@ def kernel(C, A, B, M, N, K,
   tl.store(c_ptrs, c)
 """
 
-gluon_kernel_src = """
+
+def get_gluon_kernel_src(threads_per_warp):
+    return f"""
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -77,11 +79,12 @@ def kernel(
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr
 ):
-    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[1], threads_per_warp=[64], warps_per_cta=[1], order=[0])
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[1], threads_per_warp=[{threads_per_warp}], warps_per_cta=[1], order=[0])
     offs = gl.arange(0, 64, layout=layout)
     a = gl.load(A + offs)
     gl.store(B + offs, a)
 """
+
 
 test_utils_src = """
 #include <cuda.h>
@@ -90,6 +93,9 @@ test_utils_src = """
 #include <string.h>
 #include <assert.h>
 #include "kernel.h"
+
+// Forward declaration for backward compatibility with CUDA 12.x and 13.x
+CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
 
 static void write_buffer_to_csv(char *filename, int32_t *buffer, int size) {
     FILE *file = fopen(filename, "w");
@@ -148,7 +154,7 @@ int main(int argc, char **argv) {{
   CUresult err = 0;
   cuInit(0);
   cuDeviceGet(&dev, 0);
-  cuCtxCreate(&ctx, 0, dev);
+  cuCtxCreate_v2(&ctx, 0, dev);
   cuMemAlloc(&A, M * K * 2);
   cuMemAlloc(&B, K * N * 2);
   cuMemAlloc(&C, M * N * 4);
@@ -215,34 +221,21 @@ def write_triton_kernels(dir, src, util_src):
     return kernel_path
 
 
-def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path):
+def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path, target=None):
     compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
-
-    subprocess.run(
-        [
-            sys.executable,
-            compiler_path,
-            "-n",
-            kernel_name,
-            "--signature",
-            signature,
-            "--out-name",
-            out_name,
-            "-o",
-            out_path,
-            "-w",
-            str(num_warps),
-            "-g",
-            grid,
-            kernel_path,
-        ],
-        check=True,
-        cwd=dir,
-    )
+    cmd_args = [
+        sys.executable, compiler_path, "-n", kernel_name, "--signature", signature, "--out-name", out_name, "-o",
+        out_path, "-w",
+        str(num_warps), "-g", grid
+    ]
+    if target:
+        cmd_args.extend(["-t", "%s:%s:%i" % (target.backend, target.arch, target.warp_size)])
+    cmd_args.append(kernel_path)
+    subprocess.run(cmd_args, check=True, cwd=dir)
 
 
 # Edge case kernel with no specialization
-def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
+def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, target=None):
     # compile all desired configs
     sig = f"*fp32, *{dtype}, *{dtype}, i32, i32, i32, i32, i32, i32, i32, i32, i32, {BM}, {BN}, {BK}"
     name = f"matmul_{dtype}"
@@ -256,10 +249,11 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
         num_warps=1,
         grid=grid,
         kernel_path=kernel_path,
+        target=target,
     )
 
 
-def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
+def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints, target=None):
     # compile all desired configs
     for ha, hb in ha_hb_hints:
         sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
@@ -274,6 +268,7 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
             num_warps=1,
             grid=grid,
             kernel_path=kernel_path,
+            target=target,
         )
 
 
@@ -492,13 +487,13 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
             assert '.wavefront_size: 64' in amdgcn
 
 
-def test_gluon_kernel():
-    if not is_hip():
-        pytest.skip("Gluon kernel is only supported on HIP")
+@pytest.mark.parametrize("target", [GPUTarget("hip", "gfx942", 64), GPUTarget("hip", "gfx1250", 32)])
+@pytest.mark.skipif(not is_hip(), reason="Requires HIP")
+def test_gluon_kernel(target):
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
-
+        gluon_kernel_src = get_gluon_kernel_src(target.warp_size)
         kernel_path = write_triton_kernels(tmp_dir, gluon_kernel_src, kernel_utils_src)
-        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)
         check_hasco_binary_str(tmp_dir, dtype)

@@ -20,7 +20,6 @@ from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
-
 # ---------------
 # numerics stuff
 # ---------------
@@ -143,6 +142,9 @@ def _build_test_op_cases():
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
         Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(256, 1024, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
         Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
@@ -178,7 +180,7 @@ def _build_test_op_cases():
     ])
     # swiglu together with mxfp8 downcastepilogue
     test_cases.extend([
-        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
+        Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
 
@@ -272,14 +274,14 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
-        if mode != "batched":
-            pytest.skip("NYI. X swizzling only implemented for batched input for now.")
         if not act_dtype_str.startswith("mxfloat8"):
             pytest.skip(f"NYI. X swizzling only implemented for mxfloat8 act for now. Got {act_dtype_str}")
         if not is_persistent:
             pytest.skip("NYI. X swizzling only implemented for persistent case for now.")
         if block_m < 128:
-            pytest.skip("NYI. X swizzling only implemented for block_m = 128 for now.")
+            pytest.skip("X swizzling requires block_m >= 128")
+        if do_gather:
+            pytest.skip("X swizzling requires act to be gathered format")
 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:
@@ -333,8 +335,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
-        scale_hbm_swizzling_args = {},
+        scale_hbm_swizzling_args = {"ragged_metadata": None}, # ragged_metadata will be set in the make_random_tensor function
     )
+
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
         n_slices = n_slices,

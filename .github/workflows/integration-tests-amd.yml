@@ -23,7 +23,7 @@ jobs:
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
               --volume /home/runner/.triton:/github/home/.triton
-          - image: rocm/pytorch:rocm7.0_ubuntu22.04_py3.10_pytorch_release_2.8.0
+          - image: rocm/pytorch-private:rocm7.0_ubuntu22.04_py3.10_pytorch_2.8.0_asan
             runner: ["amd-gfx942"]
             # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
@@ -47,6 +47,7 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.options }}
@@ -167,18 +168,22 @@ jobs:
         run: |
           make test-distributed
       - name: Run asan tests on AMD
-        if: false
+        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
+          TORCH_PATH=$(find /opt -name libcaffe2_nvrtc.so -printf '%h\n')
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TORCH_PATH
+          mv $TORCH_PATH/libamdhip64.so $TORCH_PATH/libamdhip64_bck.so
           export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
-          export LD_LIBRARY_PATH=$(find /usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /opt -wholename *lib/asan/libamdhip64.so -printf '%h\n'):$LD_LIBRARY_PATH
           export CLANG_ASAN_LIB=$(find /opt -name libclang_rt.asan-x86_64.so)
           export HIP_ASAN_LIB=$(find /opt -wholename *lib/asan/libamdhip64.so)
           ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 \
           LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
+          mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
         run: |
           make test-regression

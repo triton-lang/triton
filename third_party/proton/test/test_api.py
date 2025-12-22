@@ -20,7 +20,6 @@ def test_profile_single_session(tmp_path: pathlib.Path):
     proton.activate()
     proton.deactivate()
     proton.finalize()
-    assert session_id0 == 0
     assert temp_file0.exists()
 
     temp_file1 = tmp_path / "test_profile1.hatchet"
@@ -261,28 +260,17 @@ def test_scope_metrics_invalid(tmp_path: pathlib.Path):
     finally:
         proton.finalize()
 
-    assert error is not None and "Metric value type mismatch for valueId 0 (a): current=double, new=uint64_t" in error
+    assert error is not None and "Metric value type mismatch for valueId 0 (a): current=double, new=int64_t" in error
 
 
 def test_scope_properties(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_properties.hatchet"
     proton.start(str(temp_file.with_suffix("")))
-    # Test different scope creation methods
-    # Different from metrics, properties could be str
-    with proton.scope("test0", {"a (pty)": "1"}):
-        pass
-
-    @proton.scope("test1", {"a (pty)": "1"})
-    def foo():
-        pass
-
-    foo()
-
     # Properties do not aggregate
-    proton.enter_scope("test2", metrics={"a (pty)": 1.0})
+    proton.enter_scope("test0", metrics={"a (pty)": 1.0})
     proton.exit_scope()
 
-    proton.enter_scope("test2", metrics={"a (pty)": 1.0})
+    proton.enter_scope("test0", metrics={"a (pty)": 1.0})
     proton.exit_scope()
 
     proton.finalize()
@@ -290,10 +278,8 @@ def test_scope_properties(tmp_path: pathlib.Path):
     with temp_file.open() as f:
         data = json.load(f)
     for child in data[0]["children"]:
-        if child["frame"]["name"] == "test2":
+        if child["frame"]["name"] == "test0":
             assert child["metrics"]["a"] == 1.0
-        elif child["frame"]["name"] == "test0":
-            assert child["metrics"]["a"] == "1"
 
 
 def test_scope_exclusive(tmp_path: pathlib.Path):
@@ -302,8 +288,8 @@ def test_scope_exclusive(tmp_path: pathlib.Path):
     # metric a only appears in the outermost scope
     # metric b only appears in the innermost scope
     # both metrics do not appear in the root scope
-    with proton.scope("test0", metrics={"a (exc)": "1"}):
-        with proton.scope("test1", metrics={"b (exc)": "1"}):
+    with proton.scope("test0", metrics={"a (exc)": 1}):
+        with proton.scope("test1", metrics={"b (exc)": 1}):
             pass
 
     proton.finalize()
@@ -315,11 +301,11 @@ def test_scope_exclusive(tmp_path: pathlib.Path):
     test0_frame = data[0]["children"][0]
     test0_metrics = test0_frame["metrics"]
     assert len(test0_metrics) == 1
-    assert test0_metrics["a"] == "1"
+    assert test0_metrics["a"] == 1
     test1_frame = test0_frame["children"][0]
     test1_metrics = test1_frame["metrics"]
     assert len(test1_metrics) == 1
-    assert test1_metrics["b"] == "1"
+    assert test1_metrics["b"] == 1
 
 
 def test_state(tmp_path: pathlib.Path):
@@ -400,3 +386,17 @@ def test_profile_disable(disable, fresh_knobs, tmp_path: pathlib.Path):
         assert not temp_file.exists()
     else:
         assert temp_file.exists()
+
+
+def test_finalize_within_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_finalize_within_scope.hatchet"
+    session_id0 = proton.start(str(temp_file.with_suffix("")))
+    with proton.scope("test0"):
+        assert proton.context.depth(session_id0) == 1
+        proton.finalize()
+    assert temp_file.exists()
+    temp_file1 = tmp_path / "test_finalize_within_scope1.hatchet"
+    session_id1 = proton.start(str(temp_file1.with_suffix("")))
+    depth = proton.context.depth(session_id1)
+    assert depth == 0
+    proton.finalize()

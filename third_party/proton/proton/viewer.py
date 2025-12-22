@@ -64,8 +64,7 @@ def remove_frames(database: json):
     return new_database
 
 
-def get_raw_metrics(file):
-    database = json.load(file)
+def get_raw_metrics(database) -> tuple[ht.GraphFrame, list[str], list[str], dict]:
     database = remove_frames(database)
     device_info = database.pop(1)
     gf = ht.GraphFrame.from_literal(database)
@@ -259,7 +258,8 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
 
 def read(filename):
     with open(filename, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
+        database = json.load(f)
+        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(database)
         assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         return gf, inclusive_metrics, exclusive_metrics, device_info
@@ -289,7 +289,8 @@ def apply_diff_profile(gf, derived_metrics, diff_file, metrics, include, exclude
 
 def show_metrics(file_name):
     with open(file_name, "r") as f:
-        _, inclusive_metrics, exclusive_metrics, _ = get_raw_metrics(f)
+        database = json.load(f)
+        _, inclusive_metrics, exclusive_metrics, _ = get_raw_metrics(database)
         print("Available inclusive metrics:")
         if inclusive_metrics:
             for raw_metric in inclusive_metrics:
