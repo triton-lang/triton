@@ -1343,10 +1343,10 @@ public:
                    ConversionPatternRewriter &rewriter) const override {
     ValueRange fatPtrFalse = adaptor.getFalseValue();
     ValueRange fatPtrTrue = adaptor.getTrueValue();
-    assert(fatPtrTrue.size() == 1 ||
-           fatPtrTrue.size() == 2 && "expected 1 or 2 element fatPtrTrue");
-    assert(fatPtrFalse.size() == 1 ||
-           fatPtrFalse.size() == 2 && "expected 1 or 2 element fatPtrTrue");
+    assert((fatPtrTrue.size() == 1 || fatPtrTrue.size() == 2) &&
+           "expected 1 or 2 element fatPtrTrue");
+    assert((fatPtrFalse.size() == 1 || fatPtrFalse.size() == 2) &&
+           "expected 1 or 2 element fatPtrFalse");
     if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
       return success();
     if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
