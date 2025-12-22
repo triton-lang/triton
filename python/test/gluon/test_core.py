@@ -695,7 +695,7 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
             num_warps=num_warps,
             num_ctas=num_ctas,
         )
-    except triton.runtime.errors.OutOfResource:
+    except triton.runtime.errors.OutOfResources:
         pytest.skip("Too much shared memory required")
 
     try:
