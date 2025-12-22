@@ -632,7 +632,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast):
     acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                              cga_layout=cga_layout_c)
 
-    tmem_shape = (min(BLOCK_M // ctas_per_cga[0], 128), min(BLOCK_N // ctas_per_cga[1], 256))
+    tmem_shape = (min(BLOCK_M // ctas_per_cga[0], 128), BLOCK_N // ctas_per_cga[1])
     acc_tmem_layout = TensorMemoryLayout(
         block=tmem_shape,
         col_stride=1,
