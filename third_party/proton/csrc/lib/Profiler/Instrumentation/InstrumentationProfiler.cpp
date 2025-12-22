@@ -19,9 +19,6 @@ namespace proton {
 constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024;           // 64MB
 constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
 
-thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
-    std::map<Data *, size_t>(); // Initialize the static member variable
-
 InstrumentationProfiler::~InstrumentationProfiler() {}
 
 void InstrumentationProfiler::doStart() {
@@ -208,11 +205,11 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
 
   auto dataSet = getDataSet();
   const auto &functionName = functionNames[functionId];
-  if (dataScopeIdMap.empty()) {
+  if (dataEntryIdMap.empty()) {
     for (auto &data : dataSet) {
-      auto scopeId = Scope::getNewScopeId();
-      data->addOp(scopeId, functionName);
-      dataScopeIdMap[data] = scopeId;
+      auto entryId = Scope::getNewScopeId();
+      data->addOp(functionName);
+      dataEntryIdMap[data] = entryId;
     }
   }
 
@@ -249,13 +246,13 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
               for (auto *data : dataSet) {
-                auto kernelId = dataScopeIdMap[data];
-                auto scopeId = data->addOp(kernelId, contexts);
+                auto entryId = dataEntryIdMap[data];
+                auto scopeId = data->addOp(entryId, contexts);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
-                        normalizedDuration, kernelId, functionName,
+                        normalizedDuration, entryId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
                         static_cast<uint64_t>(
                             reinterpret_cast<uintptr_t>(device)),
@@ -268,7 +265,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         }
       });
 
-  dataScopeIdMap.clear();
+  dataEntryIdMap.clear();
 }
 
 void InstrumentationProfiler::doAddMetrics(

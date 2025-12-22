@@ -100,8 +100,7 @@ void processActivityKernel(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    size_t externId, 
-    const roctracer_record_t *activity) {
+    size_t externId, const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
   bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);

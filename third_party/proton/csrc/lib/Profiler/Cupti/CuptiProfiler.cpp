@@ -426,10 +426,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      auto correlationId =
-          processActivity(profiler.correlation.corrIdToExternId,
-                          profiler.correlation.externIdToState,
-                          externIdToStateCache, activity);
+      auto correlationId = processActivity(
+          profiler.correlation.corrIdToExternId,
+          profiler.correlation.externIdToState, externIdToStateCache, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -673,15 +672,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           graphNodeIdToScopes.reserve(graphState.numNodes * 2);
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
+            auto *dataPtr = data;
             auto dataEntryIt = std::find_if(
                 dataEntryIds.begin(), dataEntryIds.end(),
-                [&](const auto &entry) { return entry.first == data; });
+                [dataPtr](const auto &entry) { return entry.first == dataPtr; });
             if (dataEntryIt == dataEntryIds.end())
               continue;
-            auto baseEntryId = data->addOp(dataEntryIt->second,
-                                           {Context{GraphState::captureTag}});
+            auto baseEntryId = dataPtr->addOp(dataEntryIt->second,
+                                              {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
-              const auto nodeEntryId = data->addOp(baseEntryId, callpath);
+              const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
                     graphNodeIdToScopes.try_emplace(nodeId);
@@ -690,7 +690,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                       graphState.apiNodeIds.find(nodeId) !=
                       graphState.apiNodeIds.end();
                 }
-                nodeIt->second.setEntryId(data, nodeEntryId);
+                nodeIt->second.setEntryId(dataPtr, nodeEntryId);
               }
             }
           }
@@ -702,11 +702,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      auto externId = threadState.scopeStack.back().scopeId;
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        auto scope = threadState.scopeStack.back();
+        auto dataEntryIds = profiler.addOpToDataSet(scope);
         // XXX: Conservatively stop every GPU kernel for now
-        pImpl->pcSampling.stop(callbackData->context, externId,
-                               profiler.correlation.isApiExternId(externId));
+        pImpl->pcSampling.stop(
+            callbackData->context, dataEntryIds,
+            profiler.correlation.isApiExternId(scope.scopeId));
       }
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
@@ -720,11 +722,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         auto graphRef = pImpl->graphStates.find(graphExecId);
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
+          auto scope = threadState.scopeStack.back();
+          auto dataEntryIds = profiler.addOpToDataSet(scope);
           std::map<Data *,
                    std::vector<std::pair</*isAPI=*/bool, /*entryId=*/size_t>>>
               metricNodeScopes;
           auto &graphExec = graphRef.value().get();
-          auto &externIdState = profiler.correlation.externIdToState[externId];
+          auto &externIdState =
+              profiler.correlation.externIdToState[scope.scopeId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
             auto nodeIt = externIdState.graphNodeIdToState.find(nodeId);
             if (nodeIt == externIdState.graphNodeIdToState.end()) {
@@ -746,7 +751,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->emitMetricRecords(recordPtr, drained.second);
             });
           }
-          pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
+          pImpl->pendingGraphQueue.push(scope.scopeId, metricNodeScopes,
                                         metricNodeCount);
         }
       }

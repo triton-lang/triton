@@ -46,8 +46,7 @@ public:
 
   struct TraceEvent {
     TraceEvent() = default;
-    TraceEvent(size_t id, size_t contextId)
-        : id(id), contextId(contextId) {}
+    TraceEvent(size_t id, size_t contextId) : id(id), contextId(contextId) {}
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
@@ -108,9 +107,7 @@ public:
     return nextEventId++;
   }
 
-  bool hasEvent(size_t eventId) {
-    return eventId < traceEvents.size();
-  }
+  bool hasEvent(size_t eventId) { return eventId < traceEvents.size(); }
 
   TraceEvent &getEvent(size_t eventId) {
     if (!hasEvent(eventId)) {
@@ -159,9 +156,7 @@ size_t TraceData::addOp(size_t eventId, const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   // Add a new context under it and update the context
   auto &event = trace->getEvent(eventId);
-  auto contexts = trace->getContexts(event.contextId);
-  auto parentId = trace->addContexts(contexts, event.contextId);
-  trace->addContexts(contexts, parentId);
+  trace->addContexts(contexts, event.contextId);
   return eventId;
 }
 

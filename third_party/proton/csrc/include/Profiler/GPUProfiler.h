@@ -62,8 +62,9 @@ public:
           return &singleEntryId;
         if (multiDataEntryIds.empty())
           return nullptr;
-        auto it = std::find_if(multiDataEntryIds.begin(), multiDataEntryIds.end(),
-                               [data](const auto &pair) { return pair.first == data; });
+        auto it = std::find_if(
+            multiDataEntryIds.begin(), multiDataEntryIds.end(),
+            [data](const auto &pair) { return pair.first == data; });
         if (it == multiDataEntryIds.end())
           return nullptr;
         return &it->second;
@@ -94,8 +95,7 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
-  std::vector<std::pair<Data *, size_t>>
-  addOpToDataSet(const Scope &scope) {
+  std::vector<std::pair<Data *, size_t>> addOpToDataSet(const Scope &scope) {
     auto dataSet = this->getDataSet();
     std::vector<std::pair<Data *, size_t>> dataEntryIds;
     dataEntryIds.reserve(dataSet.size());

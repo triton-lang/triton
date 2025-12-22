@@ -109,7 +109,7 @@ public:
 
   void start(CUcontext context);
 
-  void stop(CUcontext context, uint64_t externId, bool isAPI);
+  void stop(CUcontext context, std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI);
 
   void finalize(CUcontext context);
 
@@ -122,7 +122,7 @@ private:
 
   CubinData *getCubinData(uint64_t cubinCrc);
 
-  void processPCSamplingData(ConfigureData *configureData, uint64_t externId,
+  void processPCSamplingData(ConfigureData *configureData, std::vector<std::pair<Data *, size_t>> dataEntryIds,
                              bool isAPI);
 
   ThreadSafeMap<uint32_t, ConfigureData> contextIdToConfigureData;

@@ -45,11 +45,11 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     for (auto data : getDataSet()) {
-      auto scopeId = data->addOp(scope.scopeId, scope.name);
-      dataScopeIdMap[data] = scopeId;
+      auto entryId = data->addOp(scope.name);
+      dataEntryIdMap[data] = entryId;
     }
   }
-  void stopOp(const Scope &scope) override { dataScopeIdMap.clear(); }
+  void stopOp(const Scope &scope) override { dataEntryIdMap.clear(); }
 
 private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
@@ -71,7 +71,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  static thread_local std::map<Data *, size_t> dataScopeIdMap;
+  std::map<Data *, size_t> dataEntryIdMap;
 };
 
 } // namespace proton
