@@ -87,7 +87,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
     y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
     x_flex_scale = load_scale(XFlex)
-    for k in tl.static_range(0, K):
+    for k in (tl.static_range if K <= 8 else tl.range)(0, K):
         x_ptrs = X + k * stride_xr + offs_s0[:, None] * stride_x0 + offs_x_s1[None, :] * stride_x1
         mask = valid_s0[:, None] & valid_x_s1[None, :]
         if not IS_MASK_NONE:
