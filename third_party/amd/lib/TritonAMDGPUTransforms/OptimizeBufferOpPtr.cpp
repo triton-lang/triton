@@ -140,8 +140,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto blockArgRangeValue = blockArgRange->getValue().getValue();
     auto stepRangeValue = stepRange->getValue().getValue();
 
-    // checking if arithmetic operatin overflows.
-    // Max/min values for now are equalt to 32 bit unsigned int max/min values.
+    // checking if arithmetic operation overflows.
+    // Max/min values for now are equal to 32 bit unsigned int max/min values.
     auto dtypeByteWidth = elemBitwidth / 8;
     assert(dtypeByteWidth > 0);
     int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
