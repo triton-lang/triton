@@ -47,7 +47,7 @@ jobs:
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -64,7 +64,7 @@ jobs:
         name: Restore cache of ccache and Triton compilation artifacts
         id: restore-build-cache
         if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.ccache
@@ -128,7 +128,7 @@ jobs:
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.ccache
