@@ -156,6 +156,17 @@ void SessionManager::removeSession(size_t sessionId) {
   if (!hasSession(sessionId)) {
     return;
   }
+  // Context source can be safely cleared here but not deactivation.
+  // Context source of each session is still sort of active after deactivation,
+  // For example, if we have
+  // ```Python
+  //   proton.deactivate_session(session0)
+  //   with proton.scope("A"):
+  //     proton.activate_session(session0)
+  // ```
+  // session0 should be aware of scope "A"'s enter and exit, otherwise the
+  // context stack will be imbalanced.
+  sessions[sessionId]->contextSource->clear();
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
   sessionActive.erase(sessionId);

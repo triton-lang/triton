@@ -47,7 +47,9 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeState {
-      bool isApiExternId{false};
+      // If the node is launched as a metric kernel, ignore it's timing data.
+      bool isMetricNode{false};
+      bool isApiNode{false};
 
       void setEntryId(Data *data, size_t entryId) {
         dataToEntryId.insertOrAssign(data, entryId);

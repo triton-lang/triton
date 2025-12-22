@@ -117,11 +117,11 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, {0}, barrierCGALayout);
     Type barrierMemDescType = ttg::MemDescType::get(
-        {createTokenOp.getNumBuffers(), 1}, builder.getI64Type(),
+        {createTokenOp.getNumBuffers(), numCTAs}, builder.getI64Type(),
         barrierEncoding, sharedMemorySpace,
         /*mutableMemory=*/true);
     Type singleBarrierMemDescType =
-        ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+        ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
     // These are created prior to warp_specialize.
     Value bufferFullArray = mlir::triton::gpu::LocalAllocOp::create(
