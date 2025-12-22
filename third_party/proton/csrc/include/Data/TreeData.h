@@ -20,20 +20,20 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  size_t addOp(size_t scopeId, const std::string &name) override;
+  size_t addOp(const std::string &name) override;
 
-  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
+  size_t addOp(size_t contextId, const std::vector<Context> &contexts) override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
+  void addMetric(size_t contextId, std::shared_ptr<Metric> metric) override;
 
   // Override to optimize addOp + addMetric calls
   // 1. to avoid double locking
-  // 2. to avoid looking up scopeId -> contextId twice
-  void addOpAndMetric(size_t scopeId, const std::string &opName,
+  // 2. to avoid looking up contextId -> contextId twice
+  void addOpAndMetric(size_t contextId, const std::string &opName,
                       std::shared_ptr<Metric> metric) override;
 
   void
-  addMetrics(size_t scopeId,
+  addMetrics(size_t contextId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
   std::vector<uint8_t> toMsgPack() const override;
@@ -41,8 +41,6 @@ public:
   std::string toJsonString() const override;
 
   void clear() override;
-
-  void clearCache() override;
 
 protected:
   // ScopeInterface

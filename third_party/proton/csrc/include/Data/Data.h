@@ -19,40 +19,41 @@ public:
   virtual ~Data() = default;
 
   /// Add an op to the data.
-  /// If scopeId is already present, add an op under/inside it.
-  /// Otherwise obtain the current context and append opName to it if opName is
-  /// not empty.
-  virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
+  /// Otherwise obtain the current context and append `opName` to it if `opName`
+  /// is not empty. Return the entry id of the added op.
+  virtual size_t addOp(const std::string &opName = {}) = 0;
 
   /// Add an op with custom contexts to the data.
   /// This is often used when context source is not available or when
   /// the profiler itself needs to supply the contexts, such as
   /// instruction samples in GPUs whose contexts are
   /// synthesized from the instruction address (no unwinder).
-  virtual size_t addOp(size_t scopeId,
+  /// `entryId` is an anchor node to indicate where to add the new contexts.
+  /// Return the new entry id of the added op, which may be different from
+  /// `entryId`.
+  virtual size_t addOp(size_t entryId,
                        const std::vector<Context> &contexts) = 0;
 
   /// Add a single metric to the data.
-  virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
+  virtual void addMetric(size_t entryId, std::shared_ptr<Metric> metric) = 0;
 
   /// Add an op and a metric with one call.
   /// The default implementation forwards to addOp + addMetric.
-  virtual void addOpAndMetric(size_t scopeId, const std::string &opName,
+  virtual void addOpAndMetric(size_t entryId, const std::string &opName,
                               std::shared_ptr<Metric> metric) {
-    scopeId = this->addOp(scopeId, opName);
-    this->addMetric(scopeId, metric);
+    entryId = this->addOp(entryId, {Context(opName)});
+    this->addMetric(entryId, metric);
   }
 
   /// Add multiple metrics to the data.
+  /// This metric is only used for flexible metrics passed from the outside.
+  /// Note that the index here is `scopeId` instead of `entryId`.
   virtual void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Clear all non-persistent data.
+  /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;
-
-  /// Clear caching data only.
-  virtual void clearCache() = 0;
 
   /// To Json
   virtual std::string toJsonString() const = 0;

@@ -46,8 +46,8 @@ public:
 
   struct TraceEvent {
     TraceEvent() = default;
-    TraceEvent(size_t id, size_t scopeId, size_t contextId)
-        : id(id), scopeId(scopeId), contextId(contextId) {}
+    TraceEvent(size_t id, size_t contextId)
+        : id(id), contextId(contextId) {}
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
@@ -62,24 +62,24 @@ public:
                                 "ROOT");
   }
 
-  size_t addContext(const std::vector<Context> &contexts, size_t parentId) {
+  size_t addContext(const Context &context, size_t parentId) {
+    if (traceContextMap[parentId].hasChild(context)) {
+      return traceContextMap[parentId].getChild(context);
+    }
+    auto id = nextTreeContextId++;
+    traceContextMap.try_emplace(id, id, parentId, context.name);
+    traceContextMap[parentId].addChild(context, id);
+    return id;
+  }
+
+  size_t addContexts(const std::vector<Context> &contexts, size_t parentId) {
     for (const auto &context : contexts) {
       parentId = addContext(context, parentId);
     }
     return parentId;
   }
 
-  size_t addContext(const Context &context, size_t parentId) {
-    if (traceContextMap[parentId].hasChild(context)) {
-      return traceContextMap[parentId].getChild(context);
-    }
-    auto id = nextContextId++;
-    traceContextMap.try_emplace(id, id, parentId, context.name);
-    traceContextMap[parentId].addChild(context, id);
-    return id;
-  }
-
-  size_t addContext(const std::vector<Context> &indices) {
+  size_t addContexts(const std::vector<Context> &indices) {
     auto parentId = TraceContext::RootId;
     for (auto index : indices) {
       parentId = addContext(index, parentId);
@@ -103,33 +103,28 @@ public:
     return contexts;
   }
 
-  void addEvent(size_t scopeId, size_t contextId) {
-    if (scopeIdEventIdMap.count(scopeId))
-      return;
-    scopeIdEventIdMap[scopeId] = nextEventId;
-    traceEvents.emplace_back(nextEventId, scopeId, contextId);
-    nextEventId++;
+  size_t addEvent(size_t contextId) {
+    traceEvents.emplace_back(nextEventId, contextId);
+    return nextEventId++;
   }
 
-  bool hasEvent(size_t scopeId) {
-    return scopeIdEventIdMap.find(scopeId) != scopeIdEventIdMap.end();
+  bool hasEvent(size_t eventId) {
+    return eventId < traceEvents.size();
   }
 
-  TraceEvent &getEvent(size_t scopeId) {
-    if (!hasEvent(scopeId)) {
+  TraceEvent &getEvent(size_t eventId) {
+    if (!hasEvent(eventId)) {
       throw std::runtime_error("Event not found");
     }
-    return traceEvents[scopeIdEventIdMap[scopeId]];
+    return traceEvents[eventId];
   }
 
   std::vector<TraceEvent> &getEvents() { return traceEvents; }
 
 private:
-  size_t nextContextId = TraceContext::RootId + 1;
+  size_t nextTreeContextId = TraceContext::RootId + 1;
   size_t nextEventId = 0;
   std::vector<TraceEvent> traceEvents;
-  // scope id -> event id
-  std::unordered_map<size_t, size_t> scopeIdEventIdMap;
   // tree node id -> trace context
   std::map<size_t, TraceContext> traceContextMap;
 };
@@ -142,68 +137,39 @@ void TraceData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto contextId = trace->addContext(contexts);
+  auto contextId = trace->addContexts(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
-void TraceData::exitScope(const Scope &scope) {}
+void TraceData::exitScope(const Scope &scope) {
+  scopeIdToContextId.erase(scope.scopeId);
+}
 
-size_t TraceData::addOp(size_t scopeId, const std::string &name) {
+size_t TraceData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> contexts;
-    if (contextSource != nullptr)
-      contexts = contextSource->getContexts();
-    // If name is empty, this is a placeholder event. Add an op under the
-    // current context
-    if (!name.empty())
-      contexts.emplace_back(name);
-    scopeIdToContextId[scopeId] = trace->addContext(contexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        trace->addContext(Context(name), scopeIdIt->second);
-  }
+  std::vector<Context> contexts;
+  contexts = contextSource->getContexts();
   if (!name.empty()) // not a placeholder event
-    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
-  return scopeId;
+    contexts.emplace_back(name);
+  auto contextId = trace->addContexts(contexts);
+  return trace->addEvent(contextId);
 }
 
-size_t TraceData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
+size_t TraceData::addOp(size_t eventId, const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> currentContexts;
-    if (contextSource != nullptr)
-      currentContexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!currentContexts.empty())
-      std::merge(currentContexts.begin(), currentContexts.end(),
-                 contexts.begin(), contexts.end(), currentContexts.begin());
-    scopeIdToContextId[scopeId] = trace->addContext(currentContexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        trace->addContext(contexts, scopeIdIt->second);
-  }
-  if (!contexts.empty()) // not a placeholder event
-    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
-  return scopeId;
+  // Add a new context under it and update the context
+  auto &event = trace->getEvent(eventId);
+  auto contexts = trace->getContexts(event.contextId);
+  auto parentId = trace->addContexts(contexts, event.contextId);
+  trace->addContexts(contexts, parentId);
+  return eventId;
 }
 
-void TraceData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
+void TraceData::addMetric(size_t eventId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end())
+  if (!trace->hasEvent(eventId))
     return;
-  if (!trace->hasEvent(scopeId))
-    return;
-  auto &event = trace->getEvent(scopeId);
+  auto &event = trace->getEvent(eventId);
   if (event.metrics.find(metric->getKind()) == event.metrics.end())
     event.metrics.emplace(metric->getKind(), metric);
   else
@@ -211,16 +177,11 @@ void TraceData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
 }
 
 void TraceData::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
+  if (!trace->hasEvent(eventId))
     return;
-  auto contextId = scopeIdIt->second;
-  if (!trace->hasEvent(scopeId))
-    return;
-  auto &event = trace->getEvent(scopeId);
+  auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
       event.flexibleMetrics.emplace(metricName,
@@ -252,14 +213,7 @@ void TraceData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto newTrace = std::make_unique<Trace>();
   trace.swap(newTrace);
-  scopeIdToContextId.clear();
 }
-
-void TraceData::clearCache() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  scopeIdToContextId.clear();
-}
-
 namespace {
 
 // Structure to pair CycleMetric with its context for processing

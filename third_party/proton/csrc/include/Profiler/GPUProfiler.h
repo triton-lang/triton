@@ -32,6 +32,7 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
+    std::vector<std::pair<Data *, size_t>> dataEntryIds;
     // If graphNodeIdToScopes is empty, this externId is non-graph launch.
     // For non-graph launches, we only need to track whether the externId
     // itself is API-originated.
@@ -42,48 +43,48 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    struct GraphNodeScopes {
+    struct GraphNodeState {
       bool isApiExternId{false};
 
-      void setScopeId(Data *data, size_t scopeId) {
+      void setEntryId(Data *data, size_t entryId) {
         if (singleData == nullptr || singleData == data) {
           singleData = data;
-          singleScopeId = scopeId;
+          singleEntryId = entryId;
           return;
         }
-        if (multiDataToScopeId.empty())
-          multiDataToScopeId.reserve(2);
-        multiDataToScopeId[data] = scopeId;
+        if (multiDataEntryIds.empty())
+          multiDataEntryIds.reserve(2);
+        multiDataEntryIds.push_back({data, entryId});
       }
 
-      const size_t *findScopeId(Data *data) const {
+      const size_t *findEntryId(Data *data) const {
         if (singleData == data)
-          return &singleScopeId;
-        if (multiDataToScopeId.empty())
+          return &singleEntryId;
+        if (multiDataEntryIds.empty())
           return nullptr;
-        auto it = multiDataToScopeId.find(data);
-        if (it == multiDataToScopeId.end())
+        auto it = std::find_if(multiDataEntryIds.begin(), multiDataEntryIds.end(),
+                               [data](const auto &pair) { return pair.first == data; });
+        if (it == multiDataEntryIds.end())
           return nullptr;
         return &it->second;
       }
 
-      template <typename FnT> void forEachScopeId(FnT &&fn) const {
+      template <typename FnT> void forEachEntryId(FnT &&fn) const {
         if (singleData != nullptr)
-          fn(singleData, singleScopeId);
-        for (const auto &[data, scopeId] : multiDataToScopeId)
-          fn(data, scopeId);
+          fn(singleData, singleEntryId);
+        for (const auto &[data, entryId] : multiDataEntryIds)
+          fn(data, entryId);
       }
 
-    private:
       // In most cases, a graph node is only associated with one Data object.
       // So we optimize the hot path here.
       Data *singleData{nullptr};
-      size_t singleScopeId{0};
-      std::unordered_map<Data *, size_t> multiDataToScopeId;
+      size_t singleEntryId{0};
+      std::vector<std::pair<Data *, size_t>> multiDataEntryIds{};
     };
 
-    // graphNodeId -> (per-Data scopeId + API-originated flag)
-    std::unordered_map<uint64_t, GraphNodeScopes> graphNodeIdToScopes;
+    // graphNodeId -> (per-Data entry id + API-originated flag)
+    std::unordered_map<uint64_t, GraphNodeState> graphNodeIdToState;
   };
 
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
@@ -93,16 +94,23 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
+  std::vector<std::pair<Data *, size_t>>
+  addOpToDataSet(const Scope &scope) {
+    auto dataSet = this->getDataSet();
+    std::vector<std::pair<Data *, size_t>> dataEntryIds;
+    dataEntryIds.reserve(dataSet.size());
+    for (auto *data : dataSet) {
+      dataEntryIds.push_back({data, data->addOp(scope.name)});
+    }
+    return dataEntryIds;
+  }
+
   // OpInterface
   void startOp(const Scope &scope) override {
-    this->correlation.pushExternId(scope.scopeId);
     this->threadState.scopeStack.push_back(scope);
-    for (auto data : getDataSet())
-      data->addOp(scope.scopeId, scope.name);
   }
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
-    this->correlation.popExternId();
   }
 
   // Profiler
@@ -110,10 +118,10 @@ protected:
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
   virtual void doAddMetrics(
-      size_t scopeId,
+      size_t entryId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override {
-    pImpl->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
+    pImpl->doAddMetrics(entryId, scalarMetrics, tensorMetrics);
   }
 
   struct ThreadState {
@@ -163,30 +171,25 @@ protected:
     CorrIdToExternIdMap corrIdToExternId;
     // Mapping from an external id to graph-node scopes + API-extern-id flags.
     ExternIdToStateMap externIdToState;
-    static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
 
-    void submit(const uint64_t correlationId) {
+    void submit(uint64_t correlationId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
     }
 
-    void complete(const uint64_t correlationId) {
+    void complete(uint64_t correlationId) {
       atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
-    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
-
-    void popExternId() { externIdQueue.pop_front(); }
-
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t numNodes) {
-      if (externIdQueue.empty())
-        return;
-      const auto externId = externIdQueue.back();
+    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
+                   const std::vector<std::pair<Data *, size_t>> &dataEntryIds) {
       corrIdToExternId.insert(correlationId, externId);
-      externIdToState.upsert(
-          externId, [&](ExternIdState &state) { state.numNodes = numNodes; });
+      externIdToState.upsert(externId, [&](ExternIdState &state) {
+        state.numNodes = numNodes;
+        state.dataEntryIds = dataEntryIds;
+      });
     }
 
     bool isApiExternId(size_t externId) const {

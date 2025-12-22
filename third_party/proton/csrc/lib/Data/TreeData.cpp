@@ -650,81 +650,40 @@ void TreeData::enterScope(const Scope &scope) {
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
-void TreeData::exitScope(const Scope &scope) {}
-
-size_t TreeData::addOp(size_t scopeId, const std::string &name) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> contexts;
-    if (contextSource != nullptr)
-      contexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!name.empty())
-      contexts.emplace_back(name);
-    scopeIdToContextId[scopeId] = tree->addNode(contexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        tree->addNode(Context(name), scopeIdIt->second);
-  }
-  return scopeId;
+void TreeData::exitScope(const Scope &scope) {
+  scopeIdToContextId.erase(scope.scopeId);
 }
 
-size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
+size_t TreeData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> currentContexts;
-    if (contextSource != nullptr)
-      currentContexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!currentContexts.empty())
-      std::merge(currentContexts.begin(), currentContexts.end(),
-                 contexts.begin(), contexts.end(), currentContexts.begin());
-    scopeIdToContextId[scopeId] = tree->addNode(currentContexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] = tree->addNode(contexts, scopeIdIt->second);
-  }
-  return scopeId;
+  std::vector<Context> contexts;
+  if (contextSource != nullptr)
+    contexts = contextSource->getContexts();
+  if (!name.empty())
+    contexts.emplace_back(name);
+  return tree->addNode(contexts);
 }
 
-void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
+size_t TreeData::addOp(size_t contextId, const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
+  return tree->addNode(contexts, contextId);
+}
+
+void TreeData::addMetric(size_t contextId, std::shared_ptr<Metric> metric) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
   tree->upsertMetric(contextId, metric);
 }
 
-void TreeData::addOpAndMetric(size_t scopeId, const std::string &opName,
+void TreeData::addOpAndMetric(size_t contextId, const std::string &opName,
                               std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-
-  auto contextId = scopeIdIt->second;
   contextId = tree->addNode(Context(opName), contextId);
   tree->upsertMetric(contextId, metric);
 }
 
 void TreeData::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
@@ -736,12 +695,6 @@ void TreeData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto newTree = std::make_unique<Tree>();
   tree.swap(newTree);
-  scopeIdToContextId.clear();
-}
-
-void TreeData::clearCache() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  scopeIdToContextId.clear();
 }
 
 void TreeData::dumpHatchet(std::ostream &os) const {
@@ -763,7 +716,7 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::Hatchet) {
     dumpHatchet(os);
   } else {
-    std::logic_error("Output format not supported");
+    throw std::logic_error("Output format not supported");
   }
 }
 
