@@ -64,6 +64,10 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     // declarations only, and are defined in a different compile unit, so mark
     // them appropriately in `subprogramFlags`, and set an empty
     // `compileUnitAttr`.
+    bool extractDILocalVar =
+        triton::tools::getBoolEnv("LLVM_EXTRACT_DI_LOCAL_VARIABLES");
+    bool disableLineInfo =
+        triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
     DistinctAttr recId; // Recursive ID to mark the DICompileUnitAttr and
                         // DISubprogramAttr that are recursively defined
     auto subprogramFlags = LLVM::DISubprogramFlags::Optimized;
@@ -74,11 +78,11 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
             recId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
             /*isOptimized=*/true,
-            triton::tools::getBoolEnv("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
+            extractDILocalVar
                 ? LLVM::DIEmissionKind::Full
                 : LLVM::DIEmissionKind::
                       LineTablesOnly); // DIEmissionKind::Full is required by
-                                       // emiting ptx with dbg-metadata
+                                       // emitting ptx with dbg-metadata
                                        // (otherwise assertion fail)
       }
       subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
@@ -87,7 +91,6 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     }
 
     llvm::SmallVector<mlir::LLVM::DITypeAttr> types;
-    llvm::SmallVector<std::pair<unsigned, LLVM::DITypeAttr>> typeMap;
     mlir::DataLayout dl(
         funcOp.getOperation()->getParentOfType<mlir::ModuleOp>());
     for (auto resTy : funcOp.getResultTypes()) {
@@ -99,25 +102,24 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       types.push_back(mlir::LLVM::DINullTypeAttr::get(context));
 
     // Only pointer type and scalar types are supported for now
+    OpBuilder builder(context);
     for (auto [idx, inTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
       if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
         auto pointeeTy =
             funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
         auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
-        // If there is no valid pointee type for this function argument, skip
-        // it.
-        if (pointeeTy) {
-          LLVM::DITypeAttr tyAttr =
-              convertPtrType(context, ptrTy, pointeeTy.getValue(), sizeInBits);
-          types.push_back(tyAttr);
-          typeMap.push_back({idx, tyAttr});
-        }
+        // If no valid pointee type for this function argument, use null type as
+        // unknown type.
+        mlir::Type elTy =
+            pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
+        LLVM::DITypeAttr tyAttr =
+            convertPtrType(context, ptrTy, elTy, sizeInBits);
+        types.push_back(tyAttr);
       } else {
         // Here assume remaining inTys are only scalar types
         assert(inTy.isIntOrFloat() && "Expected scalar types");
         LLVM::DITypeAttr tyAttr = convertType(context, inTy);
         types.push_back(tyAttr);
-        typeMap.push_back({idx, tyAttr});
       }
     }
 
@@ -126,48 +128,13 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
 
     StringAttr funcNameAttr = funcOp.getNameAttr();
 
+    bool isRecSelf = !disableLineInfo && extractDILocalVar;
     auto id = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
-        context, recId, /*isRecSelf=*/true, id, compileUnitAttr, fileAttr,
-        funcNameAttr, funcNameAttr, fileAttr,
+        context, recId, isRecSelf, id, compileUnitAttr, fileAttr, funcNameAttr,
+        funcNameAttr, fileAttr,
         /*line=*/line, /*scopeline=*/line, subprogramFlags, subroutineTypeAttr,
         /*retainNodes=*/{}, /*annotations=*/{});
-
-    OpBuilder builder(context);
-    builder.setInsertionPointToStart(&funcOp.getBody().front());
-    llvm::SmallVector<mlir::LLVM::DINodeAttr> retainedNodes;
-
-    // Handle function arguments and add them to retainedNodes:
-    // 1. Create DebugValueOp for each arg
-    // 2. Add each arg as DILocalVariableAttr to retainedNodes
-    for (auto [idx, argTypeAttr] : typeMap) {
-      BlockArgument arg = funcOp.getArgument(idx);
-
-      Location argLoc = arg.getLoc();
-      auto nameLoc = dyn_cast<NameLoc>(argLoc);
-      if (!nameLoc)
-        continue;
-      Location childLoc = nameLoc.getChildLoc();
-      StringAttr nameAttr = nameLoc.getName();
-
-      auto localScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
-      auto diFlag = LLVM::DIFlags::Zero;
-      auto argVarAttr = LLVM::DILocalVariableAttr::get(
-          context, localScopeAttr, nameAttr, fileAttr, line, idx + 1, 0,
-          argTypeAttr, diFlag);
-
-      auto exprAttr = LLVM::DIExpressionAttr::get(context);
-      (void)LLVM::DbgValueOp::create(builder, childLoc, arg, argVarAttr,
-                                     exprAttr);
-
-      retainedNodes.push_back(argVarAttr);
-    }
-
-    id = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
-    subprogramAttr = LLVM::DISubprogramAttr::get(
-        context, recId, /*isRecSelf=*/false, id, compileUnitAttr, fileAttr,
-        funcNameAttr, funcNameAttr, fileAttr, line, line, subprogramFlags,
-        subroutineTypeAttr, retainedNodes, /*annotations=*/{});
 
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }

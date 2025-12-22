@@ -10,6 +10,23 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
+  static void handleArgPtrDatatype(triton::FuncOp funcOp,
+                                   LLVM::LLVMFuncOp &llvmFuncOp) {
+
+    // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
+    // the pointee datatype information.
+    // This function add back the pointee datatype information to arg attribute.
+    FunctionType fty = funcOp.getFunctionType();
+    for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
+      auto argType = fty.getInput(i);
+      if (auto argPtrType = dyn_cast<triton::PointerType>(argType)) {
+        auto argDType = argPtrType.getPointeeType();
+        llvmFuncOp.setArgAttr(i, "tt.pointee_type",
+                              mlir::TypeAttr::get(argDType));
+      }
+    }
+  }
+
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -24,6 +41,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
 
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);

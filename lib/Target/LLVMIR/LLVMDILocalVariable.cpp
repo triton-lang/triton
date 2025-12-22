@@ -126,9 +126,6 @@ struct LLVMDILocalVariablePass
           llvm::sys::path::parent_path(inputFilePath));
     }
 
-    auto subroutineTypeAttr =
-        LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
-
     DistinctAttr distinctId;
     auto subprogramFlags = LLVM::DISubprogramFlags::Optimized;
     if (!funcOp.isExternal()) {
@@ -144,13 +141,51 @@ struct LLVMDILocalVariablePass
       compileUnitAttr = {};
     }
 
+    llvm::SmallVector<mlir::LLVM::DITypeAttr> types;
+    mlir::DataLayout dl(
+        funcOp.getOperation()->getParentOfType<mlir::ModuleOp>());
+    for (auto resTy : funcOp.getResultTypes()) {
+      LLVM::DITypeAttr tyAttr = convertType(context, resTy);
+      types.push_back(tyAttr);
+    }
+    // If no return type then add a null type as a place holder for that.
+    if (types.empty())
+      types.push_back(mlir::LLVM::DINullTypeAttr::get(context));
+
+    // Only pointer type and scalar types are supported for now
+    OpBuilder builder(context);
+    for (auto [idx, inTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
+      if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
+        auto pointeeTy =
+            funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
+        auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
+        // If no valid pointee type for this function argument, skip it.
+        mlir::Type elTy =
+            pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
+        LLVM::DITypeAttr tyAttr =
+            convertPtrType(context, ptrTy, elTy, sizeInBits);
+        types.push_back(tyAttr);
+      } else {
+        // Here assume remaining inTys are only scalar types
+        assert(inTy.isIntOrFloat() && "Expected scalar types");
+        LLVM::DITypeAttr tyAttr = convertType(context, inTy);
+        types.push_back(tyAttr);
+      }
+    }
+
+    auto subroutineTypeAttr = LLVM::DISubroutineTypeAttr::get(
+        context, llvm::dwarf::DW_CC_normal, types);
+
     StringAttr funcNameAttr = funcOp.getNameAttr();
     // Note that scopeline is set differently from LLVM's
     // DIScopeForLLVMFuncOpPass. I don't find reasons why scopeline should be
     // the column offset
+
+    auto recId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+    auto id = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
-        context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
-        funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
+        context, recId, /*isRecSelf=*/true, id, compileUnitAttr, fileAttr,
+        funcNameAttr, funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
         subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{},
         /*annotations=*/{});
 
@@ -164,6 +199,68 @@ struct LLVMDILocalVariablePass
     return getDISubprogramAttr(funcOp);
   }
 
+  LLVM::DISubprogramAttr
+  fuseFuncArgVariables(LLVM::LLVMFuncOp funcOp,
+                       LLVM::DISubprogramAttr subprogramAttr) {
+
+    MLIRContext *context = &getContext();
+    OpBuilder builder(context);
+    builder.setInsertionPointToStart(&funcOp.getBody().front());
+    llvm::SmallVector<mlir::LLVM::DINodeAttr> retainedNodes;
+
+    LLVM::DIFileAttr fileAttr = subprogramAttr.getFile();
+    LLVM::DISubroutineTypeAttr subroutineTypeAttr = subprogramAttr.getType();
+    int64_t line = subprogramAttr.getLine();
+    auto localScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
+    auto diFlag = LLVM::DIFlags::Zero;
+
+    // Extract function arguments and add them to retainedNodes:
+    // 0. Extract function argument types from subroutineTypeAttr
+    // 1. Create DILocalVariable and DebugValueOp for each arg
+    // 2. Add each arg as DILocalVariableAttr to retainedNodes
+    auto argTypeAttrs = subroutineTypeAttr.getTypes();
+    unsigned resNum = funcOp.getNumResults() ? funcOp.getNumResults() : 1;
+    for (unsigned idx = resNum; idx < argTypeAttrs.size(); idx++) {
+      LLVM::DITypeAttr argTypeAttr = argTypeAttrs[idx];
+      unsigned argIdx = idx - resNum;
+      BlockArgument arg = funcOp.getArgument(argIdx);
+
+      Location argLoc = arg.getLoc();
+      auto nameLoc = dyn_cast<NameLoc>(argLoc);
+      if (!nameLoc)
+        continue;
+      Location childLoc = nameLoc.getChildLoc();
+      StringAttr nameAttr = nameLoc.getName();
+
+      auto argVarAttr = LLVM::DILocalVariableAttr::get(
+          context, localScopeAttr, nameAttr, fileAttr, line, argIdx + 1, 0,
+          argTypeAttr, diFlag);
+
+      auto exprAttr = LLVM::DIExpressionAttr::get(context);
+      (void)LLVM::DbgValueOp::create(builder, childLoc, arg, argVarAttr,
+                                     exprAttr);
+
+      retainedNodes.push_back(argVarAttr);
+    }
+
+    mlir::DistinctAttr recId = subprogramAttr.getRecId();
+    mlir::DistinctAttr id =
+        mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+    LLVM::DICompileUnitAttr compileUnitAttr = subprogramAttr.getCompileUnit();
+    StringAttr funcNameAttr = subprogramAttr.getName();
+    LLVM::DISubprogramFlags subprogramFlags =
+        subprogramAttr.getSubprogramFlags();
+    subprogramAttr = LLVM::DISubprogramAttr::get(
+        context, recId, /*isRecSelf=*/false, id, compileUnitAttr, fileAttr,
+        funcNameAttr, funcNameAttr, fileAttr, line, line, subprogramFlags,
+        subroutineTypeAttr, retainedNodes, /*annotations=*/{});
+
+    Location loc = funcOp.getLoc();
+    // Reset the subprogramAttr with retainedNodes to the funcOp
+    funcOp->setLoc(mlir::FusedLoc::get(context, {loc}, subprogramAttr));
+    return subprogramAttr;
+  }
+
   // set it while traversing into a function
   LLVM::DISubprogramAttr diSubprogramAttr;
 
@@ -172,7 +269,9 @@ struct LLVMDILocalVariablePass
 
     getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) -> void {
       if (isa<LLVM::LLVMFuncOp>(op)) {
-        diSubprogramAttr = getDISubprogramAttr(cast<LLVM::LLVMFuncOp>(op));
+        auto funcOp = cast<LLVM::LLVMFuncOp>(op);
+        diSubprogramAttr = getDISubprogramAttr(funcOp);
+        diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
       } else {
         fuseDILocalVariable(op);
       }
