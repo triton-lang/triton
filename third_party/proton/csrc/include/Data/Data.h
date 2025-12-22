@@ -21,6 +21,8 @@ public:
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
   /// is not empty. Return the entry id of the added op.
+  /// An "entry" is a data specific unit of operation, e.g., a node in a tree
+  /// data structure or an event in a trace data structure.
   virtual size_t addOp(const std::string &opName = {}) = 0;
 
   /// Add an op with custom contexts to the data.

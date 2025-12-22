@@ -66,16 +66,16 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isApiExternId = false;
-    std::vector<std::pair<Data *, size_t>> dataEntryIds;
+    DataEntryMap dataToEntryId;
     externIdToState.withRead(externId,
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isApiExternId = state.isApiExternId;
-                               dataEntryIds = state.dataEntryIds;
+                               dataToEntryId = state.dataToEntryId;
                              });
     // Do not share the same Metric instance across multiple Data objects.
     // Otherwise, updating one Data will mutate the Metric observed by others
     // (counts will incorrectly compound with the number of active sessions).
-    for (auto &[data, entryId] : dataEntryIds) {
+    for (auto &[data, entryId] : dataToEntryId) {
       if (auto metric = convertKernelActivityToMetric(activity)) {
         if (isApiExternId) {
           data->addOpAndMetric(entryId, kernel->name, metric);
@@ -115,7 +115,7 @@ uint32_t processActivityKernel(
       auto &graphNodeIdToState = ref.value().get().graphNodeIdToState;
       auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
       if (nodeIt != graphNodeIdToState.end()) {
-        for (auto &[data, scopeId] : nodeIt->second.multiDataEntryIds) {
+        nodeIt->second.forEachEntryId([&](Data *data, size_t scopeId) {
           if (auto metric = convertKernelActivityToMetric(activity)) {
             if (nodeIt->second.isApiExternId) {
               data->addOpAndMetric(scopeId, kernel->name, metric);
@@ -123,7 +123,7 @@ uint32_t processActivityKernel(
               data->addMetric(scopeId, metric);
             }
           }
-        }
+        });
       }
       // Decrease the expected kernel count
       auto &state = ref.value().get();
@@ -639,7 +639,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       }
       threadState.enterOp();
       auto scope = threadState.scopeStack.back();
-      auto dataEntryIds = profiler.addOpToDataSet(scope);
+      auto dataToEntryId = profiler.addOpToDataSet(scope);
       size_t numNodes = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
@@ -673,15 +673,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             auto *dataPtr = data;
-            auto dataEntryIt =
-                std::find_if(dataEntryIds.begin(), dataEntryIds.end(),
-                             [dataPtr](const auto &entry) {
-                               return entry.first == dataPtr;
-                             });
-            if (dataEntryIt == dataEntryIds.end())
+            auto *entryId = dataToEntryId.find(dataPtr);
+            if (!entryId)
               continue;
-            auto baseEntryId = dataPtr->addOp(
-                dataEntryIt->second, {Context{GraphState::captureTag}});
+            auto baseEntryId =
+                dataPtr->addOp(*entryId, {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {
@@ -699,17 +695,17 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         }
       }
       profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                     numNodes, dataEntryIds);
+                                     numNodes, dataToEntryId);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         auto scope = threadState.scopeStack.back();
-        auto dataEntryIds = profiler.addOpToDataSet(scope);
+        auto dataToEntryId = profiler.addOpToDataSet(scope);
         // XXX: Conservatively stop every GPU kernel for now
         pImpl->pcSampling.stop(
-            callbackData->context, dataEntryIds,
+            callbackData->context, dataToEntryId,
             profiler.correlation.isApiExternId(scope.scopeId));
       }
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
@@ -725,7 +721,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
           auto scope = threadState.scopeStack.back();
-          auto dataEntryIds = profiler.addOpToDataSet(scope);
+          auto dataToEntryId = profiler.addOpToDataSet(scope);
           std::map<Data *,
                    std::vector<std::pair</*isAPI=*/bool, /*entryId=*/size_t>>>
               metricNodeScopes;

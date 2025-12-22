@@ -309,7 +309,7 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
   auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+  if (dataSet.contains(sessions[sessionId]->data.get())) {
     throw std::runtime_error(
         "Cannot get data while the session is active. Please deactivate the "
         "session first.");
@@ -327,7 +327,7 @@ std::string SessionManager::getData(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
   auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+  if (dataSet.contains(sessions[sessionId]->data.get())) {
     throw std::runtime_error(
         "Cannot get data while the session is active. Please deactivate the "
         "session first.");
@@ -345,7 +345,7 @@ void SessionManager::clearData(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
   auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+  if (dataSet.contains(sessions[sessionId]->data.get())) {
     throw std::runtime_error(
         "Cannot clear data while the session is active. Please deactivate the "
         "session first.");

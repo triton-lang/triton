@@ -352,8 +352,7 @@ void CuptiPCSampling::start(CUcontext context) {
 }
 
 void CuptiPCSampling::processPCSamplingData(
-    ConfigureData *configureData,
-    std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI) {
+    ConfigureData *configureData, DataEntryMap dataToEntryId, bool isAPI) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
@@ -382,7 +381,7 @@ void CuptiPCSampling::processPCSamplingData(
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw std::runtime_error("[PROTON] Invalid stall reason index");
-        for (auto [data, entryId] : dataEntryIds) {
+        for (auto [data, entryId] : dataToEntryId) {
           if (isAPI)
             entryId = data->addOp(entryId, {lineInfo.functionName});
           if (lineInfo.fileName.size())
@@ -414,8 +413,7 @@ void CuptiPCSampling::processPCSamplingData(
 }
 
 void CuptiPCSampling::stop(CUcontext context,
-                           std::vector<std::pair<Data *, size_t>> dataEntryIds,
-                           bool isAPI) {
+                           const DataEntryMap &dataToEntryId, bool isAPI) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
   doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
@@ -424,7 +422,7 @@ void CuptiPCSampling::stop(CUcontext context,
                       auto *configureData = getConfigureData(contextId);
                       stopPCSampling(context);
                       pcSamplingStarted = false;
-                      processPCSamplingData(configureData, dataEntryIds, isAPI);
+                      processPCSamplingData(configureData, dataToEntryId, isAPI);
                     });
 }
 

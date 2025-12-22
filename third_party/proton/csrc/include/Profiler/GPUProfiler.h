@@ -7,6 +7,7 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
+#include "Utility/SmallMap.h"
 
 #include <atomic>
 #include <chrono>
@@ -15,6 +16,8 @@
 #include <unordered_map>
 
 namespace proton {
+
+using DataEntryMap = SmallMap<Data *, size_t, 4>;
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
@@ -32,7 +35,7 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
-    std::vector<std::pair<Data *, size_t>> dataEntryIds;
+    DataEntryMap dataToEntryId;
     // If graphNodeIdToScopes is empty, this externId is non-graph launch.
     // For non-graph launches, we only need to track whether the externId
     // itself is API-originated.
@@ -47,41 +50,19 @@ public:
       bool isApiExternId{false};
 
       void setEntryId(Data *data, size_t entryId) {
-        if (singleData == nullptr || singleData == data) {
-          singleData = data;
-          singleEntryId = entryId;
-          return;
-        }
-        if (multiDataEntryIds.empty())
-          multiDataEntryIds.reserve(2);
-        multiDataEntryIds.push_back({data, entryId});
+        dataToEntryId.insertOrAssign(data, entryId);
       }
 
       const size_t *findEntryId(Data *data) const {
-        if (singleData == data)
-          return &singleEntryId;
-        if (multiDataEntryIds.empty())
-          return nullptr;
-        auto it = std::find_if(
-            multiDataEntryIds.begin(), multiDataEntryIds.end(),
-            [data](const auto &pair) { return pair.first == data; });
-        if (it == multiDataEntryIds.end())
-          return nullptr;
-        return &it->second;
+        return dataToEntryId.find(data);
       }
 
       template <typename FnT> void forEachEntryId(FnT &&fn) const {
-        if (singleData != nullptr)
-          fn(singleData, singleEntryId);
-        for (const auto &[data, entryId] : multiDataEntryIds)
+        for (const auto &[data, entryId] : dataToEntryId)
           fn(data, entryId);
       }
 
-      // In most cases, a graph node is only associated with one Data object.
-      // So we optimize the hot path here.
-      Data *singleData{nullptr};
-      size_t singleEntryId{0};
-      std::vector<std::pair<Data *, size_t>> multiDataEntryIds{};
+      DataEntryMap dataToEntryId;
     };
 
     // graphNodeId -> (per-Data entry id + API-originated flag)
@@ -95,14 +76,13 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
-  std::vector<std::pair<Data *, size_t>> addOpToDataSet(const Scope &scope) {
+  DataEntryMap addOpToDataSet(const Scope &scope) {
     auto dataSet = this->getDataSet();
-    std::vector<std::pair<Data *, size_t>> dataEntryIds;
-    dataEntryIds.reserve(dataSet.size());
+    DataEntryMap dataToEntryId;
     for (auto *data : dataSet) {
-      dataEntryIds.push_back({data, data->addOp(scope.name)});
+      dataToEntryId.insertOrAssign(data, data->addOp(scope.name));
     }
-    return dataEntryIds;
+    return dataToEntryId;
   }
 
   // OpInterface
@@ -184,11 +164,11 @@ protected:
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   const std::vector<std::pair<Data *, size_t>> &dataEntryIds) {
+                   const DataEntryMap &dataToEntryId) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
-        state.dataEntryIds = dataEntryIds;
+        state.dataToEntryId = dataToEntryId;
       });
     }
 

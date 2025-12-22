@@ -4,13 +4,13 @@
 #include "Data/Data.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
+#include "Utility/SmallSet.h"
 
 #include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -71,7 +71,7 @@ public:
   }
 
   /// Get the set of data objects registered to the profiler.
-  std::set<Data *> getDataSet() const {
+  SmallSet<Data *> getDataSet() const {
     std::shared_lock<std::shared_mutex> lock(dataSetMutex);
     return dataSet;
   }
@@ -121,7 +121,7 @@ protected:
   // `dataSet` can be accessed by both the user thread and the background
   // threads
   mutable std::shared_mutex dataSetMutex;
-  std::set<Data *> dataSet;
+  SmallSet<Data *> dataSet;
   static thread_local void *tensorMetricKernel;
   static thread_local void *scalarMetricKernel;
   static thread_local void *metricKernelStream;
