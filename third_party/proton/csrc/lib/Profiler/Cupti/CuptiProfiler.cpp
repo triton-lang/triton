@@ -722,7 +722,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             !graphRef.value().get().metricKernelNodeIds.empty()) {
           auto scope = threadState.scopeStack.back();
           auto dataToEntryId = profiler.addOpToDataSet(scope);
-          SmallMap<Data *, std::vector<std::pair<bool, size_t>>> metricNodeStates;
+          SmallMap<Data *, std::vector<std::pair<bool, size_t>>>
+              metricNodeStates;
           auto &graphExec = graphRef.value().get();
           auto &externIdState =
               profiler.correlation.externIdToState[scope.scopeId];
