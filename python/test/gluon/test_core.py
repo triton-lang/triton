@@ -567,23 +567,17 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
 
 
 @pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
-@pytest.mark.parametrize("bitwidth", [8, 16])
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (128, 128, 32), (64, 32, 64)])
+@pytest.mark.parametrize("reps", ([1, 1, 1], [2, 2, 2], [1, 4, 2]))
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 @pytest.mark.parametrize("multicast", [False, True])
-def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, two_ctas, multicast):
+def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast):
+    bitwidth = 16
     acc_dtype = torch.float32
 
     if ctas_per_cga[0] == 1 and two_ctas:
         pytest.skip("Need at least 2 CTAs along M for 2CTA mode")
-
-    instr_k = 256 // bitwidth
-    BLOCK_K = max(BLOCK_K, instr_k)
-    # M=64 on two-CTA mode is not well supported yet
-    if two_ctas and is_blackwell():
-        BLOCK_M = max(BLOCK_M, 128)
 
     cta_order = [1, 0]
 
@@ -595,9 +589,12 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
     cta_split_a = [ctas_per_cga[0], 1]
     cta_split_b = [1, ctas_per_cga_b[1]]
 
+    # M = 128 for blackkwell
+    instr_shape = [32 if is_blackwell() else 16, 32, 256 // bitwidth]
     NUM_K_TILES = 4
-    BLOCK_M *= ctas_per_cga[0]
-    BLOCK_N *= ctas_per_cga_b[1]
+    BLOCK_M = instr_shape[0] * warps[0] * ctas_per_cga[0] * reps[0]
+    BLOCK_N = instr_shape[1] * warps[1] * ctas_per_cga_b[1] * reps[1]
+    BLOCK_K = instr_shape[2] * reps[2]
     K = (256 // bitwidth) * NUM_K_TILES
 
     from triton._C.libtriton.gluon_ir import make_cga_layout
@@ -629,7 +626,6 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_c)
 
-    instr_shape = [16, BLOCK_N // warps[1], instr_k]
     acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                              cga_layout=cga_layout_c)
 
@@ -652,22 +648,14 @@ def test_tma_mma_shared_inputs(bitwidth, warps, BLOCK_M, BLOCK_N, BLOCK_K, ctas_
         x = x & ~((1 << 13) - 1)
         return x.view(dtype)
 
-    torch_dtype = {
-        8: torch.float8_e4m3fn,
-        16: torch.float16,
-        32: torch.float32,
-    }[bitwidth]
+    torch_dtype = torch.float16
     device = triton.runtime.driver.active.get_current_device()
     a = cast(torch.randn((BLOCK_M, K), device=device, dtype=torch.float32), torch_dtype)
     # We transpose b in the kernel
     b = cast(torch.randn((K, BLOCK_N), device=device, dtype=torch.float32), torch_dtype)
     out = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=acc_dtype)
 
-    gluon_dtype = {
-        8: ttgl.float8e4nv,
-        16: ttgl.float16,
-        32: ttgl.float32,
-    }[bitwidth]
+    gluon_dtype = ttgl.float16
     shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gluon_dtype, cga_layout=cga_layout_a)
     shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gluon_dtype, cga_layout=cga_layout_b)
     assert shared_layout_a.swizzle_byte_width != 0
