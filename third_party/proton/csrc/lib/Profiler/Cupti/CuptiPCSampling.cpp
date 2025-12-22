@@ -351,8 +351,9 @@ void CuptiPCSampling::start(CUcontext context) {
                     });
 }
 
-void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI) {
+void CuptiPCSampling::processPCSamplingData(
+    ConfigureData *configureData,
+    std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
@@ -412,7 +413,9 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   }
 }
 
-void CuptiPCSampling::stop(CUcontext context, std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI) {
+void CuptiPCSampling::stop(CUcontext context,
+                           std::vector<std::pair<Data *, size_t>> dataEntryIds,
+                           bool isAPI) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
   doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },

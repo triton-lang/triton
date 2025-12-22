@@ -109,7 +109,8 @@ public:
 
   void start(CUcontext context);
 
-  void stop(CUcontext context, std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI);
+  void stop(CUcontext context,
+            std::vector<std::pair<Data *, size_t>> dataEntryIds, bool isAPI);
 
   void finalize(CUcontext context);
 
@@ -122,8 +123,10 @@ private:
 
   CubinData *getCubinData(uint64_t cubinCrc);
 
-  void processPCSamplingData(ConfigureData *configureData, std::vector<std::pair<Data *, size_t>> dataEntryIds,
-                             bool isAPI);
+  void
+  processPCSamplingData(ConfigureData *configureData,
+                        std::vector<std::pair<Data *, size_t>> dataEntryIds,
+                        bool isAPI);
 
   ThreadSafeMap<uint32_t, ConfigureData> contextIdToConfigureData;
   // In case the same cubin is loaded multiple times, we need to keep track of

@@ -673,13 +673,15 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             auto *dataPtr = data;
-            auto dataEntryIt = std::find_if(
-                dataEntryIds.begin(), dataEntryIds.end(),
-                [dataPtr](const auto &entry) { return entry.first == dataPtr; });
+            auto dataEntryIt =
+                std::find_if(dataEntryIds.begin(), dataEntryIds.end(),
+                             [dataPtr](const auto &entry) {
+                               return entry.first == dataPtr;
+                             });
             if (dataEntryIt == dataEntryIds.end())
               continue;
-            auto baseEntryId = dataPtr->addOp(dataEntryIt->second,
-                                              {Context{GraphState::captureTag}});
+            auto baseEntryId = dataPtr->addOp(
+                dataEntryIt->second, {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {
