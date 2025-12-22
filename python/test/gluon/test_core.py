@@ -541,7 +541,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
             mbarrier.wait(mma_bar, phase=phase_mma, deps=[smem_a, smem_b])
             phase_mma ^= 1
         else:
-            acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=True)
+            acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=False)
             if multicast:
                 # multicast into wgmma doesn't make much sense as you need to synchronise all
                 # CTAs after the wgmma, as it doesn't provide a finer synchronization mechanism.
