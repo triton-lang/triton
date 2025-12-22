@@ -300,21 +300,22 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
-  auto *barrierOperand = ptxBuilder.newOperand(barrier, "l");
+  barrier = b.ptrtoint(i32_ty, barrier);
+  auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
   std::string opcode;
   if (twoCTAs) {
-    // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be broadcasted into CTAid 0 and 1
-    auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
+    auto ctaId = b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
+    auto totalCTAs = lookupNumCTAs(rewriter);
+    auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
+    Value mask = b.shl(b.i16_val(3), ctaIdLead);
+    auto *ctaMask = ptxBuilder.newOperand(mask, "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
              "cluster.multicast::cluster.b64 [$1], $2;";
   } else {
-    opcode =
-        "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-        ".mbarrier::arrive::one.b64 [$1];";
+    opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
   }
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
@@ -371,7 +372,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
   if (twoCTAs) {
     // TODO: we have to sync the two CTAs because we currently don't use remove
@@ -379,8 +380,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     ttng::ClusterArriveOp::create(rewriter, loc, false);
     ttng::ClusterWaitOp::create(rewriter, loc);
 
-    Value clusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-    Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
+    Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
+    Value cluster0 = tb.icmp_eq(leftClusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }
   pred = tb.and_(pred, isWarp0);
@@ -414,9 +416,14 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
   unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  // Checked in the verifier
+  assert(mmaSizeN <= 256 &&
+         "The maximum size of an MMA instruction is 128x256");
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
+  assert((!twoCTAs || numRepN == 1) &&
+         "grep for [Note: numRepN > 1 and two_ctas]");
   int numRepK = ceil<unsigned>(K, mmaSizeK);
 
   SmallVector<int64_t> shapeA = op.shapeA;
@@ -437,13 +444,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto isFp4b = op.numBitsPerElementB == 4;
   // [Instr shape twoCTAs]
-  // This division by 2 in 2CTA mode a bit subtle:
-  // The issue here is that in 2CTA you multiply in one instruction a tensor
-  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
-  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
-  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
-  // Something similar happens when we multiply by 2 the mmaSizeM when creating
-  // It's a massive code smell tho
+  // To compute a output tile of [mmaSizeM, mmaSizeN] in 2CTA mode, we load
+  // an A of size 2 * mmaSizeM x K and a B of size K x mmaSizeN.
+  // Now, since B is split amongs 2 CTAs along N, we need to divide by 2.
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
       loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
       1, 5, isFp4b);
@@ -484,7 +487,6 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  auto dLayout = cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
 
@@ -505,8 +507,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
       DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
-    return dLoader.tmemLoad(m * dLayout.getBlockM(), n * dLayout.getBlockN(),
-                            rewriter, loc);
+    return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,
+                            loc);
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,

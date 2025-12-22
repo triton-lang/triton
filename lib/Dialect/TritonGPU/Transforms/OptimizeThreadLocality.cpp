@@ -53,7 +53,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
           blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
-          blocked.getCTALayout().getCTAsPerCGA()[*reductionAxis] == 1)
+          blocked.getCGALayout().getCTAsPerCGA()[*reductionAxis] == 1)
         return failure();
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
@@ -192,9 +192,9 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
   auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
-  auto ctaLayout = getCTALayout(baseLayout);
+  auto cgaLayout = getCGALayout(baseLayout);
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
-                                            warpsPerCTA, order, ctaLayout);
+                                            warpsPerCTA, order, cgaLayout);
 
   // Update the layout on the gather op and insert conversions.
   auto cvtSrc = ConvertLayoutOp::create(
@@ -550,12 +550,12 @@ private:
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
     auto order3d = insertValue(blocked.getOrder(), 0, rank);
-    auto ctaLl = blocked.getCTALayout().getLinearLayout();
+    auto ctaLl = blocked.getCGALayout().getLinearLayout();
     auto kBlocked = *ctaLl.getInDimNames().begin();
     auto *ctx = kBlocked.getContext();
     auto dim = standardOutDimNames(ctx, rank + 1)[rank];
     ctaLl *= LinearLayout::identity1D(1, kBlocked, dim);
-    auto ctaLayout3d = CTAEncodingAttr::get(ctx, ctaLl);
+    auto ctaLayout3d = CGAEncodingAttr::get(ctx, ctaLl);
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
         order3d, ctaLayout3d);

@@ -305,10 +305,9 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       }
     }
   }
-  auto newLoadOp =
-      rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
-          pred);
+  auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
+      rewriter, op.getLoc(), op.getDesc(), indices, barrierAlloc,
+      op.getResult(), pred);
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
@@ -822,8 +821,8 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
 void combineArefs(scf::ForOp loop) {
-  SmallVector<ArefGetEnterOp> getEnterOps;
-  loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
+  // We combine getEnterOps in the same loop body, not across a loop.
+  auto getEnterOps = loop.getOps<ArefGetEnterOp>();
 
   // Arefs whose get-enter ops share the same dominant consumer can be combined
   DominanceInfo domInfo(loop);
@@ -925,9 +924,11 @@ public:
 
     SmallVector<scf::ForOp> loops;
     m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
-        loops.push_back(loop);
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName)) {
+        loop->walk([&](scf::ForOp op) { loops.push_back(op); });
+      }
     });
+
     for (scf::ForOp loop : loops) {
       combineArefs(loop);
     }

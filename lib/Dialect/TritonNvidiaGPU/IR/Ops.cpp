@@ -201,17 +201,41 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
+template <typename TOp>
+LogicalResult verifyTMAEncoding(TOp *op, Value desc, Attribute enc) {
+  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
+  if (!nvmma)
+    return op->emitOpError("TMA descriptor must have NVMMA shared layout");
+  auto descTy = cast<TensorDescType>(desc.getType());
+  auto descEnc = dyn_cast_if_present<NVMMASharedEncodingAttr>(
+      descTy.getBlockType().getEncoding());
+  // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
+  // rank-reducing loads
+  if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
+      descEnc.getSwizzlingByteWidth() != nvmma.getSwizzlingByteWidth() ||
+      descEnc.getElementBitWidth() != nvmma.getElementBitWidth() ||
+      descEnc.getFp4Padded() != nvmma.getFp4Padded())
+    return op->emitOpError("TMA descriptor layout must match shared layout");
+  if (nvmma.getTransposed())
+    return op->emitOpError("TMA descriptor layout must not be transposed");
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
     return failure();
   if (getCoord().size() < 1 || getCoord().size() > 5)
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
-  if (!getResult().getType().getMutableMemory())
+  auto resultType = getResult().getType();
+  if (!resultType.getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  if (!isa<NVMMASharedEncodingAttr>(getResult().getType().getEncoding()))
-    return emitOpError("TMA result must have NVMMA shared layout");
-  return success();
+  return verifyTMAEncoding(this, getDesc(), resultType.getEncoding());
+}
+
+// -- AsyncTMACopyLocalToGlobalOp --
+LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
+  return verifyTMAEncoding(this, getDesc(), getSrc().getType().getEncoding());
 }
 
 // -- AsyncTMAGatherOp --
@@ -222,13 +246,18 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
+  if (failed(verifyTMAEncoding(this, getDesc(), resultType.getEncoding())))
+    return failure();
   return DescriptorGatherOp::verifyResultType(*this, resultType,
                                               getXOffsets().getType());
 }
 
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
-  return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
+  auto srcType = getSrc().getType();
+  if (failed(verifyTMAEncoding(this, getDesc(), srcType.getEncoding())))
+    return failure();
+  return DescriptorGatherOp::verifyResultType(*this, srcType,
                                               getXOffsets().getType());
 }
 
@@ -378,24 +407,75 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("The col stride of the return operand must be 32 / ")
            << retType.getElementTypeBitWidth() << " but got "
            << retEnc.getColStride();
+  // The maximum size of a MMA instruction is 128x256
+  if (retEnc.getBlockN() > 256)
+    return emitOpError("The block size of the return operand must be less than "
+                       "or equal to 256");
+
+  auto aSplit = getCTASplitNum(aEnc);
+  auto bSplit = getCTASplitNum(bEnc);
+  if (aSplit[1] != 1) {
+    return emitOpError("LHS CTASplit along K should be 1, but got ")
+           << aSplit[1];
+  }
+  if (bSplit[0] != 1) {
+    return emitOpError("RHS CTASplit along K should be 1, but got ")
+           << bSplit[0];
+  }
 
   if (getTwoCtas()) {
-    // Once we have a `block` dimension in TMEM, we can look at this via the
-    // associated LL
-    auto checkSplitNum = [&](ArrayRef<unsigned> splitNum, std::string_view name,
-                             ArrayRef<unsigned> expected) -> LogicalResult {
-      if (splitNum != expected) {
-        return emitOpError("The op is two CTAs but the split num of the ")
-               << name << " is not " << expected << ". Got " << splitNum;
-      }
-      return success();
-    };
-    if (failed(checkSplitNum(getCTASplitNum(aEnc), "LHS", {2, 1})))
-      return failure();
-    if (failed(checkSplitNum(getCTASplitNum(bEnc), "RHS", {1, 2})))
-      return failure();
-    if (failed(checkSplitNum(getCTASplitNum(retEnc), "returned value", {2, 1})))
-      return failure();
+    auto retSplit = getCTASplitNum(retEnc);
+
+    auto nPerCTA = retType.getDimSize(1) / retSplit[1];
+
+    // [Note: numRepN > 1 and two_ctas]
+    // Consider, just as an example, num_ctas=16, and a huge tile of shape
+    // MNK = 512x64x2048
+    // This is an example of layout with numRepN=2 and two_ctas=true:
+    // Layout RHS:
+    // #ttg.memdesc<64x2048xf16,
+    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
+    //                      elementBitWidth = 16,
+    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
+    //
+    // As a LinearLayout:
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
+    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
+    //
+    // The issue is that the data from the CTA1 should be next to that of the
+    // first part of the instruction. Now, the max instruction size is 128x256,
+    // so the layout we should use is
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
+    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
+    // (note how we swapped the bases [0, 256] and [0, 128])
+    // The issue with this layout is that it breaks the invariant that the
+    // CGALayout splits the CGA tile into contiguous CTA tiles,
+    // i.e. total_layout = cta_layout * cga_layout.
+    // This is used all over the place, to the point that for all legacy layouts
+    // we represent the CGALayout as the `cga_layout` we have to multiply on the
+    // right.
+    // We could allow with a bit of effort SharedLinearLayouts that did not
+    // divide on the right by a CGALayout, but for now we throw a lovely error.
+    if (nPerCTA > 256)
+      return emitOpError(
+          "We don't allow to emit more than one mma instruction along N. "
+          "Reduce the block or increase the number of warps or CTAs along N");
+
+    unsigned retM = retSplit[0];
+    unsigned retN = retSplit[1];
+    if (aSplit[0] != retM) {
+      return emitOpError("twoCTA mode expects the LHS split along M to match "
+                         "the result split along M. Expected ")
+             << retM << " but got " << aSplit[0];
+    }
+    if (bSplit[1] != 2 * retN) {
+      return emitOpError(
+                 "twoCTA mode expects the RHS split along N to be twice the "
+                 "result split along N. Expected ")
+             << 2 * retN << " but got " << bSplit[1];
+    }
 
     if (!retEnc.getTwoCTAs())
       return emitOpError(
