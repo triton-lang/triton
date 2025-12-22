@@ -53,6 +53,35 @@ struct FenceAsyncSharedOpConversion
   }
 };
 
+struct FenceMBarrierInitReleaseClusterOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp>::
+      ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Only one thread needs to issue the fence, just like mbarrier.init.
+    Value tid = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(tid, b.i32_val(0));
+
+    PTXBuilder ptxBuilder;
+    auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
+    fence().predicate(pred);
+    auto voidTy = void_ty(op->getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -285,6 +314,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
+                                                            benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);

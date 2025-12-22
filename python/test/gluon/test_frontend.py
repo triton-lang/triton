@@ -7,6 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
@@ -580,6 +581,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true_1 = arith.constant true
     ttng.wait_barrier %0, %c0_i32, %true_1 deps %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.inval_barrier %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def mbarrier_fence_cluster_init_kernel():
+    mbarrier.fence_cluster_init()
+
+
+def test_mbarrier_fence_cluster_init():
+    mod = run_parser(mbarrier_fence_cluster_init_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mbarrier_fence_cluster_init_kernel() attributes {noinline = false} {
+    tt.call @triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_cluster_init__() : () -> ()
+    tt.return
+  }
+  tt.func private @triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_cluster_init__() attributes {noinline = false} {
+    ttng.fence_mbarrier_init_release_cluster
+    ttng.cluster_arrive {relaxed = true}
+    ttng.cluster_wait
     tt.return
   }
 }
@@ -1551,6 +1576,26 @@ def test_cluster_barrier_multi_cta():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
+    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_wait
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def cluster_arrive_wait_ops_kernel():
+    cluster.arrive()
+    cluster.wait()
+
+
+def test_cluster_arrive_wait_ops():
+    mod = run_parser(cluster_arrive_wait_ops_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
     ttng.cluster_arrive {relaxed = false}
     ttng.cluster_wait
     tt.return

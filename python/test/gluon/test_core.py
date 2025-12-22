@@ -115,7 +115,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     mbarrier.init(bar, count=1)
     # Need to synchronise all the CTAs after the mbarrier initialisation
     # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
-    ttgl.barrier(cluster=True)
+    mbarrier.fence_cluster_init()
 
     mbarrier.expect(bar, in_desc.nbytes_per_cta)
     tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
@@ -311,7 +311,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         # Need to synchronise all the CTAs after the mbarrier initialisation
         # so that they all see it
         if two_ctas:
-            ttgl.barrier(cluster=True)
+            mbarrier.fence_cluster_init()
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
