@@ -39,6 +39,9 @@ public:
   /// Add a single metric to the data.
   virtual void addMetric(size_t entryId, std::shared_ptr<Metric> metric) = 0;
 
+  /// Add a flexible metric to the data.
+  virtual void addMetric(size_t entryId, const FlexibleMetric &metric) = 0;
+
   /// Add an op and a metric with one call.
   /// The default implementation forwards to addOp + addMetric.
   virtual void addOpAndMetric(size_t entryId, const std::string &opName,

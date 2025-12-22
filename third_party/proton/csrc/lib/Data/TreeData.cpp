@@ -674,6 +674,12 @@ void TreeData::addMetric(size_t contextId, std::shared_ptr<Metric> metric) {
   tree->upsertMetric(contextId, metric);
 }
 
+void TreeData::addMetric(size_t contextId,
+                         const FlexibleMetric &metric) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  tree->upsertFlexibleMetric(contextId, metric);
+}
+
 void TreeData::addOpAndMetric(size_t contextId, const std::string &opName,
                               std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);

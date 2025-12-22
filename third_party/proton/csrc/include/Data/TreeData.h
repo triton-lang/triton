@@ -26,6 +26,9 @@ public:
 
   void addMetric(size_t contextId, std::shared_ptr<Metric> metric) override;
 
+  void addMetric(size_t contextId,
+                     const FlexibleMetric &metric) override;
+
   // Override to optimize addOp + addMetric calls
   // 1. to avoid double locking
   // 2. to avoid looking up contextId -> contextId twice

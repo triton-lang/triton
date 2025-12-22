@@ -18,6 +18,8 @@ public:
 
   void addMetric(size_t eventId, std::shared_ptr<Metric> metric) override;
 
+  void addMetric(size_t eventId, const FlexibleMetric &metric) override;
+
   void
   addMetrics(size_t eventId,
              const std::map<std::string, MetricValueType> &metrics) override;

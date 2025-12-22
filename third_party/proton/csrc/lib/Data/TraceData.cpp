@@ -171,6 +171,20 @@ void TraceData::addMetric(size_t eventId, std::shared_ptr<Metric> metric) {
     event.metrics[metric->getKind()]->updateMetric(*metric);
 }
 
+void TraceData::addMetric(size_t eventId, const FlexibleMetric &metric) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (!trace->hasEvent(eventId))
+    return;
+  auto &event = trace->getEvent(eventId);
+  if (event.flexibleMetrics.find(metric.getValueName(0)) ==
+      event.flexibleMetrics.end()) {
+    event.flexibleMetrics.emplace(metric.getValueName(0), metric);
+  } else {
+    event.flexibleMetrics.at(metric.getValueName(0))
+        .updateValue(metric.getValue(0));
+  }
+}
+
 void TraceData::addMetrics(
     size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
