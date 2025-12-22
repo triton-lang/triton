@@ -1343,32 +1343,32 @@ public:
                    ConversionPatternRewriter &rewriter) const override {
     ValueRange fatPtrFalse = adaptor.getFalseValue();
     ValueRange fatPtrTrue = adaptor.getTrueValue();
+    assert(fatPtrTrue.size() == 1 ||
+           fatPtrTrue.size() == 2 && "expected 1 or 2 element fatPtrTrue");
+    assert(fatPtrFalse.size() == 1 ||
+           fatPtrFalse.size() == 2 && "expected 1 or 2 element fatPtrTrue");
     if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
       return success();
     if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
       Value trueOp;
       Value falseOp;
       if (fatPtrTrue.size() == 2) {
-        trueOp =
-            rewriter.create<tt::AddPtrOp>(selectOp.getLoc(), selectOp.getType(),
-                                          fatPtrTrue[0], fatPtrTrue[1]);
+        trueOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
+                                      selectOp.getType(), fatPtrTrue[0],
+                                      fatPtrTrue[1]);
       } else {
-        assert(fatPtrTrue.size() == 1 &&
-               "Expected True operand to have 1 or 2 elements");
         trueOp = fatPtrTrue[0];
       }
       if (fatPtrFalse.size() == 2) {
-        falseOp =
-            rewriter.create<tt::AddPtrOp>(selectOp.getLoc(), selectOp.getType(),
-                                          fatPtrFalse[0], fatPtrFalse[1]);
+        falseOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
+                                       selectOp.getType(), fatPtrFalse[0],
+                                       fatPtrFalse[1]);
       } else {
-        assert(fatPtrFalse.size() == 1 &&
-               "Expected False operand to have 1 or 2 elements");
         falseOp = fatPtrFalse[0];
       }
-      auto newSelectOp = rewriter.create<arith::SelectOp>(
-          selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
-          trueOp, falseOp);
+      auto newSelectOp = arith::SelectOp::create(
+          rewriter, selectOp.getLoc(), selectOp.getType(),
+          selectOp.getCondition(), trueOp, falseOp);
       rewriter.replaceOp(selectOp, newSelectOp);
       return success();
     }
