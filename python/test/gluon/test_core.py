@@ -594,6 +594,9 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast):
     NUM_K_TILES = 4
     BLOCK_M = instr_shape[0] * warps[0] * ctas_per_cga[0] * reps[0]
     BLOCK_N = instr_shape[1] * warps[1] * ctas_per_cga_b[1] * reps[1]
+    if is_blackwell() and BLOCK_N >= 256 * ctas_per_cga[1]:
+        # tcgen05 doesn't support reps along N
+        BLOCK_N = 256 * ctas_per_cga[1]
     BLOCK_K = instr_shape[2] * reps[2]
     K = (256 // bitwidth) * NUM_K_TILES
 
