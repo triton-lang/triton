@@ -2,7 +2,7 @@
 # fmt: off
 from dataclasses import dataclass
 import triton
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
@@ -65,6 +65,8 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
+    elif get_rdna_version() in (3, 4) and m >= 512:
+        block_m = 64
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
 
