@@ -351,8 +351,9 @@ void CuptiPCSampling::start(CUcontext context) {
                     });
 }
 
-void CuptiPCSampling::processPCSamplingData(
-    ConfigureData *configureData, DataEntryMap dataToEntryId, bool isAPI) {
+void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
+                                            DataEntryMap dataToEntryId,
+                                            bool isAPI) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
@@ -412,18 +413,18 @@ void CuptiPCSampling::processPCSamplingData(
   }
 }
 
-void CuptiPCSampling::stop(CUcontext context,
-                           const DataEntryMap &dataToEntryId, bool isAPI) {
+void CuptiPCSampling::stop(CUcontext context, const DataEntryMap &dataToEntryId,
+                           bool isAPI) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
-                    pcSamplingMutex,
-                    [&]() {
-                      auto *configureData = getConfigureData(contextId);
-                      stopPCSampling(context);
-                      pcSamplingStarted = false;
-                      processPCSamplingData(configureData, dataToEntryId, isAPI);
-                    });
+  doubleCheckedLock(
+      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex,
+      [&]() {
+        auto *configureData = getConfigureData(contextId);
+        stopPCSampling(context);
+        pcSamplingStarted = false;
+        processPCSamplingData(configureData, dataToEntryId, isAPI);
+      });
 }
 
 void CuptiPCSampling::finalize(CUcontext context) {

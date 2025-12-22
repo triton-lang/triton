@@ -8,8 +8,7 @@
 namespace proton {
 
 /// A simple small set optimized for tiny cardinalities with linear lookup.
-template <typename Key, size_t InlineReserve = 4>
-class SmallSet {
+template <typename Key, size_t InlineReserve = 4> class SmallSet {
 public:
   SmallSet() { data.reserve(InlineReserve); }
 
