@@ -1248,7 +1248,6 @@ void BarrierOp::print(OpAsmPrinter &p) {
   } else {
     p << ' ' << stringifyAddrSpace(getAddrSpace());
   }
-  p << ' ' << stringifyBarrierScope(getScope());
 }
 
 ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -1281,18 +1280,6 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 
   result.addAttribute("addrSpace",
                       AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
-
-  std::string keyword;
-  if (parser.parseKeywordOrString(&keyword))
-    return failure();
-
-  auto scope = symbolizeBarrierScope(keyword);
-  if (!scope)
-    return parser.emitError(parser.getCurrentLocation())
-           << "unknown scope '" << keyword << "'";
-
-  result.addAttribute("scope",
-                      BarrierScopeAttr::get(parser.getContext(), *scope));
 
   return success();
 }

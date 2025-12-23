@@ -617,46 +617,40 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
 }
 
 def TTG_BarrierOp : TTG_Op<"barrier"> {
-  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the specified scope.";
+  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
   let description = [{
     The `barrier` op synchronises the execution and all operations between the selected address spaces for all
-    threads in the specified scope. It is used to coordinate communication between threads in the scope.
+    threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
-    This operation waits until all threads in the scope have reached a `barrier` (for syncronisation) and operations
-    between the selected address spaces made by these threads prior to the op are visible to all threads in the specified scope.
+    This operation waits until all threads in the CTA have reached a `barrier` (for syncronisation) and operations
+    between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.
 
     Data hazards between threads accessing the same memory can be avoided by synchronising the
     specified scope in-between these accesses with a `barrier`.
 
-    A `barrier` operation only provides syncronisation and memory guarantees on the selected address spaces and scope.
+    A `barrier` operation only provides syncronisation and memory guarantees on the selected address spaces in the CTA.
 
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 
     * `none`         control-only syncronisation (no memory ordering).
-    * `local`        shared-memory operations are complete and visible scope-wide.
-    * `global_read`  global memory reads are complete and visible scope-wide.
-    * `global_write` global memory writes are complete and visible scope-wide.
-    * `tensor`       tensor memory operations are complete and visible scope-wide.
-    * `all`          convenience alias for `["local", "global_read", "global_write", "tensor"]`.
+    * `local`        shared-memory operations are complete and visible CTA-wide.
+    * `global_read`  global memory reads are complete and visible CTA-wide.
+    * `global_write` global memory writes are complete and visible CTA-wide.
+    * `tensor_read`  tensor memory read operations are complete and visible CTA-wide.
+    * `tensor_write` tensor memory write operations are complete and visible CTA-wide.
+    * `all`          convenience alias for `["local", "global_read", "global_write", "tensor_read", "tensor_write"]`.
 
-    Multiple address spaces can be combined (e.g. `local|tensor`). `none` cannot be combined with other address spaces.
-
-    The mandatory `scope` attribute describes at which scope the operations will be visible when `barrier` completes:
-
-    * `cta`        syncronisation and memory ordering (if selected) within the CTA.
-    * `cga`        syncronisation and memory ordering (if selected) within all the CTAs in the CGA.
-
-    Only a single scope can be specified.
+    Multiple address spaces can be combined (e.g. `local|tensor_write`). `none` cannot be combined with other address spaces.
 
     Example:
 
     ```mlir
-    ttg.barrier local cta
-    ttg.barrier local|global_read|global_write cga
+    ttg.barrier local
+    ttg.barrier local|global_read|global_write
     ```
   }];
 
-  let arguments = (ins TTG_AddrSpace:$addrSpace, TTG_BarrierScope:$scope);
+  let arguments = (ins TTG_AddrSpace:$addrSpace);
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = [{
@@ -669,7 +663,8 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
     bool hasLocal() { return hasAddrSpace(AddrSpace::Local); }
     bool hasGlobalRead() { return hasAddrSpace(AddrSpace::GlobalRead); }
     bool hasGlobalWrite() { return hasAddrSpace(AddrSpace::GlobalWrite); }
-    bool hasTensor() { return hasAddrSpace(AddrSpace::Tensor); }
+    bool hasTensorRead() { return hasAddrSpace(AddrSpace::TensorRead); }
+    bool hasTensorWrite() { return hasAddrSpace(AddrSpace::TensorWrite); }
   }];
 }
 
