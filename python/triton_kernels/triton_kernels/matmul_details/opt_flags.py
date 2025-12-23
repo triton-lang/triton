@@ -231,12 +231,16 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
+    a_mx_scale_layout = get_layout(precision_config.a_mx_scale)
+    b_mx_scale_layout = get_layout(precision_config.b_mx_scale)
+    if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
+        # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
+        supports_persistent = False
 
-    def _layout_name(tensor):
-        layout = get_layout(tensor)
-        return layout.name if layout is not None else None
+    def _layout_name(layout):
+        return None if layout is None else layout.name
 
-    requires_persistent = (_layout_name(precision_config.a_mx_scale) is not None or _layout_name(precision_config.b_mx_scale) is not None) and target_info.has_native_mxfp()
+    requires_persistent = (_layout_name(a_mx_scale_layout) is not None or _layout_name((b_mx_scale_layout)) is not None) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
@@ -248,12 +252,10 @@ def make_default_opt_flags_nvidia(
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
-        if (
-            (b_scale_layout := get_layout(precision_config.b_mx_scale)) is not None and
-            isinstance(b_scale_layout, HopperMXScaleLayout)
-        ):
+        if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
             # TODO: persistent kernel is currently slower than non-persistent
             is_persistent = False
+
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
     # adjust block_m based on is_persistent signal
