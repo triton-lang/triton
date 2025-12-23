@@ -540,24 +540,24 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
       triton::gpu::SharedMemorySpaceAttr::get(funcOp.getContext());
   Location loc = funcOp.getLoc();
   auto context = funcOp.getContext();
-  auto barrierCTALayout =
-      ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                              /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+  auto numCTAs = triton::gpu::lookupNumCTAs(funcOp);
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
   auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-      context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType = ttg::MemDescType::get(
-      {distance, 1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
-      /*mutableMemory=*/true);
+      context, 1, 1, 1, {0}, barrierCGALayout);
+  Type barrierMemDescType =
+      ttg::MemDescType::get({distance, numCTAs}, builder.getI64Type(),
+                            barrierEncoding, sharedMemorySpace,
+                            /*mutableMemory=*/true);
   Type singleBarrierMemDescType =
-      ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+      ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);
-  Value barrierAlloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
-      loc, barrierMemDescType, Value());
+  Value barrierAlloc = mlir::triton::gpu::LocalAllocOp::create(
+      builder, loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
-    Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
-    Value barrierView = builder.create<ttg::MemDescIndexOp>(
-        loc, singleBarrierMemDescType, barrierAlloc, idx);
-    builder.create<ttng::InitBarrierOp>(funcOp->getLoc(), barrierView, 1);
+    Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
+    Value barrierView = ttg::MemDescIndexOp::create(
+        builder, loc, singleBarrierMemDescType, barrierAlloc, idx);
+    ttng::InitBarrierOp::create(builder, funcOp->getLoc(), barrierView, 1);
   }
   return barrierAlloc;
 }
@@ -645,11 +645,11 @@ void createToken(
         }
         Value v;
         if (it->second.front()->getSrcOp()->getParentOfType<scf::ForOp>())
-          v = builder.create<ttnvws::CreateTokenOp>(
-              funcOp.getLoc(), channel->numBuffers, tokenLoadType);
+          v = ttnvws::CreateTokenOp::create(builder, funcOp.getLoc(),
+                                            channel->numBuffers, tokenLoadType);
         else
-          v = builder.create<ttnvws::CreateTokenOp>(funcOp.getLoc(), 1,
-                                                    tokenLoadType);
+          v = ttnvws::CreateTokenOp::create(builder, funcOp.getLoc(), 1,
+                                            tokenLoadType);
         commChannel.tokens[consumerAsyncTaskId] = v;
       }
 
@@ -700,8 +700,8 @@ static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
   Type accMemDescType = triton::gpu::MemDescType::get(
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
+  return ttng::TMEMAllocOp::create(builder, oldTMemAllocOp.getLoc(),
+                                   accMemDescType, nullptr);
 }
 
 // Create a buffer array for each producer op, if the producer is in a ForOp,
@@ -753,7 +753,7 @@ DenseMap<Channel *, Value> createBuffer(
                    dyn_cast<RankedTensorType>(srcValue.getType())) {
       // Get basic information from tensorType
       auto order = ttg::getOrderForMemory(tensorType);
-      auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+      auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
       auto elemType = tensorType.getElementType();
 
       // Get shape, layout and type of a slice
@@ -775,7 +775,7 @@ DenseMap<Channel *, Value> createBuffer(
       Attribute sharedLayout;
       if (requireMMASharedEncoding) {
         sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-            context, sliceShape, order, CTALayout, elemType,
+            context, sliceShape, order, CGALayout, elemType,
             /*fp4Padded*/ false);
       } else if (auto tmaLoad = dyn_cast<tt::DescriptorLoadOp>(srcOp)) {
         sharedLayout = ttng::getEncodingFromDescriptor(
@@ -784,7 +784,7 @@ DenseMap<Channel *, Value> createBuffer(
         // Create an unswizzled layout for now.
         // TODO: optimize it based on the consumer.
         sharedLayout = ttg::SwizzledSharedEncodingAttr::get(context, 1, 1, 1,
-                                                            order, CTALayout);
+                                                            order, CGALayout);
       }
 
       // Get shape, layout and type of the complete buffer
@@ -798,7 +798,7 @@ DenseMap<Channel *, Value> createBuffer(
       Type memdescType =
           ttg::MemDescType::get(bufferShape, elemType, sharedLayout,
                                 sharedMemorySpace, /*mutableMemory*/ true);
-      buffer = builder.create<ttg::LocalAllocOp>(funcOp.getLoc(), memdescType);
+      buffer = ttg::LocalAllocOp::create(builder, funcOp.getLoc(), memdescType);
     } else {
       llvm_unreachable("Unexpected result type");
     }

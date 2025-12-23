@@ -52,7 +52,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -107,7 +107,7 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -158,8 +158,8 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
   auto viewDescType = triton::gpu::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
-  return builder.create<triton::gpu::MemDescIndexOp>(alloc.getLoc(),
-                                                     viewDescType, alloc, idx);
+  return triton::gpu::MemDescIndexOp::create(builder, alloc.getLoc(),
+                                             viewDescType, alloc, idx);
 }
 
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
@@ -176,7 +176,7 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
   assert(tensorType);
 
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+  auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -229,7 +229,6 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
     builder.setInsertionPoint(tmaLoad);
     auto pipelineBuffer = getBufferForPipelineStage(builder, tmaLoad.getType(),
                                                     buffer, bufferIdx, true);
-    // FIXME: translateTMAIndices
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
         loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
         pipelineBuffer, pred);

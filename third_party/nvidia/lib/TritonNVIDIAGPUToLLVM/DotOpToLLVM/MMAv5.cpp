@@ -18,44 +18,25 @@ using ::mlir::triton::gpu::SharedLinearEncodingAttr;
 // DotOpMmaV5TmemLoader
 //===----------------------------------------------------------------------===//
 
-mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
-    Value tensor, Value base, SmallVector<unsigned int> instrShape,
-    bool interleaved, bool trans)
-    : base(base), instrShape(instrShape), interleaved(interleaved),
-      trans(trans) {
-  auto ty = cast<MemDescType>(tensor.getType());
-  auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
-  int elTyWidth = ty.getElementTypeBitWidth();
-  unpacked = tmemEncoding.getColStride() != 1;
-  // When using TMEM to store operands mma operands the TMEM block size may be
-  // smaller than mma k block. Therefore we need to adjust the offset
-  // calculation.
-  numSlicePerBlockN = tmemEncoding.getBlockN() / instrShape[1];
-  numElementsPer32b = 32 / (elTyWidth * tmemEncoding.getColStride());
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0]);
+DotOpMmaV5TmemLoader mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::build(
+    Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
+    Value tmemBase) {
+  auto ctx = loc.getContext();
+  auto ll = toLinearLayout(memTy);
+  auto layout = cast<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding());
+  auto bitwidth = memTy.getElementTypeBitWidth();
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value address = tb.ptrtoint(i32_ty, tmemBase);
+  return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth);
 }
 
 MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
     int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
-  int numRows = 64;
-  if (interleaved || instrShape[0] >= 128)
-    numRows = 128;
-  int numColPerBlock =
-      ((instrShape[0] * numSlicePerBlockN * instrShape[1]) / numRows) /
-      numElementsPer32b;
-  int blockId = a + (b / numSlicePerBlockN) * numRepM;
-  int offset;
-  if (!interleaved) {
-    offset = numColPerBlock * blockId;
-  } else {
-    int blockIdIsOdd = blockId & 1;
-    int blockIdPrevEven = blockId - blockIdIsOdd;
-    offset = numColPerBlock * blockIdPrevEven + ((16 * blockIdIsOdd) << 16);
-  }
-  offset += (b % numSlicePerBlockN) * (instrShape[1] / numElementsPer32b);
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  Value address = tb.ptrtoint(i32_ty, base);
+  auto dims = to_vector(ll.getInDimNames());
+  auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
+  int row = rowCol[0].second;
+  int col = rowCol[1].second * bitwidth / 32;
+  int offset = col | (row << 16);
   return {address, offset};
 }
 
@@ -273,7 +254,7 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
-  auto &mmaOp = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &mmaOp = *ptxBuilder.create(opcode);
   mmaOp({accOp, aOp, bOp, instDescOp, useInitAccOp}).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
@@ -283,17 +264,17 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
                                 MemDescOperand a, Value b, MemDescOperand d,
                                 Value scaleA, Value scaleB, Value pred,
                                 Value instDescriptor, Value useInitAcc,
-                                bool aInTmem, mxfpKind mxfpInstKind) {
+                                bool aInTmem, mxfpKind mxfpInstKind,
+                                bool twoCTAs) {
   PTXBuilder ptxBuilder;
-  std::string opcode;
+  std::string opcode =
+      "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
   if (mxfpInstKind == mxfpKind::mxf8f6f4) {
-    opcode =
-        "tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X";
+    opcode += "mxf8f6f4.block_scale.scale_vec::1X";
   } else if (mxfpInstKind == mxfpKind::mxf4) {
-    opcode = "tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X";
+    opcode += "mxf4.block_scale.scale_vec::2X";
   } else if (mxfpInstKind == mxfpKind::mxf4nvf4) {
-    opcode =
-        "tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.scale_vec::4X";
+    opcode += "mxf4nvf4.block_scale.scale_vec::4X";
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
@@ -306,7 +287,7 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
   auto *scaleAOp = ptxBuilder.newAddrOperand(scaleA, "r");
   auto *scaleBOp = ptxBuilder.newAddrOperand(scaleB, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
-  auto &mmaOp = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &mmaOp = *ptxBuilder.create(opcode);
   mmaOp({accOp, aOp, bOp, instDescOp, scaleAOp, scaleBOp, useInitAccOp})
       .predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
@@ -319,13 +300,16 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
-  auto *barrierOperand = ptxBuilder.newOperand(barrier, "l");
+  barrier = b.ptrtoint(i32_ty, barrier);
+  auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
   std::string opcode;
   if (twoCTAs) {
-    // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be broadcasted into CTAid 0 and 1
-    auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
+    auto ctaId = b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
+    auto totalCTAs = lookupNumCTAs(rewriter);
+    auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
+    Value mask = b.shl(b.i16_val(3), ctaIdLead);
+    auto *ctaMask = ptxBuilder.newOperand(mask, "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
@@ -333,7 +317,7 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
   }
-  auto &barrierOp = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
@@ -355,7 +339,6 @@ struct DotConversion {
     } repShape;
     bool transA;
     bool transB;
-    bool interleaved;
     bool aInTmem;
   };
 
@@ -379,26 +362,23 @@ struct DotConversion {
   CreateMMAInstFn createMMAInst;
 };
 
-void convertDotImpl(const LLVMTypeConverter &typeConverter,
-                    ConversionPatternRewriter &rewriter, Location loc, Value a,
-                    Value b, Value loadedA, Value loadedB,
-                    MemDescType dTensorTy, Value useDFlag, Value pred,
-                    ValueRange barriers, ValueRange barrierPreds, bool twoCTAs,
-                    bool opKindIsMXFP4, const DotConversion &op) {
+LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
+                             ConversionPatternRewriter &rewriter, Location loc,
+                             Value a, Value b, Value loadedA, Value loadedB,
+                             MemDescType dTensorTy, Value useDFlag, Value pred,
+                             ValueRange barriers, ValueRange barrierPreds,
+                             bool twoCTAs, bool opKindIsMXFP4,
+                             const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
   if (twoCTAs) {
-    // TODO: we have to sync the two CTAs because we currently don't use remove
-    // barriers for the copies.
-    rewriter.create<ttng::ClusterArriveOp>(loc, false);
-    rewriter.create<ttng::ClusterWaitOp>(loc);
-
-    Value clusterId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
-    Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
+    Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
+    Value cluster0 = tb.icmp_eq(leftClusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }
   pred = tb.and_(pred, isWarp0);
@@ -409,7 +389,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto *mmaBlock = rewriter.createBlock(curBlock->getParent(),
                                         std::next(Region::iterator(curBlock)));
   rewriter.setInsertionPointToEnd(curBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, pred, mmaBlock, endBlock);
+  LLVM::CondBrOp::create(rewriter, loc, pred, mmaBlock, endBlock);
   // Emit the rest in mmaBlock
   rewriter.setInsertionPointToEnd(mmaBlock);
 
@@ -432,11 +412,15 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
   unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  // Checked in the verifier
+  assert(mmaSizeN <= 256 &&
+         "The maximum size of an MMA instruction is 128x256");
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
+  assert((!twoCTAs || numRepN == 1) &&
+         "grep for [Note: numRepN > 1 and two_ctas]");
   int numRepK = ceil<unsigned>(K, mmaSizeK);
-  bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
   SmallVector<int64_t> shapeA = op.shapeA;
   SmallVector<int64_t> shapeB = op.shapeB;
@@ -445,42 +429,53 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
   if (aInTmem) {
-    aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
-                                                     interleaved, transA);
+    aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
+        DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
   } else {
     auto isFp4a = op.numBitsPerElementA == 4;
-    aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
-        loc, rewriter, aTensorTy, baseA, aOperandShape, 0, 5, isFp4a));
+    auto loader = DotOpMmaSmemLoader::build(loc, rewriter, aTensorTy, baseA,
+                                            aOperandShape, 0, 5, isFp4a);
+    if (failed(loader)) {
+      return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
+                                  "operand A in shared memory ")
+             << aTensorTy << " for MMAv5 instruction shape [" << mmaSizeM
+             << ", " << mmaSizeK << "]";
+    }
+    aLoader = std::make_unique<DotOpMmaSmemLoader>(std::move(*loader));
     transA = ((DotOpMmaSmemLoader *)aLoader.get())->getDescriptor().transposed;
   }
 
   auto isFp4b = op.numBitsPerElementB == 4;
   // [Instr shape twoCTAs]
-  // This division by 2 in 2CTA mode a bit subtle:
-  // The issue here is that in 2CTA you multiply in one instruction a tensor
-  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
-  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
-  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
-  // Something similar happens when we multiply by 2 the mmaSizeM when creating
-  // It's a massive code smell tho
-  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+  // To compute a output tile of [mmaSizeM, mmaSizeN] in 2CTA mode, we load
+  // an A of size 2 * mmaSizeM x K and a B of size K x mmaSizeN.
+  // Now, since B is split amongs 2 CTAs along N, we need to divide by 2.
+  auto bLoader = DotOpMmaSmemLoader::build(
       loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
       1, 5, isFp4b);
-  bool transB = !bLoader.getDescriptor().transposed;
+  if (failed(bLoader)) {
+    return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
+                                "operand B in shared memory ")
+           << bTensorTy << " for MMAv5 instruction shape [" << mmaSizeK << ", "
+           << mmaSizeN << "]";
+  }
+  bool transB = !bLoader->getDescriptor().transposed;
 
-  assert((!aTensorTy.getElementType().isF32() || !(transA || transB)) &&
-         "Currently don't support transpose for F32.");
+  if (aTensorTy.getElementType().isF32() && (transA || transB)) {
+    return mlir::emitError(loc, "tcgen05.mma does not support transposed "
+                                "float32 operands in shared memory");
+  }
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
-                               transA,   transB,   interleaved,
-                               aInTmem};
+                               transA,   transB,   aInTmem};
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
-        Value b = bLoader.smemLoad(k, n, rewriter, loc);
+        MemDescOperand a =
+            aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
+        Value b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
@@ -494,16 +489,19 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
     createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
   }
-  rewriter.create<LLVM::BrOp>(loc, endBlock);
+  LLVM::BrOp::create(rewriter, loc, endBlock);
+  return success();
 }
 
-void convertDot(const LLVMTypeConverter &typeConverter,
-                ConversionPatternRewriter &rewriter, Location loc,
-                ttng::TCGen5MMAOp op, ttng::TCGen5MMAOpAdaptor &adaptor) {
+LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
+                         ConversionPatternRewriter &rewriter, Location loc,
+                         ttng::TCGen5MMAOp op,
+                         ttng::TCGen5MMAOpAdaptor &adaptor) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  bool twoCTAs = op.getTwoCtas();
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  assert(twoCTAs == op.getTwoCtas());
 
   DotConversion dot;
 
@@ -518,12 +516,12 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   dot.numBitsPerElementA = aTensorTy.getElementTypeBitWidth();
   dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
 
+  DotOpMmaV5TmemLoader dLoader =
+      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
-    DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
-        op.getD(), adaptor.getD(), {desc.mmaSizeM, desc.mmaSizeN},
-        desc.interleaved, /*trans=*/false);
-    return dLoader.tmemLoad(m, n, rewriter, loc);
+    return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,
+                            loc);
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,
@@ -540,11 +538,11 @@ void convertDot(const LLVMTypeConverter &typeConverter,
                   useInitAcc, desc.aInTmem, twoCTAs);
   };
 
-  convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
-                 adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), twoCTAs, /*opKindIsMXFP4=*/false,
-                 dot);
+  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
+                        adaptor.getA(), adaptor.getB(), dTensorTy,
+                        adaptor.getUseD(), adaptor.getPred(),
+                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
+                        twoCTAs, /*opKindIsMXFP4=*/false, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -577,10 +575,10 @@ int getScaleFactorColsPerSet(mxfpKind kind) {
   }
 };
 
-void convertScaledDot(const LLVMTypeConverter &typeConverter,
-                      ConversionPatternRewriter &rewriter, Location loc,
-                      ttng::TCGen5MMAScaledOp op,
-                      ttng::TCGen5MMAScaledOpAdaptor &adaptor) {
+LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
+                               ConversionPatternRewriter &rewriter,
+                               Location loc, ttng::TCGen5MMAScaledOp op,
+                               ttng::TCGen5MMAScaledOpAdaptor &adaptor) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
@@ -612,6 +610,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
 
   int numRows = 128;
   int colSizeInBits = 32;
@@ -651,14 +650,14 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
         subWordIdx, subWordIdx, mxfpInstKind);
     createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA, scaleB,
                         pred, instDescriptor, useInitAcc, desc.aInTmem,
-                        mxfpInstKind);
+                        mxfpInstKind, twoCTAs);
   };
 
-  convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
-                 adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, opKindIsMXFP4,
-                 dot);
+  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
+                        adaptor.getA(), adaptor.getB(), dTensorTy,
+                        adaptor.getUseD(), adaptor.getPred(),
+                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
+                        twoCTAs, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -674,12 +673,9 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert((isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr,
-                SharedLinearEncodingAttr>(AEnc)) &&
-           "Operand A should use Shared or Tensor memory layout.");
-    assert((isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(BEnc)) &&
-           "Operand B should use Shared layout.");
-    convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    if (failed(convertDot(*getTypeConverter(), rewriter, op.getLoc(), op,
+                          adaptor)))
+      return failure();
     rewriter.eraseOp(op);
     return success();
   }
@@ -692,7 +688,9 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    if (failed(convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op,
+                                adaptor)))
+      return failure();
     rewriter.eraseOp(op);
     return success();
   }
@@ -716,7 +714,7 @@ struct TCGen5CommitOpConversion
       pred = b.and_(adaptor.getPred(), pred);
 
     createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
-                    op.getTwoCtas());
+                    ttng::getModuleTwoCTAs(op));
     rewriter.eraseOp(op);
     return success();
   }

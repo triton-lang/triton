@@ -48,7 +48,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
+    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -151,7 +151,7 @@ class MMAv5:
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)
         bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
+        reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), layout, num_warps)
         return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0), reg_layout)
 
     @gluon.jit
@@ -195,7 +195,7 @@ def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
@@ -625,7 +625,7 @@ def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, 
     b_index = producer % (num_buffers + stealb)
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
     return producer

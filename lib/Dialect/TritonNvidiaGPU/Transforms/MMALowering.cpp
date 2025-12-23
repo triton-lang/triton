@@ -29,25 +29,25 @@ public:
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
     Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-    auto barrierCTALayout = ttg::CTALayoutAttr::get(
-        /*context=*/ctx, /*CTAsPerCGA=*/{1},
-        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+    auto numCTAs = gpu::lookupNumCTAs(op);
+    auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-        ctx, 1, 1, 1, {0}, barrierCTALayout);
+        ctx, 1, 1, 1, {0}, barrierCGALayout);
     ttg::MemDescType barrierMemDescType =
-        ttg::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+        ttg::MemDescType::get({numCTAs}, rewriter.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
-        rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
-    rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
+        ttg::LocalAllocOp::create(rewriter, loc, barrierMemDescType, Value());
+    InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
     op.addCompletionBarrier(barrierAlloc,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
+                            arith::ConstantIntOp::create(rewriter, loc, 1, 1));
     op.setIsAsync(true);
 
     rewriter.setInsertionPointAfter(op);
-    Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPredicate());
-    rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
+    Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
+                          op.getPredicate());
+    InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
 };
@@ -66,8 +66,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
     auto oldType = cast<ttg::MemDescType>(operand.get().getType());
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
-    ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(oldType.getEncoding());
-    ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
+    ttg::CGAEncodingAttr CGALayout = ttg::getCGALayout(oldType.getEncoding());
+    auto CTASplitNum = CGALayout.getCTASplitNum();
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
     Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
@@ -75,9 +75,9 @@ struct TCGen5MMAScaleSharedToTmemConversion
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
-    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc,
+                       /*barrier*/ Value());
     operand.set(tmemAlloc);
     return true;
   }
@@ -183,7 +183,7 @@ public:
     }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
       if (!pred) {
-        pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
+        pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
       if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
           !moveDefiningOpsBefore(pred, op)) {

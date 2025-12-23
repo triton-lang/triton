@@ -203,13 +203,11 @@ defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
-  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
-      maxActiveClusters = -1;
+  int clusterDim = -1, maxActiveClusters = -1;
   int shared = 0;
   CUfunction func;
 
-  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
-                        &clusterDimY, &clusterDimZ)) {
+  if (!PyArg_ParseTuple(args, "Kii", &func, &shared, &clusterDim)) {
     return NULL;
   }
 
@@ -222,13 +220,13 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-  launchAttr[0].value.clusterDim.x = clusterDimX;
-  launchAttr[0].value.clusterDim.y = clusterDimY;
-  launchAttr[0].value.clusterDim.z = clusterDimZ;
+  launchAttr[0].value.clusterDim.x = clusterDim;
+  launchAttr[0].value.clusterDim.y = 1;
+  launchAttr[0].value.clusterDim.z = 1;
   CUlaunchConfig config;
-  config.gridDimX = clusterDimX;
-  config.gridDimY = maxActiveBlocks * clusterDimY;
-  config.gridDimZ = clusterDimZ;
+  config.gridDimX = clusterDim * maxActiveBlocks;
+  config.gridDimY = 1;
+  config.gridDimZ = 1;
   config.blockDimX = 128;
   config.blockDimY = 1;
   config.blockDimZ = 1;
@@ -447,10 +445,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "strides=[");
-    for (int i = 0; i < rank; ++i) {
+    for (int i = 0; i + 1 < rank; ++i) {
       off += snprintf(err + off, sizeof(err) - off, "%llu%s",
                       (unsigned long long)stridesLL[i],
-                      (i + 1 < rank) ? ", " : "");
+                      (i + 2 < rank) ? ", " : "");
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "blockSize=[");
@@ -463,7 +461,7 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
       off += snprintf(err + off, sizeof(err) - off, "%u%s",
                       (unsigned)elementStrides[i], (i + 1 < rank) ? ", " : "");
     }
-    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    off += snprintf(err + off, sizeof(err) - off, "] fill=%d\n", (int)fill);
     PyErr_SetString(PyExc_RuntimeError, err);
 
     goto cleanup;

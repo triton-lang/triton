@@ -802,7 +802,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                     dim == 0 ? tmem.getBlockM() / 2 : tmem.getBlockM(),
                     dim == 1 ? tmem.getBlockN() / 2 : tmem.getBlockN(),
                     tmem.getColStride(), tmem.getCTASplitM(),
-                    tmem.getCTASplitN());
+                    tmem.getCTASplitN(), tmem.getTwoCTAs());
             auto newType = MemDescType::get(shape, type.getElementType(),
                                             accEncoding, type.getMemorySpace(),
                                             type.getMutableMemory());
@@ -859,13 +859,13 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
+    auto CGALayout = getCGALayout(oldRetType.getEncoding());
     builder.setInsertionPoint(op);
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
     // the sliced tmem here.
-    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        tmem.getBlockM(), tmem.getBlockN(), oldRetType, numWarps);
+    auto newDistributedEncoding =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CGALayout);
 
     // oldRetType is the desired output, we slice it and convert from the
     // compatible layout to the sliced desired output.
@@ -899,7 +899,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-      auto CTALayout = getCTALayout(srcTy.getEncoding());
+      auto CGALayout = getCGALayout(srcTy.getEncoding());
       builder.setInsertionPoint(op);
 
       // calculate new tmem type.
@@ -914,13 +914,14 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
           builder.getContext(),
           dim == 0 ? tmem.getBlockM() / 2 : tmem.getBlockM(),
           dim == 1 ? tmem.getBlockN() / 2 : tmem.getBlockN(),
-          tmem.getColStride(), tmem.getCTASplitM(), tmem.getCTASplitN());
+          tmem.getColStride(), tmem.getCTASplitM(), tmem.getCTASplitN(),
+          tmem.getTwoCTAs());
       auto newType = MemDescType::get(shape, retType.getElementType(),
                                       accEncoding, retType.getMemorySpace(),
                                       retType.getMutableMemory());
 
-      Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-          accEncoding.getBlockM(), accEncoding.getBlockN(), srcTy, numWarps);
+      auto newDistributedEncoding =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CGALayout);
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(
@@ -1148,8 +1149,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (auto thenResult : thenYieldOp.getResults()) {
       newResultTypes.push_back(thenResult.getType());
     }
-    auto newIfOp = builder.create<scf::IfOp>(ifOp.getLoc(), newResultTypes,
-                                             ifOp.getCondition());
+    auto newIfOp = scf::IfOp::create(builder, ifOp.getLoc(), newResultTypes,
+                                     ifOp.getCondition());
     // Move the original regions to the cloned operation.
     newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
     newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());

@@ -69,8 +69,8 @@ bool ttng::isOperandPipelineableBase(
     return true;
   }
   auto localAllocSrc = localAlloc.getSrc().getDefiningOp();
-  if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-          localAllocSrc)) {
+  if (!isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp,
+                       tt::DescriptorGatherOp>(localAllocSrc)) {
     return false;
   }
   foundDef = localAllocSrc;
@@ -220,9 +220,19 @@ static bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
     return true;
   }
   auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  Value accUseFlagInit;
   while (auto blockArg = dyn_cast<BlockArgument>(accUseFlag)) {
     accUseFlag = yieldOp.getOperand(blockArg.getArgNumber() - 1);
+    accUseFlagInit = forOp.getInitArgs()[blockArg.getArgNumber() - 1];
   }
+
+  if (accUseFlagInit && matchPattern(accUseFlagInit, m_Zero()) &&
+      matchPattern(accUseFlag, m_One())) {
+    // A simple case for nested loops - the use flag is initialized to false
+    // and uncondionally set to true in later iterations
+    return true;
+  }
+
   // If the accUseFlag is overwritten in the loop, we treat it as a 'false'
   // with condition being ~accUseFlag.
   return accUseFlag.getDefiningOp() &&
@@ -301,7 +311,7 @@ ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
   Type accMemDescType = triton::gpu::MemDescType::get(
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(
-      oldTMemAllocOp.getLoc(), accMemDescType,
+  return ttng::TMEMAllocOp::create(
+      builder, oldTMemAllocOp.getLoc(), accMemDescType,
       builder.getType<gpu::AsyncTokenType>(), /*src=*/Value());
 }

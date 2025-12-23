@@ -162,10 +162,26 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
   auto checkLayout = [&](Value val, auto makeErr) -> LogicalResult {
     // Only ranked tensors can have layouts.
     auto rankedTy = dyn_cast<RankedTensorType>(val.getType());
-    if (!rankedTy)
+    if (rankedTy) {
+      mlir::Attribute layout = rankedTy.getEncoding();
+      if (!layout)
+        return success();
+
+      Dialect &dialect = layout.getDialect();
+      auto verifyLayoutInterface =
+          dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(&dialect);
+      if (verifyLayoutInterface) {
+        return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
+                                                         makeErr);
+      }
+      return success();
+    }
+
+    auto memDescTy = dyn_cast<MemDescType>(val.getType());
+    if (!memDescTy)
       return success();
 
-    mlir::Attribute layout = rankedTy.getEncoding();
+    mlir::Attribute layout = memDescTy.getEncoding();
     if (!layout)
       return success();
 
@@ -173,8 +189,8 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     auto verifyLayoutInterface =
         dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(&dialect);
     if (verifyLayoutInterface) {
-      return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
-                                                       makeErr);
+      return verifyLayoutInterface->verifyMemDescLayout(layout, memDescTy, op,
+                                                        makeErr);
     }
 
     return success();

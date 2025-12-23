@@ -356,6 +356,46 @@ bool DotScaledOp::verifyOutputDims() {
   return true;
 }
 
+LogicalResult DotScaledOp::verify() {
+  auto aShape = this->getA().getType().getShape();
+  int64_t rank = aShape.size();
+  if (rank < 2)
+    return this->emitError("operands must be at least 2D");
+
+  auto k = aShape[rank - 1];
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (this->getLhsKPack())
+      k *= 2;
+  }
+  auto cShape = this->getC().getType().getShape();
+  int64_t mDim = cShape[cShape.size() - 2];
+  int64_t nDim = cShape[cShape.size() - 1];
+
+  if (getAScale()) {
+    auto aScaleShape = getAScale().getType().getShape();
+    if (aScaleShape[rank - 2] != mDim)
+      return this->emitError(
+          "scales M dimension must match the operand M dimension");
+    int scale_factor =
+        isa<Float8E4M3FNType>(getAScale().getType().getElementType()) ? 16 : 32;
+    if (aScaleShape[rank - 1] != k / scale_factor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  if (getBScale()) {
+    auto bScaleShape = getBScale().getType().getShape();
+    if (bScaleShape[rank - 2] != nDim)
+      return this->emitError(
+          "scales N dimension must match the operand N dimension");
+    int scale_factor =
+        isa<Float8E4M3FNType>(getBScale().getType().getElementType()) ? 16 : 32;
+    if (bScaleShape[rank - 1] != k / scale_factor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  return success();
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
@@ -444,7 +484,19 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   if (op.getNumOperands() != op.getNumResults()) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
-
+  auto axis = op.getAxis();
+  auto firstRank = 0;
+  for (auto tensorTy : op.getInputTypes()) {
+    int64_t rank = tensorTy.getRank();
+    if (axis < 0 || axis >= rank)
+      return op.emitOpError() << "axis out of bounds for operand rank " << rank;
+    if (firstRank == 0)
+      firstRank = rank;
+    else if (rank != firstRank)
+      return op.emitOpError()
+             << "all operands must have the same rank, but got ranks "
+             << firstRank << " and " << rank;
+  }
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
     if (opElemTy != getElementTypeOrSelf(resTy)) {
@@ -736,10 +788,10 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
 
     auto newExpandTy = RankedTensorType::get(
         newExpandShape, srcTy.getElementType(), newExpandEnc);
-    auto newExpand = rewriter.create<ExpandDimsOp>(op.getLoc(), newExpandTy,
-                                                   src, op.getAxis());
-    auto newBroadcast = rewriter.create<BroadcastOp>(
-        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    auto newExpand = ExpandDimsOp::create(rewriter, op.getLoc(), newExpandTy,
+                                          src, op.getAxis());
+    auto newBroadcast = BroadcastOp::create(
+        rewriter, broadcast.getLoc(), op.getType(), newExpand.getResult());
     rewriter.replaceOp(op, {newBroadcast.getResult()});
     return success();
   }
@@ -1329,8 +1381,7 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
   // TODO: We can support smaller gather sizes by padding the `local_alloc` this
   // lowers to to the nearest minimum tile size.
   if (unsigned rows = resultType.getShape()[0]; rows < 8) {
-    return op->emitOpError("gather must have at least 8 rows, but got ")
-           << rows;
+    return op->emitOpError("must have at least 8 rows, but got ") << rows;
   }
 
   Type dtype = resultType.getElementType();
@@ -1339,9 +1390,8 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
 
   unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
-    return op->emitOpError("gather of ")
-           << dtype << " must have at least " << minCols << " columns, but got "
-           << cols;
+    return op->emitOpError("must have at least ")
+           << minCols << " columns for " << dtype << ", but got " << cols;
   }
 
   if (resultType.getShape()[0] != indicesType.getShape()[0]) {

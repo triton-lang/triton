@@ -8,7 +8,7 @@
 namespace mlir {
 
 namespace triton::AMD {
-constexpr char AttrBypassLDS[] = "amdgpu.bypass_lds_load";
+constexpr char AttrBypassLDS[] = "amdg.bypass_lds_load";
 }
 
 // This function will

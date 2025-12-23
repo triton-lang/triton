@@ -47,7 +47,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                const tt::AMD::TargetInfo &targetInfo);
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx) {
+                                  Value extractIdx, int contiguity) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -55,13 +55,14 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescIndexOp>();
 
-  auto copyOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-      loc, loadOp.getPtr(), viewLoad, loadOp.getMask(), loadOp.getOther(),
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
+      builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
+      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
+      loadOp.getIsVolatile(), contiguity);
   auto commitOp =
-      builder.create<ttg::AsyncCommitGroupOp>(loc, copyOp->getResult(0));
+      ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
-      builder.create<ttg::AsyncWaitOp>(loc, commitOp->getResult(0), 0);
+      ttg::AsyncWaitOp::create(builder, loc, commitOp->getResult(0), 0);
 
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, loadOp->getResult(0), viewLoad, waitOp);
@@ -93,7 +94,7 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
                       .getDefiningOp<ttg::MemDescIndexOp>();
 
   tt::LoadOp newLoadOp = cast<tt::LoadOp>(builder.clone(*loadOp));
-  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp, viewLoad);
+  auto storeOp = ttg::LocalStoreOp::create(builder, loc, newLoadOp, viewLoad);
   auto maybeLocalLoad =
       tt::replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad);
 
@@ -166,8 +167,27 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         return std::nullopt;
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
+
       auto order = getOrderForMemory(srcTy);
+      if (useAsyncCopy && !targetInfo.supportsDirectToLDSScattering()) {
+        // For architectures that don't support scattering into LDS we must
+        // ensure that each warp writes a contiguous memory chunk. This requires
+        // the shared memory order to follow the thread order, while preserving
+        // the fastest dimension from the register order to keep vectorization.
+        auto llEnc =
+            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
+        auto regOrder = llEnc.getOrder();
+        auto threadOrder = llEnc.getThreadOrder();
+
+        auto contig = llEnc.getElemsPerThread(srcTy.getShape());
+        SetVector<unsigned> orderSet;
+        if (contig[regOrder[0]] > 1)
+          orderSet.insert(regOrder[0]);
+        orderSet.insert(threadOrder.begin(), threadOrder.end());
+        order = orderSet.takeVector();
+      }
+
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -200,7 +220,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         if (!tempAttr) {
           tempAttr = ttg::SwizzledSharedEncodingAttr::get(
               loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-              ctaLayout, bitWidth, /*needTrans=*/false);
+              cgaLayout, bitWidth, /*needTrans=*/false);
         }
         LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
         sharedEncs.push_back(tempAttr);
@@ -213,7 +233,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
@@ -230,7 +250,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
     return (a.getPerPhase() == b.getPerPhase() &&
             a.getMaxPhase() == b.getMaxPhase() &&
             a.getOrder() == b.getOrder() &&
-            a.getCTALayout() == b.getCTALayout());
+            a.getCGALayout() == b.getCGALayout());
   };
   if (sharedEncs.empty() || !sharedEncs.front())
     return std::nullopt;
@@ -311,12 +331,12 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                 tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
-  Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  Value minusOne = arith::ConstantIntOp::create(builder, loc, -1, 32);
+  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
   Value extractIdx = minusOne;
   Value numBuffersVal =
-      builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+      arith::ConstantIntOp::create(builder, loc, numBuffers, 32);
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependency.
@@ -327,10 +347,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   extractIdx = forOp.getBody()->getArgument(newOperandIndex);
 
   builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
-  extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
-  Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                               extractIdx, numBuffersVal);
-  extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
+  extractIdx = arith::AddIOp::create(builder, loc, extractIdx, one);
+  Value cndExt = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
+                                       extractIdx, numBuffersVal);
+  extractIdx = arith::SelectOp::create(builder, loc, cndExt, extractIdx, zero);
 
   // Patch the yield with the updated counter.
   appendToForOpYield(forOp, {extractIdx});
@@ -356,7 +376,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (useAsyncCopy &&
         canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
                                   axisInfoAnalysis, targetInfo)) {
-      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
+      unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
     } else {
       loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
     }
@@ -714,7 +737,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
 
-  for (auto [l, _] : loadToInfo) {
+  for (auto [l, _] : loadToStreamOps) {
     schedule.erase(l);
     l->erase();
   }

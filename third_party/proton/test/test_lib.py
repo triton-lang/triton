@@ -1,3 +1,9 @@
+"""
+Test module for proton's CPP API functionality.
+No GPU kernel should be declared in this test.
+Python API correctness tests involving GPU kernels should be placed in `test_api.py`.
+Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
+"""
 import pathlib
 import pytest
 
@@ -60,3 +66,30 @@ def test_add_metrics(tmp_path: pathlib.Path):
     libproton.exit_scope(id1, "one")
     libproton.finalize_all("hatchet")
     assert temp_file.exists()
+
+
+def test_init_function_metadata(tmp_path: pathlib.Path):
+    metadata_file = tmp_path / "meta.json"
+    metadata_file.write_text("{}")
+    libproton.init_function_metadata(
+        0,
+        "dummy_fn",
+        [(0, "root")],
+        [],
+        str(metadata_file),
+    )
+
+
+def test_instrumented_op_entry_exit():
+    libproton.enter_instrumented_op(0, 0, 0, 0)
+    libproton.exit_instrumented_op(0, 0, 0, 0)
+
+
+def test_set_metric_kernels():
+    libproton.set_metric_kernels(0, 0, 0)
+
+
+def test_tensor_metric_construction():
+    metric = libproton.TensorMetric(123, libproton.metric_double_index)
+    assert metric.ptr == 123
+    assert metric.index == libproton.metric_double_index

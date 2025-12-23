@@ -4,6 +4,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
+#include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -61,9 +62,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
           pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
               arch, numStages));
         });
-  ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
-                     mlir::triton::AMD::createOptimizeLDSUsagePass,
-                     const std::string &, int32_t);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      mlir::triton::createAllocateAMDGPUSharedMemory);
   ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
@@ -71,6 +69,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                             const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpilogue);
+  ADD_PASS_WRAPPER_0("add_warp_pipeline", mlir::createTritonAMDGPUWarpPipeline);
+  ADD_PASS_WRAPPER_0("add_warp_pipeline_conversion",
+                     mlir::triton::AMD::createConvertWarpPipelinePass);
   ADD_PASS_OPTION_WRAPPER_1(
       "add_optimize_dot_operands",
       mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
@@ -89,6 +90,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructions);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
+
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
   ADD_PASS_OPTION_WRAPPER_1("add_schedule_loops",
@@ -105,6 +107,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());
   });
+  ADD_PASS_WRAPPER_1(
+      "add_warp_specialize_to_llvm",
+      mlir::triton::AMD::createTritonAMDGPUConvertWarpSpecializeToLLVMPass,
+      const std::string &);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -408,7 +414,7 @@ void init_triton_amd(py::module &&m) {
 
         llvm::Triple triple(amdTargetTriple);
         const llvm::Target *target =
-            llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+            llvm::TargetRegistry::lookupTarget(triple, error);
         if (!target)
           throw std::runtime_error("target lookup error: " + error);
 
@@ -467,12 +473,16 @@ void init_triton_amd(py::module &&m) {
     std::string error;
     llvm::Triple triple(amdTargetTriple);
     const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+        llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
         target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
+  });
+
+  m.def("supports_multi_cta_launch", [](const std::string &arch) {
+    return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
   });
 
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {

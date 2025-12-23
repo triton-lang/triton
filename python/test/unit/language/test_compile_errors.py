@@ -75,7 +75,7 @@ def test_err_in_unary_op():
     # ok, but the error message needs to point to the correct spot.
     @triton.jit
     def kernel():
-        not (0, 0)
+        -(0, 0)
 
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
@@ -234,11 +234,8 @@ def test_returns_branched_on_non_constexpr():
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constexprs={}))
 
-    try:
-        assert "at 2:4:" in str(e.value), "error should point to the function call"
-        assert "at 5:8:" in str(e.value.__cause__), "error should point to the second `return`"
-    except AssertionError as assertion_err:
-        raise assertion_err from e.value
+    assert "at 2:4:" in str(e.value), "error should point to the function call"
+    assert "at 1:0:" in str(e.value.__cause__), "error should point to function definition"
 
 
 def test_power_of_two_shapes():
@@ -478,6 +475,62 @@ def test_unused_result():
     assert expected_err_msg == obtained_err_msg
 
 
+@tl.core._aggregate
+class Square:
+    x: tl.tensor
+
+    @triton.constexpr_function
+    def __init__(self, x):
+        self.x = x
+
+    @triton.must_use_result
+    @triton.constexpr_function
+    def power(self):
+        return 2
+
+    @triton.must_use_result
+    @triton.jit
+    def compute(self):
+        return self.x * self.x
+
+
+def test_bound_unused_result():
+
+    @triton.jit
+    def evil_square_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a.compute()
+
+    @triton.jit
+    def good_square_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a = a.compute()
+
+    triton.compile(triton.compiler.ASTSource(fn=good_square_kernel, signature={}, constexprs={}))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=evil_square_kernel, signature={}, constexprs={}))
+
+    assert "The result of a.compute is not being used" in str(e.value)
+
+    @triton.jit
+    def evil_power_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a.power()
+
+    @triton.jit
+    def good_power_kernel():
+        a = Square(tl.full((64, 64), 0.0, tl.float32))
+        a = a.power()
+
+    triton.compile(triton.compiler.ASTSource(fn=good_power_kernel, signature={}, constexprs={}))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=evil_power_kernel, signature={}, constexprs={}))
+
+    assert "The result of a.power is not being used" in str(e.value)
+
+
 def test_err_constexpr_and_do_not_specialize():
 
     @triton.jit(do_not_specialize=["N"])
@@ -489,3 +542,23 @@ def test_err_constexpr_and_do_not_specialize():
 
     with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
         kernel[(1, )](5)
+
+
+def test_dot_scaled_shape_verification(fresh_triton_cache):
+
+    @triton.jit
+    def kernel():
+        M: tl.constexpr = 32
+        K: tl.constexpr = 64
+        N: tl.constexpr = 32
+        a = tl.full((M, K), 0, tl.uint8)
+        b = tl.full((K, N), 0, tl.uint8)
+        lhs_scale_wrong = tl.full((M, 4), 0, tl.uint8)
+        rhs_scale = tl.full((N, 2), 0, tl.uint8)
+        acc = tl.full((M, N), 0.0, tl.float32)
+        tl.dot_scaled(a, lhs_scale_wrong, "e5m2", b, rhs_scale, "e5m2", acc, False, True, True, tl.float32)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+
+    assert str(e.value.__cause__) == "lhs_scale must be a tensor of shape [..., 32, 2]. Got ['32', '4']"

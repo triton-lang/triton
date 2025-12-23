@@ -51,12 +51,12 @@ public:
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SwizzledSharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), order,
-              triton::gpu::getCTALayout(srcEncoding), srcType.getElementType()),
+              triton::gpu::getCGALayout(srcEncoding), srcType.getElementType()),
           sharedMemorySpace);
-      auto tmp = builder.create<triton::gpu::LocalAllocOp>(
-          cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
-                                                                 dstType, tmp);
+      auto tmp = triton::gpu::LocalAllocOp::create(builder, cvtOp.getLoc(),
+                                                   tmpType, cvtOp.getSrc());
+      auto newConvert = triton::gpu::LocalLoadOp::create(
+          builder, cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });

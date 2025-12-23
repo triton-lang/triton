@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace mlir {
 namespace triton {
@@ -52,7 +53,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
           blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
-          blocked.getCTAsPerCGA()[*reductionAxis] == 1)
+          blocked.getCGALayout().getCTAsPerCGA()[*reductionAxis] == 1)
         return failure();
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
@@ -83,8 +84,8 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       viewOp.getResult().setType(newType);
       viewOp.setEfficientLayout(true);
     });
-    auto cvt = rewriter.create<ConvertLayoutOp>(viewOp.getLoc(), tensorType,
-                                                viewOp.getResult());
+    auto cvt = ConvertLayoutOp::create(rewriter, viewOp.getLoc(), tensorType,
+                                       viewOp.getResult());
     rewriter.replaceAllUsesExcept(viewOp.getResult(), cvt.getResult(), cvt);
     return success();
   }
@@ -191,21 +192,19 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
   auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
-  auto ctaLayout =
-      CTALayoutAttr::get(ctx, baseLayout.getCTAsPerCGA(),
-                         baseLayout.getCTASplitNum(), baseLayout.getCTAOrder());
+  auto cgaLayout = getCGALayout(baseLayout);
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
-                                            warpsPerCTA, order, ctaLayout);
+                                            warpsPerCTA, order, cgaLayout);
 
   // Update the layout on the gather op and insert conversions.
-  auto cvtSrc = b.create<ConvertLayoutOp>(
-      op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
-  auto cvtIdx = b.create<ConvertLayoutOp>(
-      op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
+  auto cvtSrc = ConvertLayoutOp::create(
+      b, op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
+  auto cvtIdx = ConvertLayoutOp::create(
+      b, op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
 
   b.setInsertionPointAfter(op);
   auto cvtOut =
-      b.create<ConvertLayoutOp>(op.getLoc(), op.getType(), op.getResult());
+      ConvertLayoutOp::create(b, op.getLoc(), op.getType(), op.getResult());
   b.replaceAllUsesExcept(op.getResult(), cvtOut, cvtOut);
 
   b.modifyOpInPlace(op, [&] {
@@ -409,8 +408,8 @@ private:
   Operation *createConvertLayout(OpBuilder &builder, Type destType,
                                  Operation *newReduce) const {
     builder.setInsertionPointAfter(newReduce);
-    auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-        newReduce->getLoc(), destType, newReduce->getResult(0));
+    auto newCvt = triton::gpu::ConvertLayoutOp::create(
+        builder, newReduce->getLoc(), destType, newReduce->getResult(0));
     return newCvt;
   }
 
@@ -435,7 +434,7 @@ private:
         loop.getBody()->getArgument(oldAccumBlockArgNum);
     yieldValues.push_back(newUpdate);
     auto newYield =
-        builder.create<scf::YieldOp>(oldYield.getLoc(), yieldValues);
+        scf::YieldOp::create(builder, oldYield.getLoc(), yieldValues);
     return newYield;
   }
 
@@ -458,8 +457,8 @@ private:
     builder.setInsertionPointAfter(reduce);
     IRMapping mapping;
     for (auto operand : reduce.getOperands()) {
-      auto viewOp = builder.create<triton::ReshapeOp>(
-          reduce.getLoc(), viewOpTensorType, operand,
+      auto viewOp = triton::ReshapeOp::create(
+          builder, reduce.getLoc(), viewOpTensorType, operand,
           /*allowReorder=*/true, /*efficientLayout=*/true);
       mapping.map(operand, viewOp);
     }
@@ -520,8 +519,8 @@ private:
     auto neutralVal = getNeutralElement(reductionOp.value());
     assert(neutralVal && "Could not find neutral value for reduction op!");
     auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
-    auto newAccum = builder.create<arith::ConstantOp>(oldAccum.getLoc(),
-                                                      accumType, denseAttr);
+    auto newAccum = arith::ConstantOp::create(builder, oldAccum.getLoc(),
+                                              accumType, denseAttr);
     return newAccum;
   }
 
@@ -551,14 +550,12 @@ private:
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
     auto order3d = insertValue(blocked.getOrder(), 0, rank);
-    auto ctasPerCGA3d =
-        insertValue(blocked.getCTALayout().getCTAsPerCGA(), rank, 1);
-    auto ctasSplitNum3d =
-        insertValue(blocked.getCTALayout().getCTASplitNum(), rank, 1);
-    auto ctaOrder3d =
-        insertValue(blocked.getCTALayout().getCTAOrder(), rank, rank);
-    auto ctaLayout3d = triton::gpu::CTALayoutAttr::get(
-        reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
+    auto ctaLl = blocked.getCGALayout().getLinearLayout();
+    auto kBlocked = *ctaLl.getInDimNames().begin();
+    auto *ctx = kBlocked.getContext();
+    auto dim = standardOutDimNames(ctx, rank + 1)[rank];
+    ctaLl *= LinearLayout::identity1D(1, kBlocked, dim);
+    auto ctaLayout3d = CGAEncodingAttr::get(ctx, std::move(ctaLl));
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
         order3d, ctaLayout3d);

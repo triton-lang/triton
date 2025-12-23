@@ -94,8 +94,8 @@ public:
         bases_inv[d][i] = {0};
       }
     }
-    auto invBroadcast =
-        LinearLayout(bases_inv, invReg.getOutDims(), /*isSurjective=*/false);
+    auto invBroadcast = LinearLayout(std::move(bases_inv), invReg.getOutDims(),
+                                     /*isSurjective=*/false);
     auto cvt = llReg.compose(invBroadcast);
 
     // Deduplicate the result values
@@ -166,9 +166,38 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
-                                    adaptor.getAttributes().getValue())};
+    return {DestOp::create(rewriter, loc, elemTy, operands[0],
+                           adaptor.getAttributes().getValue())};
   }
+};
+
+template <typename SourceOp>
+struct ElementwiseToIntrinsicOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseToIntrinsicOpConversion<SourceOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp, ElementwiseToIntrinsicOpConversion>;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  using Base::Base;
+
+  explicit ElementwiseToIntrinsicOpConversion(
+      LLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef intrinsic,
+      PatternBenefit benefit = patternBenefitDefault)
+      : Base(typeConverter, axisAnalysisPass, benefit), intrinsic(intrinsic) {}
+
+  SmallVector<Value> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
+                                            operands[0])
+                .getResult(0)};
+  }
+
+private:
+  StringRef intrinsic;
 };
 
 } // namespace gpu

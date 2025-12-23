@@ -39,22 +39,25 @@ test-unit: all
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) --tb=short -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) --tb=short -vs python/tutorials/06-fused-attention.py
-	$(PYTEST) --tb=short -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py python/tutorials/gluon/03-async-copy.py python/tutorials/gluon/04-tma.py python/tutorials/gluon/05-wgmma.py python/tutorials/gluon/06-tcgen05.py python/tutorials/gluon/07-persistence.py python/tutorials/gluon/08-warp-specialization.py
+	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
+		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 
 .PHONY: test-distributed
 test-distributed: all
 	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install python/triton_kernels -v
+	$(PYTHON) -m pip install "python/triton_kernels[tests]" -v
 	$(PYTEST) --tb=short -s python/triton_kernels/bench/distributed.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
+	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 
 .PHONY: test-regression
 test-regression: all
@@ -68,19 +71,22 @@ test-microbenchmark: all
 test-interpret: all
 	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) --tb=short -s -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
-		language/test_tuple.py runtime/test_autotuner.py::test_kwargs[False] \
+		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) --tb=short -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py
+	$(PYTEST) --tb=short -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead"
 	$(PYTEST) --tb=short -s third_party/proton/test/test_override.py
+	$(PYTEST) --tb=short -s third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
+	$(PYTEST) python/test/gluon/test_frontend.py
+	$(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python

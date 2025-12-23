@@ -34,7 +34,7 @@ Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
                               mlir::amdgpu::sched_barrier_opt_enum maskValue) {
   IntegerAttr mask =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
-  return rewriter.create<ROCDL::SchedBarrier>(loc, mask);
+  return ROCDL::SchedBarrier::create(rewriter, loc, mask);
 }
 
 // Insert an experimental intrinsic for instruction group level parallelism.
@@ -42,7 +42,7 @@ Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
 Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
   IntegerAttr iglpValue =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
-  return rewriter.create<ROCDL::IglpOpt>(loc, iglpValue);
+  return ROCDL::IglpOpt::create(rewriter, loc, iglpValue);
 }
 
 struct InstructionSchedHintsRewriter
@@ -105,7 +105,7 @@ struct TritonAMDGPULowerInstructionSchedHints
 
   explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
                                                   int32_t numStages) {
-    this->arch = std::move(arch.str());
+    this->arch = arch.str();
     this->numStages = numStages;
   }
 
@@ -138,7 +138,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
           TritonAMDGPUInsertInstructionSchedHints> {
 
   explicit TritonAMDGPUInsertInstructionSchedHints(StringRef variant) {
-    this->variant = std::move(variant.str());
+    this->variant = variant.str();
   }
 
   void runOnOperation() override {
@@ -170,8 +170,8 @@ struct TritonAMDGPUInsertInstructionSchedHints
         if (result.wasInterrupted()) {
           OpBuilder rewriter(ctx);
           rewriter.setInsertionPointToStart(forOp.getBody());
-          rewriter.create<triton::amdgpu::InstructionSchedHint>(forOp->getLoc(),
-                                                                schedHint);
+          triton::amdgpu::InstructionSchedHint::create(
+              rewriter, forOp->getLoc(), schedHint);
         }
       });
       break;

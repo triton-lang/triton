@@ -5,15 +5,15 @@ import types
 
 import torch
 
-import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
+import triton_kernels.matmul_details.opt_flags as opt_flags
 
 
 class _DummyPrecisionConfig:
     def __init__(self):
-        self.weight_scale = None
+        self.b_mx_scale = None
         self.max_num_imprecise_acc = None
-        self.act_scale = None
-        self.out_scale = None
+        self.a_mx_scale = None
+        self.c_mx_scale = None
         self.enforce_bitwise_invariance = False
 
 
@@ -23,6 +23,7 @@ def _stub_cuda_props(*_args, **_kwargs):
 
 def setup_amd(monkeypatch):
     monkeypatch.setattr(opt_flags, "get_cdna_version", lambda: 3)
+    monkeypatch.setattr(opt_flags, "get_rdna_version", lambda: -1)
     monkeypatch.setattr(opt_flags.torch.cuda, "get_device_properties", _stub_cuda_props)
     monkeypatch.setattr(
         opt_flags.opt_flags_amd,
@@ -185,7 +186,7 @@ def test_max_allowable_mn(monkeypatch):
             k,
             None,
             False,
-            False,
+            True,
             False,
             0,
             False,

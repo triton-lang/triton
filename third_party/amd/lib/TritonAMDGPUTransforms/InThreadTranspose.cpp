@@ -62,7 +62,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
     if (tensorType) {
       Type newType = replaceEncoding(tensorType, encoding);
       newArgs.push_back(
-          rewriter.create<ttg::ConvertLayoutOp>(loc, newType, operand));
+          ttg::ConvertLayoutOp::create(rewriter, loc, newType, operand));
     } else {
       newArgs.push_back(operand);
     }
@@ -70,7 +70,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
 
   // Construct new load with the new encoding
   auto attrs = load->getAttrs();
-  auto newLoad = rewriter.create<tt::LoadOp>(loc, newArgs, attrs);
+  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -90,17 +90,17 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
 
   auto transposedLayout =
       ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
-  auto transposedEncoding =
-      ttg::LinearEncodingAttr::get(memStoreOp->getContext(), transposedLayout);
+  auto transposedEncoding = ttg::LinearEncodingAttr::get(
+      memStoreOp->getContext(), std::move(transposedLayout));
 
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);
   auto nonTransposed =
-      rewriter.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
+      ttg::ConvertLayoutOp::create(rewriter, loc, newLoadType, data);
 
   auto transposedType = replaceEncoding(data.getType(), transposedEncoding);
-  auto inThreadTransposed = rewriter.create<ttag::InThreadTransposeOp>(
-      loc, transposedType, nonTransposed);
+  auto inThreadTransposed = ttag::InThreadTransposeOp::create(
+      rewriter, loc, transposedType, nonTransposed);
   rewriter.startOpModification(memStoreOp);
   memStoreOp->setOperand(0, inThreadTransposed);
   rewriter.finalizeOpModification(memStoreOp);
@@ -110,14 +110,14 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
-  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
   auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      ctx, dotOperandEnc, operandType.getShape(), order, cgaLayout, bitWidth,
       /*needTrans=*/false);
 
   auto sharedVec = tempAttr.getVec();
@@ -125,7 +125,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto maxPhase = tempAttr.getMaxPhase();
 
   auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
-      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+      ctx, sharedVec, perPhase, maxPhase, order, cgaLayout);
 
   return newSharedEnc;
 }
@@ -728,7 +728,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto ctx = blockedEnc.getContext();
   auto numWarps = product(blockedEnc.getWarpsPerCTA());
   auto threadsPerWarp = product(blockedEnc.getThreadsPerWarp());
-  auto numCTAs = product(blockedEnc.getCTALayout().getCTAsPerCGA());
+  auto numCTAs = product(blockedEnc.getCGALayout().getCTAsPerCGA());
   return ttg::BlockedEncodingAttr::get(ctx, shape, newSizePerThread, order,
                                        numWarps, threadsPerWarp, numCTAs);
 }

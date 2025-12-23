@@ -28,19 +28,19 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
       LLVM::ReturnOp newOp;
       if (adaptor.getOperands().size() < 2) {
         // Single or no return value.
-        newOp =
-            rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
+        newOp = LLVM::ReturnOp::create(rewriter, op.getLoc(),
+                                       adaptor.getOperands());
       } else {
         // Pack the results into a struct.
         auto packedResultsTy = this->getTypeConverter()->packFunctionResults(
             funcOp.getResultTypes());
         Value packedResults =
-            rewriter.create<LLVM::UndefOp>(op.getLoc(), packedResultsTy);
+            LLVM::UndefOp::create(rewriter, op.getLoc(), packedResultsTy);
         for (auto it : llvm::enumerate(adaptor.getOperands())) {
           packedResults = b.insert_val(packedResultsTy, packedResults,
                                        it.value(), it.index());
         }
-        newOp = rewriter.create<LLVM::ReturnOp>(op.getLoc(), packedResults);
+        newOp = LLVM::ReturnOp::create(rewriter, op.getLoc(), packedResults);
       }
       newOp->setAttrs(op->getAttrs());
       rewriter.replaceOp(op, newOp->getResults());
@@ -122,9 +122,10 @@ private:
                 this->getTypeConverter()->packFunctionResults(resultTypes)))
         return nullptr;
     }
-    auto newCallOp = rewriter.create<LLVM::CallOp>(
-        callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
-        promotedOperands, callOp->getAttrs());
+    auto newCallOp = LLVM::CallOp::create(rewriter, callOp.getLoc(),
+                                          packedResult ? TypeRange(packedResult)
+                                                       : TypeRange(),
+                                          promotedOperands, callOp->getAttrs());
     newCallOp.getProperties().setOpBundleSizes(
         rewriter.getDenseI32ArrayAttr({}));
     newCallOp.getProperties().setOperandSegmentSizes(
@@ -145,8 +146,8 @@ private:
       // Extract individual results from the structure and return them as list.
       results.reserve(numResults);
       for (unsigned i = 0; i < numResults; ++i) {
-        results.push_back(rewriter.create<LLVM::ExtractValueOp>(
-            callOp.getLoc(), newCallOp->getResult(0), i));
+        results.push_back(LLVM::ExtractValueOp::create(
+            rewriter, callOp.getLoc(), newCallOp->getResult(0), i));
       }
     }
     return results;

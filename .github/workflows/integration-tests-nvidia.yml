@@ -27,7 +27,7 @@ jobs:
       CCACHE_COMPRESS: "true"
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           submodules: "true"
       - name: Compute cache keys
@@ -102,7 +102,6 @@ jobs:
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
         run: make test-proton
       - name: Inspect cache directories
         run: |

@@ -52,7 +52,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
-// (2) numCTAs > 1 but srcCTALayout == dstCTALayout
+// (2) numCTAs > 1 but srcCGALayout == dstCGALayout
 // TODO: Case with SliceLayout as srcLayout and numCTAs > 1 is to be implemented
 // in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
@@ -82,16 +82,16 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
       return true;
   }
 
-  // The above two branches make sure that it is legal to call getCTALayout of
+  // The above two branches make sure that it is legal to call getCGALayout of
   // srcLayout and dstLayout
 
-  // Case (2): Do not use dsmem when srcCTALayout == dstCTALayout
-  auto srcCTALayout = getCTALayout(srcLayout);
-  auto dstCTALayout = getCTALayout(dstLayout);
-  if (srcCTALayout == dstCTALayout)
+  // Case (2): Do not use dsmem when srcCGALayout == dstCGALayout
+  auto srcCGALayout = getCGALayout(srcLayout);
+  auto dstCGALayout = getCGALayout(dstLayout);
+  if (srcCGALayout == dstCGALayout)
     return false;
 
-  // Dsmem access is required when srcCTALayout != dstCTALayout
+  // Dsmem access is required when srcCGALayout != dstCGALayout
   return true;
 }
 
@@ -1113,57 +1113,6 @@ void dfsPostorder(Operation *root, DFSState *state) {
 }
 
 } // namespace
-
-SetVector<Operation *>
-multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
-  if (toSort.empty()) {
-    return toSort;
-  }
-
-  // Run from each root with global count and `seen` set.
-  DFSState state(toSort);
-  for (auto *s : toSort) {
-    assert(toSort.count(s) == 1 && "NYI: multi-sets not supported");
-    dfsPostorder(s, &state);
-  }
-
-  // Reorder and return.
-  SetVector<Operation *> res;
-  for (auto it = state.topologicalCounts.rbegin(),
-            eit = state.topologicalCounts.rend();
-       it != eit; ++it) {
-    res.insert(*it);
-  }
-  return res;
-}
-
-SetVector<Operation *> multiRootGetSlice(Operation *op,
-                                         TransitiveFilter backwardFilter,
-                                         TransitiveFilter forwardFilter) {
-  SetVector<Operation *> slice;
-  slice.insert(op);
-
-  unsigned currentIndex = 0;
-  SetVector<Operation *> backwardSlice;
-  SetVector<Operation *> forwardSlice;
-  while (currentIndex != slice.size()) {
-    auto *currentOp = (slice)[currentIndex];
-    // Compute and insert the backwardSlice starting from currentOp.
-    backwardSlice.clear();
-    BackwardSliceOptions opt;
-    opt.omitBlockArguments = true;
-    opt.filter = backwardFilter;
-    (void)getBackwardSlice(currentOp, &backwardSlice, opt);
-    slice.insert(backwardSlice.begin(), backwardSlice.end());
-
-    // Compute and insert the forwardSlice starting from currentOp.
-    forwardSlice.clear();
-    getForwardSlice(currentOp, &forwardSlice, forwardFilter);
-    slice.insert(forwardSlice.begin(), forwardSlice.end());
-    ++currentIndex;
-  }
-  return multiRootTopologicalSort(slice);
-}
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   auto solver = std::make_unique<DataFlowSolver>();
