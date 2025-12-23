@@ -802,7 +802,7 @@ LogicalResult AsyncCopyMbarrierArriveOp::verify() {
 }
 
 // -- TDMPrefetchOp --
-// This op optionally returns the prefetch offsets (testint-only). When
+// This op optionally returns the prefetch offsets (testing-only). When
 // `returnOffsets` is absent, it produces no results. When present, it yields an
 // int64 tensor of the prefetch addresses relative to the tensor base. The
 // tensor shape is:
