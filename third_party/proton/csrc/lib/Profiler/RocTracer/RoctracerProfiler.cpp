@@ -352,7 +352,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
   auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
       profiler.pImpl.get());
-  auto dataSet = profiler.getDataSet();
   auto &correlation = profiler.correlation;
 
   const roctracer_record_t *record =

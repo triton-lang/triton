@@ -356,7 +356,6 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                                             bool isAPI) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
-  auto dataSet = profiler.getDataSet();
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer
   bool firstRound = true;

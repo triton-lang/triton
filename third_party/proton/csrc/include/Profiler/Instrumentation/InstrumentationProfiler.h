@@ -45,9 +45,8 @@ protected:
 
   // OpInterface
   void startOp(const Scope &scope) override {
-    for (auto data : getDataSet()) {
-      auto entryId = data->addOp(scope.name);
-      dataEntryIdMap[data] = entryId;
+    for (auto data : dataSet) {
+      dataEntryIdMap[data] = data->addOp(scope.name);
     }
   }
   void stopOp(const Scope &scope) override { dataEntryIdMap.clear(); }

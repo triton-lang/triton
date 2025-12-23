@@ -79,9 +79,8 @@ public:
 
 protected:
   void addOpToDataEntryMap(const Scope &scope) {
-    auto dataSet = this->getDataSet();
     DataEntryMap dataToEntryId;
-    for (auto *data : dataSet) {
+    for (auto *data : this->dataSet) {
       dataToEntryId.insertOrAssign(data, data->addOp(scope.name));
     }
     threadState.dataToEntryId = dataToEntryId;
@@ -236,7 +235,7 @@ protected:
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntryId = threadState.dataToEntryId;
-        for (auto *data : profiler.getDataSet()) {
+        for (auto *data : profiler.dataSet) {
           if (profiler.isOpInProgress()) {
             data->addMetrics(dataToEntryId[data], scalarMetrics);
             data->addMetrics(dataToEntryId[data], tensorMetricsHost);

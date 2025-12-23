@@ -203,7 +203,6 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
     runtime->allocateHostBuffer(&hostBuffer, newSize);
   }
 
-  auto dataSet = getDataSet();
   const auto &functionName = functionNames[functionId];
   if (dataEntryIdMap.empty()) {
     for (auto &data : dataSet) {
@@ -271,7 +270,7 @@ void InstrumentationProfiler::doAddMetrics(
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   // Currently no-op
   if (dataEntryIdMap.empty()) {
-    for (auto *data : getDataSet()) {
+    for (auto *data : dataSet) {
       data->addMetricsByScopeId(scopeId, scalarMetrics);
     }
   } else {

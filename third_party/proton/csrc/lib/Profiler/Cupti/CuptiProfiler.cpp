@@ -526,7 +526,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
         uint64_t nodeId = 0;
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-        auto dataSet = profiler.getDataSet();
         if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
@@ -537,7 +536,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             pImpl->graphStates[graphId].numNodes++;
           if (profiler.isOpInProgress()) {
             auto &graphState = pImpl->graphStates[graphId];
-            for (auto *data : dataSet) {
+            for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
               // Trick: if the scope name is empty, it means the graph is
               // created by an API kernel but not Triton op
