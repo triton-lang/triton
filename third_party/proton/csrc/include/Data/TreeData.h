@@ -35,7 +35,7 @@ public:
                       std::shared_ptr<Metric> metric) override;
 
   void
-  addMetrics(size_t contextId,
+  addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
   std::vector<uint8_t> toMsgPack() const override;

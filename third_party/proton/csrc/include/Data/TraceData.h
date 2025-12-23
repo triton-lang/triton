@@ -21,7 +21,7 @@ public:
   void addMetric(size_t eventId, const FlexibleMetric &metric) override;
 
   void
-  addMetrics(size_t eventId,
+  addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
   void clear() override;

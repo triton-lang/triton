@@ -687,8 +687,9 @@ void TreeData::addOpAndMetric(size_t contextId, const std::string &opName,
 }
 
 void TreeData::addMetrics(
-    size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto contextId = scopeIdToContextId.at(scopeId);
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
