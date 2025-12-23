@@ -79,11 +79,15 @@ public:
 
 protected:
   DataEntryMap addOpToDataEntryMap(const Scope &scope) {
+    if (this->opInProgress()) {
+      return threadState.dataToEntryId;
+    }
     auto dataSet = this->getDataSet();
     DataEntryMap dataToEntryId;
     for (auto *data : dataSet) {
       dataToEntryId.insertOrAssign(data, data->addOp(scope.name));
     }
+    threadState.dataToEntryId = dataToEntryId;
     return dataToEntryId;
   }
 
@@ -112,6 +116,7 @@ protected:
     SessionManager &sessionManager = SessionManager::instance();
     size_t opId{Scope::DummyScopeId};
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
+    DataEntryMap dataToEntryId;
     bool isApiExternId{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
@@ -235,11 +240,7 @@ protected:
         // Populate tensor metrics
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
-        DataEntryMap dataToEntryId;
-        profiler.correlation.externIdToState.withRead(
-            scopeId, [&](const ExternIdState &state) {
-              dataToEntryId = state.dataToEntryId;
-            });
+        auto &dataToEntryId = threadState.dataToEntryId;
         for (auto *data : profiler.getDataSet()) {
           if (profiler.isOpInProgress()) {
             data->addMetrics(dataToEntryId[data], scalarMetrics);
