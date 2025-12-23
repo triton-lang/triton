@@ -2025,17 +2025,17 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
-      default precision is tf32x3.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32x3"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
-    :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32x3".
+      default precision is tf32.
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
+    :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
     """
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
-        supports_tf32 = "tf32x3" in _semantic.builder.options.allowed_dot_input_precisions
-        input_precision = knobs.language.fp32_default or ("tf32x3" if (supports_tf32 and
-                                                                       (allow_tf32 or allow_tf32 is None)) else "ieee")
+        supports_tf32 = "tf32" in _semantic.builder.options.allowed_dot_input_precisions
+        input_precision = knobs.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                     (allow_tf32 or allow_tf32 is None)) else "ieee")
 
     input_precision = _unwrap_if_constexpr(input_precision)
     out_dtype = _unwrap_if_constexpr(out_dtype)
