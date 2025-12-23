@@ -233,11 +233,19 @@ protected:
         // Populate tensor metrics
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
+        DataEntryMap dataToEntryId;
+        profiler.correlation.externIdToState.withRead(
+            scopeId, [&](const ExternIdState &state) {
+              dataToEntryId = state.dataToEntryId;
+            });
         for (auto *data : profiler.getDataSet()) {
-          data->enterScope(Scope(scopeId));
-          data->addMetrics(scopeId, scalarMetrics);
-          data->addMetrics(scopeId, tensorMetricsHost);
-          data->exitScope(Scope(scopeId));
+          if (profiler.isOpInProgress()) {
+            data->addMetrics(dataToEntryId[data], scalarMetrics);
+            data->addMetrics(dataToEntryId[data], tensorMetricsHost);
+          } else {
+            data->addMetricsByScopeId(scopeId, scalarMetrics);
+            data->addMetricsByScopeId(scopeId, tensorMetricsHost);
+          }
         }
       }
     }

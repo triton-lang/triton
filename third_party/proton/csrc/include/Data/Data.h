@@ -50,12 +50,16 @@ public:
     this->addMetric(entryId, metric);
   }
 
+  virtual void
+  addMetrics(size_t entryId,
+             const std::map<std::string, MetricValueType> &metrics) = 0;
+
   /// Add multiple metrics to the data.
   /// This metric is only used for flexible metrics passed from the outside.
   /// Note that the index here is `scopeId` instead of `entryId`.
-  virtual void
-  addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
+  virtual void addMetricsByScopeId(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;

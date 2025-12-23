@@ -273,7 +273,7 @@ void InstrumentationProfiler::doAddMetrics(
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   // Currently no-op
   for (auto *data : getDataSet()) {
-    data->addMetrics(scopeId, scalarMetrics);
+    data->addMetricsByScopeId(scopeId, scalarMetrics);
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
   // parent Profiler

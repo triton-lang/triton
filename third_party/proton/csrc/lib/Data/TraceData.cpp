@@ -186,6 +186,22 @@ void TraceData::addMetric(size_t eventId, const FlexibleMetric &metric) {
 }
 
 void TraceData::addMetrics(
+    size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (!trace->hasEvent(eventId))
+    return;
+  auto &event = trace->getEvent(eventId);
+  for (auto [metricName, metricValue] : metrics) {
+    if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
+      event.flexibleMetrics.emplace(metricName,
+                                    FlexibleMetric(metricName, metricValue));
+    } else {
+      event.flexibleMetrics.at(metricName).updateValue(metricValue);
+    }
+  }
+}
+
+void TraceData::addMetricsByScopeId(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto eventId = scopeIdToContextId.at(scopeId); 
