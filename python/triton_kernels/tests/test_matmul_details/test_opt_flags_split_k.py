@@ -23,6 +23,7 @@ def _stub_cuda_props(*_args, **_kwargs):
 
 def setup_amd(monkeypatch):
     monkeypatch.setattr(opt_flags, "get_cdna_version", lambda: 3)
+    monkeypatch.setattr(opt_flags, "get_rdna_version", lambda: -1)
     monkeypatch.setattr(opt_flags.torch.cuda, "get_device_properties", _stub_cuda_props)
     monkeypatch.setattr(
         opt_flags.opt_flags_amd,

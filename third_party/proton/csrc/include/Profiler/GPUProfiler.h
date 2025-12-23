@@ -43,7 +43,9 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeScopes {
-      bool isApiExternId{false};
+      // If the node is launched as a metric kernel, ignore it's timing data.
+      bool isMetricNode{false};
+      bool isApiNode{false};
 
       void setScopeId(Data *data, size_t scopeId) {
         if (singleData == nullptr || singleData == data) {

@@ -100,7 +100,8 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numNodes
     auto scopeId = parentId;
-    bool isAPI = true;
+    bool isApiNode = true;
+    bool isMetricNode = false;
     auto iter = externIdToStateCache.find(scopeId);
     std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
     if (iter == externIdToStateCache.end()) {
@@ -127,11 +128,16 @@ uint32_t processActivityKernel(
           // No captured context for this data
           continue;
         }
-        isAPI = nodeIt->second.isApiExternId;
+        isApiNode = nodeIt->second.isApiNode;
+        isMetricNode = nodeIt->second.isMetricNode;
         scopeId = *scopeIdPtr;
       }
+      if (isMetricNode) {
+        // Ignore metric kernel timing data
+        continue;
+      }
       if (auto metric = convertKernelActivityToMetric(activity)) {
-        if (isAPI) {
+        if (isApiNode) {
           data->addOpAndMetric(scopeId, kernel->name, metric);
         } else {
           data->addMetric(scopeId, metric);
@@ -695,11 +701,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
                     graphNodeIdToScopes.try_emplace(nodeId);
-                if (inserted) {
-                  nodeIt->second.isApiExternId =
-                      graphState.apiNodeIds.find(nodeId) !=
-                      graphState.apiNodeIds.end();
-                }
+                nodeIt->second.isApiNode = graphState.apiNodeIds.find(nodeId) !=
+                                           graphState.apiNodeIds.end();
+                nodeIt->second.isMetricNode =
+                    graphState.metricKernelNodeIds.find(nodeId) !=
+                    graphState.metricKernelNodeIds.end();
                 nodeIt->second.setScopeId(data, nodeScopeId);
               }
             }
@@ -729,17 +735,15 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         auto graphRef = pImpl->graphStates.find(graphExecId);
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
-          std::map<Data *,
-                   std::vector<std::pair</*isAPI=*/bool, /*scopeId=*/size_t>>>
+          std::map<
+              Data *,
+              std::vector<std::pair</*isApiNode=*/bool, /*scopeId=*/size_t>>>
               metricNodeScopes;
           auto &graphExec = graphRef.value().get();
           auto &externIdState = profiler.correlation.externIdToState[externId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
             auto nodeIt = externIdState.graphNodeIdToScopes.find(nodeId);
-            if (nodeIt == externIdState.graphNodeIdToScopes.end()) {
-              continue;
-            }
-            bool isApi = nodeIt->second.isApiExternId;
+            bool isApi = nodeIt->second.isApiNode;
             nodeIt->second.forEachScopeId([&](Data *data, size_t scopeId) {
               metricNodeScopes[data].push_back({isApi, scopeId});
             });
