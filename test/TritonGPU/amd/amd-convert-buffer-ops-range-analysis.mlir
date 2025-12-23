@@ -2,7 +2,7 @@
 
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942" | FileCheck %s
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
 // CHECK-LABEL:   tt.func @conversion1(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32, #blocked> {
@@ -15,7 +15,7 @@
 // CHECK:           tt.return %[[VAL_6]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @conversion1(%arg0: !tt.ptr<f32>) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -40,9 +40,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @conversion2(%arg0: !tt.ptr<f32>) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -75,9 +75,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_12]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @conversion3(%arg0: !tt.ptr<f32>) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -110,9 +110,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_9]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @conversion4(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -160,9 +160,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_29]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -224,9 +224,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_28]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forOp2(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -290,9 +290,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_34]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forNested(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -359,9 +359,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_34]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forNestedOverMaxTripCount(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -416,9 +416,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_15]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @ifOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>, %arg2: i1) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -459,9 +459,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_13]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @condBranch(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -499,9 +499,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_8]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @branch(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -517,7 +517,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// CHECK: #[[$ATTR_0:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK: #[[$ATTR_0:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL:   tt.func @tile_offset(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16>, %[[VAL_1:.*]]: i32, %[[VAL_2:.*]]: i32) -> tensor<16x256xf16, #[[$ATTR_0]]> {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 256 : i32
@@ -539,8 +539,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_18]] : tensor<16x256xf16, #[[$ATTR_0]]>
 // CHECK:         }
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 4 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @tile_offset(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) -> tensor<16x256xf16, #blocked> {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
@@ -564,7 +564,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// CHECK: #[[$ATTR_1:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK: #[[$ATTR_1:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL:   tt.func public @matmul_kernel(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #[[$ATTR_1]]> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 128 : i32
@@ -587,8 +587,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_18]] : tensor<128x16xf16, #[[$ATTR_1]]>
 // CHECK:         }
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 4 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #blocked> {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
@@ -629,9 +629,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_13]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @select(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32, #blocked0> {
     %cst = arith.constant dense<0> : tensor<1024xi64, #blocked0>
     %c1024_i32 = arith.constant 1024 : i32
@@ -666,9 +666,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_12]] : tensor<1024xi64, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @where_kernel(%arg0: !tt.ptr<i64>, %arg1: !tt.ptr<i64>, %arg2: i8) -> tensor<1024xi64, #blocked0> {
     %c0_i8 = arith.constant 0 : i8
     %c1024_i32 = arith.constant 1024 : i32
@@ -715,9 +715,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_28]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forOpWithHints(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -764,9 +764,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
     %c0_i64 = arith.constant 0 : i64
     %c1_i32 = arith.constant 1 : i32
@@ -799,9 +799,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_9]] : f32
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @scalar_if(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>, %arg2: i1) -> f32 {
     %c1_i32 = arith.constant 1 : i32
     %c100_i32 = arith.constant 100 : i32
@@ -828,9 +828,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_4]] : f32
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @scalar_cond_branch(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i1) -> f32 {
     cf.cond_br %arg2, ^bb1(%arg0 : !tt.ptr<f32>), ^bb2(%arg1 : !tt.ptr<f32>)
   ^bb1(%0: !tt.ptr<f32>):  // pred: ^bb0
@@ -876,9 +876,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_33]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @flipFlopForOpSimple(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -958,9 +958,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_42]], %[[VAL_48]] : tensor<1024xf32, #blocked>, tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @flipFlopForOpComplex(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: tensor<1024xf32, #blocked0>) -> (tensor<1024xf32, #blocked0>, tensor<1024xf32, #blocked0>) {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -1037,9 +1037,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.return %[[VAL_29]] : tensor<1024xf32, #blocked>
 // CHECK:         }
 
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @forOpDynamicKBound(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>, %K: index) -> tensor<1024xf32, #blocked0> {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -1073,9 +1073,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 // CHECK-LABEL:   tt.func @whileOp
-#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @whileOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32, #blocked0>) -> tensor<1024xf32, #blocked0> {
     %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked0>
     %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked0>
