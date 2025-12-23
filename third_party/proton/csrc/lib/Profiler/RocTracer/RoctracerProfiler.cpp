@@ -247,7 +247,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       // Valid context and outermost level of the kernel launch
       threadState.enterOp();
       auto scope = threadState.scopeStack.back();
-      auto dataToEntryId = profiler.addOpToDataEntryMap(scope);
+      auto &dataToEntryId = threadState.dataToEntryId;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;

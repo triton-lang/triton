@@ -78,17 +78,13 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
-  DataEntryMap addOpToDataEntryMap(const Scope &scope) {
-    if (this->opInProgress()) {
-      return threadState.dataToEntryId;
-    }
+  void addOpToDataEntryMap(const Scope &scope) {
     auto dataSet = this->getDataSet();
     DataEntryMap dataToEntryId;
     for (auto *data : dataSet) {
       dataToEntryId.insertOrAssign(data, data->addOp(scope.name));
     }
     threadState.dataToEntryId = dataToEntryId;
-    return dataToEntryId;
   }
 
   // OpInterface
@@ -114,7 +110,6 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    size_t opId{Scope::DummyScopeId};
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
     DataEntryMap dataToEntryId;
     bool isApiExternId{false};
@@ -128,7 +123,7 @@ protected:
         return;
       // Enter a new GPU API op
       isApiExternId = true;
-      opId = Scope::getNewScopeId();
+      auto opId = Scope::getNewScopeId();
       profiler.enterOp(Scope(opId));
       profiler.correlation.setApiExternId(opId);
     }
@@ -136,7 +131,7 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress() || !isApiExternId)
         return;
-      profiler.exitOp(Scope(opId));
+      profiler.exitOp(scopeStack.back());
       isApiExternId = false;
     }
 
