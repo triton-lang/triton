@@ -177,9 +177,6 @@ class SymmetricMemoryPool:
         self._initialize(n_ranks=n_ranks, group=group, device=device)
 
 
-symm_mem_pool = SymmetricMemoryPool()
-
-
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
     """
     create expert assignment dictionary where shard i owns:
@@ -331,7 +328,7 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
+def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     rank = dist.get_rank()
@@ -413,7 +410,7 @@ def _convert_ep_to_dp(
         dst_ptrs += BLOCK
 
 
-def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
+def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx, symm_mem_pool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     rank = dist.get_rank()

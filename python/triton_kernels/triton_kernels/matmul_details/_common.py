@@ -179,6 +179,7 @@ def matmul_launch_metadata(grid, kernel, args):
     slice_sizes = args["XSliceSizes"]
     batch_size = args.get("batch_size", 1)
     if slice_sizes is not None:
+        n_slices = args["N_SLICES"]
         # If annotation is given, use that to generate name for profiling.
         if expected_slice_sizes is not None:
             n_rows = f"{expected_slice_sizes}*"
@@ -188,9 +189,9 @@ def matmul_launch_metadata(grid, kernel, args):
             n_rows = "unknown"
         if launch_metadata_allow_sync():
             n_tokens = float(slice_sizes.sum())
-            n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
+            n_w_bytes = (W.numel() * W.element_size() // n_slices) * (slice_sizes > 0).sum()
         elif expected_slice_sizes is not None:
-            n_tokens = expected_slice_sizes * args["N_SLICES"]
+            n_tokens = expected_slice_sizes * n_slices
             # This may not be totally correct (e.g., we might not be using all experts)
             # but it's better than nothing.
             n_w_bytes = W.numel() * W.element_size()
@@ -204,7 +205,7 @@ def matmul_launch_metadata(grid, kernel, args):
         n_w_bytes = W.numel() * W.element_size()
     if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else int(n_tokens)
-    repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
+    repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{args["N_SLICES"]}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
     if batch_size > 1:
