@@ -78,7 +78,7 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
-  DataEntryMap addOpToDataSet(const Scope &scope) {
+  DataEntryMap addOpToDataEntryMap(const Scope &scope) {
     auto dataSet = this->getDataSet();
     DataEntryMap dataToEntryId;
     for (auto *data : dataSet) {
@@ -220,8 +220,7 @@ protected:
     virtual void doStop() = 0;
 
     void
-    doAddMetrics(size_t scopeId,
-                 const std::map<std::string, MetricValueType> &scalarMetrics,
+    doAddMetrics(size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
@@ -235,8 +234,10 @@ protected:
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
         for (auto *data : profiler.getDataSet()) {
+          data->enterScope(Scope(scopeId));
           data->addMetrics(scopeId, scalarMetrics);
           data->addMetrics(scopeId, tensorMetricsHost);
+          data->exitScope(Scope(scopeId));
         }
       }
     }
