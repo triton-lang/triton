@@ -19,12 +19,16 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch, use_async_copy):
-    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)
-            ) if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
+    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)) \
+        if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+
+
+def is_async_copy_enabled(arch):
+    return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
 @dataclass(frozen=True)
@@ -227,7 +231,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        use_async_copy = knobs.amd.use_async_copy
+        use_async_copy = is_async_copy_enabled(options.arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)

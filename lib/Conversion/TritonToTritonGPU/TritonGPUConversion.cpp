@@ -131,9 +131,10 @@ bool TritonGPUConversionTarget::isDynamicallyLegal(
 // available.
 static RankedTensorType getNewIndicesType(RankedTensorType type,
                                           unsigned numThreads,
-                                          unsigned numWarps) {
+                                          unsigned numWarps, unsigned numCTAs) {
   assert(type.getRank() == 1);
   auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
+  auto ctx = type.getContext();
 
   // Technically any layout where we have a pack of 4 neighbouring elements plus
   // broadcasted over the warp dimension is okay but for now we just pick a
@@ -142,9 +143,9 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
   std::array<unsigned, 2> threadsPerWarp = {numThreads, 1};
   std::array<unsigned, 2> order = {1, 0};
   std::array<unsigned, 2> warpsPerCta = {1, numWarps};
+  auto cgaLayout =
+      CGAEncodingAttr::fromSplitParams(ctx, {1, numCTAs}, {1, numCTAs}, order);
 
-  MLIRContext *ctx = type.getContext();
-  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
   auto parentEncoding = BlockedEncodingAttr::get(
       ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, cgaLayout);
   auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
@@ -160,8 +161,8 @@ static LogicalResult convertGatherScatterIndices(Operation *op,
                                                  OpOperand &indices,
                                                  ConversionPatternRewriter &b) {
   auto type = cast<RankedTensorType>(indices.get().getType());
-  RankedTensorType newType =
-      getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
+  RankedTensorType newType = getNewIndicesType(
+      type, lookupThreadsPerWarp(b), lookupNumWarps(op), lookupNumCTAs(op));
   if (!newType)
     return failure();
   Value index =

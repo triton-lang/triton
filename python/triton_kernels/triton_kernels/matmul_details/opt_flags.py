@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton
 from triton_kernels import target_info
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version
 from triton_kernels.tensor import FP4
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
@@ -83,6 +83,8 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
+    elif get_rdna_version() in (3, 4) and m >= 512:
+        block_m = 64
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
@@ -127,13 +129,12 @@ def make_default_opt_flags_amd(
         num_stages = 1
 
     # specific configs for F16 x MXFP4 on CDNA4
-    # Note that these configs will exceed LDS usage with async copy enabled
     if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.b_mx_scale is not None:
         split_k = 1
         if m <= 1024:
             target_kernel_kwargs["waves_per_eu"] = 3
             block_n = 128
-            block_k = 256
+            block_k = 128
             num_warps = 4
         else:
             target_kernel_kwargs["waves_per_eu"] = 0

@@ -174,6 +174,15 @@ static void initProton(pybind11::module &&m) {
       pybind11::arg("sessionId"));
 
   m.def(
+      "get_data_msgpack",
+      [](size_t sessionId) {
+        auto data = SessionManager::instance().getDataMsgPack(sessionId);
+        return pybind11::bytes(reinterpret_cast<const char *>(data.data()),
+                               data.size());
+      },
+      pybind11::arg("sessionId"));
+
+  m.def(
       "clear_data",
       [](size_t sessionId) { SessionManager::instance().clearData(sessionId); },
       pybind11::arg("sessionId"));
