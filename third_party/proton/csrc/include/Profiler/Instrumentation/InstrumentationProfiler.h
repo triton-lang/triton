@@ -8,6 +8,7 @@
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
+#include "Utility/SmallMap.h"
 
 namespace proton {
 
@@ -71,7 +72,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  std::map<Data *, size_t> dataEntryIdMap;
+  SmallMap<Data *, size_t> dataEntryIdMap;
 };
 
 } // namespace proton

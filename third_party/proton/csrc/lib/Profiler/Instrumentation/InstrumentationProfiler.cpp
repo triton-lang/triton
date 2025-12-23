@@ -207,9 +207,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   const auto &functionName = functionNames[functionId];
   if (dataEntryIdMap.empty()) {
     for (auto &data : dataSet) {
-      auto entryId = Scope::getNewScopeId();
-      data->addOp(functionName);
-      dataEntryIdMap[data] = entryId;
+      dataEntryIdMap[data] = data->addOp(functionName);
     }
   }
 
@@ -247,9 +245,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                          circularLayoutConfig->numBlocks);
               for (auto *data : dataSet) {
                 auto entryId = dataEntryIdMap[data];
-                auto scopeId = data->addOp(entryId, contexts);
+                entryId = data->addOp(entryId, contexts);
                 data->addMetric(
-                    scopeId,
+                    entryId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
                         normalizedDuration, entryId, functionName,
@@ -272,8 +270,14 @@ void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   // Currently no-op
-  for (auto *data : getDataSet()) {
-    data->addMetricsByScopeId(scopeId, scalarMetrics);
+  if (dataEntryIdMap.empty()) {
+    for (auto *data : getDataSet()) {
+      data->addMetricsByScopeId(scopeId, scalarMetrics);
+    }
+  } else {
+    for (auto [data, entryId] : dataEntryIdMap) {
+      data->addMetrics(entryId, scalarMetrics);
+    }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
   // parent Profiler
