@@ -244,13 +244,13 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
               for (auto *data : dataSet) {
-                auto entryId = dataEntryIdMap[data];
-                entryId = data->addOp(entryId, contexts);
+                auto kernelId = dataEntryIdMap[data];
+                auto entryId = data->addOp(kernelId, contexts);
                 data->addMetric(
                     entryId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
-                        normalizedDuration, entryId, functionName,
+                        normalizedDuration, kernelId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
                         static_cast<uint64_t>(
                             reinterpret_cast<uintptr_t>(device)),
