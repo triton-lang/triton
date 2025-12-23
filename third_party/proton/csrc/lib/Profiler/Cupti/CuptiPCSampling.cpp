@@ -352,7 +352,7 @@ void CuptiPCSampling::start(CUcontext context) {
 }
 
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            DataEntryMap dataToEntryId,
+                                            const DataEntryMap &dataToEntryId,
                                             bool isAPI) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();

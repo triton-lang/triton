@@ -123,7 +123,7 @@ private:
   CubinData *getCubinData(uint64_t cubinCrc);
 
   void processPCSamplingData(ConfigureData *configureData,
-                             DataEntryMap dataToEntryId, bool isAPI);
+                             const DataEntryMap &dataToEntryId, bool isAPI);
 
   ThreadSafeMap<uint32_t, ConfigureData> contextIdToConfigureData;
   // In case the same cubin is loaded multiple times, we need to keep track of
