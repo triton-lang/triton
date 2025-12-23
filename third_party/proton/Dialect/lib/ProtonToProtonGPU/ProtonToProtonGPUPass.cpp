@@ -155,8 +155,8 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
   int allocSharedMemSize = numSharedEntries * bytesPerEntry;
 
-  int estimatedOccupany = maxSharedMemSize / std::max(1, sharedMemUsed);
-  if (estimatedOccupany <= 1)
+  int estimatedOccupancy = maxSharedMemSize / std::max(1, sharedMemUsed);
+  if (estimatedOccupancy <= 1)
     return allocSharedMemSize;
 
   int maxAllocSharedMemSize = maxSharedMemSize * maxSharedMemRatio;
@@ -218,8 +218,11 @@ public:
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    int allocSharedMemSize =
-        getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
+    int numCTAs = triton::gpu::lookupNumCTAs(func);
+    auto maxSharedMemSizePerCTA = maxSharedMemSize / numCTAs;
+
+    int allocSharedMemSize = getAllocSharedMemSize(maxSharedMemSizePerCTA,
+                                                   sharedMemUsed, segmentNum);
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
@@ -282,8 +285,8 @@ public:
     Value segment;
     Value buffer;
     if (bufferType == gpu::BufferType::SHARED) {
-      auto cgaLayout = triton::gpu::CGAEncodingAttr::get1DLayout(
-          context, triton::gpu::lookupNumCTAs(func));
+      auto cgaLayout =
+          triton::gpu::CGAEncodingAttr::get1DLayout(context, numCTAs);
       auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
           context, 1, 1, 1, {0}, cgaLayout);
       Attribute sharedMemorySpace =
