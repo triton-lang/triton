@@ -90,6 +90,7 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
+    addOpToDataEntryMap(scope);
   }
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
