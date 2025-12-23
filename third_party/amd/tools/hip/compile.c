@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <string.h>
+#define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
 
 // helpers to check for hip errors
@@ -28,8 +29,8 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {{
 
 // globals
 #define HSACO_NAME {kernel_name}_hsaco
-hipModule_t {kernel_name}_mod = nullptr;
-hipFunction_t {kernel_name}_func = nullptr;
+hipModule_t {kernel_name}_mod = NULL;
+hipFunction_t {kernel_name}_func = NULL;
 unsigned char HSACO_NAME[{bin_size}] = {{ {bin_data} }};
 
 
@@ -50,7 +51,7 @@ void load_{kernel_name}() {{
 {kernel_docstring}
 */
 hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
-    if ({kernel_name}_func == nullptr)
+    if ({kernel_name}_func == NULL)
        load_{kernel_name}();
     unsigned int gX = {gridX};
     unsigned int gY = {gridY};
@@ -61,7 +62,7 @@ hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
 
     // TODO: shared memory
     if(gX * gY * gZ > 0)
-      return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, {shared}, stream, args, nullptr);
+      return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, {shared}, stream, args, NULL);
     else
       return hipErrorInvalidValue;
 }}
