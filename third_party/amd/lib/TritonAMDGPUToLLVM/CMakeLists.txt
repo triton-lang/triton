@@ -14,6 +14,7 @@ add_triton_library(TritonAMDGPUToLLVM
     DotOpToLLVM/WMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    FuncOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     GCNAsmFormat.cpp
     TritonGPUToLLVM.cpp

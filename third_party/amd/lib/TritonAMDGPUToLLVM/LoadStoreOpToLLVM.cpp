@@ -289,59 +289,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // direct to lds loads do not support per lane shared offsets. We need to
-  // ensure that we write coalesced into shared memory. This means we cannot
-  // exceed the supported load width because splitting them would cause strided
-  // (non coalesced) writes. Additionally:
-  //   1) For *non* swizzled shared encodings we check if they result in
-  //      coalesced writes and can then lower them directly to the intrinsics.
-  //   2) For swizzled shared encodings we need to transfer the swizzling to the
-  //      source pointers. For now this is done by swizzling the pointers
-  //      between the lane of a warp via permute. This only works if the swizzle
-  //      pattern does not exchange elements between warps which holds for all
-  //      our swizzle patterns. There is still a check performed to not silently
-  //      produce wrong results if we invalidate the condition in the future
-  LogicalResult canWriteCoalesced(RewriterBase &rewriter, Operation *op,
-                                  RankedTensorType srcTy, MemDescType dstTy,
-                                  unsigned vectorSize,
-                                  bool requiresSrcPtrSwizzling) const {
-    if (targetInfo.supportsDirectToLDSScattering()) {
-      return success();
-    }
-
-    int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
-    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      LDBG(*op << " results in unsupported load bitwidth: " << vecBits);
-      return failure();
-    }
-    // Compute the blocked -> shared linear layout to check preconditions
-    LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
-    LinearLayout sharedLayout;
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            dstTy.getEncoding())) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(dstTy);
-    }
-    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-
-    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!requiresSrcPtrSwizzling &&
-        !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
-      LDBG(*op << " does not write coalesced into LDS and is not swizzled");
-      return failure();
-    }
-
-    if (requiresSrcPtrSwizzling &&
-        !LLVM::AMD::doesSwizzleInsideWarp(rewriter, srcToSharedLayout,
-                                          threadsPerWarp)) {
-      LDBG(*op << " does swizzle across warp boundaries");
-      return failure();
-    }
-    return success();
-  }
-
   // For each load emit the computation to get the lane id offset which holds
   // the source pointers/offsets we need to store to shared memory
   SmallVector<Value>
@@ -837,17 +784,8 @@ struct BufferLoadToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings restrict vec by the min interval
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
-    }
-
-    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
-    if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
-                                 requiresSrcPtrSwizzling))) {
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrType, dstEnc,
+                                       dstTy.getAllocShape(), vec)) {
       return failure();
     }
 
@@ -856,6 +794,10 @@ struct BufferLoadToLocalOpConversion
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
 
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool requiresSrcPtrSwizzling =
+        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
+        maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
@@ -986,18 +928,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings restrict vec by the min interval
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
-    }
-
-    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
-
-    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, vec,
-                                 requiresSrcPtrSwizzling))) {
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc,
+                                       dstTy.getAllocShape(), vec)) {
       return failure();
     }
 
@@ -1005,6 +937,10 @@ struct AsyncCopyGlobalToLocalOpConversion
     // the LDS addresses since we gather into LDS
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool requiresSrcPtrSwizzling =
+        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
+        maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
@@ -1831,9 +1767,8 @@ struct AtomicCASOpConversion
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
     if (!atomicMemOrdering)
       return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory ordering");
-    auto scope = op.getScope();
-    auto scopeStr = getAMDGPUMemScopeStr(scope);
-    if (!scopeStr)
+    auto scope = getAMDGPUMemScopeStr(op.getScope());
+    if (!scope)
       return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
     // deal with tensor or scalar
@@ -1846,6 +1781,10 @@ struct AtomicCASOpConversion
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     SmallVector<Value> resultVals(elemsPerThread);
 
+    auto successOrdering = *atomicMemOrdering;
+    auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+    auto scopeStr = StringRef(scope.value());
+
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += 1) {
       Value casVal = valElements[i];
@@ -1855,11 +1794,10 @@ struct AtomicCASOpConversion
       if (tensorTy) { // for tensor
         auto retType = valueElemTy;
         // TODO: USE ATOMIC CAS OP on Tensor
-        auto successOrdering = *atomicMemOrdering;
-        auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+
         auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
             rewriter, loc, casPtr, casCmp, casVal, successOrdering,
-            failureOrdering, StringRef(scopeStr.value()));
+            failureOrdering, scopeStr);
 
         // Extract the new_loaded value from the pair.
         Value ret = b.extract_val(valueElemTy, cmpxchg, 0);
@@ -1880,11 +1818,9 @@ struct AtomicCASOpConversion
         // Build main block with atomic_cmpxchg.
         rewriter.setInsertionPointToEnd(atomicBlock);
 
-        auto successOrdering = LLVM::AtomicOrdering::acq_rel;
-        auto failureOrdering = LLVM::AtomicOrdering::monotonic;
         auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
             rewriter, loc, casPtr, casCmp, casVal, successOrdering,
-            failureOrdering, StringRef("agent"));
+            failureOrdering, scopeStr);
 
         if (!op.getResult().use_empty()) {
           // Extract the new_loaded value from the pair.

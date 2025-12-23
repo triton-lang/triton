@@ -3,8 +3,12 @@ from triton import knobs
 
 import os
 import pathlib
+import hashlib
+import pytest
+from triton._internal_testing import is_cuda
 
 
+@pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
 def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     stage_name = 'make_ttgir'
     curr_repro_path = tmp_path / ("repro_prefix." + stage_name + ".repro.mlir")
@@ -16,7 +20,15 @@ def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     inspect_stages_hook_called = False
     make_ttgir_wrapper_called = False
 
-    def inspect_stages_hook(self, stages, options, language, capability):
+    def get_key():
+        return pathlib.Path(__file__).read_text()
+
+    def get_hash():
+        return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+
+    def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+        if all(arg is None for arg in (stages, options, language, capability)):
+            return get_key(), get_hash()
         nonlocal inspect_stages_hook_called
         inspect_stages_hook_called = True
 

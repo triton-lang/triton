@@ -36,7 +36,7 @@ createDistributedEncodings(MLIRContext &ctx) {
   auto rank = 2;
   SmallVector<SmallVector<unsigned>> orders = {{0, 1}, {1, 0}};
   SmallVector<triton::gpu::CGAEncodingAttr> cgaLayouts = {
-      triton::gpu::CGAEncodingAttr::getDefault(&ctx, rank),
+      triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, rank),
       triton::gpu::CGAEncodingAttr::fromSplitParams(&ctx, {4, 2}, {2, 2},
                                                     {1, 0}),
   };

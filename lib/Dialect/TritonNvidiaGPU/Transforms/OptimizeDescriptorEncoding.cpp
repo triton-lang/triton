@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include <algorithm>
 #include <unordered_set>
@@ -160,11 +161,26 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
   if (rhs.cgaLayout)
     cgaLayouts.insert(rhs.cgaLayout);
 
+  auto getDefaultLayout = [&](ttg::CGAEncodingAttr encoding) {
+    // The default layout puts all the CTAs in the last dimension
+    // We do this as this function needs to be commutative for all encodings
+    // This heuristic could be improved if needed
+    auto ctx = encoding.getContext();
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto dims = triton::standardOutDimNames(ctx, rank);
+    auto numCTAs = encoding.getLinearLayout().getInDimSize(kBlock);
+    LinearLayout llDefault;
+    for (int i = 0; i < rank - 1; ++i) {
+      llDefault *= LinearLayout::identity1D(1, kBlock, dims[i]);
+    }
+    llDefault *= LinearLayout::identity1D(numCTAs, kBlock, dims.back());
+    return ttg::CGAEncodingAttr::get(ctx, llDefault);
+  };
+
   switch (cgaLayouts.size()) {
   case 2:
     // if we find clashing CGALayouts, fallback to default
-    result.cgaLayout =
-        ttg::CGAEncodingAttr::getDefault(lhs.cgaLayout.getContext(), rank);
+    result.cgaLayout = getDefaultLayout(lhs.cgaLayout);
     break;
   case 1:
     result.cgaLayout = cgaLayouts[0];
@@ -195,7 +211,8 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
 
 Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
                                     ttg::CGAEncodingAttr cgaLayout,
-                                    ArrayRef<int64_t> usageShape) {
+                                    ArrayRef<int64_t> usageShape,
+                                    unsigned numCTAs) {
   auto ctx = tensorType.getContext();
   SmallVector<unsigned> order;
   for (int i = tensorType.getRank() - 1; i >= 0; --i)
@@ -203,9 +220,13 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
 
   ArrayRef<int64_t> shape =
       usageShape.empty() ? tensorType.getShape() : usageShape;
-  if (!cgaLayout)
-    cgaLayout = ttg::CGAEncodingAttr::getDefault(ctx, tensorType.getRank());
-  else if (cgaLayout.getRank() != tensorType.getRank())
+  if (!cgaLayout) {
+    // Arbitrarily distribute along the last dim
+    SmallVector<unsigned> ctasPerCGA(tensorType.getRank(), 1);
+    ctasPerCGA.back() = numCTAs;
+    cgaLayout = ttg::CGAEncodingAttr::fromSplitParams(ctx, ctasPerCGA,
+                                                      ctasPerCGA, order);
+  } else if (cgaLayout.getRank() != tensorType.getRank())
     cgaLayout = updateCGALayoutForShape(cgaLayout, shape);
 
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, cgaLayout,
@@ -320,16 +341,17 @@ void assignMemoryLayouts(FuncOp &func) {
 
   // 3. Transfer propagated encodings into the graph
   auto ctx = func.getContext();
+  auto numCTAs = gpu::lookupNumCTAs(func);
   for (auto &[desc, einfo] : valueToEncodingInfo) {
     auto existingTy = desc.getType().getBlockType();
     Attribute newEncoding;
     if (einfo->desiredEncoding) {
       newEncoding = einfo->desiredEncoding;
     } else if (einfo->forcedToDefault) {
-      newEncoding = getFallbackSharedEncoding(existingTy, {}, {});
+      newEncoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs);
     } else {
-      newEncoding =
-          getFallbackSharedEncoding(existingTy, einfo->cgaLayout, einfo->shape);
+      newEncoding = getFallbackSharedEncoding(existingTy, einfo->cgaLayout,
+                                              einfo->shape, numCTAs);
     }
     desc.setType(getTensorDescTypeWithEncoding(desc.getDefiningOp(), existingTy,
                                                newEncoding));
@@ -339,7 +361,8 @@ void assignMemoryLayouts(FuncOp &func) {
   SmallVector<Type> resultTys(func.getResultTypes());
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<TensorDescType>(resultTy)) {
-      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
+      auto encoding =
+          getFallbackSharedEncoding(descTy.getBlockType(), {}, {}, numCTAs);
       resultTys[i] = getTensorDescTypeWithEncoding(
           nullptr, descTy.getBlockType(), encoding);
     }

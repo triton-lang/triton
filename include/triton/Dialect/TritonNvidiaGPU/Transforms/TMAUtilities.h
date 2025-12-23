@@ -16,10 +16,6 @@ inline bool isFp4Padded(Attribute encoding) {
   return mmaEnc && mmaEnc.getFp4Padded();
 }
 
-SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
-                                       Attribute encoding,
-                                       SmallVector<Value> indices);
-
 gpu::CGAEncodingAttr updateCGALayoutForShape(gpu::CGAEncodingAttr cgaLayout,
                                              ArrayRef<int64_t> shape);
 
@@ -52,9 +48,8 @@ inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
   return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize);
 }
 
-std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty);
-
-std::optional<int> getTMAElementType(Operation *op, TensorDescType ty);
+FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty);
+FailureOr<int> getTMAElementType(Location loc, TensorDescType ty);
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);

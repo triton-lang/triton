@@ -20,7 +20,6 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    threadfence_system,
     compute_pids,
 )
 
@@ -104,7 +103,8 @@ def _p_matmul(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
              pYPtrs=None,
-             ScatterShardIndx=None,
+             map_dst_coord=None,
+             all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              ):
@@ -309,6 +309,9 @@ def _p_matmul(
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:
                 if XMxScalePtrs is not None: # not using TMA for x scale load
+                    # dividing MX_PACK_DIVISOR by W_K_DIVISOR because off_k_w is
+                    # already divided by W_K_DIVISOR (2 for mxfp4 where 2 fp4
+                    # values are packed per Byte along K)
                     off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
                     if EVEN_K:
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
@@ -416,8 +419,7 @@ def _p_matmul(
                 tl.device_assert(stride_y_k // stride_y_m == tl.cdiv(stride_y_k, stride_y_m))
                 split_k_row_offs = pid_k1 * (stride_y_k // stride_y_m)
                 offs_y_m = tl.where(mask_m, offs_y_m + split_k_row_offs, offs_y_m)
-        elif Y_TMA_MODE is None and pYPtrs is None:
-            tl.static_assert(HAS_SCATTER)
+        elif Y_TMA_MODE is None and HAS_SCATTER:
             offs_y_m, mask_m = _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, start_m1 + offs_m, mask_m)
             MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
         else:
@@ -603,28 +605,36 @@ def _p_matmul(
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
                 mask = mask_m[:, None] & mask_n[None, :]
-                offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_n[None, :] * stride_y_n +offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
-                if ScatterShardIndx is not None:
-                    dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
-                    for i in tl.static_range(n_reduce_shards):
+
+                dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
+                    start_m1 + off_m1 if WriteBackIndx is None else None, offs_y_m,
+                    out_off_n, offs_y_n,
+                    *map_dst_coord.captured)
+                offs_kzmn = (
+                    pid_k1.to(index_type) * stride_y_k +
+                    start_z1.to(index_type) * stride_y_z +
+                    dst_y_n[None, :] * stride_y_n +
+                    dst_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
+                )
+                for i in tl.static_range(n_reduce_shards):
+                    if dst_shard_idx is not None:
                         peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
-                        peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
-                        tl.multiple_of(peer_Y_ptr, 16)
-                        tl.store(peer_Y_ptr[:, None] + offs_kzmn, out, mask=mask)
-                else:
-                    # full all gather
-                    for i in tl.static_range(n_reduce_shards):
+                    else:
                         peer = (reduce_rank + i) % n_reduce_shards
-                        peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+                    peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+                    if len(peer_Y_ptr.shape) == 0:
                         tl.multiple_of(peer_Y_ptr, 16)
-                        tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
+                    else:
+                        tl.multiple_of(peer_Y_ptr, [16, 16])
+                    tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
+
 
     # Update the flexpoint scales
     if USE_LOCAL_ABSMAX:
         tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
 
     if pYPtrs is not None:
-        threadfence_system()
+        all_writes_issued.fn(*all_writes_issued.captured)
 
 _per_device_alloc_fns = {}
 def get_per_device_per_stream_alloc_fn(device):
