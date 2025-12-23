@@ -7,16 +7,6 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
 
-SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
-                                       Attribute encoding,
-                                       SmallVector<Value> indices) {
-  if (isFp4Padded(encoding)) {
-    auto two = arith::ConstantIntOp::create(builder, loc, 2, 32);
-    indices.back() = arith::MulIOp::create(builder, loc, indices.back(), two);
-  }
-  return indices;
-}
-
 ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
                                              ArrayRef<int64_t> shape) {
   auto rank = shape.size();

@@ -241,18 +241,14 @@ void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
                         Value alloc, Value insertIdx, Value extractIdx,
                         Value barrier, Operation *waitOp,
                         CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(
-      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
-      waitOp, schedule,
-      [&](OpBuilderForStage &builder, Value tmaPtr, Value barrier, Value view,
-          Value pred) {
-        auto indices = ttng::translateTMAIndices(
-            builder, loadOp.getLoc(),
-            loadOp.getDesc().getType().getBlockType().getEncoding(),
-            loadOp.getIndices());
-        ttng::AsyncTMACopyGlobalToLocalOp::create(
-            builder, loadOp.getLoc(), tmaPtr, indices, barrier, view, pred);
-      });
+  return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
+                            extractIdx, barrier, waitOp, schedule,
+                            [&](OpBuilderForStage &builder, Value desc,
+                                Value barrier, Value view, Value pred) {
+                              ttng::AsyncTMACopyGlobalToLocalOp::create(
+                                  builder, loadOp.getLoc(), desc,
+                                  loadOp.getIndices(), barrier, view, pred);
+                            });
 }
 
 void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
@@ -261,10 +257,10 @@ void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           CoarseSchedule &schedule) {
   return createTMAAsyncCopy(forOp, gatherOp, gatherOp.getDesc(), alloc,
                             insertIdx, extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value tmaPtr,
+                            [&](OpBuilderForStage &builder, Value desc,
                                 Value barrier, Value view, Value pred) {
                               ttng::AsyncTMAGatherOp::create(
-                                  builder, gatherOp.getLoc(), tmaPtr,
+                                  builder, gatherOp.getLoc(), desc,
                                   gatherOp.getXOffsets(), gatherOp.getYOffset(),
                                   barrier, view, pred);
                             });
