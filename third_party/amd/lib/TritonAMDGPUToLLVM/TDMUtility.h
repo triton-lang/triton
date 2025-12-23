@@ -55,6 +55,26 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
                       bool isLoad, const triton::LinearLayout &cgaLayout,
                       Value ctaId);
 
+// Emit prefetches for a TDM tile to make it available for an actual load in
+// the future. Data is prefetched cooperatively across all CTAs, warps, and
+// lanes to cover the entire TDM tile.
+// Returns the prefetched memory offsets. This should only be used for testing
+// purposes.
+SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
+                                   ArrayRef<Value> desc,
+                                   ArrayRef<int64_t> blockShape, int numLanes,
+                                   int numWarps, int numCTAs,
+                                   ArrayRef<Value> offset, Value pred,
+                                   Type elementType, Value laneId, Value warpId,
+                                   Value ctaId, bool isSpeculative);
+
+// Compute the linear layout used by TDM prefetch lowering. The returned layout
+// contains the `register` dimension representing each prefetch instruction.
+triton::LinearLayout
+computeTDMPrefetchLinearLayout(MLIRContext *ctx, ArrayRef<int64_t> blockShape,
+                               int numLanes, int numWarps, int numCTAs,
+                               int elementBitWidth);
+
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
