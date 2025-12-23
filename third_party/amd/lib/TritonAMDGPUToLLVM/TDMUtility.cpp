@@ -84,7 +84,7 @@ computeTDMPrefetchLinearLayout(MLIRContext *ctx, ArrayRef<int64_t> blockShape,
                                int elementBitWidth) {
   int numDims = blockShape.size();
 
-  // Prefetch only supports 256 bytes at a time
+  // Prefetches 256 bytes into L2
   const int bytesPerPrefetch = 256;
   int elemPerPrefetch = (bytesPerPrefetch * 8) / elementBitWidth;
 
@@ -733,13 +733,6 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   // Calculate maximum allowed offset from tilePtr before going out of bounds
   Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
 
-  // GFX1250 prefetches 256 bytes into L2
-  int bytesPerPrefetch = 256;
-
-  // Calculate how many elements fit into a prefetch
-  int elemPerPrefetch =
-      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
-
   // Compute LL to map from reg, lane, warp, block to the prefetch locations.
   auto ll = computeTDMPrefetchLinearLayout(loc.getContext(), blockShape,
                                            numLanes, numWarps, numCTAs,
@@ -753,10 +746,15 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   auto kWarp = rewriter.getStringAttr("warp");
   auto kBlock = rewriter.getStringAttr("block");
 
-  // Iterate over each register in the final LL and emit a prefetch intrinsic
-  SmallVector<Value> offsets(ll.getInDimSize(kRegister));
+  // Adjust the inner stride (always 1) to the number of elements per prefetch
+  int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
   auto scaledStride = tensorStride;
   scaledStride.back() = b.i32_val(elemPerPrefetch);
+
+  // Iterate over each register and emit a prefetch intrinsic
+  SmallVector<Value> offsets(ll.getInDimSize(kRegister));
   for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
     auto indices = applyLinearLayout(loc, rewriter, ll,
                                      {{kRegister, b.i32_val(reg)},

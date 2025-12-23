@@ -2211,7 +2211,6 @@ struct TDMPrefetchConversion
 
     // If the op has no results, just erase it
     if (op->getNumResults() == 0) {
-      // No results to return - just erase the op
       rewriter.eraseOp(op);
       return success();
     }

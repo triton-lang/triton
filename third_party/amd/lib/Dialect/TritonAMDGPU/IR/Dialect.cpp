@@ -848,7 +848,7 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   auto numWarps = triton::gpu::lookupNumWarps(module);
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
 
-  // Compute the linear layout to get the number of registers
+  // Compute the mapping to unroll the TDM tile across CTAs, warps, and lanes
   auto ll = mlir::LLVM::AMD::computeTDMPrefetchLinearLayout(
       context, blockShape, threadsPerWarp, numWarps, numCTAs,
       elementType.getIntOrFloatBitWidth());
