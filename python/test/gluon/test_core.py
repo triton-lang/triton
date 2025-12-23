@@ -30,7 +30,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     get_tmem_reg_layout,
-    tcgen05_mbarrier_init,
+    tcgen05_mma_barrier_count,
     tcgen05_mma,
     tcgen05_mma_scaled,
     tcgen05_commit,
@@ -172,7 +172,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    tcgen05_mbarrier_init(mma_bar, multicast=[smem_a, smem_b])
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
 
     # Need to synchronise all the CTAs after the mbarrier initialisation
     # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
@@ -515,7 +515,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
     if use_tcgen05:
         mma_bar = mbarrier.allocate_mbarrier()
         phase_mma = 0
-        tcgen05_mbarrier_init(mma_bar, multicast=[smem_a, smem_b] if multicast else [])
+        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast))
         acc_tmem = allocate_tensor_memory(
             element_ty=ttgl.float32,
             shape=[BLOCK_M, BLOCK_N],

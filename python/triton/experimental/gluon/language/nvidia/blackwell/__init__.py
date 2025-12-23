@@ -460,8 +460,19 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @constexpr_function
-def _num_canonical_ctas(smems):
-    if not smems:
+def tcgen05_mma_barrier_count(smems, multicast):
+    """
+    Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
+
+    Args:
+        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
+        multicast (bool): Whether the tcgen05 instruction is multicast.
+
+    Returns:
+        int: The number of CTAs that will commit the tcgen05 MMA instruction.
+    """
+    assert 0 <= len(smems) <= 2, "tcgen05_mma_barrier_count supports 0, 1, or 2 smem descriptors"
+    if not smems or not multicast:
         return 1
 
     def basis_is_zero(basis):
@@ -485,29 +496,6 @@ def _num_canonical_ctas(smems):
     # Inclusion-exclusion
     num_cta_commits = 2**num_broadcast_bits_a + 2**num_broadcast_bits_b - 1
     return num_cta_commits
-
-
-@gluon.jit
-def tcgen05_mbarrier_init(barrier, multicast=()):
-    """
-    Initialize an mbarrier for tcgen05 operations.
-
-    When `multicast=True`, we initialize the barrier to wait for all participating
-    CTAs to commit. In 2CTA mode, only the "leader" CTAs (even CTAs) issue the
-    tcgen05 sequence, so the expected arrival count is `num_ctas // 2`.
-
-    Args:
-        barrier (shared_memory_descriptor): The barrier to initialize.
-        multicast (List[shared_memory_descriptor]): Shared memory descriptors
-            used in the tcgen05 instruction coming from a TMA with multicast.
-    """
-    assert len(multicast) >= 0 and len(multicast) <= 2, \
-        "Multicast must be empty or contain 0, 1, or 2 smem descriptors"
-
-    # Count the number of canonical CTAs that will launch the next multicast instruction
-    # This is the union of both subspaces
-    count: ttgl.constexpr = _num_canonical_ctas(multicast)
-    mbarrier.init(barrier, count)
 
 
 @builtin
