@@ -695,7 +695,7 @@ void TreeData::addMetrics(
                                FlexibleMetric(metricName, metricValue));
   }
 }
-  
+
 void TreeData::addMetricsByScopeId(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);

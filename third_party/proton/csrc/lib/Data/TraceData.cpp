@@ -204,7 +204,7 @@ void TraceData::addMetrics(
 void TraceData::addMetricsByScopeId(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto eventId = scopeIdToContextId.at(scopeId); 
+  auto eventId = scopeIdToContextId.at(scopeId);
   if (!trace->hasEvent(eventId))
     return;
   auto &event = trace->getEvent(eventId);

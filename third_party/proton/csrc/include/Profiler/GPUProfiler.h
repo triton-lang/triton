@@ -220,7 +220,8 @@ protected:
     virtual void doStop() = 0;
 
     void
-    doAddMetrics(size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
+    doAddMetrics(size_t scopeId,
+                 const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
