@@ -103,7 +103,7 @@ static SmallVector<Value> computeCrossWarpHistogram(
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
     b.store(b.i32_val(0), sharedMemPtr);
   }
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
   Block *afterAtomics = nullptr;
   // Apply atomic add to update the histogram in shared memory.
   for (int i = 0; i < warpLevelHistogram.size(); ++i) {
@@ -118,7 +118,7 @@ static SmallVector<Value> computeCrossWarpHistogram(
     LLVM::BrOp::create(rewriter, loc, afterAtomics);
     rewriter.setInsertionPointToStart(afterAtomics);
   }
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
   // load the histogram to register with the right layout.
   for (Value index : indices) {
     Value sharedMemPtr =

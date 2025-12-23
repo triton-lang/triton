@@ -78,7 +78,7 @@ findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
     // - barriers
     // - loops
     if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, gpu::BarrierOp,
-            scf::ForOp, scf::WhileOp>(op)) {
+            triton::gpu::BarrierOp, scf::ForOp, scf::WhileOp>(op)) {
       ipnt = bi;
     }
   }

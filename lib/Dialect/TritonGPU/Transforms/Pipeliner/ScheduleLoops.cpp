@@ -24,8 +24,11 @@ namespace mlir::triton::gpu {
 //===----------------------------------------------------------------------===//
 
 bool hasGpuBarriers(scf::ForOp forOp) {
-  WalkResult result = forOp.walk(
-      [&](mlir::gpu::BarrierOp barrier) { return WalkResult::interrupt(); });
+  WalkResult result = forOp.walk([&](Operation *op) {
+    if (isa<mlir::gpu::BarrierOp, triton::gpu::BarrierOp>(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
   return result.wasInterrupted();
 }
 

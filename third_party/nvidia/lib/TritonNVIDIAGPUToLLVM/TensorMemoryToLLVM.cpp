@@ -468,7 +468,9 @@ struct TensorMemoryStoreOpConversion
 
     // Emit a barrier to ensure all threads have finished writing to tensor
     // memory before any use of the tensor memory.
-    b.barrier();
+    // Can be AddrSpace::TensorWrite if we emit
+    // NVVM::Tcgen05WaitKind::STORE during barrier lowering
+    b.barrier(triton::gpu::AddrSpace::None);
 
     rewriter.eraseOp(op);
     return success();
@@ -512,7 +514,9 @@ struct TensorMemoryAllocOpConversion
       NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
       // Emit a barrier to ensure all threads have finished writing to tensor
       // memory before any use of the tensor memory.
-      b.barrier();
+      // Can be AddrSpace::TensorWrite if we emit
+      // NVVM::Tcgen05WaitKind::STORE during barrier lowering
+      b.barrier(triton::gpu::AddrSpace::None);
     }
     // Cast to address space 3 as the shared memory object uses 3.
     // TODO: clean this up and use either a int or ptr address space 6

@@ -49,7 +49,7 @@ struct InitBarrierOpConversion
     LLVM::BrOp::create(rewriter, loc, ValueRange(), endBlock);
     rewriter.setInsertionPointToStart(endBlock);
     // Synchronize the whole CTA, so all waves see the LDS barrier
-    b.barrier();
+    b.barrier(triton::gpu::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
   }

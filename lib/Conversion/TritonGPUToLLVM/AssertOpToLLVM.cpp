@@ -42,7 +42,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       // tensor in those two operations may have different layout we need to
       // make sure all the threads are done executing the assert before going to
       // the next op.
-      b.barrier();
+      b.barrier(triton::gpu::AddrSpace::None);
     }
     rewriter.eraseOp(op);
     return success();
