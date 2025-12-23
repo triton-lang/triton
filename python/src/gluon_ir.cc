@@ -756,6 +756,16 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
              self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
            })
+      .def("create_fence_mbarrier_init_release_cluster",
+           [](GluonOpBuilder &self) {
+             self.create<ttng::FenceMBarrierInitReleaseClusterOp>();
+           })
+      .def("create_cluster_arrive",
+           [](GluonOpBuilder &self, bool relaxed) {
+             self.create<ttng::ClusterArriveOp>(relaxed);
+           })
+      .def("create_cluster_wait",
+           [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
