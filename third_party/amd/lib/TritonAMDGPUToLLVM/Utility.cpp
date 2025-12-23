@@ -557,7 +557,7 @@ unsigned getContiguity(Value ptr, Value offset,
 
 unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-  if (!tensorTy || !tensorTy.getEncoding())
+  if (!tensorTy)
     return 1;
   auto contiguity = getContiguity(ptr, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
