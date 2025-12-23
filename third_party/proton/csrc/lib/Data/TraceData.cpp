@@ -156,8 +156,8 @@ size_t TraceData::addOp(size_t eventId, const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   // Add a new context under it and update the context
   auto &event = trace->getEvent(eventId);
-  trace->addContexts(contexts, event.contextId);
-  return eventId;
+  auto contextId = trace->addContexts(contexts, event.contextId);
+  return trace->addEvent(contextId);
 }
 
 void TraceData::addMetric(size_t eventId, std::shared_ptr<Metric> metric) {
