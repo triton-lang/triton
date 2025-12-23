@@ -126,8 +126,8 @@ def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, Any]] 
         raise ValueError(f"Scope name mismatch: {name} != {popped_name}")
     elif not name:
         name = popped_name
-    libproton.exit_scope(id, name)
     if metrics:
         set_metric_kernels()
         libproton.add_metrics(id, *transform_tensor_metrics(metrics))
+    libproton.exit_scope(id, name)
     return id
