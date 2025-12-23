@@ -14,7 +14,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
         if n <= 128 and (n & (n - 1)) == 0:
             block_n = n
         else:
-            max_n = 128 if get_cdna_version() == 4 else 256
+            max_n = 64 if get_cdna_version() == 4 else 256
             block_n = max(32, min(max_n, triton.next_power_of_2(grid_m * n * num_xcds // n_cu)))
     elif block_m > 64:
         block_n = 256
