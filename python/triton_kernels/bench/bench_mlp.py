@@ -196,7 +196,6 @@ if __name__ == "__main__":
     batch_sizes_dense = [*range(128, 8192, 128)]
     batch_ranges_moe = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
     batch_sizes_moe = list(chain(*[range(*r) for r in batch_ranges_moe]))
-    batch_sizes_moe = [128]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     world_size = int(os.environ["WORLD_SIZE"])
@@ -207,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
     parser.add_argument("--quantized", action="store_true", default=False)
     args = parser.parse_args()
-    dtypes = quantized_dtypes if args.quantized else dense_dtypes
+    dtypes = quantized_dtypes
     roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dtypes[0], dtypes[1], EP=args.ep, name="gpt-oss-x2")
     torch.distributed.barrier()
     torch.distributed.destroy_process_group()
