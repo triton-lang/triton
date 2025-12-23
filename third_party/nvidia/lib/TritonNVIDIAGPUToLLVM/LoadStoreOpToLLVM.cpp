@@ -1412,10 +1412,16 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                        {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       int operandIdx = 3;
+      auto encoding = op.getDesc().getType().getBlockType().getEncoding();
+      bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
+        if (fp4Padded && i == 0) {
+          coord = b.mul(coord, b.i32_val(2));
+        }
         if (i < offsets.size())
           coord = b.add(coord, offsets[offsets.size() - i - 1].second);
+
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
         if (i != rank - 1)
@@ -1496,8 +1502,12 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
     auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                      {{kMsg, copyIdxVal}, {kBlock, ctaId}});
+    bool fp4Padded = nvidia_gpu::isFp4Padded(srcTy.getEncoding());
     for (int i = 0; i < rank; i++) {
       Value coord = coords[rank - i - 1];
+      if (fp4Padded && i == 0) {
+        coord = b.mul(coord, b.i32_val(2));
+      }
       if (i < offsets.size())
         coord = b.add(coord, offsets[offsets.size() - i - 1].second);
       operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1623,8 +1633,11 @@ static LogicalResult iterateGatherScatterIndices(
     return op->emitError("memdesc shape must match alloc shape");
   // `NVMMASharedEncodingAttr` means the core matrix tiles are placed next to
   // each other in shared memory, which lines up with how `gather4` loads data.
-  if (!isa<NVMMASharedEncodingAttr>(smemType.getEncoding()))
+  auto enc = dyn_cast<NVMMASharedEncodingAttr>(smemType.getEncoding());
+  if (!enc)
     return op->emitError("requires dst encoding NVMMASharedEncodingAttr");
+  if (enc.getFp4Padded())
+    yOffsetValue = b.mul(yOffsetValue, b.i32_val(2));
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
