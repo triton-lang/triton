@@ -51,8 +51,8 @@ private:
   }
 
   std::unique_ptr<Trace> trace;
-  // ScopeId -> ContextId
-  std::unordered_map<size_t, size_t> scopeIdToContextId;
+  // ScopeId -> EventId
+  std::unordered_map<size_t, size_t> scopeIdToEventId;
 };
 
 } // namespace proton

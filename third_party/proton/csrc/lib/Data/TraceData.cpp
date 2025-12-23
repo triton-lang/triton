@@ -134,12 +134,12 @@ void TraceData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto contextId = trace->addContexts(contexts);
-  scopeIdToContextId[scope.scopeId] = contextId;
+  auto eventId = trace->addEvent(trace->addContexts(contexts));
+  scopeIdToEventId[scope.scopeId] = eventId;
 }
 
 void TraceData::exitScope(const Scope &scope) {
-  scopeIdToContextId.erase(scope.scopeId);
+  scopeIdToEventId.erase(scope.scopeId);
 }
 
 size_t TraceData::addOp(const std::string &name) {
@@ -204,7 +204,7 @@ void TraceData::addMetrics(
 void TraceData::addMetricsByScopeId(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto eventId = scopeIdToContextId.at(scopeId);
+  auto eventId = scopeIdToEventId.at(scopeId);
   if (!trace->hasEvent(eventId))
     return;
   auto &event = trace->getEvent(eventId);
