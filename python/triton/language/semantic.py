@@ -1622,6 +1622,11 @@ class TritonSemantic(Generic[TensorTy]):
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
         assert lhs.type.is_block() and rhs.type.is_block()
         #TODO: validate types.
+        if lhs_scale is not None and not isinstance(lhs_scale, tl.constexpr):
+             assert lhs_scale.type.is_block(), "lhs_scale must be a block"
+        if rhs_scale is not None and not isinstance(rhs_scale, tl.constexpr):
+             assert rhs_scale.type.is_block(), "rhs_scale must be a block"
+
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
