@@ -50,9 +50,9 @@ public:
     this->addMetric(entryId, metric);
   }
 
-  virtual void
-  addOpAndMetricBatch(std::vector<std::tuple<size_t, const std::string &,
-                                             std::shared_ptr<Metric>>> &batch) {
+  virtual void addOpAndMetricBatch(
+      std::vector<std::tuple<size_t, const char *, std::shared_ptr<Metric>>>
+          &batch) {
     for (auto &[entryId, opName, metric] : batch) {
       this->addOpAndMetric(entryId, opName, metric);
     }

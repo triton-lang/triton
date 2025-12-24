@@ -33,8 +33,8 @@ public:
              const std::map<std::string, MetricValueType> &metrics) override;
 
   void addOpAndMetricBatch(
-      std::vector<std::tuple<size_t, const std::string &,
-                             std::shared_ptr<Metric>>> &batch) override;
+      std::vector<std::tuple<size_t, const char *, std::shared_ptr<Metric>>>
+          &batch) override;
 
   void addMetricsByScopeId(
       size_t scopeId,

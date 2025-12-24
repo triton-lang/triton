@@ -47,9 +47,9 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
-static thread_local std::map<Data *,
-                             std::vector<std::tuple<size_t, const std::string &,
-                                                    std::shared_ptr<Metric>>>>
+static thread_local std::map<
+    Data *,
+    std::vector<std::tuple<size_t, const char *, std::shared_ptr<Metric>>>>
     batch;
 
 uint32_t processActivityKernel(

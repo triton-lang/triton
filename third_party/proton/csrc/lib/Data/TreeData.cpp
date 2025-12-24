@@ -689,11 +689,11 @@ void TreeData::addMetrics(
 }
 
 void TreeData::addOpAndMetricBatch(
-    std::vector<std::tuple<size_t, const std::string &,
-                           std::shared_ptr<Metric>>> &batch) {
+    std::vector<std::tuple<size_t, const char *, std::shared_ptr<Metric>>>
+        &batch) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   for (auto &[parentId, name, metric] : batch) {
-    auto entryId = tree->addNode(name, parentId);
+    auto entryId = tree->addNode(Context(name), parentId);
     tree->upsertMetric(entryId, metric);
   }
 }
