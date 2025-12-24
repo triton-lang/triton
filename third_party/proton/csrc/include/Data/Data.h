@@ -50,6 +50,8 @@ public:
     this->addMetric(entryId, metric);
   }
 
+  /// Add multiple metrics to the data.
+  /// This metric is only used for flexible metrics passed from the inside.
   virtual void
   addMetrics(size_t entryId,
              const std::map<std::string, MetricValueType> &metrics) = 0;

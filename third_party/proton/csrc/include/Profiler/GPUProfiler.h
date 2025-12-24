@@ -78,21 +78,18 @@ public:
                     std::unordered_map<size_t, ExternIdState>>;
 
 protected:
-  void addOpToDataEntryMap(const Scope &scope) {
-    DataEntryMap dataToEntryId;
-    for (auto *data : this->dataSet) {
-      dataToEntryId.insertOrAssign(data, data->addOp(scope.name));
-    }
-    threadState.dataToEntryId = dataToEntryId;
-  }
-
   // OpInterface
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
-    addOpToDataEntryMap(scope);
+    for (auto *data : dataSet) {
+      auto entryId = data->addOp(scope.name);
+      threadState.dataToEntryId.insertOrAssign(data, entryId);
+    }
   }
+
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
+    threadState.dataToEntryId.clear();
   }
 
   // Profiler
@@ -100,10 +97,10 @@ protected:
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
   virtual void doAddMetrics(
-      size_t entryId,
+      size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override {
-    pImpl->doAddMetrics(entryId, scalarMetrics, tensorMetrics);
+    pImpl->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
   }
 
   struct ThreadState {
@@ -236,12 +233,12 @@ protected:
             tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntryId = threadState.dataToEntryId;
         for (auto *data : profiler.dataSet) {
-          if (profiler.isOpInProgress()) {
-            data->addMetrics(dataToEntryId[data], scalarMetrics);
-            data->addMetrics(dataToEntryId[data], tensorMetricsHost);
-          } else {
+          if (dataToEntryId.empty()) {
             data->addMetricsByScopeId(scopeId, scalarMetrics);
             data->addMetricsByScopeId(scopeId, tensorMetricsHost);
+          } else {
+            data->addMetrics(dataToEntryId[data], scalarMetrics);
+            data->addMetrics(dataToEntryId[data], tensorMetricsHost);
           }
         }
       }

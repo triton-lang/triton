@@ -246,7 +246,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       threadState.enterOp();
-      auto scope = threadState.scopeStack.back();
       auto &dataToEntryId = threadState.dataToEntryId;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
@@ -268,6 +267,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
                  "graph is created."
               << std::endl;
       }
+      auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(data->correlation_id, scope.scopeId,
                                      numInstances, dataToEntryId);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {

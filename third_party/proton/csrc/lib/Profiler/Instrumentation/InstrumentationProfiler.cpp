@@ -204,11 +204,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   }
 
   const auto &functionName = functionNames[functionId];
-  if (dataEntryIdMap.empty()) {
-    for (auto &data : dataSet) {
-      dataEntryIdMap[data] = data->addOp(functionName);
-    }
-  }
+  enterOp(Scope(functionName));
 
   auto config = getParserConfig(functionId, size);
   auto circularLayoutConfig =
@@ -262,18 +258,19 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         }
       });
 
-  dataEntryIdMap.clear();
+  exitOp(Scope(functionName));
 }
 
 void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
-  // Currently no-op
   if (dataEntryIdMap.empty()) {
+    // API originated metrics
     for (auto *data : dataSet) {
       data->addMetricsByScopeId(scopeId, scalarMetrics);
     }
   } else {
+    // Op originated metrics
     for (auto [data, entryId] : dataEntryIdMap) {
       data->addMetrics(entryId, scalarMetrics);
     }
