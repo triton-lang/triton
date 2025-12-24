@@ -39,7 +39,6 @@ public:
   struct TreeNode : public Context {
     inline static const size_t RootId = 0;
     inline static const size_t DummyId = std::numeric_limits<size_t>::max();
-    inline static const size_t kChildIndexThreshold = 8;
 
     struct ChildEntry {
       std::string_view name;
@@ -55,32 +54,12 @@ public:
 
     void addChild(std::string_view childName, size_t id) {
       children.push_back({childName, id});
-      if (!childIndex.empty()) {
-        childIndex.emplace(childName, id);
-        return;
-      }
-      if (children.size() == kChildIndexThreshold) {
-        childIndex.reserve(children.size() * 2);
-        for (const auto &child : children) {
-          childIndex.emplace(child.name, child.id);
-        }
-      }
+      childIndex.emplace(childName, id);
     }
 
     size_t findChild(std::string_view childName) const {
-      if (!childIndex.empty()) {
-        auto it = childIndex.find(childName);
-        if (it != childIndex.end()) {
-          return it->second;
-        }
-        return DummyId;
-      }
-      for (const auto &child : children) {
-        if (child.name == childName) {
-          return child.id;
-        }
-      }
-      return DummyId;
+      auto it = childIndex.find(childName);
+      return it != childIndex.end() ? it->second : DummyId;
     }
 
     size_t parentId = DummyId;
