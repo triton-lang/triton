@@ -20,6 +20,11 @@ from triton_kernels.numerics import InFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 
 
+def was_launched_with_torchrun():
+    required = ["RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT"]
+    return all(k in os.environ for k in required)
+
+
 def parse_dtype(dtype):
     ret = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn, "mx4": FP4}[dtype]
     if ret == torch.float8_e4m3fn and get_cdna_version() == 3:
@@ -192,21 +197,24 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
 if __name__ == "__main__":
     # torchrun --nproc-per-node=2 ./bench_mlp.py --ep 2 --name gpt-oss-x2
+    if not was_launched_with_torchrun():
+        print("usage: torchrun --nproc-per-node=<EP> ./bench_mlp.py")
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
-    batch_sizes_dense = [*range(128, 8192, 128)]
-    batch_ranges_moe = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
-    batch_sizes_moe = list(chain(*[range(*r) for r in batch_ranges_moe]))
-    dense_dtypes = ["fp8", "fp8"]
-    quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.distributed.init_process_group(backend="nccl", world_size=world_size, device_id=torch.device(local_rank))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ep", type=int, default=1)
-    parser.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
-    parser.add_argument("--quantized", action="store_true", default=False)
+    parser.add_argument("--quantized", action="store_true", default=True)
     args = parser.parse_args()
-    dtypes = quantized_dtypes
-    roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, dtypes[0], dtypes[1], EP=args.ep, name="gpt-oss-x2")
+    # set dtypes
+    if args.quantized:
+        dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
+    else:
+        dtypes = ["fp8", "fp8"]
+    # set model type
+    batch_ranges = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
+    batch_sizes = list(chain(*[range(*r) for r in batch_ranges]))
+    ep = torch.distributed.get_world_size()
+    roofline_mlp(batch_sizes, 5760, 5760, 128, 4, dtypes[0], dtypes[1], ep, name="mlp_moe")
     torch.distributed.barrier()
     torch.distributed.destroy_process_group()
