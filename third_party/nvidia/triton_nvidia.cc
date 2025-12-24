@@ -14,6 +14,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include "triton/Tools/PluginUtils.h"
 
 namespace py = pybind11;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -299,3 +300,21 @@ void init_triton_nvidia(py::module &&m) {
     return false;
   });
 }
+
+extern "C" void init_triton_nvidia_opaque(void *m) {
+  pybind11::module *_m = (pybind11::module *)m;
+  init_triton_nvidia(_m->def_submodule("nvidia"));
+}
+int register_nvidia_backend() {
+  printf("REGISTERING NVIDIA!\n");
+  if (std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH"); !filename.empty()) {
+    TritonPlugin TP(filename);
+    std::vector<const char *> backendNames;
+    void *init = (void*)init_triton_nvidia_opaque;
+    if (auto result = TP.registerBackend(init, "nvidia"); !result)
+      throw TP.err2exp(result.takeError());
+  }
+  return 0xC0FFEE;
+}
+volatile int nvidiaRegistrationAnchor = register_nvidia_backend();

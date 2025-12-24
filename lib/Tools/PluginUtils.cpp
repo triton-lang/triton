@@ -85,6 +85,25 @@ llvm::Error TritonPlugin::loadPlugin() {
     dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   }
 
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_BACKENDS)) {
+    auto enumerateBackendsAPIOrErr =
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
+            ENUMERATE_BACKENDS);
+    auto initBackendAPIOrErr = getAPI<InitBackendType, InitBackendCType>(INIT_BACKEND);
+    auto registerBackendAPIOrErr = getAPI<RegisterBackendType, RegisterBackendCType>(REGISTER_BACKEND);
+
+    if (auto Err = enumerateBackendsAPIOrErr.takeError())
+      return Err;
+    if (auto Err = initBackendAPIOrErr.takeError())
+      return Err;
+    if (auto Err = registerBackendAPIOrErr.takeError())
+      return Err;
+
+    initBackendAPI = *initBackendAPIOrErr;
+    registerBackendAPI = *registerBackendAPIOrErr;
+    enumerateBackendsAPI = *enumerateBackendsAPIOrErr;
+  }
+
   isLoaded = true;
   return llvm::Error::success();
 }
@@ -125,6 +144,33 @@ TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
   if (!isPassPluginSymbolPresent)
     return TP_SUCCESS;
   return enumeratePyBindHandles(enumeratePassesAPI, passNames);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::getBackendHandles(std::vector<const char *> &backendNames) {
+  if (auto Err = loadPlugin())
+    return Err;
+  // Do a check to see if the enumerate-passes api symbol is present, bail as
+  // if there are 0 passes if not
+  intptr_t isBackendPluginSymbolPresent =
+      (intptr_t)library.getAddressOfSymbol(ENUMERATE_BACKENDS);
+  if (!isBackendPluginSymbolPresent)
+    return TP_SUCCESS;
+  return enumeratePyBindHandles(enumerateBackendsAPI, backendNames);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::initBackend(void *m, const char *backendHandle) {
+  if (auto Err = loadPlugin())
+    return Err;
+  return checkAPIResult(initBackendAPI(m, backendHandle), backendHandle);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::registerBackend(void *m, const char *backendHandle) {
+  if (auto Err = loadPlugin())
+    return Err;
+  return checkAPIResult(registerBackendAPI(m, backendHandle), backendHandle);
 }
 
 llvm::Expected<TritonPluginResult>

@@ -13,6 +13,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include "triton/Tools/PluginUtils.h"
 
 namespace py = pybind11;
 using namespace mlir::triton;
@@ -110,3 +111,21 @@ void init_triton_proton(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_sched_barriers",
                      proton::gpu::createAddSchedBarriersPass);
 }
+
+extern "C" void init_triton_proton_opaque(void *m) {
+  pybind11::module *_m = (pybind11::module *)m;
+  init_triton_proton(_m->def_submodule("proton"));
+}
+int register_proton_backend() {
+  printf("REGISTERING PROTON!\n");
+  if (std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH"); !filename.empty()) {
+    TritonPlugin TP(filename);
+    std::vector<const char *> backendNames;
+    void *init = (void*)init_triton_proton_opaque;
+    if (auto result = TP.registerBackend(init, "proton"); !result)
+      throw TP.err2exp(result.takeError());
+  }
+  return 0xC0FFEE;
+}
+volatile int protonRegistrationAnchor = register_proton_backend();
