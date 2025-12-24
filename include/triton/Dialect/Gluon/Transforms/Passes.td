@@ -45,8 +45,8 @@ def GluonSimplifyControlFlow: Pass<"gluon-slimplify-control-flow"> {
   let summary = "simplications for control flow ops";
 
   let description = [{
-    The `gluon-inline` pass applies a reduced set of simplification
-    and canonicalization patterns to the module.
+    The `gluon-simplify-control-flow` pass applies a reduced set of
+    simplification and canonicalization patterns for control flow ops.
   }];
   let dependentDialects = [];
 }
