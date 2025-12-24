@@ -30,7 +30,8 @@ public:
   void runOnFuncOp(triton::FuncOp funcOp) {
     SmallVector<scf::ForOp> loops;
     funcOp->walk([&](scf::ForOp forOp) {
-      if (forOp->hasAttr(mlir::triton::kWarpSpecializeAttrName))
+      if (forOp->hasAttr(mlir::triton::kWarpSpecializeAttrName) &&
+          triton::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
     if (loops.empty())
@@ -110,7 +111,7 @@ public:
   }
 
   void runOnOperation() override {
-    if (numStages < 1)
+    if (numStages <= 1)
       return;
 
     getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });

@@ -270,6 +270,8 @@ def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8,
                                     a_use_tma, b_use_tma):
+    if is_hopper() and not (a_use_tma and b_use_tma):
+        pytest.skip("Hopper warp specialization requires all TMA loads")
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
         pytest.skip("uses too much shared memory")
     if num_stages == 0 and a_use_tma and b_use_tma and not use_fp8 and (BLOCK_SIZE_N, BLOCK_SIZE_K) == (256, 128):
@@ -307,7 +309,7 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
         assert "ttng.async_tma_copy_global_to_local" in ttgir
     if (not a_use_tma or not b_use_tma) and num_stages > 1:
         assert "ttg.async_copy_global_to_local" in ttgir
-    if is_hopper() and num_warps == 8:
+    if is_hopper() and (num_warps == 8 or num_stages <= 1):
         assert "ttg.warp_specialize" not in ttgir
     else:
         assert "ttg.warp_specialize" in ttgir
