@@ -480,8 +480,7 @@ public:
     auto firstInitIt = forOp.getInitArgsMutable().begin();
     int baseOpNo = firstInitIt->getOperandNumber();
     int tokIdx = tokUse.getOperandNumber() - baseOpNo;
-    if (tokIdx < 0 || tokIdx >= (int)forOp.getInitArgs().size())
-      return failure();
+    assert(tokIdx >= 0 && tokIdx < (int)forOp.getInitArgs().size());
 
     // Ensure the memory descriptor result of the alloc is only used inside the
     // loop. Otherwise sinking would break users after the loop.
