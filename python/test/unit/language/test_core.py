@@ -4200,13 +4200,17 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
-def test_masked_load_shared_memory(dtype, device):
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_masked_load_shared_memory(dtype, num_ctas, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
     M = 32
     N = 32
     K = 16
+    if num_ctas >= 4:
+        M = 64
+        N = 64
 
     in1 = torch.rand((M, K), dtype=dtype, device=device)
     in2 = torch.rand((K, N), dtype=dtype, device=device)
