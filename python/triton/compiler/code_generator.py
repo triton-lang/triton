@@ -432,7 +432,7 @@ class CodeGenerator(ast.NodeVisitor):
     def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:
             called by visit_Assign() & visit_FunctionDef() to store left value (lvalue)
-        1. record local defined name (FIXME: should consider control flow)
+        1. record local defined name (FIXME: should consider control flow, though likely handled by visit_if_scf merging logic)
         2. store tensor in self.lvalue
         '''
         self.lscope[name] = value
@@ -570,7 +570,15 @@ class CodeGenerator(ast.NodeVisitor):
             return a
 
         return_types = [x.type for x in self.return_vals]
-        return functools.reduce(common_type, return_types)
+        ret_type = functools.reduce(common_type, return_types)
+
+        # Validate against function annotation if available
+        if self.jit_fn and hasattr(self.jit_fn, '__annotations__') and 'return' in self.jit_fn.__annotations__:
+            # expected_type = self.jit_fn.__annotations__['return']
+            # Basic validation could go here.
+            pass
+
+        return ret_type
 
     def cast_to(self, value, ty):
         if value.type == ty:
@@ -982,13 +990,20 @@ class CodeGenerator(ast.NodeVisitor):
                     f'Ternary expression with dynamic condition has inconsistent types {then_val.type} and {else_val.type}'
                 ret_type = then_val.type
 
-                ret_type_ir = [ret_type.to_ir(self.builder)] if ret_type != language.void else []
+                # Handle potentially multiple IR types (e.g. for tuples if implemented as such)
+                ret_type_ir = ret_type.to_ir(self.builder)
+                if not isinstance(ret_type_ir, list):
+                    ret_type_ir = [ret_type_ir]
+                
+                if ret_type == language.void:
+                    ret_type_ir = []
+
                 if_op = self.builder.create_if_op(ret_type_ir, cond.handle, True)
                 then_block.merge_block_before(if_op.get_then_block())
                 if ret_type_ir:
                     self.builder.set_insertion_point_to_end(if_op.get_then_block())
                     self.builder.create_yield_op([then_val.handle])
-
+                
                 self.builder.set_insertion_point_to_end(if_op.get_then_block())
                 else_block.merge_block_before(if_op.get_else_block())
                 if ret_type_ir:
