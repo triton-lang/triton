@@ -198,6 +198,19 @@ def _compute_pid(tile_id, num_pid_n, num_pid_m, GROUP_SIZE_M):
 
 
 @triton.jit
+def _maybe_tma_load(desc, ptr, off0, off1, USE_TMA: tl.constexpr):
+    if USE_TMA:
+        return desc.load((off0, off1))
+    else:
+        offs0 = off0 + tl.arange(0, desc.block_shape[0])
+        offs1 = off1 + tl.arange(0, desc.block_shape[1])
+        mask0 = offs0 < desc.shape[0]
+        mask1 = offs1 < desc.shape[1]
+        mask = mask0[:, None] & mask1[None, :]
+        return tl.load(ptr + offs0[:, None] * desc.strides[0] + offs1[None, :] * desc.strides[1], mask=mask)
+
+
+@triton.jit
 def matmul_tma_ws_kernel(  #
         a_ptr, b_ptr, c_ptr,  #
         a_stride0, a_stride1,  #
@@ -210,6 +223,8 @@ def matmul_tma_ws_kernel(  #
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
         USE_FP8: tl.constexpr,  #
+        A_USE_TMA: tl.constexpr,  #
+        B_USE_TMA: tl.constexpr,  #
 ):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
                                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
@@ -230,8 +245,8 @@ def matmul_tma_ws_kernel(  #
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in tl.range(k_tiles, warp_specialize=True, num_stages=num_stages):
         off_k = k * BLOCK_SIZE_K
-        a = a_desc.load((off_am, off_k))
-        b = b_desc.load((off_bn, off_k))
+        a = _maybe_tma_load(a_desc, a_ptr, off_am, off_k, A_USE_TMA)
+        b = _maybe_tma_load(b_desc, b_ptr, off_bn, off_k, B_USE_TMA)
         accumulator = tl.dot(a, b.T, accumulator)
 
     c = accumulator.to(tl.float8e4nv if USE_FP8 else tl.float16)
@@ -242,17 +257,22 @@ def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
     return (num_stages * BLOCK_K * (BLOCK_M + BLOCK_N) + BLOCK_M * BLOCK_N) * (1 if use_fp8 else 2) > 228 * 1024
 
 
-@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (8192, 8192, 512)])
+@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (2048, 2048, 512)])
 @pytest.mark.parametrize("BLOCK_SIZE_M", [128])
 @pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
-@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.parametrize("num_stages", [0, 2, 3])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.parametrize("a_use_tma", [False, True])
+@pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
-def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8):
+def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8,
+                                    a_use_tma, b_use_tma):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
+        pytest.skip("uses too much shared memory")
+    if num_stages == 0 and a_use_tma and b_use_tma and not use_fp8 and (BLOCK_SIZE_N, BLOCK_SIZE_K) == (256, 128):
         pytest.skip("uses too much shared memory")
     dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
 
@@ -269,25 +289,28 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 
     triton.set_allocator(alloc_fn)
 
-    grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
+    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
     kernel = matmul_tma_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, num_warps=num_warps,
-                                        USE_FP8=use_fp8)
-    ttgir = kernel.asm["ttgir"]
-    if is_blackwell():
-        assert "ttng.tc_gen5_mma" in ttgir
-        assert "ttng.async_tma_copy_global_to_local" in ttgir
-    else:
-        assert "ttng.warp_group_dot" in ttgir
-        assert "ttng.async_tma_copy_global_to_local" in ttgir
-    if is_hopper() and num_warps == 8:
-        assert "ttg.warp_specialize" not in ttgir
-    else:
-        assert "ttg.warp_specialize" in ttgir
+                                        USE_FP8=use_fp8, A_USE_TMA=a_use_tma, B_USE_TMA=b_use_tma)
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)
     torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
+
+    ttgir = kernel.asm["ttgir"]
+    if is_blackwell():
+        assert "ttng.tc_gen5_mma" in ttgir
+    else:
+        assert "ttng.warp_group_dot" in ttgir
+    if a_use_tma or b_use_tma:
+        assert "ttng.async_tma_copy_global_to_local" in ttgir
+    if (not a_use_tma or not b_use_tma) and num_stages > 1:
+        assert "ttg.async_copy_global_to_local" in ttgir
+    if is_hopper() and num_warps == 8:
+        assert "ttg.warp_specialize" not in ttgir
+    else:
+        assert "ttg.warp_specialize" in ttgir
 
 
 @triton.jit
