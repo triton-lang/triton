@@ -764,10 +764,15 @@ class CodeGenerator(ast.NodeVisitor):
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
         if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
             lhs = constexpr(lhs)
-        if isinstance(lhs, constexpr):
-            fn = getattr(lhs, method_name)
-        else:
-            fn = self.get_Attribute(lhs, method_name)
+        try:
+            if isinstance(lhs, constexpr):
+                fn = getattr(lhs, method_name)
+            else:
+                fn = self.get_Attribute(lhs, method_name)
+        except AttributeError:
+             raise self._unsupported(
+                 node, "AST binary operator '{}' is not supported for types {} and {}".format(
+                     node.op.__name__, lhs.type, rhs.type))
         return self.call_Function(node, fn, [rhs], {})
 
     def visit_BinOp(self, node):
