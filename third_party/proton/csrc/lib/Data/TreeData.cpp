@@ -3,6 +3,7 @@
 #include "Data/Metric.h"
 #include "Device.h"
 #include "Utility/MsgPackWriter.h"
+#include "Utility/SmallMap.h"
 
 #include <array>
 #include <cstdint>
@@ -64,8 +65,8 @@ public:
     size_t id = DummyId;
     std::unordered_map<std::string, size_t> children = {};
     std::vector<size_t> childIds = {};
-    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
-    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
+    SmallMap<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    SmallMap<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
   };
 
