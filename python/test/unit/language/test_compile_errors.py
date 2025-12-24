@@ -562,3 +562,18 @@ def test_dot_scaled_shape_verification(fresh_triton_cache):
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     assert str(e.value.__cause__) == "lhs_scale must be a tensor of shape [..., 32, 2]. Got ['32', '4']"
+
+
+def test_err_unsupported_binary_op_types():
+    @triton.jit
+    def kernel():
+        # strict types: adding a dtype to an int is not supported
+        # and previously caused a crash if dtype object didn't have .type attribute
+        tl.float32 + 1
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+
+    # Check for the specific improved error message
+    assert "AST binary operator 'Add' is not supported for types" in str(e.value)
+
