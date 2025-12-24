@@ -88,8 +88,12 @@ public:
       }
       // Clear async_task.
     }
-    if (!success)
-      signalPassFailure();
+    if (!success) {
+      mlir::emitError(
+          getOperation()->getLoc(),
+          "failed to partition the function into warp-specialized code");
+      return signalPassFailure();
+    }
 
     doCodePartition(funcOp, numStages);
     if (dumpIntermediateSteps) {
