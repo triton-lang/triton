@@ -3,8 +3,6 @@
 #include "Data/Metric.h"
 #include "Device.h"
 #include "Utility/MsgPackWriter.h"
-#include "Utility/SmallMap.h"
-
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -65,8 +63,8 @@ public:
     size_t id = DummyId;
     std::unordered_map<std::string, size_t> children = {};
     std::vector<size_t> childIds = {};
-    SmallMap<MetricKind, std::shared_ptr<Metric>> metrics = {};
-    SmallMap<std::string, FlexibleMetric> flexibleMetrics = {};
+    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
   };
 
@@ -105,8 +103,8 @@ public:
   void upsertMetric(size_t contextId, std::shared_ptr<Metric> metric) {
     auto &node = treeNodeMap.at(contextId);
     auto it = node.metrics.find(metric->getKind());
-    if (it == nullptr) {
-      node.metrics.insert(metric->getKind(), metric);
+    if (it == node.metrics.end()) {
+      node.metrics.emplace(metric->getKind(), metric);
       metricKinds.insert(metric->getKind());
       if (metric->getKind() == MetricKind::Kernel) {
         auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
@@ -132,7 +130,7 @@ public:
         }
       }
     } else {
-      (*it)->updateMetric(*metric);
+      it->second->updateMetric(*metric);
     }
   }
 
@@ -140,12 +138,12 @@ public:
                             const FlexibleMetric &flexibleMetric) {
     auto &node = treeNodeMap.at(contextId);
     auto it = node.flexibleMetrics.find(flexibleMetric.getValueName(0));
-    if (it == nullptr) {
-      node.flexibleMetrics.insert(flexibleMetric.getValueName(0),
-                                  flexibleMetric);
+    if (it == node.flexibleMetrics.end()) {
+      node.flexibleMetrics.emplace(flexibleMetric.getValueName(0),
+                                   flexibleMetric);
       flexibleMetricNames.insert(flexibleMetric.getValueName(0));
     } else {
-      (*it).updateMetric(flexibleMetric);
+      it->second.updateMetric(flexibleMetric);
     }
   }
 
@@ -439,16 +437,19 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
           if (hasKernelMetric &&
-              treeNode.metrics.find(MetricKind::Kernel) == nullptr) {
+              treeNode.metrics.find(MetricKind::Kernel) ==
+                  treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(kernelInclusiveValueNames.size());
           }
           if (hasPCSamplingMetric &&
-              treeNode.metrics.find(MetricKind::PCSampling) == nullptr) {
+              treeNode.metrics.find(MetricKind::PCSampling) ==
+                  treeNode.metrics.end()) {
             metricEntries += PCSamplingMetric::Count;
           }
           if (hasCycleMetric &&
-              treeNode.metrics.find(MetricKind::Cycle) == nullptr) {
+              treeNode.metrics.find(MetricKind::Cycle) ==
+                  treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(cycleInclusiveValueNames.size());
           }
@@ -551,14 +552,16 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
 
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
           if (hasKernelMetric &&
-              treeNode.metrics.find(MetricKind::Kernel) == nullptr) {
+              treeNode.metrics.find(MetricKind::Kernel) ==
+                  treeNode.metrics.end()) {
             writer.packStr(kernelMetricDurationName);
             writer.packUInt(0);
             writer.packStr(kernelMetricInvocationsName);
             writer.packUInt(0);
           }
           if (hasPCSamplingMetric &&
-              treeNode.metrics.find(MetricKind::PCSampling) == nullptr) {
+              treeNode.metrics.find(MetricKind::PCSampling) ==
+                  treeNode.metrics.end()) {
             PCSamplingMetric pcSamplingMetric;
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric.getValueName(i);
@@ -567,7 +570,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
             }
           }
           if (hasCycleMetric &&
-              treeNode.metrics.find(MetricKind::Cycle) == nullptr) {
+              treeNode.metrics.find(MetricKind::Cycle) ==
+                  treeNode.metrics.end()) {
             writer.packStr(cycleMetricDurationName);
             writer.packUInt(0);
             writer.packStr(cycleMetricNormalizedDurationName);

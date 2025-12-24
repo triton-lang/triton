@@ -297,13 +297,14 @@ public:
   explicit PendingGraphQueue(Runtime *runtime) : runtime(runtime) {}
 
   struct PendingGraph {
-    SmallMap<Data *, std::vector<size_t>> dataToEntryIds;
+    std::map<Data *, std::vector<size_t>> dataToEntryIds;
     size_t numMetricNodes;
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  void push(const SmallMap<Data *, std::vector<size_t>> &dataToEntryIds,
-            size_t numNodes) {
+  void push(
+      const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
+      size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     auto device = runtime->getDevice();
     auto &queue = deviceQueues[device];
@@ -666,11 +667,12 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             auto *dataPtr = data;
-            auto *entryId = dataToEntryId.find(dataPtr);
-            if (!entryId)
+            auto entryIt = dataToEntryId.find(dataPtr);
+            if (entryIt == dataToEntryId.end())
               continue;
             auto baseEntryId =
-                dataPtr->addOp(*entryId, {Context{GraphState::captureTag}});
+                dataPtr->addOp(entryIt->second,
+                               {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {
@@ -714,7 +716,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
           auto scope = threadState.scopeStack.back();
-          SmallMap<Data *, std::vector<size_t>> metricNodeEntryIds;
+          std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
           auto &graphExec = graphRef.value().get();
           auto &externIdState =
               profiler.correlation.externIdToState[scope.scopeId];

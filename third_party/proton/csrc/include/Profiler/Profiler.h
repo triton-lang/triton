@@ -4,7 +4,6 @@
 #include "Data/Data.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
-#include "Utility/SmallSet.h"
 
 #include <atomic>
 #include <cstdint>
@@ -13,6 +12,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace proton {
@@ -71,7 +71,7 @@ public:
   }
 
   /// Get the set of data objects registered to the profiler.
-  SmallSet<Data *> getDataSet() const {
+  std::set<Data *> getDataSet() const {
     std::shared_lock<std::shared_mutex> lock(mutex);
     return dataSet;
   }
@@ -118,7 +118,7 @@ protected:
                const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
   mutable std::shared_mutex mutex;
-  SmallSet<Data *> dataSet;
+  std::set<Data *> dataSet;
   static thread_local void *tensorMetricKernel;
   static thread_local void *scalarMetricKernel;
   static thread_local void *metricKernelStream;

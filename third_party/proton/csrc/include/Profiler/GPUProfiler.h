@@ -7,7 +7,6 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/SmallMap.h"
 
 #include <atomic>
 #include <chrono>
@@ -17,7 +16,7 @@
 
 namespace proton {
 
-using DataEntryMap = SmallMap<Data *, size_t, 4>;
+using DataEntryMap = std::map<Data *, size_t>;
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
@@ -52,11 +51,14 @@ public:
       bool isApiNode{false};
 
       void setEntryId(Data *data, size_t entryId) {
-        dataToEntryId.insertOrAssign(data, entryId);
+        dataToEntryId.insert_or_assign(data, entryId);
       }
 
       const size_t *findEntryId(Data *data) const {
-        return dataToEntryId.find(data);
+        auto it = dataToEntryId.find(data);
+        if (it == dataToEntryId.end())
+          return nullptr;
+        return &it->second;
       }
 
       template <typename FnT> void forEachEntryId(FnT &&fn) const {
@@ -83,7 +85,7 @@ protected:
     this->threadState.scopeStack.push_back(scope);
     for (auto *data : dataSet) {
       auto entryId = data->addOp(scope.name);
-      threadState.dataToEntryId.insertOrAssign(data, entryId);
+      threadState.dataToEntryId.insert_or_assign(data, entryId);
     }
   }
 
