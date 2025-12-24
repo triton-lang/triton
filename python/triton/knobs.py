@@ -1,5 +1,9 @@
 from __future__ import annotations
+from enum import Enum
 
+from dataclasses import dataclass
+from contextlib import contextmanager
+from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 import functools
 import importlib
 import os
@@ -7,10 +11,6 @@ import re
 import subprocess
 import sysconfig
 import pathlib
-
-from dataclasses import dataclass
-from contextlib import contextmanager
-from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
 from triton._C.libtriton import getenv, getenv_bool  # type: ignore
 
@@ -52,6 +52,9 @@ def toenv(val: Any) -> Union[None, tuple[Optional[str]]]:
 
     if t is int:
         return (str(val), )
+
+    if isinstance(val, Enum):
+        return (str(val.value), )
 
     return None
 
@@ -213,7 +216,7 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
         for path in paths:
             if tool := NvidiaTool.from_path(path):
                 return tool
-
+            
         raise RuntimeError(f"Cannot find {self.binary}")
 
 
@@ -222,6 +225,31 @@ class env_opt_str(env_base[Optional[str], Optional[str]]):
 
     def get(self) -> Optional[str]:
         return getenv(self.key)
+
+
+EnumType = TypeVar("EnumType", bound=Enum)
+
+
+class env_enum(Generic[EnumType], env_base[Optional[Union[str, EnumType]], Optional[EnumType]]):
+    def __init__(self, key: str, type: Type[EnumType], default: Optional[EnumType] = None) -> None:
+        super().__init__(key)
+        self.type = type
+        self.default = default
+
+    def get(self) -> Optional[EnumType]:
+        val = getenv(self.key)
+        if val is None:
+            return self.default
+        try:
+            return self.type(val)
+        except ValueError:
+            # Fallback for case-insensitivity if needed, though strictly Enum matches value
+            try:
+                # Assuming values are lower case, but user might pass upper via env
+                return self.type(val.lower())
+            except ValueError:
+                pass
+            raise ValueError(f"Invalid value '{val}' for {self.key}. Expected one of {[e.value for e in self.type]}")
 
 
 class env_opt_bool(env_base):
@@ -353,14 +381,24 @@ class cache_knobs(base_knobs):
         return os.path.join(self.home_dir, ".triton", dirname)
 
 
+class IRLoc(str, Enum):
+    TTIR = "ttir"
+    TTGIR = "ttgir"
+    LLIR = "llir"
+    PTX = "ptx"
+    HSACO = "hsaco"
+    AMDGCN = "amdgcn"
+    CUBIN = "cubin"
+    JSON = "json"
+
+
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     dump_ir_extract_di_local_variables: env_bool = env_bool("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
-    # TODO: Use enum to constrain / 'typecheck' the values
-    use_ir_loc: env_opt_str = env_opt_str("USE_IR_LOC")
+    use_ir_loc: env_enum[IRLoc] = env_enum("USE_IR_LOC", IRLoc)
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
@@ -425,8 +463,7 @@ class HookChain(Generic[F]):
 
 
 # This is of the form [attr_name, attr_val]
-# TODO: Use tuple instead of list for better typing.
-KernelAttr = list[Union[str, int]]
+KernelAttr = tuple[Union[str, int], ...]
 
 
 class JITHookCompileInfo(TypedDict):
