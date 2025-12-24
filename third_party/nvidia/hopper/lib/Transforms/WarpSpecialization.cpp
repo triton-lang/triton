@@ -110,6 +110,9 @@ public:
   }
 
   void runOnOperation() override {
+    if (numStages < 1)
+      return;
+
     getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
   }
 };
