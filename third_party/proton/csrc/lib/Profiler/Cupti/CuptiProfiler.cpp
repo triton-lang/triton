@@ -112,16 +112,21 @@ uint32_t processActivityKernel(
     auto &graphNodeIdToState = externState.graphNodeIdToState;
     auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
     if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
+      auto metric = convertKernelActivityToMetric(activity);
+      if (!metric) {
+        return correlationId;
+      }
       const bool isApiNode = nodeIt->second.isApiNode;
       const auto kernelName = kernel->name;
       nodeIt->second.forEachEntryId(
-          [activity, isApiNode, kernelName](Data *data, size_t entryId) {
-            if (auto metric = convertKernelActivityToMetric(activity)) {
-              if (isApiNode) {
-                data->addOpAndMetric(entryId, kernelName, metric);
-              } else {
-                data->addMetric(entryId, metric);
-              }
+          [isApiNode, kernelName, metric](Data *data, size_t entryId) {
+            // copy metric
+            auto kernelMetric = std::make_shared<KernelMetric>(
+                *std::static_pointer_cast<KernelMetric>(metric));
+            if (isApiNode) {
+              data->addOpAndMetric(entryId, kernelName, kernelMetric);
+            } else {
+              data->addMetric(entryId, kernelMetric);
             }
           });
     }
