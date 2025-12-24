@@ -47,6 +47,11 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
+static thread_local std::map<Data *,
+                             std::vector<std::tuple<size_t, const std::string &,
+                                                    std::shared_ptr<Metric>>>>
+    batch;
+
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
@@ -118,7 +123,7 @@ uint32_t processActivityKernel(
           [activity, isApiNode, kernelName](Data *data, size_t entryId) {
             if (auto metric = convertKernelActivityToMetric(activity)) {
               if (isApiNode) {
-                data->addOpAndMetric(entryId, kernelName, metric);
+                batch[data].emplace_back(entryId, kernelName, metric);
               } else {
                 data->addMetric(entryId, metric);
               }
@@ -432,6 +437,11 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   } while (true);
 
   std::free(buffer);
+
+  for (auto &[data, entries] : batch) {
+    data->addOpAndMetricBatch(entries);
+  }
+  batch.clear();
 
   profiler.correlation.complete(maxCorrelationId);
 }

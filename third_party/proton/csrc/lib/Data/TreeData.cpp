@@ -678,13 +678,6 @@ void TreeData::addMetric(size_t contextId, const FlexibleMetric &metric) {
   tree->upsertFlexibleMetric(contextId, metric);
 }
 
-void TreeData::addOpAndMetric(size_t contextId, const std::string &opName,
-                              std::shared_ptr<Metric> metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  contextId = tree->addNode(Context(opName), contextId);
-  tree->upsertMetric(contextId, metric);
-}
-
 void TreeData::addMetrics(
     size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
@@ -692,6 +685,16 @@ void TreeData::addMetrics(
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
                                FlexibleMetric(metricName, metricValue));
+  }
+}
+
+void TreeData::addOpAndMetricBatch(
+    std::vector<std::tuple<size_t, const std::string &,
+                           std::shared_ptr<Metric>>> &batch) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto &[parentId, name, metric] : batch) {
+    auto entryId = tree->addNode(name, parentId);
+    tree->upsertMetric(entryId, metric);
   }
 }
 

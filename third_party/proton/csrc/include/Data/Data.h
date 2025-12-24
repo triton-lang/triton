@@ -50,6 +50,14 @@ public:
     this->addMetric(entryId, metric);
   }
 
+  virtual void
+  addOpAndMetricBatch(std::vector<std::tuple<size_t, const std::string &,
+                                             std::shared_ptr<Metric>>> &batch) {
+    for (auto &[entryId, opName, metric] : batch) {
+      this->addOpAndMetric(entryId, opName, metric);
+    }
+  }
+
   /// Add multiple metrics to the data.
   /// This metric is only used for flexible metrics passed from the inside.
   virtual void

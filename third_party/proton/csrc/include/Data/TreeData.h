@@ -32,11 +32,9 @@ public:
   addMetrics(size_t contextId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
-  // Override to optimize addOp + addMetric calls
-  // 1. to avoid double locking
-  // 2. to avoid looking up contextId -> contextId twice
-  void addOpAndMetric(size_t contextId, const std::string &opName,
-                      std::shared_ptr<Metric> metric) override;
+  void addOpAndMetricBatch(
+      std::vector<std::tuple<size_t, const std::string &,
+                             std::shared_ptr<Metric>>> &batch) override;
 
   void addMetricsByScopeId(
       size_t scopeId,
