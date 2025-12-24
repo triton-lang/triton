@@ -12,6 +12,7 @@
 #include <ostream>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,11 @@ public:
     inline static const size_t RootId = 0;
     inline static const size_t DummyId = std::numeric_limits<size_t>::max();
 
+    struct ChildEntry {
+      std::string_view name;
+      size_t id = DummyId;
+    };
+
     TreeNode() = default;
     explicit TreeNode(size_t id, const std::string &name)
         : id(id), Context(name) {}
@@ -46,23 +52,22 @@ public:
         : id(id), parentId(parentId), Context(name) {}
     virtual ~TreeNode() = default;
 
-    void addChild(const Context &context, size_t id) {
-      children.emplace(context.name, id);
-      childIds.push_back(id);
+    void addChild(std::string_view childName, size_t id) {
+      children.push_back({childName, id});
     }
 
-    bool hasChild(const Context &context) const {
-      return children.find(context.name) != children.end();
-    }
-
-    size_t getChild(const Context &context) const {
-      return children.at(context.name);
+    size_t findChild(std::string_view childName) const {
+      for (const auto &child : children) {
+        if (child.name == childName) {
+          return child.id;
+        }
+      }
+      return DummyId;
     }
 
     size_t parentId = DummyId;
     size_t id = DummyId;
-    std::unordered_map<std::string, size_t> children = {};
-    std::vector<size_t> childIds = {};
+    std::vector<ChildEntry> children = {};
     std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
@@ -82,11 +87,14 @@ public:
 
   size_t addNode(const Context &context, size_t parentId) {
     auto &parent = treeNodeMap.at(parentId);
-    if (parent.hasChild(context))
-      return parent.getChild(context);
+    std::string_view contextName = context.name;
+    auto existingChildId = parent.findChild(contextName);
+    if (existingChildId != TreeNode::DummyId)
+      return existingChildId;
     auto id = nextContextId++;
-    treeNodeMap.try_emplace(id, id, parentId, context.name);
-    parent.addChild(context, id);
+    auto [it, inserted] =
+        treeNodeMap.try_emplace(id, id, parentId, context.name);
+    parent.addChild(it->second.name, id);
     return id;
   }
 
@@ -168,14 +176,14 @@ public:
 
   template <typename FnT> void walkPreOrder(size_t contextId, FnT &&fn) {
     fn(getNode(contextId));
-    for (auto childId : getNode(contextId).childIds) {
-      walkPreOrder(childId, fn);
+    for (const auto &child : getNode(contextId).children) {
+      walkPreOrder(child.id, fn);
     }
   }
 
   template <typename FnT> void walkPostOrder(size_t contextId, FnT &&fn) {
-    for (auto childId : getNode(contextId).childIds) {
-      walkPostOrder(childId, fn);
+    for (const auto &child : getNode(contextId).children) {
+      walkPostOrder(child.id, fn);
     }
     fn(getNode(contextId));
   }
@@ -309,10 +317,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
         childrenArray.get_ref<json::array_t &>().reserve(
-            treeNode.childIds.size());
-        for (auto childId : treeNode.childIds) {
+            treeNode.children.size());
+        for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
-          jsonNodes[childId] = &childrenArray.back();
+          jsonNodes[child.id] = &childrenArray.back();
         }
       });
 
@@ -576,9 +584,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         writer.packStr("children");
-        writer.packArray(static_cast<uint32_t>(treeNode.childIds.size()));
-        for (auto childId : treeNode.childIds) {
-          packNode(tree->getNode(childId));
+        writer.packArray(static_cast<uint32_t>(treeNode.children.size()));
+        for (const auto &child : treeNode.children) {
+          packNode(tree->getNode(child.id));
         }
       };
 
