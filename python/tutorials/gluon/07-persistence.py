@@ -195,7 +195,7 @@ def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
@@ -625,7 +625,7 @@ def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, 
     b_index = producer % (num_buffers + stealb)
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
     return producer

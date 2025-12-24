@@ -443,17 +443,11 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
       rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
-  auto kBlock = StringAttr::get(ctx, "block");
-  LinearLayout::BasesT bases;
-  bases[kBlock] =
-      std::vector<std::vector<int32_t>>(llvm::Log2_32(numCTAs), {0});
-  auto dims = standardOutDimNames(ctx, 1);
-  auto barrierCGALayout =
-      ttg::CGAEncodingAttr::get(ctx, LinearLayout(std::move(bases), dims));
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, numCTAs}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
 }

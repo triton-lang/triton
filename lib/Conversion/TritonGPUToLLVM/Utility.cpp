@@ -1564,4 +1564,79 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   rewriter.replaceOp(op, {resultStruct});
 }
 
+// Only retain those attributes that are not constructed by
+// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+// attributes.
+void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                          SmallVectorImpl<NamedAttribute> &result) {
+
+  for (const auto &attr : op->getAttrs()) {
+    if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+        attr.getName() == op.getFunctionTypeAttrName() ||
+        attr.getName() == "std.varargs" ||
+        attr.getName() == triton::gpu::AttrNumWarpsName ||
+        (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
+      continue;
+    result.push_back(attr);
+  }
+}
+
+triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
+                           ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo) {
+  // Push back two new arguments that indicate the current pointer to shared
+  // memory and global scratch memory.
+  auto loc = funcOp.getLoc();
+  auto ctx = funcOp->getContext();
+  auto sharedPtrTy =
+      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+  auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+  auto profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+
+  // 1. Modify the function type to add the new arguments.
+  auto funcTy = funcOp.getFunctionType();
+  auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
+  bool isKernel = triton::isKernel(funcOp);
+  if (isKernel && targetInfo.isCuda()) {
+    for (auto i : llvm::seq(amendedInputTy.size())) {
+      if (isa<TensorDescType>(amendedInputTy[i])) {
+        funcOp.setArgAttr(i, "tt.nv_tma_desc",
+                          mlir::IntegerAttr::get(i32_ty, 1));
+      }
+    }
+  }
+  if (!isKernel) {
+    amendedInputTy.push_back(sharedPtrTy);
+  }
+  amendedInputTy.push_back(globalPtrTy);
+  amendedInputTy.push_back(profilePtrTy);
+  auto amendedFuncTy =
+      FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
+  // 2. Modify the argument attributes to add the new argument.
+  SmallVector<NamedAttribute> amendedAttrs;
+  filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+  if (auto argAttrs = funcOp.getAllArgAttrs()) {
+    llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                       argAttrs.end());
+    while (amendedArgAttrs.size() < amendedInputTy.size()) {
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    }
+    amendedAttrs.push_back(rewriter.getNamedAttr(
+        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+  }
+
+  // 3. Add the new arguments to the region
+  auto amendedFuncOp = triton::FuncOp::create(
+      rewriter, funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+  auto &region = funcOp.getBody();
+  if (!isKernel) {
+    region.addArgument(sharedPtrTy, loc);
+  }
+  region.addArgument(globalPtrTy, loc);
+  region.addArgument(profilePtrTy, loc);
+  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                              amendedFuncOp.end());
+  return amendedFuncOp;
+}
+
 } // namespace mlir

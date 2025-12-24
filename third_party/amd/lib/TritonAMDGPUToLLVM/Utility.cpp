@@ -792,6 +792,11 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
         Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
         pkVals[i] = (b.bitcast(pkScaled, v2i32));
       }
+    } else {
+      // bitcast to v2i32
+      for (unsigned i = 0; i < 4; i++) {
+        pkVals[i] = b.bitcast(pkVals[i], vec_ty(i32_ty, 2));
+      }
     }
     Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
     Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
