@@ -90,13 +90,13 @@ class CustomPhilox4x:
         return counter
 
     def advance(self, n_steps):
-        self._counter[0] += n_steps
-        if self._counter[0] < n_steps:
-             self._counter[1] += 1
-             if self._counter[1] == 0:
-                 self._counter[2] += 1
-                 if self._counter[2] == 0:
-                     self._counter[3] += 1
+        for i in range(4):
+            val = int(self._counter[i]) + n_steps
+            self._counter[i] = val
+            bits = np.dtype(self._dtype).itemsize * 8
+            n_steps = val >> bits
+            if n_steps == 0:
+                break
 
 
 class CustomPhilox(CustomPhilox4x):
@@ -275,4 +275,32 @@ def test_rand_limits(dtype, device):
     kernel[(1, )](min_max_int, output, 2)
 
     assert output[0] == output[1]
+    assert output[0] == output[1]
     assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0
+
+
+def test_philox_overflow():
+    # Test that advance works correctly for large offsets that trigger overflow
+    config = PHILOX_32
+    seed = 0
+    gen = CustomPhilox4x(seed, config=config)
+    
+    # Set counter to [2**32-1, 0, 0, 0]
+    gen._counter[0] = 2**32 - 1
+    
+    # Advance by 1, should trigger carry to _counter[1]
+    gen.advance(1)
+    
+    assert gen._counter[0] == 0
+    assert gen._counter[1] == 1
+    assert gen._counter[2] == 0
+    assert gen._counter[3] == 0
+    
+    # Test multiple carries
+    gen._counter[:] = [2**32 - 1, 2**32 - 1, 0, 0]
+    gen.advance(1)
+    
+    assert gen._counter[0] == 0
+    assert gen._counter[1] == 0
+    assert gen._counter[2] == 1
+    assert gen._counter[3] == 0
