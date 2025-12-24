@@ -72,7 +72,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  std::set<Data *, size_t> dataEntryIdMap;
+  std::map<Data *, size_t> dataEntryIdMap;
 };
 
 } // namespace proton
