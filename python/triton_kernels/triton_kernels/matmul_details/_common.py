@@ -179,7 +179,7 @@ def matmul_launch_metadata(grid, kernel, args):
     n_slices = args.get("N_SLICES", None)
     if slice_sizes is not None:
         n_tokens = slice_sizes.sum()
-        n_w_bytes = (W.numel() * W.element_size() // n_slices) * (slice_sizes > 0)
+        n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
     else:
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
