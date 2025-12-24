@@ -302,9 +302,8 @@ public:
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  void push(
-      const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
-      size_t numNodes) {
+  void push(const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
+            size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     auto device = runtime->getDevice();
     auto &queue = deviceQueues[device];
@@ -670,9 +669,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto entryIt = dataToEntryId.find(dataPtr);
             if (entryIt == dataToEntryId.end())
               continue;
-            auto baseEntryId =
-                dataPtr->addOp(entryIt->second,
-                               {Context{GraphState::captureTag}});
+            auto baseEntryId = dataPtr->addOp(
+                entryIt->second, {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {

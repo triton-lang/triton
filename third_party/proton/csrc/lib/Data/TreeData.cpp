@@ -436,9 +436,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
           }
         }
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric &&
-              treeNode.metrics.find(MetricKind::Kernel) ==
-                  treeNode.metrics.end()) {
+          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
+                                     treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(kernelInclusiveValueNames.size());
           }
@@ -447,9 +446,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
                   treeNode.metrics.end()) {
             metricEntries += PCSamplingMetric::Count;
           }
-          if (hasCycleMetric &&
-              treeNode.metrics.find(MetricKind::Cycle) ==
-                  treeNode.metrics.end()) {
+          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
+                                    treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(cycleInclusiveValueNames.size());
           }
@@ -551,9 +549,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric &&
-              treeNode.metrics.find(MetricKind::Kernel) ==
-                  treeNode.metrics.end()) {
+          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
+                                     treeNode.metrics.end()) {
             writer.packStr(kernelMetricDurationName);
             writer.packUInt(0);
             writer.packStr(kernelMetricInvocationsName);
@@ -569,9 +566,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               writer.packUInt(0);
             }
           }
-          if (hasCycleMetric &&
-              treeNode.metrics.find(MetricKind::Cycle) ==
-                  treeNode.metrics.end()) {
+          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
+                                    treeNode.metrics.end()) {
             writer.packStr(cycleMetricDurationName);
             writer.packUInt(0);
             writer.packStr(cycleMetricNormalizedDurationName);

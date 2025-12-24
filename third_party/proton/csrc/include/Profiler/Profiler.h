@@ -10,9 +10,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <string>
-#include <set>
 #include <vector>
 
 namespace proton {
