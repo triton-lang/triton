@@ -17,6 +17,7 @@ from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
+from ..language.type_parser import normalize_ty, type_canonicalisation_dict
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
@@ -270,30 +271,7 @@ class DependenciesFinder(ast.NodeVisitor):
 # -----------------------------------------------------------------------------
 
 
-def _normalize_ty(ty) -> str:
-    import triton.language.core as core
-    if isinstance(ty, str):
-        ty = ty.strip()
-        if ty.startswith("const "):
-            ty = ty.removeprefix("const")
-            ty = _normalize_ty(ty)
-            assert ty.startswith("*")
-            return "*k" + ty[1:]
-        if ty.endswith("*"):
-            return "*" + _normalize_ty(ty[:-1])
-        if ty.startswith("*"):
-            return "*" + _normalize_ty(ty[1:])
-        if ty.startswith("tl."):
-            return _normalize_ty(ty.removeprefix("tl."))
-    elif isinstance(ty, core.pointer_type):
-        return f"*{_normalize_ty(ty.element_ty)}"
-    elif isinstance(ty, core.dtype):
-        ty = ty.name
-    elif isinstance(ty, type):
-        ty = ty.__name__
-    else:
-        ty = str(ty)
-    return type_canonicalisation_dict.get(ty.replace("_t", ""), ty)
+
 
 
 class KernelParam:
@@ -314,7 +292,7 @@ class KernelParam:
     def annotation(self) -> str:
         if not self._param.annotation or self._param.annotation == inspect.Parameter.empty:
             return ""
-        return _normalize_ty(self._param.annotation)
+        return normalize_ty(self._param.annotation)
 
     @cached_property
     def annotation_type(self) -> str:

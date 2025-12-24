@@ -1247,13 +1247,13 @@ def _rewrap_tensor(t, original_tensor):
 class GridExecutor:
 
     def __init__(self, fn, arg_names, grid, pre_run_hooks=[]):
-        from .jit import _normalize_ty  # TODO: modularize
+        from ..language.type_parser import normalize_ty
 
         self.fn = fn
         self.arg_names = arg_names
         self.grid = grid
         self.pre_run_hooks = pre_run_hooks
-        __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
+        __annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
