@@ -1838,7 +1838,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if is_hip():
         if not is_hip_cdna3() and not is_hip_cdna4() and not is_hip_gfx1250() and (dtype_x == 'float8_e4m3fn'
                                                                                    or dtype_z == 'float8_e4m3fn'):
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4.')
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4 and above.')
         if (not (is_hip_cdna4() or is_hip_gfx1250())) and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
                                                            (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
             pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4 and above.')
@@ -3514,7 +3514,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4 and above")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250):
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
                 pytest.skip(
                     f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4, and above"
                 )
