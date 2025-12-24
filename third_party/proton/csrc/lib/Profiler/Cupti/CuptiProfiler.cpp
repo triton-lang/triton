@@ -60,7 +60,6 @@ uint32_t processActivityKernel(
   if (!/*not valid*/ corrIdToExternId.withRead(
           correlationId, [&](const size_t &value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
-    return correlationId;
   }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
@@ -113,12 +112,8 @@ uint32_t processActivityKernel(
       // We have a graph creation captured
       auto &graphNodeIdToState = ref.value().get().graphNodeIdToState;
       auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
-      if (nodeIt != graphNodeIdToState.end()) {
+      if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
         nodeIt->second.forEachEntryId([&](Data *data, size_t entryId) {
-          if (nodeIt->second.isMetricNode) {
-            // Skip metric nodes
-            return;
-          }
           if (auto metric = convertKernelActivityToMetric(activity)) {
             if (nodeIt->second.isApiNode) {
               data->addOpAndMetric(entryId, kernel->name, metric);
