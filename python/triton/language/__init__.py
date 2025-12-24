@@ -312,6 +312,8 @@ def str_to_ty(name, c):
         ndim = len(block_shape)
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
+        if stride_type[-1] != 1:
+            raise ValueError("Last dim stride must be 1")
         stride_type = tuple_type(([int64] * ndim))
         block = block_type(dtype, block_shape)
         if is_gluon:
