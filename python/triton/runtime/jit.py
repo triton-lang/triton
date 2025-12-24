@@ -497,7 +497,6 @@ class JITCallable:
 
     @property
     def cache_key(self) -> str:
-        # TODO : hash should be attribute of `self`
         with self._hash_lock:
             if self.hash is not None:
                 return self.hash
