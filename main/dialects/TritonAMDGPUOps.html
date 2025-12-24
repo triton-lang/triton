@@ -761,7 +761,10 @@ Stride is the distance between the beginning of contiguous memory chunks.
 When performing a load of a block, the <code class="docutils literal notranslate"><span class="pre">stride</span></code> is the address difference between
 the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
 when it converts to the buffer ops because it is important for optimizing
-the cache memory access.</p>
+the cache memory access.
+Contiguity is the maximum number of elements that can be loaded in a single vector
+with the given layout and mask.
+This allows to use buffer_load even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code></p>
 <section id="id20">
@@ -769,6 +772,7 @@ the cache memory access.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="id21">
@@ -902,7 +906,10 @@ Stride is the distance between the beginning of contiguous memory chunks.
 When performing a block store, the <code class="docutils literal notranslate"><span class="pre">stride</span></code> is the address difference between
 the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
 when it converts to the buffer ops because it is important for optimizing
-the cache memory access.</p>
+the cache memory access.
+Contiguity is the maximum number of elements that can be loaded in a single vector
+with the given layout and mask.
+This allows to use buffer_store even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code></p>
 <section id="id26">
@@ -910,6 +917,7 @@ the cache memory access.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="id27">

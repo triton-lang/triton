@@ -382,6 +382,9 @@ When performing a load of a block, the `stride` is the address difference betwee
 the first elements of each row in bytes. Compiler tries to obtain the `stride`
 when it converts to the buffer ops because it is important for optimizing
 the cache memory access.
+Contiguity is the maximum number of elements that can be loaded in a single vector
+with the given layout and mask.
+This allows to use buffer_load even if the alignment cannot be proven based on IR.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
@@ -392,6 +395,7 @@ Interfaces: `BufferOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
@@ -481,6 +485,9 @@ When performing a block store, the `stride` is the address difference between
 the first elements of each row in bytes. Compiler tries to obtain the `stride`
 when it converts to the buffer ops because it is important for optimizing
 the cache memory access.
+Contiguity is the maximum number of elements that can be loaded in a single vector
+with the given layout and mask.
+This allows to use buffer_store even if the alignment cannot be proven based on IR.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
 
@@ -491,6 +498,7 @@ Interfaces: `BufferOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
