@@ -311,10 +311,11 @@ def str_to_ty(name, c):
         dtype = str_to_ty(dtype, None)
         ndim = len(block_shape)
         shape_type = tuple_type([int32] * ndim)
-        # FIXME: Last dim stride should be constexpr(1)
-        if stride_type[-1] != 1:
-            raise ValueError("Last dim stride must be 1")
-        stride_type = tuple_type(([int64] * ndim))
+        # Last dim stride should be constexpr(1)
+        stride_type_list = [int64] * ndim
+        if ndim > 0:
+            stride_type_list[-1] = constexpr_type(1)
+        stride_type = tuple_type(stride_type_list)
         block = block_type(dtype, block_shape)
         if is_gluon:
             from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout

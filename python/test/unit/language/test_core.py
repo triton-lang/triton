@@ -6699,4 +6699,18 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
     d = a.to(torch.float32) @ b.to(torch.float32)
 
+
     assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)
+
+
+def test_stride_constraint():
+    from triton.language import str_to_ty, constexpr_type, int64
+
+    # Test that the last stride is constrained to 1
+    desc_str = "tensordesc<float32, [128, 64], 0>"
+    ty = str_to_ty(desc_str, None)
+    
+    assert ty.strides_type[-1] == constexpr_type(1)
+    
+    # Verify we can make a descriptor with this type
+    assert ty.block_type.element_ty.name == 'fp32'
