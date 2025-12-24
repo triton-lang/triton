@@ -313,6 +313,17 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
         assert "ttg.warp_specialize" in ttgir
 
 
+@pytest.mark.parametrize("M, N, K", [(512, 512, 512)])
+@pytest.mark.parametrize("num_stages", [0, 3])
+@pytest.mark.parametrize("a_use_tma", [False, True])
+@pytest.mark.parametrize("b_use_tma", [False, True])
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+def test_warp_specialize_tma_matmul_consan(M, N, K, num_stages, a_use_tma, b_use_tma, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = "consan"
+    test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M=128, BLOCK_SIZE_N=128, BLOCK_SIZE_K=64, num_stages=num_stages,
+                                    num_warps=4, use_fp8=False, a_use_tma=a_use_tma, b_use_tma=b_use_tma)
+
+
 @triton.jit
 def matmul_tma_persistent_ws_kernel(  #
         a_ptr, b_ptr, c_ptr,  #
