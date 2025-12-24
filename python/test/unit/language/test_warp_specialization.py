@@ -321,6 +321,9 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 @pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul_consan(M, N, K, num_stages, a_use_tma, b_use_tma, fresh_knobs):
+    if is_hopper():
+        # FIXME: Hopper warp specialization generates incorrect debug info.
+        triton.knobs.compilation.disable_line_info = True
     triton.knobs.compilation.instrumentation_mode = "consan"
     test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M=128, BLOCK_SIZE_N=128, BLOCK_SIZE_K=64, num_stages=num_stages,
                                     num_warps=4, use_fp8=False, a_use_tma=a_use_tma, b_use_tma=b_use_tma)
