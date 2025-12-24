@@ -61,7 +61,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 
 // FIXME: Make this API and that of maybeLookupNumWarps consistent!
 // Utility to find the number of threads per warp
-int lookupThreadsPerWarp(OpBuilder &rewriter);
+int maybeLookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
 int lookupNumCTAs(Operation *op);
 
