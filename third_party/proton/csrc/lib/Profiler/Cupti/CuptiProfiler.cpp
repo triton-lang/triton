@@ -58,7 +58,7 @@ uint32_t processActivityKernel(
   auto correlationId = kernel->correlationId;
   size_t externId = 0;
   if (!/*not valid*/ corrIdToExternId.withRead(
-          correlationId, [&](const size_t &value) { externId = value; })) {
+          correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
   }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
@@ -103,9 +103,6 @@ uint32_t processActivityKernel(
     } else {
       // Cache miss, fetch from the main map
       auto ref = externIdToState.find(externId);
-      if (!ref.has_value()) {
-        return correlationId;
-      }
       // Update the cache
       externIdToStateCache.emplace(externId, ref.value());
       state = &ref.value().get();
