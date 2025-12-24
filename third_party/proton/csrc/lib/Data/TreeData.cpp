@@ -105,8 +105,8 @@ public:
   void upsertMetric(size_t contextId, std::shared_ptr<Metric> metric) {
     auto &node = treeNodeMap.at(contextId);
     auto it = node.metrics.find(metric->getKind());
-    if (it == node.metrics.end()) {
-      node.metrics.emplace(metric->getKind(), metric);
+    if (it == nullptr) {
+      node.metrics.insert(metric->getKind(), metric);
       metricKinds.insert(metric->getKind());
       if (metric->getKind() == MetricKind::Kernel) {
         auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
@@ -132,7 +132,7 @@ public:
         }
       }
     } else {
-      it->second->updateMetric(*metric);
+      (*it)->updateMetric(*metric);
     }
   }
 
@@ -140,12 +140,12 @@ public:
                             const FlexibleMetric &flexibleMetric) {
     auto &node = treeNodeMap.at(contextId);
     auto it = node.flexibleMetrics.find(flexibleMetric.getValueName(0));
-    if (it == node.flexibleMetrics.end()) {
-      node.flexibleMetrics.emplace(flexibleMetric.getValueName(0),
-                                   flexibleMetric);
+    if (it == nullptr) {
+      node.flexibleMetrics.insert(flexibleMetric.getValueName(0),
+                                  flexibleMetric);
       flexibleMetricNames.insert(flexibleMetric.getValueName(0));
     } else {
-      it->second.updateMetric(flexibleMetric);
+      (*it).updateMetric(flexibleMetric);
     }
   }
 
@@ -438,18 +438,17 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
           }
         }
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
-                                     treeNode.metrics.end()) {
+          if (hasKernelMetric &&
+              treeNode.metrics.find(MetricKind::Kernel) == nullptr) {
             metricEntries +=
                 static_cast<uint32_t>(kernelInclusiveValueNames.size());
           }
           if (hasPCSamplingMetric &&
-              treeNode.metrics.find(MetricKind::PCSampling) ==
-                  treeNode.metrics.end()) {
+              treeNode.metrics.find(MetricKind::PCSampling) == nullptr) {
             metricEntries += PCSamplingMetric::Count;
           }
-          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
-                                    treeNode.metrics.end()) {
+          if (hasCycleMetric &&
+              treeNode.metrics.find(MetricKind::Cycle) == nullptr) {
             metricEntries +=
                 static_cast<uint32_t>(cycleInclusiveValueNames.size());
           }
@@ -551,16 +550,15 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
-                                     treeNode.metrics.end()) {
+          if (hasKernelMetric &&
+              treeNode.metrics.find(MetricKind::Kernel) == nullptr) {
             writer.packStr(kernelMetricDurationName);
             writer.packUInt(0);
             writer.packStr(kernelMetricInvocationsName);
             writer.packUInt(0);
           }
           if (hasPCSamplingMetric &&
-              treeNode.metrics.find(MetricKind::PCSampling) ==
-                  treeNode.metrics.end()) {
+              treeNode.metrics.find(MetricKind::PCSampling) == nullptr) {
             PCSamplingMetric pcSamplingMetric;
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric.getValueName(i);
@@ -568,8 +566,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               writer.packUInt(0);
             }
           }
-          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
-                                    treeNode.metrics.end()) {
+          if (hasCycleMetric &&
+              treeNode.metrics.find(MetricKind::Cycle) == nullptr) {
             writer.packStr(cycleMetricDurationName);
             writer.packUInt(0);
             writer.packStr(cycleMetricNormalizedDurationName);
