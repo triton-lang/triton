@@ -344,6 +344,8 @@ def matmul_tma_persistent_ws_kernel(  #
         NUM_SMS: tl.constexpr,  #
         USE_FP8: tl.constexpr,  #
         FLATTEN: tl.constexpr,  #
+        A_USE_TMA: tl.constexpr,  #
+        B_USE_TMA: tl.constexpr,  #
 ):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
                                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
@@ -367,8 +369,8 @@ def matmul_tma_persistent_ws_kernel(  #
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             off_k = ki * BLOCK_SIZE_K
-            a = a_desc.load((off_am, off_k))
-            b = b_desc.load((off_bn, off_k))
+            a = _maybe_tma_load(a_desc, a_ptr, off_am, off_k, A_USE_TMA)
+            b = _maybe_tma_load(b_desc, b_ptr, off_bn, off_k, B_USE_TMA)
             accumulator = tl.dot(a, b.T, accumulator)
 
         c = accumulator.to(tl.float8e4nv if USE_FP8 else tl.float16)
@@ -383,10 +385,14 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.parametrize("flatten", [False, True] if is_blackwell() else [True])
+@pytest.mark.parametrize("a_use_tma", [False, True])
+@pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
-                                               use_fp8, flatten):
+                                               use_fp8, flatten, a_use_tma, b_use_tma):
+    if is_hopper() and not (a_use_tma and b_use_tma):
+        pytest.skip("Hopper warp specialization requires all TMA loads")
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8):
         pytest.skip("uses too much shared memory")
     dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
@@ -414,14 +420,16 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
     kernel = matmul_tma_persistent_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
                                                    num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=flatten
-                                                   and is_blackwell())
+                                                   and is_blackwell(), A_USE_TMA=a_use_tma, B_USE_TMA=b_use_tma)
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
         assert "ttng.tc_gen5_mma" in ttgir
-        assert "ttng.async_tma_copy_global_to_local" in ttgir
     else:
         assert "ttng.warp_group_dot" in ttgir
+    if a_use_tma or b_use_tma:
         assert "ttng.async_tma_copy_global_to_local" in ttgir
+    if not a_use_tma or not b_use_tma:
+        assert "ttg.async_copy_global_to_local" in ttgir
     if is_hopper() and num_warps == 8:
         assert "ttg.warp_specialize" not in ttgir
     else:
@@ -430,6 +438,21 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)
     torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
+
+
+@pytest.mark.parametrize("M, N, K", [(512, 512, 512)])
+@pytest.mark.parametrize("a_use_tma", [False, True])
+@pytest.mark.parametrize("b_use_tma", [False, True])
+@pytest.mark.parametrize("flatten", [False, True] if is_blackwell() else [True])
+@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_tma, flatten, fresh_knobs):
+    if is_hopper():
+        # FIXME: Hopper warp specialization generates incorrect debug info.
+        triton.knobs.compilation.disable_line_info = True
+    triton.knobs.compilation.instrumentation_mode = "consan"
+    test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M=128, BLOCK_SIZE_N=128, BLOCK_SIZE_K=64,
+                                               num_stages=3, num_warps=4, use_fp8=False, flatten=flatten,
+                                               a_use_tma=a_use_tma, b_use_tma=b_use_tma)
 
 
 @triton.jit
