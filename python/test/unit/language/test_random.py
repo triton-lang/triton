@@ -91,7 +91,12 @@ class CustomPhilox4x:
 
     def advance(self, n_steps):
         self._counter[0] += n_steps
-        assert self._counter[0] < 2**32, "FIXME: doesn't work for large offsets"
+        if self._counter[0] < n_steps:
+             self._counter[1] += 1
+             if self._counter[1] == 0:
+                 self._counter[2] += 1
+                 if self._counter[2] == 0:
+                     self._counter[3] += 1
 
 
 class CustomPhilox(CustomPhilox4x):
