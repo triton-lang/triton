@@ -1859,6 +1859,7 @@ def load_local_alloc_mma_write_after_read_kernel(a_ptr, K, BLOCK_M: ttgl.constex
     mbarrier.invalidate(bar)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_mma_read_local_alloc_write(run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_mma_read_local_alloc_write, (False, monkeypatch))
