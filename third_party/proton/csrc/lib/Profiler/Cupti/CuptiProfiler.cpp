@@ -97,42 +97,45 @@ uint32_t processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numNodes
     auto iter = externIdToStateCache.find(externId);
-    std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
-    if (iter == externIdToStateCache.end()) {
-      // Cache miss, fetch from the main map
-      ref = externIdToState.find(externId);
-      // Update the cache
-      if (ref.has_value()) {
-        externIdToStateCache.emplace(externId, ref.value());
-      }
+    CuptiProfiler::ExternIdState *state = nullptr;
+    if (iter != externIdToStateCache.end()) {
+      state = &iter->second.get();
     } else {
-      ref = std::ref(iter->second);
+      // Cache miss, fetch from the main map
+      auto ref = externIdToState.find(externId);
+      if (!ref.has_value()) {
+        return correlationId;
+      }
+      // Update the cache
+      externIdToStateCache.emplace(externId, ref.value());
+      state = &ref.value().get();
     }
-    if (ref.has_value()) {
-      // We have a graph creation captured
-      auto &graphNodeIdToState = ref.value().get().graphNodeIdToState;
-      auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
-      if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
-        nodeIt->second.forEachEntryId([&](Data *data, size_t entryId) {
-          if (auto metric = convertKernelActivityToMetric(activity)) {
-            if (nodeIt->second.isApiNode) {
-              data->addOpAndMetric(entryId, kernel->name, metric);
-            } else {
-              data->addMetric(entryId, metric);
+    auto &externState = *state;
+    // We have a graph creation captured
+    auto &graphNodeIdToState = externState.graphNodeIdToState;
+    auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
+    if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
+      const bool isApiNode = nodeIt->second.isApiNode;
+      const auto kernelName = kernel->name;
+      nodeIt->second.forEachEntryId(
+          [activity, isApiNode, kernelName](Data *data, size_t entryId) {
+            if (auto metric = convertKernelActivityToMetric(activity)) {
+              if (isApiNode) {
+                data->addOpAndMetric(entryId, kernelName, metric);
+              } else {
+                data->addMetric(entryId, metric);
+              }
             }
-          }
-        });
-      }
-      // Decrease the expected kernel count
-      auto &state = ref.value().get();
-      if (state.numNodes > 0) {
-        state.numNodes--;
-      }
-      // If all kernels have been processed, clean up
-      if (state.numNodes == 0) {
-        externIdToState.erase(externId);
-        corrIdToExternId.erase(correlationId);
-      }
+          });
+    }
+    // Decrease the expected kernel count
+    if (externState.numNodes > 0) {
+      externState.numNodes--;
+    }
+    // If all kernels have been processed, clean up
+    if (externState.numNodes == 0) {
+      externIdToState.erase(externId);
+      corrIdToExternId.erase(correlationId);
     }
   }
   return correlationId;
