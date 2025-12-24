@@ -320,9 +320,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope = {}
         self.jit_fn = jit_fn
         # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
-        if is_kernel:
-            function_name = function_name[function_name.rfind('.') + 1:]
-            function_name = check_identifier_legality(function_name, "function")
+        # ensure function name is legal
+        function_name = function_name[function_name.rfind('.') + 1:]
+        function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
