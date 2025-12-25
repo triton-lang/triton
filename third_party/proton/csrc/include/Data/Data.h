@@ -33,7 +33,7 @@ struct DataEntry {
     auto &metricsMap = metrics.get();
     auto it = metricsMap.find(metric->getKind());
     if (it == metricsMap.end()) {
-      metricsMap.emplace(metric->getKind(), metric);
+      metricsMap[metric->getKind()] = std::make_shared<Metric>(*metric);
     } else {
       it->second->updateMetric(*metric);
     }
