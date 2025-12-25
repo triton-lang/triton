@@ -216,16 +216,17 @@ protected:
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntry = threadState.dataToEntry;
-        for (auto *data : profiler.dataSet) {
-          if (dataToEntry.empty()) {
-            // Add metrics to a specific scope
+        if (dataToEntry.empty()) {
+          // Add metrics to a specific scope
+          for (auto *data : profiler.dataSet) {
             data->addScopeMetrics(scopeId, scalarMetrics);
             data->addScopeMetrics(scopeId, tensorMetricsHost);
-          } else {
-            // Add metrics to the current op
-            const auto entryId = dataToEntry.at(data).id;
-            data->addEntryMetrics(entryId, scalarMetrics);
-            data->addEntryMetrics(entryId, tensorMetricsHost);
+          }
+        } else {
+          // Add metrics to the current op
+          for (auto [data, entry] : dataToEntry) {
+            data->addEntryMetrics(entry.id, scalarMetrics);
+            data->addEntryMetrics(entry.id, tensorMetricsHost);
           }
         }
       }
