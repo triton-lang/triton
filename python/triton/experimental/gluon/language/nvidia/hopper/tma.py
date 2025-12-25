@@ -101,7 +101,7 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     coord = list(coord)[-1]
     align_bytes = 16
     if desc.layout.fp4_padded:
-        align_bytes = 128
+        align_bytes = 64
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8
