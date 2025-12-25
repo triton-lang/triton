@@ -160,11 +160,12 @@ protected:
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   const DataToEntryMap &dataToEntry) {
+                   bool isMissingName, const DataToEntryMap &dataToEntry) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
         state.dataToEntry = dataToEntry;
+        state.isMissingName = isMissingName;
       });
     }
 

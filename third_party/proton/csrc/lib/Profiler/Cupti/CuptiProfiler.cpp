@@ -277,8 +277,6 @@ struct GraphState {
   // Identify whether a node is a metric kernel node.
   // NOTE: This set has to be ordered to match the node creation order.
   std::set<uint64_t> metricKernelNodeIds;
-  // Identify if a node is launched by an API call or triton
-  std::unordered_set<uint64_t> apiNodeIds;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -564,11 +562,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->graphStates[originalGraphId].metricKernelNodeIds.end()) {
             graphState.metricKernelNodeIds.insert(nodeId);
           }
-          if (pImpl->graphStates[originalGraphId].apiNodeIds.find(
-                  originalNodeId) !=
-              pImpl->graphStates[originalGraphId].apiNodeIds.end()) {
-            graphState.apiNodeIds.insert(nodeId);
-          }
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         auto &numNodes = pImpl->graphStates[graphId].numNodes;
@@ -584,7 +577,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         }
         graphState.nodeIdToState.erase(nodeId);
         graphState.metricKernelNodeIds.erase(nodeId);
-        graphState.apiNodeIds.erase(nodeId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
         pImpl->graphStates.erase(graphId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
@@ -654,10 +646,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphState = pImpl->graphStates[graphExecId];
 
           // For each unique call path, we generate a scope id per data object
-          auto &graphNodeIdToScopes =
+          auto &graphNodeIdToState =
               profiler.correlation.externIdToState[scope.scopeId]
                   .graphNodeIdToState;
-          graphNodeIdToScopes.reserve(graphState.numNodes * 2);
+          graphNodeIdToState.reserve(graphState.numNodes * 2);
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
             auto *dataPtr = data;
@@ -671,7 +663,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               bool isMissingName = callpath.back().name.empty();
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
-                    graphNodeIdToScopes.try_emplace(nodeId);
+                    graphNodeIdToState.try_emplace(nodeId);
                 nodeIt->second.isMetricNode =
                     graphState.metricKernelNodeIds.find(nodeId) !=
                     graphState.metricKernelNodeIds.end();
@@ -682,8 +674,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           }
         }
       }
+      bool isMissingName = scope.name.empty();
       profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                     numNodes, dataToEntry);
+                                     numNodes, isMissingName, dataToEntry);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
