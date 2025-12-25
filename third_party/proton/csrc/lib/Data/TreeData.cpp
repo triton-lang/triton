@@ -341,11 +341,10 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
       deviceIdMasks[static_cast<size_t>(deviceType)] |=
           (1u << static_cast<uint32_t>(deviceId));
     } else {
-      throw std::runtime_error(
-          "[PROTON] DeviceId " + std::to_string(deviceId) +
-          " exceeds MaxRegisteredDeviceIds " +
-          std::to_string(kMaxRegisteredDeviceIds) + " for deviceType " +
-          std::to_string(deviceType));
+      throw std::runtime_error("[PROTON] DeviceId " + std::to_string(deviceId) +
+                               " exceeds MaxRegisteredDeviceIds " +
+                               std::to_string(kMaxRegisteredDeviceIds) +
+                               " for deviceType " + std::to_string(deviceType));
     }
   };
 
@@ -373,7 +372,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
           }
         }
       });
-      
+
   // We only need these metrics for tree data
   KernelMetric kernelMetric;
   auto &kernelMetricDurationName =

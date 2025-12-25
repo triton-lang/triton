@@ -409,17 +409,18 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   }
 }
 
-void CuptiPCSampling::stop(CUcontext context, const DataToEntryMap &dataToEntry) {
+void CuptiPCSampling::stop(CUcontext context,
+                           const DataToEntryMap &dataToEntry) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  doubleCheckedLock(
-      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex,
-      [&]() {
-        auto *configureData = getConfigureData(contextId);
-        stopPCSampling(context);
-        pcSamplingStarted = false;
-        processPCSamplingData(configureData, dataToEntry);
-      });
+  doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
+                    pcSamplingMutex,
+                    [&]() {
+                      auto *configureData = getConfigureData(contextId);
+                      stopPCSampling(context);
+                      pcSamplingStarted = false;
+                      processPCSamplingData(configureData, dataToEntry);
+                    });
 }
 
 void CuptiPCSampling::finalize(CUcontext context) {

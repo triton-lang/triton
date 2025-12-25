@@ -128,8 +128,7 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
     for (auto [data, entry] : state.dataToEntry) {
-      auto childEntry =
-          data->addOp(entry.id, {Context(activity->kernel_name)});
+      auto childEntry = data->addOp(entry.id, {Context(activity->kernel_name)});
       childEntry.upsertMetric(metric);
     }
   }

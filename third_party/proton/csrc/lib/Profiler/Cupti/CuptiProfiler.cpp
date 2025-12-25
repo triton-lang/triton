@@ -692,8 +692,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         auto scope = threadState.scopeStack.back();
         auto &dataToEntry = threadState.dataToEntry;
         // XXX: Conservatively stop every GPU kernel for now
-        pImpl->pcSampling.stop(
-            callbackData->context, dataToEntry);
+        pImpl->pcSampling.stop(callbackData->context, dataToEntry);
       }
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {

@@ -13,8 +13,9 @@ public:
   virtual ~TraceData();
 
   DataEntry addOp(const std::string &name) override;
-  
-  DataEntry addOp(size_t eventId, const std::vector<Context> &contexts) override;
+
+  DataEntry addOp(size_t eventId,
+                  const std::vector<Context> &contexts) override;
 
   void addScopeMetrics(
       size_t scopeId,
