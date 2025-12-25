@@ -116,16 +116,15 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
 
     fp4_padded = "with fp4_padded=True " if desc.layout.fp4_padded else ""
     ttgl.device_assert(
-        is_zero,
-        f"{fn_name} {fp4_padded}{arg_name} must be {align_bytes}-byte aligned, "
-        f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}",
-        _semantic=_semantic)
+        is_zero, f"{fn_name} {fp4_padded}{arg_name} must be {align_bytes}-byte aligned, "
+        f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}", _semantic=_semantic)
 
 
 @builtin
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate", _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
+                              _semantic=_semantic)
 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
@@ -143,7 +142,8 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate", _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate",
+                              _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
