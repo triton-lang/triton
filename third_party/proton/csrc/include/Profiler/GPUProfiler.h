@@ -59,7 +59,7 @@ public:
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) const {
-        for (const auto &[data, entry] : dataToEntry)
+        for (auto &[data, entry] : dataToEntry)
           fn(data, entry);
       }
 
