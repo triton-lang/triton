@@ -13,24 +13,47 @@ from triton.backends.driver import GPUDriver
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
-libraries = ['libcuda.so.1']
 PyCUtensorMap = None
+
+# Preferred library names in order of priority
+_LIBCUDA_NAMES = ['libcuda.so.1', 'libcuda.so']
 
 
 @functools.lru_cache()
-def libcuda_dirs():
+def _find_libcuda():
+    """
+    Find libcuda library location and name.
+    Returns tuple: (list of directories, library name)
+    Tries libcuda.so.1 first, then falls back to libcuda.so for Conda stubs.
+    """
     if env_libcuda_path := knobs.nvidia.libcuda_path:
-        return [env_libcuda_path]
+        return [env_libcuda_path], 'libcuda.so.1'
 
+    # Check Conda environment paths
+    conda_prefix = os.getenv("CONDA_PREFIX")
+    if conda_prefix:
+        conda_paths = [
+            os.path.join(conda_prefix, "lib"),
+            os.path.join(conda_prefix, "lib", "stubs"),
+        ]
+        for lib_name in _LIBCUDA_NAMES:
+            for path in conda_paths:
+                if os.path.exists(os.path.join(path, lib_name)):
+                    return [path], lib_name
+
+    # Check system ldconfig
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
     locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
     dirs = [os.path.dirname(loc) for loc in locs]
+
+    # Fallback to LD_LIBRARY_PATH
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
     if env_ld_library_path and not dirs:
         dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so.1"))]
-    msg = 'libcuda.so cannot found!\n'
+
+    msg = 'libcuda.so cannot be found!\n'
     if locs:
         msg += 'Possible files are located at %s.' % str(locs)
         msg += 'Please create a symlink of libcuda.so to any of the files.'
@@ -38,7 +61,21 @@ def libcuda_dirs():
         msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
         msg += ' (requires sudo) to refresh the linker cache.'
     assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
-    return dirs
+    return dirs, 'libcuda.so.1'
+
+
+@functools.lru_cache()
+def libcuda_dirs():
+    return _find_libcuda()[0]
+
+
+@functools.lru_cache()
+def get_libcuda_library():
+    return _find_libcuda()[1]
+
+
+def get_libraries():
+    return [get_libcuda_library()]
 
 
 @functools.lru_cache()
@@ -64,7 +101,7 @@ class CudaUtils(object):
             name="cuda_utils",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
-            libraries=libraries,
+            libraries=get_libraries(),
         )
         global PyCUtensorMap
         PyCUtensorMap = mod.PyCUtensorMap
@@ -685,7 +722,7 @@ class CudaLauncher(object):
             name="__triton_launcher",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
-            libraries=libraries,
+            libraries=get_libraries(),
         )
 
         self.num_ctas = getattr(metadata, "num_ctas", 1)
