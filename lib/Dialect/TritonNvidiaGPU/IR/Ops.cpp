@@ -301,6 +301,9 @@ LogicalResult AsyncTMAGatherOp::verify() {
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(), resultType)))
     return failure();
+  // `tile::gather4` does not support fp4_padded operands.
+  if (isFp4Padded(getResult().getType().getEncoding()))
+    return emitOpError("does not support fp4_padded operands");
   return verifyGatherScatterOp(*this,
                                getDesc().getType().getSignlessBlockType(),
                                resultType, getXOffsets().getType());

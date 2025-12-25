@@ -146,6 +146,10 @@ class CUDAOptions:
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+    @property
+    def enable_iisan(self):
+        return self.instrumentation_mode == "iisan"
+
 
 class CUDABackend(BaseBackend):
     instrumentation = None
@@ -171,7 +175,7 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
+        if "instrumentation_mode" in opts and opts["instrumentation_mode"] in ["consan", "iisan"]:
             opts["debug"] = True
             opts["sanitize_overflow"] = False
 
