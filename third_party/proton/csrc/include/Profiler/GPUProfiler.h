@@ -58,7 +58,7 @@ public:
         return &it->second;
       }
 
-      template <typename FnT> void forEachEntry(FnT &&fn) const {
+      template <typename FnT> void forEachEntry(FnT &&fn) {
         for (auto &[data, entry] : dataToEntry)
           fn(data, entry);
       }
