@@ -20,26 +20,17 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  size_t addOp(const std::string &name) override;
+  DataEntry addOp(const std::string &name) override;
 
-  size_t addOp(size_t contextId, const std::vector<Context> &contexts) override;
+  DataEntry addOp(size_t contextId,
+                  const std::vector<Context> &contexts) override;
 
-  void addMetric(size_t contextId, std::shared_ptr<Metric> metric) override;
-
-  void addMetric(size_t contextId, const FlexibleMetric &metric) override;
-
-  void
-  addMetrics(size_t contextId,
-             const std::map<std::string, MetricValueType> &metrics) override;
-
-  // Override to optimize addOp + addMetric calls
-  // 1. to avoid double locking
-  // 2. to avoid looking up contextId -> contextId twice
-  void addOpAndMetric(size_t contextId, const std::string &opName,
-                      std::shared_ptr<Metric> metric) override;
-
-  void addMetricsByScopeId(
+  void addScopeMetrics(
       size_t scopeId,
+      const std::map<std::string, MetricValueType> &metrics) override;
+
+  void addEntryMetrics(
+      size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
   std::vector<uint8_t> toMsgPack() const override;

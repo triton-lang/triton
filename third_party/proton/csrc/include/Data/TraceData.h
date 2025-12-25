@@ -12,20 +12,16 @@ public:
   TraceData(const std::string &path, ContextSource *contextSource = nullptr);
   virtual ~TraceData();
 
-  size_t addOp(const std::string &name) override;
+  DataEntry addOp(const std::string &name) override;
+  
+  DataEntry addOp(size_t eventId, const std::vector<Context> &contexts) override;
 
-  size_t addOp(size_t eventId, const std::vector<Context> &contexts) override;
-
-  void addMetric(size_t eventId, std::shared_ptr<Metric> metric) override;
-
-  void addMetric(size_t eventId, const FlexibleMetric &metric) override;
-
-  void
-  addMetrics(size_t entryId,
-             const std::map<std::string, MetricValueType> &metrics) override;
-
-  void addMetricsByScopeId(
+  void addScopeMetrics(
       size_t scopeId,
+      const std::map<std::string, MetricValueType> &metrics) override;
+
+  void addEntryMetrics(
+      size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
   void clear() override;

@@ -142,46 +142,30 @@ void TraceData::exitScope(const Scope &scope) {
   scopeIdToEventId.erase(scope.scopeId);
 }
 
-size_t TraceData::addOp(const std::string &name) {
+DataEntry TraceData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   std::vector<Context> contexts;
   contexts = contextSource->getContexts();
   if (!name.empty()) // not a placeholder event
     contexts.emplace_back(name);
   auto contextId = trace->addContexts(contexts);
-  return trace->addEvent(contextId);
+  auto eventId = trace->addEvent(contextId);
+  auto &event = trace->getEvent(eventId);
+  return DataEntry(eventId, event.metrics);
 }
 
-size_t TraceData::addOp(size_t eventId, const std::vector<Context> &contexts) {
+DataEntry TraceData::addOp(size_t eventId,
+                           const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   // Add a new context under it and update the context
   auto &event = trace->getEvent(eventId);
   auto contextId = trace->addContexts(contexts, event.contextId);
-  return trace->addEvent(contextId);
+  auto newEventId = trace->addEvent(contextId);
+  auto &newEvent = trace->getEvent(newEventId);
+  return DataEntry(newEventId, newEvent.metrics);
 }
 
-void TraceData::addMetric(size_t eventId, std::shared_ptr<Metric> metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto &event = trace->getEvent(eventId);
-  if (event.metrics.find(metric->getKind()) == event.metrics.end())
-    event.metrics.emplace(metric->getKind(), metric);
-  else
-    event.metrics[metric->getKind()]->updateMetric(*metric);
-}
-
-void TraceData::addMetric(size_t eventId, const FlexibleMetric &metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto &event = trace->getEvent(eventId);
-  if (event.flexibleMetrics.find(metric.getValueName(0)) ==
-      event.flexibleMetrics.end()) {
-    event.flexibleMetrics.emplace(metric.getValueName(0), metric);
-  } else {
-    event.flexibleMetrics.at(metric.getValueName(0))
-        .updateValue(metric.getValue(0));
-  }
-}
-
-void TraceData::addMetrics(
+void TraceData::addEntryMetrics(
     size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto &event = trace->getEvent(eventId);
@@ -195,7 +179,7 @@ void TraceData::addMetrics(
   }
 }
 
-void TraceData::addMetricsByScopeId(
+void TraceData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto eventId = scopeIdToEventId.at(scopeId);

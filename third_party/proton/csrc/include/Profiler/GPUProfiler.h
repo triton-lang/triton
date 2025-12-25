@@ -16,8 +16,6 @@
 
 namespace proton {
 
-using DataEntryMap = std::map<Data *, size_t>;
-
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
@@ -34,11 +32,10 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
-    DataEntryMap dataToEntryId;
-    // If graphNodeIdToScopes is empty, this externId is non-graph launch.
-    // For non-graph launches, we only need to track whether the externId
-    // itself is API-originated.
-    bool isApiExternId{false};
+    DataToEntryMap dataToEntry;
+    // Sometimes the kernel name cannot be retrieved in application threads
+    // for reasons like uninitialize CUDA context.
+    bool isMissingName{true};
     // ----graph launch fields----
     // For graph launches, the launch correlation id fans out into multiple
     // kernel activity records. We track the expected fanout here and keep
@@ -48,28 +45,28 @@ public:
     struct GraphNodeState {
       // If the node is launched as a metric kernel, ignore it's timing data.
       bool isMetricNode{false};
-      bool isApiNode{false};
+      bool isMissingName{true};
 
-      void setEntryId(Data *data, size_t entryId) {
-        dataToEntryId.insert_or_assign(data, entryId);
+      void setEntry(Data *data, const DataEntry &entry) {
+        dataToEntry.insert_or_assign(data, entry);
       }
 
-      const size_t *findEntryId(Data *data) const {
-        auto it = dataToEntryId.find(data);
-        if (it == dataToEntryId.end())
+      const DataEntry *findEntry(Data *data) const {
+        auto it = dataToEntry.find(data);
+        if (it == dataToEntry.end())
           return nullptr;
         return &it->second;
       }
 
-      template <typename FnT> void forEachEntryId(FnT &&fn) const {
-        for (const auto &[data, entryId] : dataToEntryId)
-          fn(data, entryId);
+      template <typename FnT> void forEachEntry(FnT &&fn) const {
+        for (const auto &[data, entry] : dataToEntry)
+          fn(data, entry);
       }
 
-      DataEntryMap dataToEntryId;
+      DataToEntryMap dataToEntry;
     };
 
-    // graphNodeId -> (per-Data entry id + API-originated flag)
+    // graphNodeId -> (per-Data entry)
     std::unordered_map<uint64_t, GraphNodeState> graphNodeIdToState;
   };
 
@@ -84,14 +81,14 @@ protected:
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
     for (auto *data : dataSet) {
-      auto entryId = data->addOp(scope.name);
-      threadState.dataToEntryId.insert_or_assign(data, entryId);
+      auto entry = data->addOp(scope.name);
+      threadState.dataToEntry.insert_or_assign(data, entry);
     }
   }
 
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
-    threadState.dataToEntryId.clear();
+    threadState.dataToEntry.clear();
   }
 
   // Profiler
@@ -109,20 +106,19 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
-    DataEntryMap dataToEntryId;
+    DataToEntryMap dataToEntry;
     bool isApiExternId{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp() {
+    void enterOp(const Scope &scope) {
       if (profiler.isOpInProgress()) // Already in a triton op
         return;
       // Enter a new GPU API op
       isApiExternId = true;
-      auto opId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(opId));
+      profiler.enterOp(scope);
       profiler.correlation.setApiExternId(opId);
     }
 
@@ -165,11 +161,11 @@ protected:
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   const DataEntryMap &dataToEntryId) {
+                   const DataToEntryMap &dataToEntry) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
-        state.dataToEntryId = dataToEntryId;
+        state.dataToEntry = dataToEntry;
       });
     }
 
@@ -233,14 +229,16 @@ protected:
         // Populate tensor metrics
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
-        auto &dataToEntryId = threadState.dataToEntryId;
+        auto &dataToEntry = threadState.dataToEntry;
         for (auto *data : profiler.dataSet) {
-          if (dataToEntryId.empty()) {
+          if (scopeId == Scope::DummyScopeId) {
+            // Add metrics to a specific scope
             data->addMetricsByScopeId(scopeId, scalarMetrics);
             data->addMetricsByScopeId(scopeId, tensorMetricsHost);
           } else {
-            data->addMetrics(dataToEntryId[data], scalarMetrics);
-            data->addMetrics(dataToEntryId[data], tensorMetricsHost);
+            // Add metrics to the current op
+            data->addMetrics(dataToEntry[data], scalarMetrics);
+            data->addMetrics(dataToEntry[data], tensorMetricsHost);
           }
         }
       }

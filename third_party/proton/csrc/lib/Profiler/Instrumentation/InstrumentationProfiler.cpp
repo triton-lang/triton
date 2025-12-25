@@ -238,20 +238,17 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               auto normalizedDuration = static_cast<double>(duration) /
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
-              for (auto *data : dataSet) {
-                auto kernelId = dataEntryIdMap[data];
-                auto entryId = data->addOp(kernelId, contexts);
-                data->addMetric(
-                    entryId,
-                    std::make_shared<CycleMetric>(
-                        event.first->cycle, event.second->cycle, duration,
-                        normalizedDuration, kernelId, functionName,
-                        blockTrace.blockId, blockTrace.procId, trace.uid,
-                        static_cast<uint64_t>(
-                            reinterpret_cast<uintptr_t>(device)),
-                        static_cast<uint64_t>(runtime->getDeviceType()),
-                        timeShiftCost, blockTrace.initTime,
-                        blockTrace.preFinalTime, blockTrace.postFinalTime));
+              for (auto [data, entry] : dataToEntryMap) {
+                auto kernelId = entry.id;
+                entry = data->addOp(kernelId, contexts);
+                entry.upsertMetric(std::make_shared<CycleMetric>(
+                    event.first->cycle, event.second->cycle, duration,
+                    normalizedDuration, kernelId, functionName,
+                    blockTrace.blockId, blockTrace.procId, trace.uid,
+                    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device)),
+                    static_cast<uint64_t>(runtime->getDeviceType()),
+                    timeShiftCost, blockTrace.initTime, blockTrace.preFinalTime,
+                    blockTrace.postFinalTime));
               }
             }
           }
@@ -264,15 +261,14 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
 void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
-  if (dataEntryIdMap.empty()) {
-    // API originated metrics
-    for (auto *data : dataSet) {
-      data->addMetricsByScopeId(scopeId, scalarMetrics);
+  if (scopeId == Scope::DummyScopeId) {
+    for (auto [data, entry] : dataToEntryMap) {
+      data->addEntryMetrics(entry.id, scalarMetrics);
     }
   } else {
-    // Op originated metrics
-    for (auto [data, entryId] : dataEntryIdMap) {
-      data->addMetrics(entryId, scalarMetrics);
+    // API originated metrics
+    for (auto *data : dataSet) {
+      data->addScopeMetrics(scopeId, scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the

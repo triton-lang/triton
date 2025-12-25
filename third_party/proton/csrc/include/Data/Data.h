@@ -12,6 +12,34 @@ namespace proton {
 
 enum class OutputFormat { Hatchet, ChromeTrace, Count };
 
+/// An "entry" is a data specific unit of operation, e.g., a node in a tree
+/// data structure or an event in a trace data structure.
+struct DataEntry {
+  /// `entryId` is a unique identifier for the entry in the data.
+  size_t id;
+  /// `metrics` is a map from metric kind to metric accumulator associated
+  /// with the entry.
+  /// Flexible metrics cannot be directly stored here since they maybe added by
+  /// both the frontend and the backend.
+  /// Use `Data::addScopeMetrics` and `Data::addEntryMetrics` to add flexible
+  /// metrics.
+  std::reference_wrapper<std::map<MetricKind, std::shared_ptr<Metric>>> metrics;
+
+  explicit DataEntry(size_t id,
+                     std::map<MetricKind, std::shared_ptr<Metric>> &metrics)
+      : id(id), metrics(metrics) {}
+
+  void upsertMetric(std::shared_ptr<Metric> metric) {
+    auto &metricsMap = metrics.get();
+    auto it = metricsMap.find(metric->getKind());
+    if (it == metricsMap.end()) {
+      metricsMap.emplace(metric->getKind(), metric);
+    } else {
+      it->second->updateMetric(*metric);
+    }
+  }
+};
+
 class Data : public ScopeInterface {
 public:
   Data(const std::string &path, ContextSource *contextSource = nullptr)
@@ -21,47 +49,33 @@ public:
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
   /// is not empty. Return the entry id of the added op.
-  /// An "entry" is a data specific unit of operation, e.g., a node in a tree
-  /// data structure or an event in a trace data structure.
-  virtual size_t addOp(const std::string &opName = {}) = 0;
+  virtual DataEntry addOp(const std::string &opName = {}) = 0;
 
   /// Add an op with custom contexts to the data.
   /// This is often used when context source is not available or when
   /// the profiler itself needs to supply the contexts, such as
   /// instruction samples in GPUs whose contexts are
   /// synthesized from the instruction address (no unwinder).
-  /// `entryId` is an anchor node to indicate where to add the new contexts.
-  /// Return the new entry id of the added op, which may be different from
-  /// `entryId`.
-  virtual size_t addOp(size_t entryId,
-                       const std::vector<Context> &contexts) = 0;
+  virtual DataEntry addOp(size_t entryId,
+                          const std::vector<Context> &contexts) = 0;
 
-  /// Add a single metric to the data.
-  virtual void addMetric(size_t entryId, std::shared_ptr<Metric> metric) = 0;
-
-  /// Add a flexible metric to the data.
-  virtual void addMetric(size_t entryId, const FlexibleMetric &metric) = 0;
-
-  /// Add an op and a metric with one call.
-  /// The default implementation forwards to addOp + addMetric.
-  virtual void addOpAndMetric(size_t entryId, const std::string &opName,
-                              std::shared_ptr<Metric> metric) {
-    entryId = this->addOp(entryId, {Context(opName)});
-    this->addMetric(entryId, metric);
-  }
-
-  /// Add multiple metrics to the data.
-  /// This metric is only used for flexible metrics passed from the inside.
+  /// Record a batch of named metrics for a scope.
+  ///
+  /// This is primarily intended for user-defined metrics defined in Python and
+  /// directly associated with a scope.
+  /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
-  addMetrics(size_t entryId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
+  addScopeMetrics(size_t scopeId,
+                  const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Add multiple metrics to the data.
-  /// This metric is only used for flexible metrics passed from the outside.
-  /// Note that the index here is `scopeId` instead of `entryId`.
-  virtual void addMetricsByScopeId(
-      size_t scopeId,
-      const std::map<std::string, MetricValueType> &metrics) = 0;
+  /// Record a batch of named metrics for an entry.
+  ///
+  /// This is primarily intended for user-defined metrics defined in Python and
+  /// added lazily by the backend profiler.
+  /// `metrics` is a map from metric name to value to be applied to `entryId`.
+  virtual void
+  addEntryMetrics(size_t entryId,
+                  const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;
@@ -90,6 +104,8 @@ protected:
   const std::string path{};
   ContextSource *contextSource{};
 };
+
+typedef std::map<Data *, DataEntry> DataToEntryMap;
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
 

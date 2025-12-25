@@ -47,10 +47,10 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     for (auto data : dataSet) {
-      dataEntryIdMap[data] = data->addOp(scope.name);
+      dataToEntryMap[data] = data->addOp(scope.name);
     }
   }
-  void stopOp(const Scope &scope) override { dataEntryIdMap.clear(); }
+  void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }
 
 private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
@@ -72,7 +72,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  std::map<Data *, size_t> dataEntryIdMap;
+  DataToEntryMap dataToEntryMap;
 };
 
 } // namespace proton
