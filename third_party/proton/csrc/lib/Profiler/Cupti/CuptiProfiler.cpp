@@ -273,7 +273,7 @@ struct GraphState {
       dataToCallpathToNodes;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation
-  std::map<uint64_t, NodeState> nodeIdToState;
+  std::unordered_map<uint64_t, NodeState> nodeIdToState;
   // Identify whether a node is a metric kernel node.
   // NOTE: This set has to be ordered to match the node creation order.
   std::set<uint64_t> metricKernelNodeIds;
