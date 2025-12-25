@@ -113,10 +113,26 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     Operation *incrementOp;
   };
 
-  // Analysis that decides if blockArg + advanceStep can overflow
-  static bool overflowPossible(amdttg::BufferOpInterface bufferOp,
-                               Value blockArg, Value advanceStep,
-                               DataFlowSolver *solver) {
+  static bool isStrictlyNegative(Value advanceStep, DataFlowSolver *solver) {
+    auto stepType = cast<RankedTensorType>(advanceStep.getType());
+    assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
+
+    const auto *stepRange =
+        solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
+    if (stepRange->getValue().isUninitialized()) {
+      LDBG("Rejected: step range is unintialized");
+      return true;
+    }
+
+    auto stepRangeValue = stepRange->getValue().getValue();
+
+    return (int64_t)stepRangeValue.smax().isNegative();
+  }
+
+  static std::optional<std::pair<int64_t, int64_t>>
+  estimateRangeOfOffsetValues(amdttg::BufferOpInterface bufferOp,
+                              Value blockArg, Value advanceStep,
+                              DataFlowSolver *solver) {
     auto stepType = cast<RankedTensorType>(advanceStep.getType());
     assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
 
@@ -127,25 +143,19 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
         solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
     if (blockArgRange->getValue().isUninitialized()) {
       LDBG("Rejected: blockArg range is unintialized");
-      return true;
+      return {};
     }
 
     const auto *stepRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
-    if (blockArgRange->getValue().isUninitialized()) {
+    if (stepRange->getValue().isUninitialized()) {
       LDBG("Rejected: step range is unintialized");
-      return true;
+      return {};
     }
 
     auto blockArgRangeValue = blockArgRange->getValue().getValue();
     auto stepRangeValue = stepRange->getValue().getValue();
 
-    // checking if arithmetic operation overflows.
-    // Max/min values for now are equal to 32 bit unsigned int max/min values.
-    auto dtypeByteWidth = elemBitwidth / 8;
-    assert(dtypeByteWidth > 0);
-    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
-    int64_t minOffsetValue = 0;
     int64_t operationUncappedResultMax =
         (int64_t)blockArgRangeValue.umax().getLimitedValue() +
         (int64_t)stepRangeValue.umax().getLimitedValue();
@@ -153,8 +163,57 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
         (int64_t)blockArgRangeValue.umin().getLimitedValue() +
         (int64_t)stepRangeValue.umin().getLimitedValue();
 
-    return (operationUncappedResultMin < minOffsetValue ||
-            operationUncappedResultMax > maxOffsetValue);
+    return {{operationUncappedResultMin, operationUncappedResultMax}};
+  }
+
+  static bool unsignedOverflowImpossible(amdttg::BufferOpInterface bufferOp,
+                                         Value blockArg, Value advanceStep,
+                                         DataFlowSolver *solver) {
+    auto maybeOpRange =
+        estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
+    if (!maybeOpRange.has_value())
+      return true;
+    auto opRange = maybeOpRange.value();
+
+    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
+    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto dtypeByteWidth = elemBitwidth / 8;
+    assert(dtypeByteWidth > 0);
+    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
+    int64_t minOffsetValue = 0;
+
+    return (opRange.first >= minOffsetValue ||
+            opRange.second <= maxOffsetValue);
+  }
+
+  static bool unsignedOverflowInevitable(amdttg::BufferOpInterface bufferOp,
+                                         Value blockArg, Value advanceStep,
+                                         DataFlowSolver *solver) {
+    auto maybeOpRange =
+        estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
+    if (!maybeOpRange.has_value())
+      return true;
+    auto opRange = maybeOpRange.value();
+
+    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
+    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto dtypeByteWidth = elemBitwidth / 8;
+    assert(dtypeByteWidth > 0);
+    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
+
+    return opRange.first > maxOffsetValue;
+  }
+
+  static bool isTransformationEquivalent(amdttg::BufferOpInterface bufferOp,
+                                         Value blockArg, Value advanceStep,
+                                         DataFlowSolver *solver) {
+    if (!isStrictlyNegative(advanceStep, solver) &&
+        unsignedOverflowImpossible(bufferOp, blockArg, advanceStep, solver))
+      return true;
+    if (isStrictlyNegative(advanceStep, solver) &&
+        unsignedOverflowInevitable(bufferOp, blockArg, advanceStep, solver))
+      return true;
+    return false;
   }
 
   static BlockArgument getLoopBlockArgument(Value val, scf::ForOp loop) {
@@ -308,9 +367,9 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       return {};
     }
 
-    if (overflowPossible(op, offsetLoopArgument, advanceStep, solver)) {
-      LDBG("Rejected: increment operation potentially overflows, it is unsafe "
-           "to split offset computation");
+    if (!isTransformationEquivalent(op, offsetLoopArgument, advanceStep,
+                                    solver)) {
+      LDBG("Rejected: it is arithmetically unsafe to split offset computation");
       return {};
     }
 
