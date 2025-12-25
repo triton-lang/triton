@@ -533,7 +533,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto &graphState = pImpl->graphStates[graphId];
             for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
-              contexts.push_back(threadState.scopeStack.back());
+              contexts.push_back(threadState.currentOpScope);
               graphState.nodeIdToState[nodeId].captureContexts[data] =
                   std::move(contexts);
               graphState
@@ -619,7 +619,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       auto symbolName =
           callbackData->symbolName ? std::string(callbackData->symbolName) : "";
       threadState.enterOp(Scope(std::move(symbolName)));
-      auto &scope = threadState.scopeStack.back();
+      auto &scope = threadState.currentOpScope;
       auto &dataToEntry = threadState.dataToEntry;
       size_t numNodes = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
@@ -683,7 +683,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
-        auto scope = threadState.scopeStack.back();
+        auto scope = threadState.currentOpScope;
         auto &dataToEntry = threadState.dataToEntry;
         // XXX: Conservatively stop every GPU kernel for now
         pImpl->pcSampling.stop(callbackData->context, dataToEntry);
@@ -700,7 +700,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         auto graphRef = pImpl->graphStates.find(graphExecId);
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
-          auto scope = threadState.scopeStack.back();
+          auto &scope = threadState.currentOpScope;
           std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
           auto &graphExec = graphRef.value().get();
           auto &externIdState =

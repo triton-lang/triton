@@ -272,7 +272,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
                  "graph is created."
               << std::endl;
       }
-      auto &scope = threadState.scopeStack.back();
+      auto &scope = threadState.currentOpScope;
       auto isMissingName = scope.name.empty();
       profiler.correlation.correlate(data->correlation_id, scope.scopeId,
                                      numInstances, isMissingName, dataToEntry);
