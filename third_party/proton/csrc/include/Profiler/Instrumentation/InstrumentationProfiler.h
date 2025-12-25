@@ -47,7 +47,7 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     for (auto data : dataSet) {
-      dataToEntryMap[data] = data->addOp(scope.name);
+      dataToEntryMap.insert_or_assign(data, data->addOp(scope.name));
     }
   }
   void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }

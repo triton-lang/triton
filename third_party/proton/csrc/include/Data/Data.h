@@ -25,8 +25,6 @@ struct DataEntry {
   /// metrics.
   std::reference_wrapper<std::map<MetricKind, std::shared_ptr<Metric>>> metrics;
 
-  DataEntry() = default;
-
   explicit DataEntry(size_t id,
                      std::map<MetricKind, std::shared_ptr<Metric>> &metrics)
       : id(id), metrics(metrics) {}

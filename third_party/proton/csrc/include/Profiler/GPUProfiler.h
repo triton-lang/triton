@@ -223,8 +223,9 @@ protected:
             data->addScopeMetrics(scopeId, tensorMetricsHost);
           } else {
             // Add metrics to the current op
-            data->addEntryMetrics(dataToEntry[data], scalarMetrics);
-            data->addEntryMetrics(dataToEntry[data], tensorMetricsHost);
+            const auto entryId = dataToEntry.at(data).id;
+            data->addEntryMetrics(entryId, scalarMetrics);
+            data->addEntryMetrics(entryId, tensorMetricsHost);
           }
         }
       }
