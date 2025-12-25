@@ -97,10 +97,8 @@ class tensor_descriptor(base_value):
         return self.type.layout
 
 
-def _emit_alignment_check(desc, coord, name: str, _semantic=None):
-    if hasattr(coord, "__iter__"):
-        coord = list(coord)[-1]
-
+def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
+    coord = list(coord)[-1]
     align_bytes = 16
     if desc.layout.fp4_padded:
         align_bytes = 128
@@ -118,8 +116,8 @@ def _emit_alignment_check(desc, coord, name: str, _semantic=None):
 
     ttgl.device_assert(
         is_zero,
-        f"{name} {"with fp4_padded=True" if desc.layout.fp4_padded else ""} "
-        f"innermost coordinate must be {align_bytes}-byte aligned, "
+        f"{fn_name} {"with fp4_padded=True " if desc.layout.fp4_padded else ""}"
+        f"{arg_name} must be {align_bytes}-byte aligned, "
         f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}",
         _semantic=_semantic)
 
@@ -127,7 +125,8 @@ def _emit_alignment_check(desc, coord, name: str, _semantic=None):
 @builtin
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate", _semantic=_semantic)
+
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
@@ -144,7 +143,7 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
