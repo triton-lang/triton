@@ -107,7 +107,7 @@ protected:
     SessionManager &sessionManager = SessionManager::instance();
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
     DataToEntryMap dataToEntry;
-    bool isApiExternId{false};
+    bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
@@ -117,16 +117,15 @@ protected:
       if (profiler.isOpInProgress()) // Already in a triton op
         return;
       // Enter a new GPU API op
-      isApiExternId = true;
+      isApiExternOp = true;
       profiler.enterOp(scope);
-      profiler.correlation.setApiExternId(opId);
     }
 
     void exitOp() {
-      if (!profiler.isOpInProgress() || !isApiExternId)
+      if (!profiler.isOpInProgress() || !isApiExternOp)
         return;
       profiler.exitOp(scopeStack.back());
-      isApiExternId = false;
+      isApiExternOp = false;
     }
 
     void enterScope(const std::string &name) {
@@ -146,7 +145,7 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from an external id to graph-node scopes + API-extern-id flags.
+    // Mapping from an external id to graph-node states
     ExternIdToStateMap externIdToState;
 
     Correlation() = default;
@@ -167,19 +166,6 @@ protected:
         state.numNodes = numNodes;
         state.dataToEntry = dataToEntry;
       });
-    }
-
-    bool isApiExternId(size_t externId) const {
-      bool isApi = false;
-      externIdToState.withRead(externId, [&](const ExternIdState &state) {
-        isApi = state.isApiExternId;
-      });
-      return isApi;
-    }
-
-    void setApiExternId(size_t externId) {
-      externIdToState.upsert(
-          externId, [&](ExternIdState &state) { state.isApiExternId = true; });
     }
 
     template <typename FlushFnT>

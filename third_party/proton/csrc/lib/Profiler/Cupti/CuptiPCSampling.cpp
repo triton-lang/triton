@@ -352,8 +352,7 @@ void CuptiPCSampling::start(CUcontext context) {
 }
 
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            const DataToEntryMap &dataToEntryId,
-                                            bool isAPI) {
+                                            const DataToEntryMap &dataToEntry) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   // In the first round, we need to call getPCSamplingData to get the unsynced
@@ -381,7 +380,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw std::runtime_error("[PROTON] Invalid stall reason index");
-        for (auto [data, entry] : dataToEntryId) {
+        for (auto [data, entry] : dataToEntry) {
           if (lineInfo.fileName.size())
             entry = data->addOp(
                 entry.id, {formatFileLineFunction(
@@ -410,8 +409,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   }
 }
 
-void CuptiPCSampling::stop(CUcontext context, const DataToEntryMap &dataToEntryId,
-                           bool isAPI) {
+void CuptiPCSampling::stop(CUcontext context, const DataToEntryMap &dataToEntry) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
   doubleCheckedLock(
@@ -420,7 +418,7 @@ void CuptiPCSampling::stop(CUcontext context, const DataToEntryMap &dataToEntryI
         auto *configureData = getConfigureData(contextId);
         stopPCSampling(context);
         pcSamplingStarted = false;
-        processPCSamplingData(configureData, dataToEntryId, isAPI);
+        processPCSamplingData(configureData, dataToEntry);
       });
 }
 
