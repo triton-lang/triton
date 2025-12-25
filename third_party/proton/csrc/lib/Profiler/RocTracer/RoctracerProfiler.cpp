@@ -103,19 +103,18 @@ void processActivityKernel(
     size_t externId, const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
-  auto metric = convertActivityToMetric(activity);
-  if (!metric)
-    return;
   bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
   auto &state = externIdToState[externId];
   if (!isGraph) {
     for (auto [data, entry] : state.dataToEntry) {
-      if (state.isMissingName) {
-        auto childEntry =
-            data->addOp(entry.id, {Context(activity->kernel_name)});
-        childEntry.upsertMetric(metric);
-      } else {
-        entry.upsertMetric(metric);
+      if (auto metric = convertActivityToMetric(activity)) {
+        if (state.isMissingName) {
+          auto childEntry =
+              data->addOp(entry.id, {Context(activity->kernel_name)});
+          childEntry.upsertMetric(metric);
+        } else {
+          entry.upsertMetric(metric);
+        }
       }
     }
   } else {
@@ -128,8 +127,11 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
     for (auto [data, entry] : state.dataToEntry) {
-      auto childEntry = data->addOp(entry.id, {Context(activity->kernel_name)});
-      childEntry.upsertMetric(metric);
+      if (auto metric = convertActivityToMetric(activity)) {
+        auto childEntry =
+            data->addOp(entry.id, {Context(activity->kernel_name)});
+        childEntry.upsertMetric(metric);
+      }
     }
   }
   --state.numNodes;

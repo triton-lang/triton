@@ -61,10 +61,6 @@ uint32_t processActivityKernel(
           correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
   }
-  auto kernelMetric = convertKernelActivityToMetric(activity);
-  if (!kernelMetric) {
-    return correlationId;
-  }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
     // Non-graph kernels
@@ -76,11 +72,13 @@ uint32_t processActivityKernel(
                                dataToEntry = state.dataToEntry;
                              });
     for (auto &[data, entry] : dataToEntry) {
-      if (isMissingName) {
-        auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
-        childEntry.upsertMetric(kernelMetric);
-      } else {
-        entry.upsertMetric(kernelMetric);
+      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (isMissingName) {
+          auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+          childEntry.upsertMetric(kernelMetric);
+        } else {
+          entry.upsertMetric(kernelMetric);
+        }
       }
     }
     externIdToState.erase(externId);
@@ -114,12 +112,15 @@ uint32_t processActivityKernel(
     if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
       const bool isMissingName = nodeIt->second.isMissingName;
       nodeIt->second.forEachEntry(
-          [isMissingName, kernel, kernelMetric](Data *data, DataEntry &entry) {
-            if (isMissingName) {
-              auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
-              childEntry.upsertMetric(kernelMetric);
-            } else {
-              entry.upsertMetric(kernelMetric);
+          [isMissingName, kernel, activity](Data *data, DataEntry &entry) {
+            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+              if (isMissingName) {
+                auto childEntry =
+                    data->addOp(entry.id, {Context(kernel->name)});
+                childEntry.upsertMetric(kernelMetric);
+              } else {
+                entry.upsertMetric(kernelMetric);
+              }
             }
           });
     }
