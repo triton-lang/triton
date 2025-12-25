@@ -217,14 +217,14 @@ protected:
             tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntry = threadState.dataToEntry;
         for (auto *data : profiler.dataSet) {
-          if (scopeId == Scope::DummyScopeId) {
+          if (dataToEntry.empty()) {
             // Add metrics to a specific scope
-            data->addMetricsByScopeId(scopeId, scalarMetrics);
-            data->addMetricsByScopeId(scopeId, tensorMetricsHost);
+            data->addScopeMetrics(scopeId, scalarMetrics);
+            data->addScopeMetrics(scopeId, tensorMetricsHost);
           } else {
             // Add metrics to the current op
-            data->addMetrics(dataToEntry[data], scalarMetrics);
-            data->addMetrics(dataToEntry[data], tensorMetricsHost);
+            data->addEntryMetrics(dataToEntry[data], scalarMetrics);
+            data->addEntryMetrics(dataToEntry[data], tensorMetricsHost);
           }
         }
       }

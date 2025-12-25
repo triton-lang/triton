@@ -261,14 +261,13 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
 void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
-  if (scopeId == Scope::DummyScopeId) {
-    for (auto [data, entry] : dataToEntryMap) {
-      data->addEntryMetrics(entry.id, scalarMetrics);
-    }
-  } else {
-    // API originated metrics
+  if (dataToEntryMap.empty()) {
     for (auto *data : dataSet) {
       data->addScopeMetrics(scopeId, scalarMetrics);
+    }
+  } else {
+    for (auto [data, entry] : dataToEntryMap) {
+      data->addEntryMetrics(entry.id, scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
