@@ -16,7 +16,7 @@ enum class OutputFormat { Hatchet, ChromeTrace, Count };
 /// data structure or an event in a trace data structure.
 struct DataEntry {
   /// `entryId` is a unique identifier for the entry in the data.
-  size_t id;
+  size_t id{Scope::DummyScopeId};
   /// `metrics` is a map from metric kind to metric accumulator associated
   /// with the entry.
   /// Flexible metrics cannot be directly stored here since they maybe added by
@@ -24,6 +24,8 @@ struct DataEntry {
   /// Use `Data::addScopeMetrics` and `Data::addEntryMetrics` to add flexible
   /// metrics.
   std::reference_wrapper<std::map<MetricKind, std::shared_ptr<Metric>>> metrics;
+
+  DataEntry() = default;
 
   explicit DataEntry(size_t id,
                      std::map<MetricKind, std::shared_ptr<Metric>> &metrics)
