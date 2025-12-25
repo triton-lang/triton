@@ -114,10 +114,10 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     rem = coord.__mod__(align_val, _semantic=_semantic)
     is_zero = rem.__eq__(zero, _semantic=_semantic)
 
+    fp4_padded = "with fp4_padded=True " if desc.layout.fp4_padded else ""
     ttgl.device_assert(
         is_zero,
-        f"{fn_name} {"with fp4_padded=True " if desc.layout.fp4_padded else ""}"
-        f"{arg_name} must be {align_bytes}-byte aligned, "
+        f"{fn_name} {fp4_padded}{arg_name} must be {align_bytes}-byte aligned, "
         f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}",
         _semantic=_semantic)
 
