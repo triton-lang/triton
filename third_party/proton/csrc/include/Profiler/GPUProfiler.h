@@ -105,7 +105,6 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    Scope currentOpScope;
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
     DataToEntryMap dataToEntry;
     bool isApiExternOp{false};
@@ -119,14 +118,13 @@ protected:
         return;
       // Enter a new GPU API op
       isApiExternOp = true;
-      currentOpScope = scope;
       profiler.enterOp(scope);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress() || !isApiExternOp)
         return;
-      profiler.exitOp(currentOpScope);
+      profiler.exitOp(scopeStack.back());
       isApiExternOp = false;
     }
 
