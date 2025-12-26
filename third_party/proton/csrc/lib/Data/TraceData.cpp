@@ -50,7 +50,7 @@ public:
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
-    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
@@ -223,10 +223,10 @@ namespace {
 
 // Structure to pair CycleMetric with its context for processing
 struct CycleMetricWithContext {
-  std::shared_ptr<CycleMetric> cycleMetric;
+  const CycleMetric *cycleMetric;
   uint32_t contextId;
 
-  CycleMetricWithContext(std::shared_ptr<CycleMetric> metric, uint32_t ctx)
+  CycleMetricWithContext(const CycleMetric *metric, uint32_t ctx)
       : cycleMetric(metric), contextId(ctx) {}
 };
 
@@ -235,12 +235,12 @@ convertToTimelineTrace(TraceData::Trace *trace,
                        std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
 
-  auto getInt64Value = [](const std::shared_ptr<CycleMetric> &metric,
+  auto getInt64Value = [](const CycleMetric *metric,
                           CycleMetric::CycleMetricKind kind) {
     return std::get<uint64_t>(metric->getValue(kind));
   };
 
-  auto getStringValue = [](const std::shared_ptr<CycleMetric> &metric,
+  auto getStringValue = [](const CycleMetric *metric,
                            CycleMetric::CycleMetricKind kind) {
     return std::get<std::string>(metric->getValue(kind));
   };
@@ -406,16 +406,16 @@ void dumpCycleMetricTrace(TraceData::Trace *trace,
 
 void dumpKernelMetricTrace(
     TraceData::Trace *trace, uint64_t minTimeStamp,
-    std::map<size_t, std::vector<TraceData::Trace::TraceEvent>>
+    std::map<size_t, std::vector<const TraceData::Trace::TraceEvent *>>
         &streamTraceEvents,
     std::ostream &os) {
   // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
     json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
-    for (auto const &event : events) {
-      auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
-          event.metrics.at(MetricKind::Kernel));
+    for (auto const *event : events) {
+      auto *kernelMetrics = static_cast<KernelMetric *>(
+          event->metrics.at(MetricKind::Kernel).get());
       uint64_t startTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
@@ -424,7 +424,7 @@ void dumpKernelMetricTrace(
       double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
       double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
 
-      auto contextId = event.contextId;
+      auto contextId = event->contextId;
       auto contexts = trace->getContexts(contextId);
 
       json element;
@@ -452,7 +452,7 @@ void dumpKernelMetricTrace(
 void TraceData::dumpChromeTrace(std::ostream &os) const {
   auto &events = trace->getEvents();
   // stream id -> trace event
-  std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
+  std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
   bool hasKernelMetrics = false, hasCycleMetrics = false;
   // Data structure for efficient cycle metrics conversion
@@ -462,12 +462,11 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   for (auto &entry : events) {
     auto &event = entry.second;
     if (event.metrics.count(MetricKind::Kernel)) {
-      std::shared_ptr<KernelMetric> kernelMetric =
-          std::dynamic_pointer_cast<KernelMetric>(
-              event.metrics.at(MetricKind::Kernel));
+      auto *kernelMetric = static_cast<KernelMetric *>(
+          event.metrics.at(MetricKind::Kernel).get());
       auto streamId =
           std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
-      streamTraceEvents[streamId].push_back(event);
+      streamTraceEvents[streamId].push_back(&event);
 
       uint64_t startTime =
           std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
@@ -475,9 +474,8 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       hasKernelMetrics = true;
     }
     if (event.metrics.count(MetricKind::Cycle)) {
-      std::shared_ptr<CycleMetric> cycleMetric =
-          std::dynamic_pointer_cast<CycleMetric>(
-              event.metrics.at(MetricKind::Cycle));
+      auto *cycleMetric = static_cast<CycleMetric *>(
+          event.metrics.at(MetricKind::Cycle).get());
       cycleEvents.emplace_back(cycleMetric, event.contextId);
       hasCycleMetrics = true;
     }

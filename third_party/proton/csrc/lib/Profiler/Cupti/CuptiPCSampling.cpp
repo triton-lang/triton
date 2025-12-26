@@ -395,9 +395,8 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                   stallReason->pcSamplingStallReasonIndex)
                   ? 0
                   : samples;
-          auto metric = std::make_shared<PCSamplingMetric>(metricKind, samples,
-                                                           stalledSamples);
-          entry.upsertMetric(metric);
+          entry.upsertMetric(std::make_unique<PCSamplingMetric>(
+              metricKind, samples, stalledSamples));
         }
       }
     }

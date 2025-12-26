@@ -72,14 +72,14 @@ private:
   int deviceOffset = 0x7fffffff;
 };
 
-std::shared_ptr<Metric>
+std::unique_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
-  std::shared_ptr<Metric> metric;
+  std::unique_ptr<Metric> metric;
   switch (activity->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
     if (activity->begin_ns < activity->end_ns) {
-      metric = std::make_shared<KernelMetric>(
+      metric = std::make_unique<KernelMetric>(
           static_cast<uint64_t>(activity->begin_ns),
           static_cast<uint64_t>(activity->end_ns), 1,
           static_cast<uint64_t>(
@@ -111,9 +111,9 @@ void processActivityKernel(
         if (state.isMissingName) {
           auto childEntry =
               data->addOp(entry.id, {Context(activity->kernel_name)});
-          childEntry.upsertMetric(metric);
+          childEntry.upsertMetric(std::move(metric));
         } else {
-          entry.upsertMetric(metric);
+          entry.upsertMetric(std::move(metric));
         }
       }
     }
@@ -130,7 +130,7 @@ void processActivityKernel(
       if (auto metric = convertActivityToMetric(activity)) {
         auto childEntry =
             data->addOp(entry.id, {Context(activity->kernel_name)});
-        childEntry.upsertMetric(metric);
+        childEntry.upsertMetric(std::move(metric));
       }
     }
   }

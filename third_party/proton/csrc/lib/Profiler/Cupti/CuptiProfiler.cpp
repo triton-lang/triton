@@ -32,13 +32,13 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 
 namespace {
 
-std::shared_ptr<Metric>
+std::unique_ptr<Metric>
 convertKernelActivityToMetric(CUpti_Activity *activity) {
-  std::shared_ptr<Metric> metric;
+  std::unique_ptr<Metric> metric;
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   if (kernel->start < kernel->end) {
     metric =
-        std::make_shared<KernelMetric>(static_cast<uint64_t>(kernel->start),
+        std::make_unique<KernelMetric>(static_cast<uint64_t>(kernel->start),
                                        static_cast<uint64_t>(kernel->end), 1,
                                        static_cast<uint64_t>(kernel->deviceId),
                                        static_cast<uint64_t>(DeviceType::CUDA),
@@ -75,9 +75,9 @@ uint32_t processActivityKernel(
       if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
         if (isMissingName) {
           auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(kernelMetric);
+          childEntry.upsertMetric(std::move(kernelMetric));
         } else {
-          entry.upsertMetric(kernelMetric);
+          entry.upsertMetric(std::move(kernelMetric));
         }
       }
     }
@@ -111,18 +111,17 @@ uint32_t processActivityKernel(
     auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
     if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
       const bool isMissingName = nodeIt->second.isMissingName;
-      nodeIt->second.forEachEntry(
-          [isMissingName, kernel, activity](Data *data, DataEntry &entry) {
-            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              if (isMissingName) {
-                auto childEntry =
-                    data->addOp(entry.id, {Context(kernel->name)});
-                childEntry.upsertMetric(kernelMetric);
-              } else {
-                entry.upsertMetric(kernelMetric);
-              }
-            }
-          });
+      nodeIt->second.forEachEntry([isMissingName, kernel,
+                                   activity](Data *data, DataEntry &entry) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          if (isMissingName) {
+            auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+            childEntry.upsertMetric(std::move(kernelMetric));
+          } else {
+            entry.upsertMetric(std::move(kernelMetric));
+          }
+        }
+      });
     }
     // Decrease the expected kernel count
     if (externState.numNodes > 0) {
@@ -663,7 +662,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                                             {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
               const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
-              bool isMissingName = callpath.back().name.empty();
+              bool isMissingName =
+                  callpath.empty() || callpath.back().name.empty();
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
                     graphNodeIdToState.try_emplace(nodeId);

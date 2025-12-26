@@ -7,6 +7,7 @@
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <utility>
 
 namespace proton {
 
@@ -23,17 +24,19 @@ struct DataEntry {
   /// both the frontend and the backend.
   /// Use `Data::addScopeMetrics` and `Data::addEntryMetrics` to add flexible
   /// metrics.
-  std::reference_wrapper<std::map<MetricKind, std::shared_ptr<Metric>>> metrics;
+  std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
 
   explicit DataEntry(size_t id,
-                     std::map<MetricKind, std::shared_ptr<Metric>> &metrics)
+                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
       : id(id), metrics(metrics) {}
 
-  void upsertMetric(std::shared_ptr<Metric> metric) {
+  void upsertMetric(std::unique_ptr<Metric> metric) {
+    if (!metric)
+      return;
     auto &metricsMap = metrics.get();
     auto it = metricsMap.find(metric->getKind());
     if (it == metricsMap.end()) {
-      metricsMap.emplace(metric->getKind(), metric);
+      metricsMap.emplace(metric->getKind(), std::move(metric));
     } else {
       it->second->updateMetric(*metric);
     }

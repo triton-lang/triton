@@ -66,7 +66,7 @@ public:
     size_t id = DummyId;
     std::vector<ChildEntry> children = {};
     std::unordered_map<std::string_view, size_t> childIndex = {};
-    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
   };
@@ -170,8 +170,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             hasKernelMetric = true;
-            std::shared_ptr<KernelMetric> kernelMetric =
-                std::static_pointer_cast<KernelMetric>(metric);
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
@@ -208,8 +208,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             metricsJson[deviceTypeNameKey] = deviceTypeName;
           } else if (metricKind == MetricKind::PCSampling) {
             hasPCSamplingMetric = true;
-            auto pcSamplingMetric =
-                std::static_pointer_cast<PCSamplingMetric>(metric);
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric->getValueName(i);
               std::visit([&](auto &&value) { metricsJson[valueName] = value; },
@@ -217,7 +217,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             }
           } else if (metricKind == MetricKind::Cycle) {
             hasCycleMetric = true;
-            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(
@@ -353,7 +353,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             hasKernelMetric = true;
-            auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
             uint64_t deviceId = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
@@ -363,7 +363,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
             hasPCSamplingMetric = true;
           } else if (metricKind == MetricKind::Cycle) {
             hasCycleMetric = true;
-            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
             uint64_t deviceId = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::DeviceId));
             uint64_t deviceType = std::get<uint64_t>(
@@ -458,7 +458,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               continue;
             }
 
-            auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
@@ -478,8 +478,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
             writer.packStr(kernelMetricDeviceTypeName);
             writer.packStr(deviceTypeName);
           } else if (metricKind == MetricKind::PCSampling) {
-            auto pcSamplingMetric =
-                std::static_pointer_cast<PCSamplingMetric>(metric);
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric->getValueName(i);
               writer.packStr(valueName);
@@ -499,7 +499,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               continue;
             }
 
-            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(

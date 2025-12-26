@@ -241,7 +241,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               for (auto [data, entry] : dataToEntryMap) {
                 auto kernelId = entry.id;
                 entry = data->addOp(kernelId, contexts);
-                entry.upsertMetric(std::make_shared<CycleMetric>(
+                entry.upsertMetric(std::make_unique<CycleMetric>(
                     event.first->cycle, event.second->cycle, duration,
                     normalizedDuration, kernelId, functionName,
                     blockTrace.blockId, blockTrace.procId, trace.uid,
