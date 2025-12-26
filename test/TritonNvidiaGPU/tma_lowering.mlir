@@ -113,9 +113,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_alloc_user
   tt.func public @tma_load_alloc_user(%arg0: !tt.tensordesc<tensor<64x64xf32, #nvmma_128>>, %arg1: i32) -> (tensor<64x64xf32, #blocked>, !ttg.memdesc<64x64xf32, #shared, #smem, mutable>) {
-    %0 = tt.descriptor_load %arg0[%arg1, %arg1, %arg1] : !tt.tensordesc<tensor<64x64xf32, #nvmma_128>> -> tensor<64x64xf32, #blocked>
+    %0 = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<64x64xf32, #nvmma_128>> -> tensor<64x64xf32, #blocked>
     // CHECK: %[[A:.+]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xf32, #[[$NVMMA]], #smem, mutable>
-    // CHECK: tng.async_tma_copy_global_to_local %{{.+}}[%{{.+}}, %{{.+}}, %{{.+}}] %[[A]],
+    // CHECK: tng.async_tma_copy_global_to_local %{{.+}}[%{{.+}}, %{{.+}}] %[[A]],
     %1 = ttg.local_alloc %0 : (tensor<64x64xf32, #blocked>) -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     // CHECK: %[[L:.+]] = ttg.local_load %[[A]] :
     // CHECK: %[[S:.+]] = ttg.local_alloc %[[L]] :
