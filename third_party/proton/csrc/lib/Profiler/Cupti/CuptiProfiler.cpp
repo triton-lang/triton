@@ -274,8 +274,6 @@ struct GraphState {
     std::map<Data *, Callpath> captureContexts;
     // A unique id for the graph node
     uint64_t nodeId{};
-    // Node name
-    std::string name{};
     // Whether the node is missing name
     bool isMissingName{};
     // Whether the node is a metric kernel node
@@ -553,9 +551,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             if (name.empty() || (threadState.isApiExternOp &&
                                  threadState.isMetricKernelLaunching)) {
               nodeState.isMissingName = true;
-            } else {
-              nodeState.name = name;
-            }
+            } 
             if (threadState.isMetricKernelLaunching) {
               nodeState.isMetricNode = true;
               graphState.metricKernelNodeIds.insert(nodeId);
@@ -691,22 +687,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto baseEntry = dataPtr->addOp(entryIt->second.id,
                                             {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeStates] : callpathToNodeStates) {
-              const auto parentEntry = dataPtr->addOp(baseEntry.id, callpath);
+              const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
               for (const auto &nodeStateRef : nodeStates) {
                 const auto &nodeState = nodeStateRef.get();
                 auto [nodeIt, inserted] =
                     graphNodeIdToState.try_emplace(nodeState.nodeId);
-                if (inserted) {
-                  nodeIt->second.isMissingName = nodeState.isMissingName;
-                  nodeIt->second.isMetricNode = nodeState.isMetricNode;
-                }
-                if (nodeIt->second.isMissingName) {
-                  nodeIt->second.setEntry(data, parentEntry);
-                } else {
-                  const auto nodeEntry = dataPtr->addOp(
-                      parentEntry.id, {Context(nodeState.name)});
-                  nodeIt->second.setEntry(data, nodeEntry);
-                }
+                nodeIt->second.isMissingName = nodeState.isMissingName;
+                nodeIt->second.isMetricNode = nodeState.isMetricNode;
+                nodeIt->second.setEntry(data, nodeEntry);
               }
             }
           }
