@@ -7,6 +7,7 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
+#include "Utility/Table.h"
 
 #include <atomic>
 #include <chrono>
@@ -69,57 +70,7 @@ public:
       DataToEntryMap dataToEntry;
     };
 
-    struct GraphNodeStateTable {
-      uint64_t minNodeId{0};
-      std::vector<GraphNodeState> nodes;
-      std::vector<uint8_t> present;
-
-      void resetRange(uint64_t minId, uint64_t maxId) {
-        minNodeId = minId;
-        auto size = static_cast<size_t>(maxId - minId + 1);
-        nodes.clear();
-        nodes.resize(size);
-        present.assign(size, 0);
-      }
-
-      void clear() {
-        minNodeId = 0;
-        nodes.clear();
-        present.clear();
-      }
-
-      std::pair<GraphNodeState *, bool> tryEmplace(uint64_t nodeId) {
-        if (nodes.empty() || nodeId < minNodeId)
-          return {nullptr, false};
-        uint64_t offset = nodeId - minNodeId;
-        if (offset >= static_cast<uint64_t>(nodes.size()))
-          return {nullptr, false};
-        auto index = static_cast<size_t>(offset);
-        bool inserted = !present[index];
-        present[index] = 1;
-        return {&nodes[index], inserted};
-      }
-
-      GraphNodeState *find(uint64_t nodeId) {
-        if (nodes.empty() || nodeId < minNodeId)
-          return nullptr;
-        uint64_t offset = nodeId - minNodeId;
-        if (offset >= static_cast<uint64_t>(nodes.size()))
-          return nullptr;
-        auto index = static_cast<size_t>(offset);
-        return present[index] ? &nodes[index] : nullptr;
-      }
-
-      const GraphNodeState *find(uint64_t nodeId) const {
-        if (nodes.empty() || nodeId < minNodeId)
-          return nullptr;
-        uint64_t offset = nodeId - minNodeId;
-        if (offset >= static_cast<uint64_t>(nodes.size()))
-          return nullptr;
-        auto index = static_cast<size_t>(offset);
-        return present[index] ? &nodes[index] : nullptr;
-      }
-    };
+    using GraphNodeStateTable = RangeTable<GraphNodeState>;
 
     // graphNodeId -> (per-Data entry)
     GraphNodeStateTable graphNodeIdToState;

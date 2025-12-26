@@ -697,24 +697,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto baseEntry = dataPtr->addOp(entryIt->second.id,
                                             {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeStates] : callpathToNodeStates) {
-              const auto parentEntry = dataPtr->addOp(baseEntry.id, callpath);
+              const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
               for (const auto &nodeStateRef : nodeStates) {
                 const auto &nodeState = nodeStateRef.get();
                 auto [graphNodeState, inserted] =
                     graphNodeIdToState.tryEmplace(nodeState.nodeId);
-                if (!graphNodeState)
-                  continue;
                 if (inserted) {
                   graphNodeState->isMissingName = nodeState.isMissingName;
                   graphNodeState->isMetricNode = nodeState.isMetricNode;
                 }
-                if (graphNodeState->isMissingName) {
-                  graphNodeState->setEntry(data, parentEntry);
-                } else {
-                  const auto nodeEntry = dataPtr->addOp(
-                      parentEntry.id, {Context(nodeState.name)});
-                  graphNodeState->setEntry(data, nodeEntry);
-                }
+                graphNodeState->setEntry(data, nodeEntry);
               }
             }
           }
