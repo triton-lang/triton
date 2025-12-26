@@ -700,13 +700,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
               for (const auto &nodeStateRef : nodeStates) {
                 const auto &nodeState = nodeStateRef.get();
-                auto [graphNodeState, inserted] =
-                    graphNodeIdToState.tryEmplace(nodeState.nodeId);
-                if (inserted) {
-                  graphNodeState->isMissingName = nodeState.isMissingName;
-                  graphNodeState->isMetricNode = nodeState.isMetricNode;
-                }
-                graphNodeState->setEntry(data, nodeEntry);
+                auto &graphNodeState =
+                    graphNodeIdToState.emplace(nodeState.nodeId);
+                graphNodeState.isMissingName = nodeState.isMissingName;
+                graphNodeState.isMetricNode = nodeState.isMetricNode;
+                graphNodeState.setEntry(data, nodeEntry);
               }
             }
           }

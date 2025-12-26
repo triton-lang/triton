@@ -1,5 +1,5 @@
-#ifndef PROTON_UTILITY_TABLE_H_
-#define PROTON_UTILITY_TABLE_H_
+#ifndef PROTON_UTILITY_TABLE_H
+#define PROTON_UTILITY_TABLE_H
 
 #include <cstddef>
 #include <cstdint>
@@ -15,66 +15,72 @@ class RangeTable {
   static_assert(std::is_integral_v<IdT>, "RangeTable IdT must be integral");
 
 public:
-  void resetRange(IdT minId, IdT maxId) {
-    if (maxId < minId) {
+  void resetRange(IdT minIdValue, IdT maxIdValue) {
+    if (maxIdValue < minIdValue) {
       clear();
       return;
     }
-    minId_ = minId;
-    auto size = static_cast<size_t>(maxId - minId + 1);
-    nodes_.clear();
-    nodes_.resize(size);
-    present_.assign(size, 0);
+    minId = minIdValue;
+    auto size = static_cast<size_t>(maxIdValue - minIdValue + 1);
+    nodes.clear();
+    nodes.resize(size);
+    present.assign(size, false);
   }
 
   void clear() {
-    minId_ = 0;
-    nodes_.clear();
-    present_.clear();
+    minId = 0;
+    nodes.clear();
+    present.clear();
   }
 
   std::pair<T *, bool> tryEmplace(IdT id) {
     if (!inRange(id))
       return {nullptr, false};
     auto index = indexFor(id);
-    bool inserted = !present_[index];
-    present_[index] = 1;
-    return {&nodes_[index], inserted};
+    bool inserted = !present[index];
+    present[index] = true;
+    return {&nodes[index], inserted};
+  }
+
+  T &emplace(IdT id) {
+    auto index = indexFor(id);
+    present[index] = true;
+    return nodes[index];
   }
 
   T *find(IdT id) {
     if (!inRange(id))
       return nullptr;
     auto index = indexFor(id);
-    return present_[index] ? &nodes_[index] : nullptr;
+    return present[index] ? &nodes[index] : nullptr;
   }
 
   const T *find(IdT id) const {
     if (!inRange(id))
       return nullptr;
     auto index = indexFor(id);
-    return present_[index] ? &nodes_[index] : nullptr;
+    return present[index] ? &nodes[index] : nullptr;
   }
 
-  bool empty() const { return nodes_.empty(); }
+  bool empty() const { return nodes.empty(); }
 
 private:
   bool inRange(IdT id) const {
-    if (nodes_.empty() || id < minId_)
+    if (nodes.empty() || id < minId)
       return false;
-    auto offset = static_cast<size_t>(id - minId_);
-    return offset < nodes_.size();
+    auto offset = static_cast<size_t>(id - minId);
+    return offset < nodes.size();
   }
 
   size_t indexFor(IdT id) const {
-    return static_cast<size_t>(id - minId_);
+    return static_cast<size_t>(id - minId);
   }
 
-  IdT minId_{0};
-  std::vector<T> nodes_;
-  std::vector<uint8_t> present_;
+  IdT minId{0};
+  std::vector<T> nodes;
+  std::vector<bool> present;
 };
 
 } // namespace proton
 
-#endif // PROTON_UTILITY_TABLE_H_
+#endif // PROTON_UTILITY_TABLE_H
