@@ -558,6 +558,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             }
             for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
+              if (!threadState.isApiExternOp ||
+                  !threadState.isMetricKernelLaunching) {
+                contexts.push_back(name);
+              }
               nodeState.captureContexts[data] = std::move(contexts);
               graphState.dataToCallpathToNodeStates
                   [data][nodeState.captureContexts[data]]
