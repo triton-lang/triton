@@ -738,26 +738,24 @@ std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
 //   block = []}>
 static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll,
                               bool skipEmptyBases = false) {
-  const auto &bases = ll.getBases();
+  auto bases = ll.getBases();
+  if (skipEmptyBases) {
+    decltype(bases) filtered;
+    for (auto &kv : bases)
+      if (!kv.second.empty())
+        filtered.insert(kv);
+    bases = std::move(filtered);
+  }
 
-  auto baseToString = [](const auto &base) {
+  // Printing code unchanged (just prints `bases` instead of `ll.getBases()`).
+  printer << join(bases, ", ", [](const auto &base) {
     return base.first.str() + " = " + "[" +
            join(base.second, ", ",
                 [](const std::vector<int32_t> &vec) {
                   return "[" + join(vec, ", ") + "]";
                 }) +
            "]";
-  };
-
-  if (!skipEmptyBases) {
-    printer << join(bases, ", ", baseToString);
-    return;
-  }
-
-  auto filteredBases = llvm::make_filter_range(
-      bases, [](const auto &base) { return !base.second.empty(); });
-
-  printer << join(filteredBases, ", ", baseToString);
+  });
 }
 
 // Print the CGA encoding as `CGALayout = [[...]]` when the layout is

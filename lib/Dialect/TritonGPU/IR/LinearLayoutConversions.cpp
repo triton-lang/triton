@@ -1402,7 +1402,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // for a single tile thread holds 4 vals, we move register base 2, to lane
   // base 4.
 
-  // No repetitions, in m/n dim.
+  // No repetitions in m/n dim.
   auto firstRepInNonK = tileLayout.getInDimSizeLog2(kRegister);
   if (nonOpSelLayout.getInDimSizeLog2(kRegister) <= firstRepInNonK) {
     return nonOpSelLayout;
