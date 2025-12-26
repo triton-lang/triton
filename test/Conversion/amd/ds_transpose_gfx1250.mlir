@@ -1,8 +1,8 @@
 // RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s
 
-#mma_b16 = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 32]}> // b16
-#mma_b8 = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 64]}> // b8
-#mma_b8_2x = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 128]}> // b8
+#mma_b16 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}> // b16
+#mma_b8 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}> // b8
+#mma_b8_2x = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}> // b8
 #linear_ds_tr = #ttg.linear<{register = [[0, 64], [16, 0], [0, 1], [32, 0], [0, 2], [0, 4], [64, 0], [0, 8], [0, 32]],
                              lane = [[1, 0], [2, 0], [4, 0], [0, 16], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
 

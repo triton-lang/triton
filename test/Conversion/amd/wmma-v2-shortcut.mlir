@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx1200" -reconcile-unrealized-casts -split-input-file | FileCheck %s
 
-#wmmaTv2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1], isTranspose = true}>
+#wmmaTv2 = #ttg.amd_wmma<{version = 2, ctaLayout = {register = [], warp = []}, isTranspose = true}>
 #dotop0v2 = #ttg.dot_op<{opIdx = 0, parent = #wmmaTv2, kWidth=8}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {

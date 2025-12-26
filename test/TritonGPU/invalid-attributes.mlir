@@ -43,29 +43,29 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 (including packed cases for `scaled_dot`)}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 (including packed cases for `scaled_dot`)}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v1 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v2 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1], instrShape = [16, 16, 64]}>
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}, instrShape = [16, 16, 64]}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v3 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16]}>
+#wmma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 16]}>
 
 // -----
 
