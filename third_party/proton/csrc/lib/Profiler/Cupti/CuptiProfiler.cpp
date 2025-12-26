@@ -533,7 +533,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto &graphState = pImpl->graphStates[graphId];
             for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
-              contexts.push_back(threadState.scopeStack.back());
+              if (!threadState.isMetricKernelLaunching) {
+                contexts.push_back(threadState.scopeStack.back());
+              }
               graphState.nodeIdToState[nodeId].captureContexts[data] =
                   std::move(contexts);
               graphState
