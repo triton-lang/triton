@@ -681,7 +681,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphNodeIdToState =
               profiler.correlation.externIdToState[scope.scopeId]
                   .graphNodeIdToState;
-          graphNodeIdToState.reserve(graphState.numNodes * 2);
+          graphNodeIdToState.reserve(graphState.numNodes);
           for (auto &[data, callpathToNodeStates] :
                graphState.dataToCallpathToNodeStates) {
             auto *dataPtr = data;
