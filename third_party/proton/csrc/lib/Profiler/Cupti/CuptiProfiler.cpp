@@ -621,7 +621,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       const auto symbolName =
           callbackData->symbolName ? std::string(callbackData->symbolName) : "";
       threadState.enterOp(Scope(std::move(symbolName)));
-      auto &scope = threadState.scopeStack.back();
+      const auto &scope = threadState.scopeStack.back();
       auto &dataToEntry = threadState.dataToEntry;
       size_t numNodes = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
