@@ -218,10 +218,12 @@ public:
       tid = LLVM::SubOp::create(rewriter, loc, tid, b.i32_val(*startId));
 
     Value warpId = b.udiv(tid, b.i32_val(32));
-    // This indicates to PTXAS that the result and its derived values are
-    // uniform across the warp. For example, if a branch condition derives from
-    // this value, it can be proven to be non-divergent.
-    warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
+    if (!op.getOmitUniformHint()) {
+      // This indicates to PTXAS that the result and its derived values are
+      // uniform across the warp. For example, if a branch condition derives
+      // from this value, it can be proven to be non-divergent.
+      warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
+    }
     rewriter.replaceOp(op, warpId);
     return success();
   }
