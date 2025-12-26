@@ -10,7 +10,6 @@ from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.matmul import matmul
-from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
 
@@ -248,8 +247,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
 def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act, affinity_mode):
-    if is_hip():
-        pytest.skip("Distributed test is not supported on AMD GPU")
     if n_tokens < distributed_launcher.world_size:
         raise ValueError("n_tokens must be >= number of gpus")
     if n_tokens % distributed_launcher.world_size != 0:
