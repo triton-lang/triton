@@ -113,18 +113,18 @@ uint32_t processActivityKernel(
     auto &externState = *state;
     // We have a graph creation captured
     auto &graphNodeIdToState = externState.graphNodeIdToState;
-    auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
-    if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
-      const bool isMissingName = nodeIt->second.isMissingName;
+    auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
+    if (nodeState && !nodeState->isMetricNode) {
+      const bool isMissingName = nodeState->isMissingName;
       if (!isMissingName) {
-        nodeIt->second.forEachEntry(
+        nodeState->forEachEntry(
             [activity](Data *, DataEntry &entry) {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 entry.upsertMetric(std::move(kernelMetric));
               }
             });
       } else {
-        nodeIt->second.forEachEntry(
+        nodeState->forEachEntry(
             [kernel, activity](Data *data, DataEntry &entry) {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
@@ -681,7 +681,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &graphNodeIdToState =
               profiler.correlation.externIdToState[scope.scopeId]
                   .graphNodeIdToState;
-          graphNodeIdToState.reserve(graphState.numNodes);
+          if (!graphState.nodeIdToState.empty()) {
+            auto minNodeId = graphState.nodeIdToState.begin()->first;
+            auto maxNodeId = graphState.nodeIdToState.rbegin()->first;
+            graphNodeIdToState.resetRange(minNodeId, maxNodeId);
+          } else {
+            graphNodeIdToState.clear();
+          }
           for (auto &[data, callpathToNodeStates] :
                graphState.dataToCallpathToNodeStates) {
             auto *dataPtr = data;
@@ -691,14 +697,24 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto baseEntry = dataPtr->addOp(entryIt->second.id,
                                             {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeStates] : callpathToNodeStates) {
-              const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
+              const auto parentEntry = dataPtr->addOp(baseEntry.id, callpath);
               for (const auto &nodeStateRef : nodeStates) {
                 const auto &nodeState = nodeStateRef.get();
-                auto [nodeIt, inserted] =
-                    graphNodeIdToState.try_emplace(nodeState.nodeId);
-                nodeIt->second.isMissingName = nodeState.isMissingName;
-                nodeIt->second.isMetricNode = nodeState.isMetricNode;
-                nodeIt->second.setEntry(data, nodeEntry);
+                auto [graphNodeState, inserted] =
+                    graphNodeIdToState.tryEmplace(nodeState.nodeId);
+                if (!graphNodeState)
+                  continue;
+                if (inserted) {
+                  graphNodeState->isMissingName = nodeState.isMissingName;
+                  graphNodeState->isMetricNode = nodeState.isMetricNode;
+                }
+                if (graphNodeState->isMissingName) {
+                  graphNodeState->setEntry(data, parentEntry);
+                } else {
+                  const auto nodeEntry = dataPtr->addOp(
+                      parentEntry.id, {Context(nodeState.name)});
+                  graphNodeState->setEntry(data, nodeEntry);
+                }
               }
             }
           }
@@ -735,11 +751,12 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto &externIdState =
               profiler.correlation.externIdToState[scope.scopeId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
-            auto nodeIt = externIdState.graphNodeIdToState.find(nodeId);
-            nodeIt->second.forEachEntry(
-                [&](Data *data, const DataEntry &entry) {
-                  metricNodeEntryIds[data].push_back(entry.id);
-                });
+            auto *nodeState = externIdState.graphNodeIdToState.find(nodeId);
+            if (!nodeState)
+              continue;
+            nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
+              metricNodeEntryIds[data].push_back(entry.id);
+            });
           }
           auto metricBufferCapacity =
               pImpl->metricBuffer->getCapacity(); // bytes
