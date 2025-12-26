@@ -119,23 +119,12 @@ public:
     return it->second;
   }
 
-  std::vector<TraceEvent> getEvents() const {
-    std::vector<TraceEvent> events;
-    events.reserve(traceEvents.size());
-    for (const auto &entry : traceEvents) {
-      events.push_back(entry.second);
-    }
-    std::sort(events.begin(), events.end(),
-              [](const TraceEvent &a, const TraceEvent &b) {
-                return a.id < b.id;
-              });
-    return events;
-  }
+  const std::map<size_t, TraceEvent> &getEvents() const { return traceEvents; }
 
 private:
   size_t nextTreeContextId = TraceContext::RootId + 1;
   size_t nextEventId = 0;
-  std::unordered_map<size_t, TraceEvent> traceEvents;
+  std::map<size_t, TraceEvent> traceEvents;
   // tree node id -> trace context
   std::map<size_t, TraceContext> traceContextMap;
 };
@@ -461,7 +450,7 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os) const {
-  auto events = trace->getEvents();
+  auto &events = trace->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
@@ -470,7 +459,8 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   std::map<uint64_t, int> kernelBlockNum;
   std::vector<CycleMetricWithContext> cycleEvents;
   cycleEvents.reserve(events.size());
-  for (auto &event : events) {
+  for (auto &entry : events) {
+    auto &event = entry.second;
     if (event.metrics.count(MetricKind::Kernel)) {
       std::shared_ptr<KernelMetric> kernelMetric =
           std::dynamic_pointer_cast<KernelMetric>(
