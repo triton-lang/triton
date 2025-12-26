@@ -71,13 +71,17 @@ uint32_t processActivityKernel(
                                isMissingName = state.isMissingName;
                                dataToEntry = state.dataToEntry;
                              });
-    for (auto &[data, entry] : dataToEntry) {
-      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-        if (isMissingName) {
+    if (!isMissingName) {
+      for (auto &[data, entry] : dataToEntry) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          entry.upsertMetric(std::move(kernelMetric));
+        }
+      }
+    } else {
+      for (auto &[data, entry] : dataToEntry) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
           childEntry.upsertMetric(std::move(kernelMetric));
-        } else {
-          entry.upsertMetric(std::move(kernelMetric));
         }
       }
     }
@@ -111,17 +115,22 @@ uint32_t processActivityKernel(
     auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
     if (nodeIt != graphNodeIdToState.end() && !nodeIt->second.isMetricNode) {
       const bool isMissingName = nodeIt->second.isMissingName;
-      nodeIt->second.forEachEntry([isMissingName, kernel,
-                                   activity](Data *data, DataEntry &entry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          if (isMissingName) {
-            auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
-            childEntry.upsertMetric(std::move(kernelMetric));
-          } else {
-            entry.upsertMetric(std::move(kernelMetric));
-          }
-        }
-      });
+      if (!isMissingName) {
+        nodeIt->second.forEachEntry(
+            [activity](Data *, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                entry.upsertMetric(std::move(kernelMetric));
+              }
+            });
+      } else {
+        nodeIt->second.forEachEntry(
+            [kernel, activity](Data *data, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+                childEntry.upsertMetric(std::move(kernelMetric));
+              }
+            });
+      }
     }
     // Decrease the expected kernel count
     if (externState.numNodes > 0) {
@@ -264,6 +273,12 @@ struct GraphState {
     std::map<Data *, Callpath> captureContexts;
     // A unique id for the graph node
     uint64_t nodeId{};
+    // Node name
+    std::string name{};
+    // Whether the node is missing name
+    bool isMissingName{};
+    // Whether the node is a metric kernel node
+    bool isMetricNode{};
   };
 
   // Capture tag to identify captured call paths
@@ -530,21 +545,27 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             pImpl->graphStates[graphId].numNodes++;
           if (profiler.isOpInProgress()) {
             auto &graphState = pImpl->graphStates[graphId];
+            auto &nodeState = graphState.nodeIdToState[nodeId];
+            if (!threadState.isApiExternOp ||
+                !threadState.isMetricKernelLaunching) {
+              const auto &name = threadState.scopeStack.back().name;
+              if (name.empty()) {
+                nodeState.isMissingName = true;
+              } else {
+                nodeState.name = threadState.scopeStack.back().name;
+              }
+            }
             for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
-              if (!threadState.isApiExternOp ||
-                  !threadState.isMetricKernelLaunching) {
-                contexts.push_back(threadState.scopeStack.back());
-              }
-              graphState.nodeIdToState[nodeId].captureContexts[data] =
-                  std::move(contexts);
+              nodeState.captureContexts[data] = std::move(contexts);
               graphState
-                  .dataToCallpathToNodes[data][graphState.nodeIdToState[nodeId]
-                                                   .captureContexts[data]]
+                  .dataToCallpathToNodes[data][nodeState.captureContexts[data]]
                   .push_back(nodeId);
             }
-            if (threadState.isMetricKernelLaunching)
+            if (threadState.isMetricKernelLaunching) {
+              nodeState.isMetricNode = true;
               graphState.metricKernelNodeIds.insert(nodeId);
+            }
           } // else no op in progress, the creation is triggered by graph
             // clone/instantiate
         } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
@@ -662,17 +683,18 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto baseEntry = dataPtr->addOp(entryIt->second.id,
                                             {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
-              const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
-              bool isMissingName =
-                  callpath.empty() || callpath.back().name.empty();
+              const auto parentEntry = dataPtr->addOp(baseEntry.id, callpath);
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
                     graphNodeIdToState.try_emplace(nodeId);
-                nodeIt->second.isMetricNode =
-                    graphState.metricKernelNodeIds.find(nodeId) !=
-                    graphState.metricKernelNodeIds.end();
-                nodeIt->second.isMissingName = isMissingName;
-                nodeIt->second.setEntry(data, nodeEntry);
+                if (nodeIt->second.isMissingName) {
+                  nodeIt->second.setEntry(data, parentEntry);
+                } else {
+                  const auto nodeEntry = dataPtr->addOp(
+                      parentEntry.id,
+                      {Context(graphState.nodeIdToState[nodeId].name)});
+                  nodeIt->second.setEntry(data, nodeEntry);
+                }
               }
             }
           }
