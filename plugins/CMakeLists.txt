@@ -14,6 +14,8 @@ set(TritonPluginsTestLib_SOURCES
     TritonPlugin.cpp
     )
 
+# Dialect Plugins
+add_subdirectory(DialectPlugins)
 
 foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_mlir_library(${plugin}
