@@ -474,8 +474,8 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       hasKernelMetrics = true;
     }
     if (event.metrics.count(MetricKind::Cycle)) {
-      auto *cycleMetric = static_cast<CycleMetric *>(
-          event.metrics.at(MetricKind::Cycle).get());
+      auto *cycleMetric =
+          static_cast<CycleMetric *>(event.metrics.at(MetricKind::Cycle).get());
       cycleEvents.emplace_back(cycleMetric, event.contextId);
       hasCycleMetrics = true;
     }

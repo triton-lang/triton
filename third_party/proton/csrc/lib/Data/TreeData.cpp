@@ -170,8 +170,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             hasKernelMetric = true;
-            auto *kernelMetric =
-                static_cast<KernelMetric *>(metric.get());
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
