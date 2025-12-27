@@ -753,3 +753,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!ty = tensor<1xi32, #blocked>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+// CHECK-LABEL: @aref_result_outside_scheduled_loop
+tt.func @aref_result_outside_scheduled_loop(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: nvws.aref.create
+  // CHECK: nvws.aref.put.enter
+  // CHECK: nvws.aref.put.exit
+  // CHECK: nvws.aref.get.enter
+  // CHECK: nvws.aref.get.exit
+  scf.for %i = %lb to %ub step %step : i32 {
+    %0 = "op_a"() {ttg.partition = array<i32: 2>} : () -> !ty
+    "op_b"(%0) {ttg.partition = array<i32: 0>} : (!ty) -> ()
+    scf.for %j = %lb to %ub step %step : i32 {
+      %x = arith.addi %lb, %lb {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>} : i32
+      scf.yield
+    } {tt.scheduled_max_stage = 0 : i32, ttg.partition = array<i32: 0>}
+    scf.yield
+  } {tt.warp_specialize, ttg.partition = array<i32: 0, 2>, ttg.partition.stages = [0, 1], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+}
