@@ -1,11 +1,14 @@
 import triton
-from triton import knobs
 
 import os
 import pathlib
+import hashlib
+import pytest
+from triton._internal_testing import is_cuda
 
 
-def test_inspection(monkeypatch, tmp_path: pathlib.Path):
+@pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
+def test_inspection(monkeypatch, fresh_knobs, tmp_path: pathlib.Path):
     stage_name = 'make_ttgir'
     curr_repro_path = tmp_path / ("repro_prefix." + stage_name + ".repro.mlir")
     repro_path = tmp_path / "repro_prefix"
@@ -16,7 +19,15 @@ def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     inspect_stages_hook_called = False
     make_ttgir_wrapper_called = False
 
-    def inspect_stages_hook(self, stages, options, language, capability):
+    def get_key():
+        return pathlib.Path(__file__).read_text()
+
+    def get_hash():
+        return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+
+    def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+        if all(arg is None for arg in (stages, options, language, capability)):
+            return get_key(), get_hash()
         nonlocal inspect_stages_hook_called
         inspect_stages_hook_called = True
 
@@ -43,7 +54,7 @@ def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     curr_repro_path.unlink()
 
     # Setup hook and call again, check if hooks got called
-    knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
+    fresh_knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     k2[(1, )]()
     assert inspect_stages_hook_called and make_ttgir_wrapper_called
     assert os.path.exists(curr_repro_path)
