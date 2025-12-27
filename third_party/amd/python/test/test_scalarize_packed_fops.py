@@ -92,7 +92,7 @@ def test_check_scalarized():
         assert len(bbs) > 1, "couldn't split amdgcn bbs"
         found_mfma = False
         found_packed_fop = False
-        packed_fop = re.compile(r"v_pk_\w+")
+        packed_fop = re.compile(r"v_pk_(add|sub|mul)\w+")
         for bb in bbs:
             if "mfma" in bb or "wmma" in bb:
                 assert not packed_fop.search(bb)

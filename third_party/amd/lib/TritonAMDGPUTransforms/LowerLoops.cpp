@@ -47,7 +47,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                const tt::AMD::TargetInfo &targetInfo);
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx) {
+                                  Value extractIdx, int contiguity) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -58,7 +58,7 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp.getIsVolatile(), contiguity);
   auto commitOp =
       ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
@@ -167,8 +167,27 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         return std::nullopt;
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
+
       auto order = getOrderForMemory(srcTy);
+      if (useAsyncCopy && !targetInfo.supportsDirectToLDSScattering()) {
+        // For architectures that don't support scattering into LDS we must
+        // ensure that each warp writes a contiguous memory chunk. This requires
+        // the shared memory order to follow the thread order, while preserving
+        // the fastest dimension from the register order to keep vectorization.
+        auto llEnc =
+            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
+        auto regOrder = llEnc.getOrder();
+        auto threadOrder = llEnc.getThreadOrder();
+
+        auto contig = llEnc.getElemsPerThread(srcTy.getShape());
+        SetVector<unsigned> orderSet;
+        if (contig[regOrder[0]] > 1)
+          orderSet.insert(regOrder[0]);
+        orderSet.insert(threadOrder.begin(), threadOrder.end());
+        order = orderSet.takeVector();
+      }
+
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -201,7 +220,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         if (!tempAttr) {
           tempAttr = ttg::SwizzledSharedEncodingAttr::get(
               loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-              ctaLayout, bitWidth, /*needTrans=*/false);
+              cgaLayout, bitWidth, /*needTrans=*/false);
         }
         LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
         sharedEncs.push_back(tempAttr);
@@ -214,7 +233,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
@@ -231,7 +250,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
     return (a.getPerPhase() == b.getPerPhase() &&
             a.getMaxPhase() == b.getMaxPhase() &&
             a.getOrder() == b.getOrder() &&
-            a.getCTALayout() == b.getCTALayout());
+            a.getCGALayout() == b.getCGALayout());
   };
   if (sharedEncs.empty() || !sharedEncs.front())
     return std::nullopt;
@@ -357,7 +376,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (useAsyncCopy &&
         canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
                                   axisInfoAnalysis, targetInfo)) {
-      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
+      unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
     } else {
       loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
     }
@@ -715,7 +737,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
 
-  for (auto [l, _] : loadToInfo) {
+  for (auto [l, _] : loadToStreamOps) {
     schedule.erase(l);
     l->erase();
   }

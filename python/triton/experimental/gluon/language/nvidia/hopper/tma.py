@@ -116,6 +116,7 @@ def make_tensor_descriptor(
     _semantic=None,
 ) -> tensor_descriptor:
     padding_option = _unwrap_if_constexpr(padding_option)
+    block_shape = _unwrap_if_constexpr(block_shape)
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):
@@ -123,7 +124,7 @@ def make_tensor_descriptor(
     if len(strides) != ndim:
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
-        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
+        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(block_shape)}")
     assert isinstance(base.dtype, ttgl.pointer_type)
     elem_size = base.dtype.element_ty.primitive_bitwidth // 8
     contig_dim_size = ttgl._unwrap_if_constexpr(block_shape[-1])

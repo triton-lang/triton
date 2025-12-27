@@ -58,9 +58,10 @@ hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
     hipDeviceptr_t global_scratch = 0;
     hipDeviceptr_t profile_scratch = 0;
     void *args[{num_args}] = {{ {arg_pointers} }};
+
     // TODO: shared memory
     if(gX * gY * gZ > 0)
-      return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * warpSize, 1, 1, {shared}, stream, args, nullptr);
+      return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, {shared}, stream, args, nullptr);
     else
       return hipErrorInvalidValue;
 }}

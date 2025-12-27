@@ -1,5 +1,4 @@
 import functools
-import operator
 import os
 import subprocess
 import triton
@@ -14,7 +13,7 @@ from triton.backends.driver import GPUDriver
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
-libraries = ['cuda']
+libraries = ['libcuda.so.1']
 PyCUtensorMap = None
 
 
@@ -314,7 +313,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   return cuLaunchKernelExHandle;
 }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch, CUdeviceptr profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch, CUdeviceptr profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
     // 4 attributes that we can currently pass maximum
@@ -324,15 +323,9 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
       cuLaunchKernelExHandle = getLaunchKernelExHandle();
     }}
     CUlaunchConfig config;
-    config.gridDimX = gridX;
+    config.gridDimX = gridX * num_ctas;
     config.gridDimY = gridY;
     config.gridDimZ = gridZ;
-
-    if (num_ctas != 1) {{
-      config.gridDimX *= clusterDimX;
-      config.gridDimY *= clusterDimY;
-      config.gridDimZ *= clusterDimZ;
-    }}
 
     config.blockDimX = 32 * num_warps;
     config.blockDimY = 1;
@@ -357,9 +350,9 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
     if (num_ctas != 1) {{
       CUlaunchAttribute clusterAttr = {{}};
       clusterAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-      clusterAttr.value.clusterDim.x = clusterDimX;
-      clusterAttr.value.clusterDim.y = clusterDimY;
-      clusterAttr.value.clusterDim.z = clusterDimZ;
+      clusterAttr.value.clusterDim.x = num_ctas;
+      clusterAttr.value.clusterDim.y = 1;
+      clusterAttr.value.clusterDim.z = 1;
       launchAttr[num_attrs] = clusterAttr;
       ++num_attrs;
 
@@ -370,6 +363,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
       ++num_attrs;
     }}
 
+    // num_ctas == 16 is non-portable. Does work for H100 and B200 tho
     config.numAttrs = num_attrs;
     if (num_ctas == 16) {{
       CUDA_CHECK(cuFuncSetAttribute(
@@ -515,8 +509,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
-  if (!PyArg_ParseTuple(kernel_metadata, \"iiiiii\", &num_warps, &num_ctas, &shared_memory, &clusterDimX, &clusterDimY, &clusterDimZ)) {{
+  int num_warps, num_ctas, shared_memory;
+  if (!PyArg_ParseTuple(kernel_metadata, \"iii\", &num_warps, &num_ctas, &shared_memory)) {{
     PyErr_SetString(PyExc_TypeError, "kernel_metadata must be a tuple");
     return NULL;
   }}
@@ -552,7 +546,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {newline.join(tma_decls)}
   {newline.join(float_storage_decls)}
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch, profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch, profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -635,8 +629,10 @@ def make_tensordesc_arg(arg, metadata):
     padding = 1 if arg.padding == "nan" else 0
 
     if fp4_padded:
-        shape = list(shape)
-        shape[-1] *= 2
+        expanded_shape = list(shape)
+        expanded_shape[-1] *= 2
+    else:
+        expanded_shape = shape
 
     cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor(
         arg.base.data_ptr(),
@@ -644,7 +640,7 @@ def make_tensordesc_arg(arg, metadata):
         elem_size,
         TMA_DTYPE_DEVICE_TO_HOST[elem_type],
         block_size,
-        shape,
+        expanded_shape,
         strides,
         padding,
     )
@@ -694,7 +690,7 @@ class CudaLauncher(object):
             libraries=libraries,
         )
 
-        self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
+        self.num_ctas = getattr(metadata, "num_ctas", 1)
         self.launch = wrap_handle_tensordesc(mod.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align

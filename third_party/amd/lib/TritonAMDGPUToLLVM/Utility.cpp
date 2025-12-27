@@ -8,6 +8,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "llvm/ADT/TypeSwitch.h"
 namespace tt = mlir::triton;
@@ -304,16 +305,101 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
-  Value blockId =
-      ::mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension(axis));
-  return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
+  assert(moduleOp);
+
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  if (numCTAs == 1) {
+    // For single CTA the block id is the program id
+    Value blockId = ::mlir::gpu::BlockIdOp::create(rewriter, loc,
+                                                   mlir::gpu::Dimension(axis));
+    return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
+  }
+  // For multiple CTAs the cluster id is the program id
+  std::array intrinsics = {"llvm.amdgcn.cluster.id.x",
+                           "llvm.amdgcn.cluster.id.y",
+                           "llvm.amdgcn.cluster.id.z"};
+  auto axisUInt = unsigned(axis);
+  assert(axisUInt < intrinsics.size());
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsics[axisUInt],
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
+}
+
+// For multicast memory operations (e.g., cluster.load.async.to.lds), we need a
+// bitmask indicating which CTAs in the CGA/cluster will access the same memory
+// addresses. This allows the hardware to efficiently broadcast data to multiple
+// CTAs. The linear layout's free variables in the block dimension tell us which
+// CTAs form a "communication group" (i.e., access the same data):
+//   - Free bit at position k: CTAs whose IDs differ only in bit k access
+//     the same data and should be in the same multicast group.
+//   - Fixed bits (non-free): Distinguish between different groups that
+//     access different data.
+// The multicast mask has bit i set if CTA i is in the same communication
+// group as the current CTA. The free bits determine a groupMask whereas the
+// non-free bits determine the group offset:
+//   ctaMask = groupMask << groupOffset
+// where:
+//   - groupMask: Covers all 2^k CTAs in the group (k = number of free bits)
+//   - groupOffset: Starting position of this group, determined by fixed bits
+// As an example suppose we have 8 CTAs and freeVarMask = 0b101 (bits 0,2 free).
+// This creates 2 groups of 4 CTAs each:
+//   - Group 0: CTAs {0,1,4,5} (fixed bits = 0b000)
+//   - Group 1: CTAs {2,3,6,7} (fixed bits = 0b010)
+// For CTA 5 (0b101): groupOffset = 0b101 & 0b010 = 0 => ctaMask = 0b00110011
+// For CTA 7 (0b111): groupOffset = 0b111 & 0b010 = 2 => ctaMask = 0b11001100
+Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
+                           const LinearLayout &regLayout) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+
+  auto kBlock = StringAttr::get(rewriter.getContext(), "block");
+  auto freeVarMask = regLayout.getFreeVariableMasks()[kBlock];
+
+  // If there are no free bits we do not share any data with other CTAs
+  if (freeVarMask == 0) {
+    return Value();
+  }
+
+  // Construct the groupMask with 1s at all positions representing CTAs in the
+  // communication group. We start with 0b1 and iterate over free bits. For
+  // every free bit at position k, we copy the current pattern 2^k positions
+  // higher.
+  // Example for freeVarMask = 0b101, x = non determined yet:
+  //   Initial:          groupMask = 0bxxxxxxx1 (positions {0})
+  //   Bit 0 (free):     groupMask = 0bxxxxxx11 (positions {0,1})
+  //   Bit 1 (non-free): groupMask = 0bxxxx0011 (positions {0,1})
+  //   Bit 2 (free):     groupMask = 0b00110011 (positions {0,1,4,5})
+  int groupMask = 1;
+  for (int log2 = 0; log2 < regLayout.getInDimSizeLog2(kBlock); log2++) {
+    if (!(freeVarMask & (1 << log2)))
+      continue;
+    groupMask = groupMask | (groupMask << (1 << log2));
+  }
+  // If all bits are set we broadcast to all CTAs so return the group mask.
+  if (freeVarMask == regLayout.getInDimSize(kBlock) - 1) {
+    return b.i32_val(groupMask);
+  }
+  // The non-free bits set in the ctaId determine the group offset. For every
+  // non-free bit set at position k, we shift the groupMask by 2^k positions.
+  // This can be conviniently computed by masking the ctaId with the inverse
+  // of the freeVarMask.
+  // Example1: freeVarMask = 0b101
+  //   ~freeVarMask  = 0b010
+  //   shiftAmount   = 0b101 & 0b010 = 0b000 (no shift needed)
+  //   blockMask     = 0b110011 << 0 = 0b00110011
+  // Example2: freeVarMask = 0b101, ctaId = 0b111 (cta 7)
+  //   ~freeVarMask  = 0b010
+  //   shiftAmount   = 0b111 & 0b010 = 0b010 (shift by 2)
+  //   blockMask     = 0b110011 << 2 = 0b11001100
+  Value shiftAmount = b.and_(groupId, b.i32_val(~freeVarMask));
+  Value ctaMask = b.shl(b.i32_val(groupMask), shiftAmount);
+  return ctaMask;
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm,
-             bool forceNoAliasAsyncLoads) {
+             Value pred, Value falseVal, Value multicastMask,
+             triton::CacheModifier cm, bool forceNoAliasAsyncLoads) {
   return triton::amdgpu::MaskedLoadOp::create(rewriter, loc, elemTy, ptr, pred,
-                                              falseVal, cm,
+                                              falseVal, multicastMask, cm,
                                               forceNoAliasAsyncLoads)
       .getResult();
 }
@@ -458,8 +544,8 @@ unsigned getContiguity(Value ptr, Value offset,
   // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto llAttr =
-      triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
+  auto llAttr = triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(),
+                                                     std::move(linearLayout));
   auto order = triton::gpu::getOrder(tensorTy);
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&
@@ -507,66 +593,97 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
                                       unsigned threadsPerWarp,
                                       unsigned vecSize) {
+  auto kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
+
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
+
+  // Create a coalesced/identity layout and see if it divides srcToShared
+  auto coalescedLayout =
+      LinearLayout::identity1D(contig, kReg, kOffset) *
+      LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
+
+  return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
+}
+
+// On architectures supporting scattering into LDS we are only constraint by the
+// minimal vector size. On architectures not support scattering, e.g. gfx9,
+// direct to LDS loads do not support per lane shared offsets. We need to ensure
+// that each warp writes coalesced into shared memory. This means we cannot
+// exceed the supported load width because splitting them would cause strided
+// (non coalesced) writes. Additionally:
+// 1. For *non* swizzled shared encodings we check if they result in coalesced
+//    writes and can then lower them directly to the intrinsics.
+// 2. For swizzled shared encodings we need to transfer the swizzling to the
+//    source pointers. For now this is done by swizzling the pointers
+//    between the lane of a warp via permute. This only works if the swizzle
+//    pattern does not exchange elements between warps which holds for all
+//    our swizzle patterns. There is still a check performed to not silently
+//    produce wrong results if we invalidate the condition in the future
+bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
+                        RankedTensorType srcTy, Attribute dstEnc,
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
+  // For padded encodings restrict vec by the min interval
+  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
+  if (paddedEnc)
+    vectorSize = std::min(vectorSize, paddedEnc.getMinInterval());
+
+  // Check that vectorSize is not smaller than the minimal supported vector size
+  int elemBitWidth = tt::getPointeeBitWidth(srcTy);
+  auto vectorBits = vectorSize * elemBitWidth;
+  if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
+    LDBG("vectorBits (" << vectorBits
+                        << ") is too small for loads directly to LDS");
+    return false;
+  }
+
+  // Following checks are specific to architectures not supporting scattering
+  if (targetInfo.supportsDirectToLDSScattering())
+    return true;
+
+  // Must support the full vector width; splitting would cause strided writes.
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
+    return false;
+
+  // Compute the blocked -> shared linear layout to check preconditions
+  LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout sharedLayout;
+  if (paddedEnc) {
+    sharedLayout = paddedEnc.getLinearComponent();
+  } else {
+    sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
+
+    // Use a non swizzled layout since we apply swizzling to the src pointers
+    auto swizzledEnc =
+        dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
+    if (swizzledEnc && swizzledEnc.getMaxPhase() != 1) {
+      auto flatSharedEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
+          srcTy.getContext(), swizzledEnc.getVec(), 1, 1,
+          swizzledEnc.getOrder(), swizzledEnc.getCGALayout());
+      sharedLayout = tt::gpu::toLinearLayout(dstAllocShape, flatSharedEnc);
+    }
+  }
+  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  if (vectorSize != contig) {
     LDBG("Load vectorization ("
-         << vecSize << ") and contiguity (" << contig
+         << vectorSize << ") and contiguity (" << contig
          << ") do not match resulting in strided writes");
     return false;
   }
 
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = contig * (1 << inLane);
-    if (basis != expected) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for lane "
-           << 1 + inLane << "; given " << basis << " but expected "
-           << expected);
-      return false;
-    }
-  }
-  // Additionally we could swizzle based on the warp dimension so we need to
-  // check that when all bases are divided by contig, none of the first
-  // (log2(warpSize) + 1) bits are set to 1
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  assert(llvm::isPowerOf2_32(contig));
-  unsigned mask = (threadsPerWarp * contig) - 1;
-  StringAttr kWarp = rewriter.getStringAttr("warp");
-  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
-    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
-    if ((basis & mask) != 0) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for warp "
-           << inWarp);
-      return false;
-    }
+  if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
+                                        targetInfo.getWarpSize(), vectorSize)) {
+    LDBG("Does not write coalesced into LDS");
+    return false;
   }
 
-  return true;
-}
-
-bool doesSwizzleInsideWarp(RewriterBase &rewriter,
-                           const LinearLayout &srcToSharedLayout,
-                           unsigned threadsPerWarp) {
-  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  // If all bases in lane dimension are below threadsPerWarp multiplied with the
-  // contiguity we do not swizzle across warp boundaries.
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  unsigned upperLimit = threadsPerWarp * contig;
-
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    if (basis >= upperLimit) {
-      return false;
-    }
-  }
   return true;
 }
 
@@ -605,18 +722,6 @@ bool isStoredContigWithMfmaLayout(
            axisInfo->getContiguity(order[1]) == 1;
   }
   return mfmaLayout.getIsTransposed();
-}
-
-bool isUsedByDotScaledOp(Operation *op) {
-  const ForwardSliceOptions fwdOpt;
-  SetVector<mlir::Operation *> forwardSliceSet;
-  getForwardSlice(op, &forwardSliceSet, fwdOpt);
-
-  return std::any_of(
-      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
-        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
-            operation);
-      });
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {

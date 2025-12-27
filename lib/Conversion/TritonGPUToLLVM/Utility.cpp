@@ -6,7 +6,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -302,7 +301,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::optional<int> getWarpGroupStartThreadId(Block *block) {
+std::optional<int> getWarpGroupStartWarpId(Block *block) {
   using namespace triton::gpu;
 
   // Look for an enclosing `ttg.warp_specialize` op.
@@ -318,9 +317,19 @@ std::optional<int> getWarpGroupStartThreadId(Block *block) {
   std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
   assert(startIds && "cannot get warp group ID before warp group allocation");
   int32_t warpStartId = (*startIds)[idx];
-  int threadsPerWarp =
-      TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
-  return warpStartId * threadsPerWarp;
+  return warpStartId;
+}
+
+std::optional<int> getWarpGroupStartThreadId(Block *block) {
+  using namespace triton::gpu;
+
+  std::optional<int> warpStartId = getWarpGroupStartWarpId(block);
+  if (!warpStartId)
+    return {};
+
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+      block->getParentOp()->getParentOfType<ModuleOp>());
+  return *warpStartId * threadsPerWarp;
 }
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {
@@ -1225,8 +1234,6 @@ delinearize(RewriterBase &rewriter, Location loc,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ll = triton::gpu::toLinearLayout(shape, layout);
-  auto linearLayout =
-      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
   int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
   auto isRepresentative = b.true_val();
@@ -1238,6 +1245,8 @@ delinearize(RewriterBase &rewriter, Location loc,
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
   }
 
+  auto linearLayout = triton::gpu::LinearEncodingAttr::get(
+      rewriter.getContext(), std::move(ll));
   auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
   auto shapeDim = linearLayout.basesPerDim(dimName);
   auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);

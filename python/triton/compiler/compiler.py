@@ -244,6 +244,9 @@ def compile(src, target=None, options=None, _env_vars=None):
     # create cache manager
     env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
     key = get_cache_key(src, backend, options, env_vars=env_vars)
+    if knobs.runtime.add_stages_inspection_hook is not None:
+        inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
+        key += inspect_stages_key
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
@@ -283,18 +286,6 @@ def compile(src, target=None, options=None, _env_vars=None):
         **env_vars,
     }
     metadata["triton_version"] = __version__
-    cluster_dims = getattr(options, "cluster_dims", None)
-    if cluster_dims is None:
-        num_ctas = getattr(options, "num_ctas", None)
-        if num_ctas is None:
-            num_ctas = 1
-        cluster_dims = (num_ctas, 1, 1)
-    if not isinstance(cluster_dims, (list, tuple)):
-        cluster_dims = (cluster_dims, )
-    cluster_dims = tuple(cluster_dims)
-    if len(cluster_dims) < 3:
-        cluster_dims = cluster_dims + (1, ) * (3 - len(cluster_dims))
-    metadata["cluster_dims"] = cluster_dims
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options, src.language)
@@ -419,7 +410,6 @@ class CompiledKernel:
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         metadata = json.loads(metadata_path.read_text())
-        metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
         metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])

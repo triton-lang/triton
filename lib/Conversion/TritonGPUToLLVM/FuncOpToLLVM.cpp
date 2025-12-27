@@ -39,6 +39,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       if (attr.getName() == SymbolTable::getSymbolAttrName() ||
           attr.getName() == op.getFunctionTypeAttrName() ||
           attr.getName() == "std.varargs" ||
+          attr.getName() == triton::gpu::AttrNumWarpsName ||
           (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
         continue;
       result.push_back(attr);
@@ -61,7 +62,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     bool isKernel = triton::isKernel(funcOp);
-    if (isKernel) {
+    if (isKernel && targetInfo.isCuda()) {
       for (auto i : llvm::seq(amendedInputTy.size())) {
         if (isa<TensorDescType>(amendedInputTy[i])) {
           funcOp.setArgAttr(i, "tt.nv_tma_desc",
@@ -178,10 +179,24 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
             "ttg.total-num-warps"))
       numWarps = totalNumWarps.getInt();
 
+    int numCTAs = 1;
+    if (auto module = funcOp->getParentOfType<ModuleOp>()) {
+      if (auto moduleAttr =
+              module->getAttrOfType<IntegerAttr>(triton::gpu::AttrNumCTAsName))
+        numCTAs = moduleAttr.getInt();
+    }
+
     // Set `nvvm.maxnreg` if it was specified on the module.
     if (Attribute maxnregAttr =
             funcOp.getParentOp()->getAttr(triton::gpu::AttrMaxRegistersName))
       newFuncOp->setAttr(NVVM::NVVMDialect::getMaxnregAttrName(), maxnregAttr);
+
+    // Do we want to do this for nCTAs == 1 whenever sm >= 90?
+    if (numCTAs > 1) {
+      // Request a specific number of CTAs per cluster in the generated PTX.
+      newFuncOp->setAttr(NVVM::NVVMDialect::getClusterDimAttrName(),
+                         rewriter.getDenseI32ArrayAttr(numCTAs));
+    }
 
     // Set an attribute for reqntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.

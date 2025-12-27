@@ -459,6 +459,15 @@ public:
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
   // Relevant for reshaping
+
+  SmallVector<std::pair<StringAttr, int32_t>> getInDims() const {
+    SmallVector<std::pair<StringAttr, int32_t>> inDims;
+    inDims.reserve(bases.size());
+    for (auto [inDim, inDimBases] : bases) {
+      inDims.push_back({inDim, getInDimSize(inDim)});
+    }
+    return inDims;
+  }
   SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
     return to_vector(outDims);
   }
@@ -573,7 +582,7 @@ public:
     auto value = std::move(it->second);
     bases.erase(it);
     bases.insert({newDim, std::move(value)});
-    return LinearLayout(bases, getOutDims(),
+    return LinearLayout(std::move(bases), getOutDims(),
                         /*requireSurjective=*/isSurjective());
   }
 

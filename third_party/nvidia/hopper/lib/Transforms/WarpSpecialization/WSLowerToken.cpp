@@ -113,11 +113,9 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
 
     Attribute sharedMemorySpace =
         triton::gpu::SharedMemorySpaceAttr::get(context);
-    auto barrierCTALayout =
-        ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                                /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+    auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-        context, 1, 1, 1, {0}, barrierCTALayout);
+        context, 1, 1, 1, {0}, barrierCGALayout);
     Type barrierMemDescType = ttg::MemDescType::get(
         {createTokenOp.getNumBuffers(), 1}, builder.getI64Type(),
         barrierEncoding, sharedMemorySpace,

@@ -213,7 +213,7 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
       %loaded_data = tt.load ... : tensor<#transposable_layout>
       %tmp1 = ttg.convert_layout %loaded_data : tensor<#transposable_layout> -> tensor<#blocked>
       %tmp2 = ttg.convert_layout %tmp1 : tensor<#blocked> -> tensor<#transposable_layout>
-      %transposed = amdgpu.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
+      %transposed = amdg.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
       %local_data = ttg.local_alloc %transposed : tensor<#linear> -> !ttg.memdesc<#shared>
       %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     ```
@@ -289,6 +289,16 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
            "std::string", /*default=*/"std::string{}",
            "GFX generation name of target device.">
   ];
+}
+
+def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
+  let summary = "partition and pipeline";
+
+  let description = [{
+    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
+  }];
+
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

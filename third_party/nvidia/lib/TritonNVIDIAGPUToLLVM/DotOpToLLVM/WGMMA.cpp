@@ -204,34 +204,49 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto baseB = getOffsetedBase(loadedB, cast<MemDescType>(bTensorTy),
                                typeConverter, rewriter, loc);
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
-  auto instrShape = mmaEncoding.getInstrShape();
-  auto accSize = 2 * (instrShape[1] / 4);
-  unsigned M = 4 * instrShape[0];
-  unsigned N = instrShape[1];
-  unsigned K = instrShape[2];
-  bool zeroAcc = isZeroConst(c);
   auto instrMNK = mmaEncoding.getInstrShape();
+  auto accSize = 2 * (instrMNK[1] / 4);
+  unsigned M = 4 * instrMNK[0];
+  unsigned N = instrMNK[1];
+  unsigned K = instrMNK[2];
+  bool zeroAcc = isZeroConst(c);
   auto warpSize = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
                                                instrMNK[1] * warpSize[1]};
-  int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
-  int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
-  int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], instrShape[2]);
+  unsigned mmaSizeM = shapePerCTATile[0];
+  unsigned mmaSizeN = shapePerCTATile[1];
+  unsigned mmaSizeK = instrMNK[2];
+  int numRepM = ceil<unsigned>(dShapePerCTA[0], mmaSizeM);
+  int numRepN = ceil<unsigned>(dShapePerCTA[1], mmaSizeN);
+  int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], mmaSizeK);
   DotOpMmaSmemLoader aLoader;
   SmallVector<Value> structA;
   auto warpGroups = {warpSize[0] / 4, warpSize[1]};
   bool transA = false;
   if (aInShared) {
-    aLoader =
+    auto loader =
         DotOpMmaSmemLoader::build(loc, rewriter, cast<MemDescType>(aTensorTy),
                                   baseA, {M, K}, 0, 3, false, dTensorTy);
+    if (failed(loader)) {
+      return mlir::emitError(loc, "failed to find valid wgmma layout for "
+                                  "operand A in shared memory ")
+             << aTensorTy << " for WGMMA instruction shape [" << M << ", " << K
+             << "]";
+    }
+    aLoader = std::move(*loader);
     transA = aLoader.getDescriptor().transposed;
   } else {
     structA = unpackLLElements(loc, loadedA, rewriter);
   }
-  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {K, N}, 1, 3, false, dTensorTy);
-  bool transB = !bLoader.getDescriptor().transposed;
+  auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
+                                           {K, N}, 1, 3, false, dTensorTy);
+  if (failed(bLoader)) {
+    return mlir::emitError(loc, "failed to find valid wgmma layout for "
+                                "operand B in shared memory ")
+           << bTensorTy << " for WGMMA instruction shape [" << K << ", " << N
+           << "]";
+  }
+  bool transB = !bLoader->getDescriptor().transposed;
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -270,14 +285,14 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       for (int k = 0; k < numRepK; ++k) {
         Value a;
         if (aInShared) {
-          a = aLoader.smemLoad(m, k, rewriter, loc);
+          a = aLoader.smemLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
         } else {
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
           assert(aDotOpEnc.getKWidth() ==
                  32 / aTensorTy.getElementTypeBitWidth());
 
-          unsigned regASize = (instrShape[0] * instrShape[2]) / 32;
+          unsigned regASize = (instrMNK[0] * instrMNK[2]) / 32;
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
@@ -286,7 +301,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
-        auto b = bLoader.smemLoad(k, n, rewriter, loc);
+        auto b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
         numLowPrecisionAcc += K;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.

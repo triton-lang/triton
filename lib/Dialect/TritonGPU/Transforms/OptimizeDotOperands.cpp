@@ -7,7 +7,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -55,12 +54,14 @@ public:
     // the vec and maxPhase for the YType, hence it would causing incorrect
     // swizzling code.
     auto ctx = getContext();
-    auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
-    auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
+    auto oldCGALayout = triton::gpu::getCGALayout(srcTy.getEncoding());
+    auto newLl =
+        transposeLinearLayout(oldCGALayout.getLinearLayout(), trans.getOrder());
+    auto newCGALayout = CGAEncodingAttr::get(ctx, std::move(newLl));
     auto newInnerCvtEnc =
         SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
                                         /*order=*/getOrderForMemory(srcTy),
-                                        newCTALayout, srcTy.getElementType(),
+                                        newCGALayout, srcTy.getElementType(),
                                         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();

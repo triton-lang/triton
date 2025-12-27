@@ -3,18 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def OptimizeAMDLDSUsage : Pass<"optimize-amd-lds-usage", "mlir::ModuleOp"> {
-    let summary = "Minimize LDS usage";
-    let constructor = "mlir::triton::AMD::createOptimizeLDSUsagePass(\"\")";
-
-    let options = [
-        Option<"targetArch", "target-arch", "std::string", /*default*/"",
-               "gfx target device architecture, e.g., gfx942">,
-        Option<"customLDSLimit", "lds-limit", "int", /*default*/"0",
-               "custom limit of LDS consumption, if not provided, maximum LDS size is used">,
-    ];
-}
-
 def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
 
@@ -86,6 +74,34 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
         Option<"numStages", "num_stages", "int32_t", /*default*/"2",
                 "number of pipeline stages">,
     ];
+}
+
+def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
+    let summary = "Emit conditional barrier and inlines scf.execute_region for warp-pipeline";
+    let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
+def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {
+  let summary = "lower `ttg.warp_specialize` to LLVM";
+  let constructor = "mlir::triton::AMD::createTritonAMDGPUConvertWarpSpecializeToLLVMPass(\"\")";
+  let description = [{
+    The `triton-amdgpu-convert-warp-specialize-to-llvm` pass performs codegen for warp
+    specialization. It is a function-level transformation that rewrites
+    warp-specialized kernels by using shared memory and barriers to communicate
+    states between the default warpgroup and the worker warps.
+  }];
+
+  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::ROCDL::ROCDLDialect"];
+
+  let options = [
+    Option<"arch", "arch", "std::string", /*default*/"\"\"",
+           "target device architecture, e.g., gfx1250">,
+  ];
 }
 
 #endif

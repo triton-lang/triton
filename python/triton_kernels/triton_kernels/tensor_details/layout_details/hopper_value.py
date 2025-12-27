@@ -1,7 +1,10 @@
 import torch
 import triton
 import triton.language as tl
+from dataclasses import dataclass
 from .base import Layout
+
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 
 
@@ -82,12 +85,17 @@ def _unpack_bits(x, mx_axis: int):
 # -----------------------------------------------------------------------
 
 
+@dataclass
 class HopperMXValueLayout(Layout):
+    mx_axis: int
+    mma_version: int
+    leading_shape: list[int]
     name: str = "HOPPER_VALUE"
 
     def __init__(self, shape, mx_axis, mma_version=3):
         super().__init__(shape)
-        assert mx_axis in range(len(shape))
+        if mx_axis < 0:
+            mx_axis += len(shape)
         self.mx_axis = mx_axis
         self.mma_version = mma_version
         *self.leading_shape, self.K, self.N, = shape
@@ -120,6 +128,14 @@ class HopperMXValueLayout(Layout):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
+        # Pre-pad both matrix dims to multiples of 64
+        *_, M_in, K_in = data.shape
+        SWIZZLE_ALIGN_M = 64
+        SWIZZLE_ALIGN_K = 64
+        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+
         data = self._maybe_mT(data)
         init_shape = data.shape
 
@@ -197,7 +213,9 @@ class HopperMXValueLayout(Layout):
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
-        return block_shape
+        N, K = block_shape[-2:]
+        assert N % 4 == 0
+        return [*block_shape[:-2], N // 4, K * 4]
 
 
 @triton.jit
@@ -274,6 +292,22 @@ def _unpack_fp4_to_bf16_triton(x):
 
 
 @triton.jit
+def mul_bf16x2(a, b):
+    use_mul: tl.constexpr = cuda_capability_geq(9)
+    op_instr: tl.constexpr = "mul.bf16x2" if use_mul else "fma.rn.bf16x2"
+    op_suffix: tl.constexpr = "" if use_mul else ", z"
+
+    return tl.inline_asm_elementwise(
+        asm=f"{op_instr} $0, $1, $2{op_suffix};",
+        constraints="=r,r,r",
+        args=[a, b],
+        dtype=tl.bfloat16,
+        is_pure=True,
+        pack=2,
+    )
+
+
+@triton.jit
 def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     """
     Implements the bit-untwiddling of a 32-bit integer (8 mxfp4 elements):
@@ -315,11 +349,17 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
         is_pure=True,
         pack=4,
     )
+    # Sanity check shape
+    for axis in tl.static_range(len(x.shape)):
+        if axis == mx_axis:
+            tl.static_assert(x.shape[axis] == MXFP_BLOCK_SIZE * scale.shape[axis])
+        else:
+            tl.static_assert(x.shape[axis] == scale.shape[axis])
     # Broadcast scale
     scale = scale.expand_dims(mx_axis + 1)
-    scale = scale.broadcast_to(scale.shape[:mx_axis + 1] + [32] + scale.shape[mx_axis + 2:])
+    scale = scale.broadcast_to(scale.shape[:mx_axis + 1] + [MXFP_BLOCK_SIZE] + scale.shape[mx_axis + 2:])
     scale = scale.reshape(x.shape)
 
     # Combine scale and x
-    x = x * scale
+    x = mul_bf16x2(x, scale)
     return x
