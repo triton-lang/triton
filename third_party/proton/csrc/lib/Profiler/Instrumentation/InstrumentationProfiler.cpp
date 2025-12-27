@@ -19,9 +19,6 @@ namespace proton {
 constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024;           // 64MB
 constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
 
-thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
-    std::map<Data *, size_t>(); // Initialize the static member variable
-
 InstrumentationProfiler::~InstrumentationProfiler() {}
 
 void InstrumentationProfiler::doStart() {
@@ -206,15 +203,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
     runtime->allocateHostBuffer(&hostBuffer, newSize);
   }
 
-  auto dataSet = getDataSet();
   const auto &functionName = functionNames[functionId];
-  if (dataScopeIdMap.empty()) {
-    for (auto &data : dataSet) {
-      auto scopeId = Scope::getNewScopeId();
-      data->addOp(scopeId, functionName);
-      dataScopeIdMap[data] = scopeId;
-    }
-  }
+  enterOp(Scope(functionName));
 
   auto config = getParserConfig(functionId, size);
   auto circularLayoutConfig =
@@ -249,10 +239,10 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
               for (auto *data : dataSet) {
-                auto kernelId = dataScopeIdMap[data];
-                auto scopeId = data->addOp(kernelId, contexts);
+                auto kernelId = dataEntryIdMap[data];
+                auto entryId = data->addOp(kernelId, contexts);
                 data->addMetric(
-                    scopeId,
+                    entryId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
                         normalizedDuration, kernelId, functionName,
@@ -268,15 +258,22 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         }
       });
 
-  dataScopeIdMap.clear();
+  exitOp(Scope(functionName));
 }
 
 void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
-  // Currently no-op
-  for (auto *data : getDataSet()) {
-    data->addMetrics(scopeId, scalarMetrics);
+  if (dataEntryIdMap.empty()) {
+    // API originated metrics
+    for (auto *data : dataSet) {
+      data->addMetricsByScopeId(scopeId, scalarMetrics);
+    }
+  } else {
+    // Op originated metrics
+    for (auto [data, entryId] : dataEntryIdMap) {
+      data->addMetrics(entryId, scalarMetrics);
+    }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
   // parent Profiler

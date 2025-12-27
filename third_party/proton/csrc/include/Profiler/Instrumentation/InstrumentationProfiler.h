@@ -8,6 +8,7 @@
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
+#include "Utility/SmallMap.h"
 
 namespace proton {
 
@@ -44,12 +45,11 @@ protected:
 
   // OpInterface
   void startOp(const Scope &scope) override {
-    for (auto data : getDataSet()) {
-      auto scopeId = data->addOp(scope.scopeId, scope.name);
-      dataScopeIdMap[data] = scopeId;
+    for (auto data : dataSet) {
+      dataEntryIdMap[data] = data->addOp(scope.name);
     }
   }
-  void stopOp(const Scope &scope) override { dataScopeIdMap.clear(); }
+  void stopOp(const Scope &scope) override { dataEntryIdMap.clear(); }
 
 private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
@@ -71,7 +71,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  static thread_local std::map<Data *, size_t> dataScopeIdMap;
+  SmallMap<Data *, size_t> dataEntryIdMap;
 };
 
 } // namespace proton

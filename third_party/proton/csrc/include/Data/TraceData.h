@@ -12,19 +12,23 @@ public:
   TraceData(const std::string &path, ContextSource *contextSource = nullptr);
   virtual ~TraceData();
 
-  size_t addOp(size_t scopeId, const std::string &name) override;
+  size_t addOp(const std::string &name) override;
 
-  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
+  size_t addOp(size_t eventId, const std::vector<Context> &contexts) override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
+  void addMetric(size_t eventId, std::shared_ptr<Metric> metric) override;
+
+  void addMetric(size_t eventId, const FlexibleMetric &metric) override;
 
   void
-  addMetrics(size_t scopeId,
+  addMetrics(size_t entryId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
-  void clear() override;
+  void addMetricsByScopeId(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &metrics) override;
 
-  void clearCache() override;
+  void clear() override;
 
   std::string toJsonString() const override;
 
@@ -47,8 +51,8 @@ private:
   }
 
   std::unique_ptr<Trace> trace;
-  // ScopeId -> ContextId
-  std::unordered_map<size_t, size_t> scopeIdToContextId;
+  // ScopeId -> EventId
+  std::unordered_map<size_t, size_t> scopeIdToEventId;
 };
 
 } // namespace proton

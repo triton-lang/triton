@@ -30,10 +30,6 @@ template <>
 thread_local GPUProfiler<CuptiProfiler>::ThreadState
     GPUProfiler<CuptiProfiler>::threadState(CuptiProfiler::instance());
 
-template <>
-thread_local std::deque<size_t>
-    GPUProfiler<CuptiProfiler>::Correlation::externIdQueue{};
-
 namespace {
 
 std::shared_ptr<Metric>
@@ -56,13 +52,13 @@ uint32_t processActivityKernel(
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::set<Data *> &dataSet, CUpti_Activity *activity) {
+    CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  size_t parentId = 0;
+  size_t externId = 0;
   if (!/*not valid*/ corrIdToExternId.withRead(
-          correlationId, [&](const size_t &value) { parentId = value; })) {
+          correlationId, [&](const size_t &value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
     return correlationId;
   }
@@ -70,23 +66,25 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isApiExternId = false;
-    externIdToState.withRead(parentId,
+    DataEntryMap dataToEntryId;
+    externIdToState.withRead(externId,
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isApiExternId = state.isApiExternId;
+                               dataToEntryId = state.dataToEntryId;
                              });
     // Do not share the same Metric instance across multiple Data objects.
     // Otherwise, updating one Data will mutate the Metric observed by others
     // (counts will incorrectly compound with the number of active sessions).
-    for (auto *data : dataSet) {
+    for (auto &[data, entryId] : dataToEntryId) {
       if (auto metric = convertKernelActivityToMetric(activity)) {
         if (isApiExternId) {
-          data->addOpAndMetric(parentId, kernel->name, metric);
+          data->addOpAndMetric(entryId, kernel->name, metric);
         } else {
-          data->addMetric(parentId, metric);
+          data->addMetric(entryId, metric);
         }
       }
     }
-    externIdToState.erase(parentId);
+    externIdToState.erase(externId);
     corrIdToExternId.erase(correlationId);
   } else {
     // Graph kernels
@@ -99,52 +97,37 @@ uint32_t processActivityKernel(
     // - parentId -> launch context
     // --- CUPTI thread ---
     // - corrId -> numNodes
-    auto scopeId = parentId;
-    bool isApiNode = true;
-    bool isMetricNode = false;
-    auto iter = externIdToStateCache.find(scopeId);
+    auto iter = externIdToStateCache.find(externId);
     std::optional<std::reference_wrapper<CuptiProfiler::ExternIdState>> ref;
     if (iter == externIdToStateCache.end()) {
       // Cache miss, fetch from the main map
-      ref = externIdToState.find(scopeId);
+      ref = externIdToState.find(externId);
       // Update the cache
       if (ref.has_value()) {
-        externIdToStateCache.emplace(scopeId, ref.value());
+        externIdToStateCache.emplace(externId, ref.value());
       }
     } else {
       ref = std::ref(iter->second);
     }
-    for (auto *data : dataSet) {
-      if (ref.has_value()) {
-        // We have a graph creation captured
-        auto &graphNodeIdToScopes = ref.value().get().graphNodeIdToScopes;
-        auto nodeIt = graphNodeIdToScopes.find(kernel->graphNodeId);
-        if (nodeIt == graphNodeIdToScopes.end()) {
-          // No captured context for this node
-          continue;
-        }
-        auto scopeIdPtr = nodeIt->second.findScopeId(data);
-        if (scopeIdPtr == nullptr) {
-          // No captured context for this data
-          continue;
-        }
-        isApiNode = nodeIt->second.isApiNode;
-        isMetricNode = nodeIt->second.isMetricNode;
-        scopeId = *scopeIdPtr;
-      }
-      if (isMetricNode) {
-        // Ignore metric kernel timing data
-        continue;
-      }
-      if (auto metric = convertKernelActivityToMetric(activity)) {
-        if (isApiNode) {
-          data->addOpAndMetric(scopeId, kernel->name, metric);
-        } else {
-          data->addMetric(scopeId, metric);
-        }
-      }
-    }
     if (ref.has_value()) {
+      // We have a graph creation captured
+      auto &graphNodeIdToState = ref.value().get().graphNodeIdToState;
+      auto nodeIt = graphNodeIdToState.find(kernel->graphNodeId);
+      if (nodeIt != graphNodeIdToState.end()) {
+        nodeIt->second.forEachEntryId([&](Data *data, size_t entryId) {
+          if (nodeIt->second.isMetricNode) {
+            // Skip metric nodes
+            return;
+          }
+          if (auto metric = convertKernelActivityToMetric(activity)) {
+            if (nodeIt->second.isApiNode) {
+              data->addOpAndMetric(entryId, kernel->name, metric);
+            } else {
+              data->addMetric(entryId, metric);
+            }
+          }
+        });
+      }
       // Decrease the expected kernel count
       auto &state = ref.value().get();
       if (state.numNodes > 0) {
@@ -152,7 +135,7 @@ uint32_t processActivityKernel(
       }
       // If all kernels have been processed, clean up
       if (state.numNodes == 0) {
-        externIdToState.erase(parentId);
+        externIdToState.erase(externId);
         corrIdToExternId.erase(correlationId);
       }
     }
@@ -165,14 +148,13 @@ uint32_t processActivity(
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::set<Data *> &dataSet, CUpti_Activity *activity) {
+    CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId =
-        processActivityKernel(corrIdToExternId, externIdToState,
-                              externIdToStateCache, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
+                                          externIdToStateCache, activity);
     break;
   }
   default:
@@ -320,21 +302,17 @@ public:
   explicit PendingGraphQueue(Runtime *runtime) : runtime(runtime) {}
 
   struct PendingGraph {
-    size_t externId;
-    std::map<Data *, std::vector<std::pair<bool, size_t>>> dataToScopeIds;
+    SmallMap<Data *, std::vector<size_t>> dataToEntryIds;
     size_t numMetricNodes;
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  void push(size_t externId,
-            const std::map<Data *, std::vector<std::pair<bool, size_t>>>
-                &dataToScopeIds,
+  void push(const SmallMap<Data *, std::vector<size_t>> &dataToEntryIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     auto device = runtime->getDevice();
     auto &queue = deviceQueues[device];
-    queue.pendingGraphs.push_back(
-        PendingGraph{externId, dataToScopeIds, numNodes});
+    queue.pendingGraphs.push_back(PendingGraph{dataToEntryIds, numNodes});
     queue.totalNumNodes += numNodes;
   }
 
@@ -439,7 +417,6 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t size,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
-  auto dataSet = profiler.getDataSet();
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
@@ -448,10 +425,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      auto correlationId =
-          processActivity(profiler.correlation.corrIdToExternId,
-                          profiler.correlation.externIdToState,
-                          externIdToStateCache, dataSet, activity);
+      auto correlationId = processActivity(
+          profiler.correlation.corrIdToExternId,
+          profiler.correlation.externIdToState, externIdToStateCache, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -477,25 +453,25 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricDesc = metricBuffer->getMetricDescriptor(metricId);
       auto metricName = metricDesc.name;
       auto metricTypeIndex = metricDesc.typeIndex;
-      for (auto &[data, scopeIds] : pendingGraph.dataToScopeIds) {
-        auto scopeId = scopeIds[i].second;
+      for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
+        auto entryId = entryIds[i];
         switch (metricTypeIndex) {
         case variant_index_v<uint64_t, MetricValueType>: {
           uint64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addMetrics(scopeId, {{metricName, typedValue}});
+          data->addMetric(entryId, FlexibleMetric{metricName, typedValue});
           break;
         }
         case variant_index_v<int64_t, MetricValueType>: {
           int64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addMetrics(scopeId, {{metricName, typedValue}});
+          data->addMetric(entryId, FlexibleMetric{metricName, typedValue});
           break;
         }
         case variant_index_v<double, MetricValueType>: {
           double typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addMetrics(scopeId, {{metricName, typedValue}});
+          data->addMetric(entryId, FlexibleMetric{metricName, typedValue});
           break;
         }
         default:
@@ -550,7 +526,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
         uint64_t nodeId = 0;
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-        auto dataSet = profiler.getDataSet();
         if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
@@ -561,7 +536,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             pImpl->graphStates[graphId].numNodes++;
           if (profiler.isOpInProgress()) {
             auto &graphState = pImpl->graphStates[graphId];
-            for (auto *data : dataSet) {
+            for (auto *data : profiler.dataSet) {
               auto contexts = data->getContexts();
               // Trick: if the scope name is empty, it means the graph is
               // created by an API kernel but not Triton op
@@ -661,6 +636,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         return;
       }
       threadState.enterOp();
+      auto scope = threadState.scopeStack.back();
+      auto &dataToEntryId = threadState.dataToEntryId;
       size_t numNodes = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
@@ -684,20 +661,23 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-          auto externId = profiler.correlation.externIdQueue.back();
           auto &graphState = pImpl->graphStates[graphExecId];
 
           // For each unique call path, we generate a scope id per data object
           auto &graphNodeIdToScopes =
-              profiler.correlation.externIdToState[externId]
-                  .graphNodeIdToScopes;
+              profiler.correlation.externIdToState[scope.scopeId]
+                  .graphNodeIdToState;
           graphNodeIdToScopes.reserve(graphState.numNodes * 2);
           for (auto &[data, callpathToNodes] :
                graphState.dataToCallpathToNodes) {
-            const auto baseScopeId =
-                data->addOp(externId, GraphState::captureTag);
+            auto *dataPtr = data;
+            auto *entryId = dataToEntryId.find(dataPtr);
+            if (!entryId)
+              continue;
+            auto baseEntryId =
+                dataPtr->addOp(*entryId, {Context{GraphState::captureTag}});
             for (const auto &[callpath, nodeIds] : callpathToNodes) {
-              const auto nodeScopeId = data->addOp(baseScopeId, callpath);
+              const auto nodeEntryId = dataPtr->addOp(baseEntryId, callpath);
               for (auto nodeId : nodeIds) {
                 auto [nodeIt, inserted] =
                     graphNodeIdToScopes.try_emplace(nodeId);
@@ -706,22 +686,25 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                 nodeIt->second.isMetricNode =
                     graphState.metricKernelNodeIds.find(nodeId) !=
                     graphState.metricKernelNodeIds.end();
-                nodeIt->second.setScopeId(data, nodeScopeId);
+                nodeIt->second.setEntryId(data, nodeEntryId);
               }
             }
           }
         }
       }
-      profiler.correlation.correlate(callbackData->correlationId, numNodes);
+      profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
+                                     numNodes, dataToEntryId);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      auto externId = profiler.correlation.externIdQueue.back();
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
+        auto scope = threadState.scopeStack.back();
+        auto &dataToEntryId = threadState.dataToEntryId;
         // XXX: Conservatively stop every GPU kernel for now
-        pImpl->pcSampling.stop(callbackData->context, externId,
-                               profiler.correlation.isApiExternId(externId));
+        pImpl->pcSampling.stop(
+            callbackData->context, dataToEntryId,
+            profiler.correlation.isApiExternId(scope.scopeId));
       }
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
@@ -735,17 +718,15 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         auto graphRef = pImpl->graphStates.find(graphExecId);
         if (graphRef.has_value() &&
             !graphRef.value().get().metricKernelNodeIds.empty()) {
-          std::map<
-              Data *,
-              std::vector<std::pair</*isApiNode=*/bool, /*scopeId=*/size_t>>>
-              metricNodeScopes;
+          auto scope = threadState.scopeStack.back();
+          SmallMap<Data *, std::vector<size_t>> metricNodeEntryIds;
           auto &graphExec = graphRef.value().get();
-          auto &externIdState = profiler.correlation.externIdToState[externId];
+          auto &externIdState =
+              profiler.correlation.externIdToState[scope.scopeId];
           for (auto nodeId : graphExec.metricKernelNodeIds) {
-            auto nodeIt = externIdState.graphNodeIdToScopes.find(nodeId);
-            bool isApi = nodeIt->second.isApiNode;
-            nodeIt->second.forEachScopeId([&](Data *data, size_t scopeId) {
-              metricNodeScopes[data].push_back({isApi, scopeId});
+            auto nodeIt = externIdState.graphNodeIdToState.find(nodeId);
+            nodeIt->second.forEachEntryId([&](Data *data, size_t entryId) {
+              metricNodeEntryIds[data].push_back(entryId);
             });
           }
           auto metricBufferCapacity =
@@ -759,8 +740,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->emitMetricRecords(recordPtr, drained.second);
             });
           }
-          pImpl->pendingGraphQueue.push(externId, metricNodeScopes,
-                                        metricNodeCount);
+          pImpl->pendingGraphQueue.push(metricNodeEntryIds, metricNodeCount);
         }
       }
       threadState.exitOp();
