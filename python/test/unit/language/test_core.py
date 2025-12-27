@@ -1672,8 +1672,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
 def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     check_type_supported(dtype_str, device)
-    if "float" in dtype_str and is_hip():
-        pytest.skip("HIP does not support atomic cas with float types")
+    if is_hip_cdna2():
+        pytest.skip("Disabled due to being flaky on CDNA2")
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
