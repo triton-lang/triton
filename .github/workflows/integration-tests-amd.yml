@@ -167,6 +167,15 @@ jobs:
       - name: Run distributed tests
         run: |
           make test-distributed
+      - name: Print firmware version for debugging
+        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
+        run: |
+          echo "=== PLDM_BUNDLE Firmware ==="
+          amd-smi firmware | grep -A2 PLDM_BUNDLE || echo "PLDM_BUNDLE not found"
+          echo "=== VBIOS Info ==="
+          amd-smi static | grep -A4 -i VBIOS || echo "VBIOS info not found"
+          echo "=== ROCm Version ==="
+          cat /opt/rocm/.info/version 2>/dev/null || echo "ROCm version file not found"
       - name: Run asan tests on AMD
         if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
