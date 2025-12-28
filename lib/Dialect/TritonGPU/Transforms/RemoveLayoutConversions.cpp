@@ -1001,9 +1001,13 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1016,6 +1020,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1417,42 +1423,24 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
-    if (!op)
+    if (!op || !isExtOrBroadcastOp(op))
       continue;
-    if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
-      Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
-      if (!srcEncoding)
-        return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
 
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
+    Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
+    if (!srcEncoding)
+      return;
 
-      // If we can rematerialize the rest of the ext slice we can ignore this
-      // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
-        continue;
-      }
-      // Only apply it if there is a single ext op otherwise we would have to
-      // duplicate the convert.
-      if (extOrBroadcastOp != nullptr)
-        return;
-      extOrBroadcastOp = op;
-    }
+    // If we can rematerialize the rest of the ext slice we can ignore this ext
+    // as it won't need a convert.
+    if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                           slice, layout)))
+      continue;
+
+    // Only apply it if there is a single ext op otherwise we would have to
+    // duplicate the convert.
+    if (extOrBroadcastOp != nullptr)
+      return;
+    extOrBroadcastOp = op;
   }
 
   if (extOrBroadcastOp == nullptr)

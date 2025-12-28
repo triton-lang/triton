@@ -1,8 +1,24 @@
 // RUN: triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | FileCheck %s
 
+#loc = loc("01-vector-add.py":30:0)
+#loc7 = loc("x_ptr"(#loc))
+#loc8 = loc("y_ptr"(#loc))
+#loc9 = loc("out_ptr"(#loc))
+#loc10 = loc("n_elements"(#loc))
+// CHECK: #llvm.di_local_variable<{{.*}}, name = "x_ptr", {{.*}}>
+// CHECK: #llvm.di_local_variable<{{.*}}, name = "y_ptr", {{.*}}>
+// CHECK: #llvm.di_local_variable<{{.*}}, name = "out_ptr", {{.*}}>
+// CHECK: #llvm.di_local_variable<{{.*}}, name = "n_elements", {{.*}}>
+// CHECK: #llvm.di_subprogram<{{.*}} retainedNodes = {{.*}}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32 } {
-  llvm.func @add_kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>,
-                        %arg2: !llvm.ptr<1>, %arg3: i32, %arg4: !llvm.ptr<1>) {
+  llvm.func @add_kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32} loc(#loc7),
+                        %arg1: !llvm.ptr<1> {tt.pointee_type = f32} loc(#loc8),
+                        %arg2: !llvm.ptr<1> {tt.pointee_type = f32} loc(#loc9),
+                        %arg3: i32 loc(#loc10), %arg4: !llvm.ptr<1>) {
+    // CHECK: llvm.intr.dbg.value #di_local_variable{{([0-9]*)?}} = %x_ptr :
+    // CHECK: llvm.intr.dbg.value #di_local_variable{{([0-9]*)?}} = %y_ptr :
+    // CHECK: llvm.intr.dbg.value #di_local_variable{{([0-9]*)?}} = %out_ptr :
+    // CHECK: llvm.intr.dbg.value #di_local_variable{{([0-9]*)?}} = %n_elements :
     %constant_i32 = llvm.mlir.constant(3 : index) : i32
 
     // CHECK: %pid = rocdl.workgroup.id.x

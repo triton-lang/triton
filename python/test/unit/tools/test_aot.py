@@ -10,8 +10,24 @@ import numpy as np
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton.backends.nvidia.driver import include_dirs, library_dirs
 from triton._internal_testing import is_cuda, is_hip
+
+if is_cuda():
+    from triton.backends.nvidia.driver import include_dirs, library_dirs
+
+    def library_names():
+        return ["cuda"]
+
+elif is_hip():
+    from triton.backends.amd.driver import include_dirs, _get_path_to_hip_runtime_dylib
+
+    def library_dirs():
+        hip_runtime_dylib = _get_path_to_hip_runtime_dylib()
+        return [os.path.dirname(hip_runtime_dylib)]
+
+    def library_names():
+        return ["amdhip64"]
+
 
 kernel_utils_src = """
 import triton
@@ -86,16 +102,25 @@ def kernel(
 """
 
 
-test_utils_src = """
+if is_cuda():
+    test_utils_src = """
 #include <cuda.h>
+
+// Forward declaration for backward compatibility with CUDA 12.x and 13.x
+CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
+"""
+elif is_hip():
+    test_utils_src = """
+#define __HIP_PLATFORM_AMD__
+#include <hip/hip_runtime.h>
+"""
+
+test_utils_src += """
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include "kernel.h"
-
-// Forward declaration for backward compatibility with CUDA 12.x and 13.x
-CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
 
 static void write_buffer_to_csv(char *filename, int32_t *buffer, int size) {
     FILE *file = fopen(filename, "w");
@@ -142,7 +167,8 @@ def gen_kernel_library(dir, libname):
 
 
 def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
-    test_src = f"""
+    if is_cuda():
+        test_src = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
 
@@ -196,6 +222,61 @@ int main(int argc, char **argv) {{
   cuCtxDestroy(ctx);
 }}
 """
+    elif is_hip():
+        test_src = f"""
+int main(int argc, char **argv) {{
+  int M = {M}, N = {N}, K = {K};
+
+  // initialize hip handles
+  hipDevice_t dev;
+  // hipCtx_t ctx;
+  hipStream_t stream;
+  hipDeviceptr_t A, B, C;
+  hipError_t err = 0;
+  hipInit(0);
+  hipDeviceGet(&dev, 0);
+  // hipCtxCreate(&ctx, 0, dev);
+  hipMalloc(&A, M * K * 2);
+  hipMalloc(&B, K * N * 2);
+  hipMalloc(&C, M * N * 4);
+  hipStreamCreateWithFlags(&stream, 0);
+  load_matmul_fp16();
+
+  // initialize input data
+  int16_t hA[M*K];
+  int16_t hB[K*N];
+  memset(hA, 0, M*K*2);
+  memset(hB, 0, K*N*2);
+  read_csv_to_buffer(argv[1], hA, M*K);
+  read_csv_to_buffer(argv[2], hB, K*N);
+  hipMemcpyHtoD(A, hA, M*K*2);
+  hipMemcpyHtoD(B, hB, K*N*2);
+
+  // launch kernel
+  hipError_t ret;
+  int algo_id = {algo_id};
+  if (algo_id == 0) {{
+    ret = matmul_fp16_default(stream, C, A, B, M, N, K, N, 1, K, 1, N, 1);
+  }} else {{
+    ret = matmul_fp16(stream, C, A, B, M, N, K, N, 1, K, 1, N, 1, {algo_id});
+  }}
+  if (ret != 0) fprintf(stderr, "kernel launch failed\\n");
+  assert(ret == 0);
+
+  // read data
+  int32_t hC[M*N];
+  memset(hC, 0, M*N*4);
+  hipMemcpyDtoH(hC, C, M*N*4);
+  write_buffer_to_csv(argv[3], hC, M*N);
+
+  // free hip handles
+  unload_matmul_fp16();
+  hipFree(A);
+  hipFree(B);
+  hipFree(C);
+  // hipCtxDestroy(ctx);
+}}
+"""
     src = test_utils_src + test_src
     with open(os.path.join(dir, "test.c"), "w") as file:
         file.write(src)
@@ -205,7 +286,9 @@ int main(int argc, char **argv) {{
         command.extend(["-I", inc_dir])
     for lib_dir in library_dirs():
         command.extend(["-L", lib_dir])
-    command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
+    for lib_name in library_names():
+        command.extend(["-l", lib_name])
+    command.extend(["-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
 
@@ -294,12 +377,12 @@ def generate_matmul_test_data(dir, M, N, K):
 def check_hasco_binary_str(tmp_dir: str, dtype: str):
     # Linking is not yet enabled on HIP backend so just check compilation for now.
     h_files = glob.glob(f"matmul_{dtype}.*.h", root_dir=tmp_dir)
-    cpp_files = glob.glob(f"matmul_{dtype}.*.cpp", root_dir=tmp_dir)
+    c_files = glob.glob(f"matmul_{dtype}.*.c", root_dir=tmp_dir)
     assert len(h_files) == 1, "Expected one .h file"
-    assert len(cpp_files) == 1, "Expected one .cpp file"
+    assert len(c_files) == 1, "Expected one .c file"
     pattern = re.compile(r'HSACO_NAME\[(\d+)\]')
-    with open(os.path.join(tmp_dir, cpp_files[0]), "r") as cpp_file:
-        content = cpp_file.read()
+    with open(os.path.join(tmp_dir, c_files[0]), "r") as c_file:
+        content = c_file.read()
         matches = pattern.findall(content)
         assert len(matches) == 1, "Expected one HSACO_NAME definition"
         assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
@@ -317,7 +400,6 @@ def test_compile_link_matmul_no_specialization():
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
-            return
 
         link_aot_kernels(tmp_dir)
 
@@ -352,7 +434,6 @@ def test_compile_link_matmul():
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16")])
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
-            return
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -386,7 +467,6 @@ def test_launcher_has_no_available_kernel():
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":1", ":1")])
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
-            return
 
         link_aot_kernels(tmp_dir)
 
@@ -414,7 +494,6 @@ def test_launcher_has_no_available_kernel():
         assert "kernel launch failed" in result.stderr
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_compile_link_autotune_matmul():
     np.random.seed(3)
 
