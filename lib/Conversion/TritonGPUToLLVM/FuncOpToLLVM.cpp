@@ -65,23 +65,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
   }
 
-  static void handleArgPtrDatatype(triton::FuncOp funcOp,
-                                   LLVM::LLVMFuncOp &llvmFuncOp) {
-
-    // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
-    // the pointee datatype. This function add the pointee datatype to arg
-    // attribute.
-    FunctionType fty = funcOp.getFunctionType();
-    for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
-      auto argType = fty.getInput(i);
-      if (auto argPtrType = dyn_cast<triton::PointerType>(argType)) {
-        auto argDType = argPtrType.getPointeeType();
-        llvmFuncOp.setArgAttr(i, "tt.pointee_type",
-                              mlir::TypeAttr::get(argDType));
-      }
-    }
-  }
-
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
