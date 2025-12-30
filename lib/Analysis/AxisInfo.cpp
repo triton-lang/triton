@@ -150,8 +150,6 @@ private:
       unsigned firstIndex) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
-    } else if (auto ws = dyn_cast<gpu::WarpSpecializePartitionsOp>(op)) {
-      visitWarpSpecializeExplicitCaptures(ws, successor, argLattices);
     } else {
       setAllToEntryStates(argLattices.take_front(firstIndex));
       setAllToEntryStates(argLattices.drop_front(
@@ -172,10 +170,6 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
-
-  void visitWarpSpecializeExplicitCaptures(
-      gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -1121,20 +1115,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
-}
-
-void AxisInfoAnalysis::visitWarpSpecializeExplicitCaptures(
-    gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
-    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  assert(!successor.isParent());
-  ProgramPoint *point = getProgramPointAfter(ws);
-
-  for (auto [capture, argLattice] :
-       llvm::zip(ws.getParentOp().getExplicitCaptures(), argLattices)) {
-    propagateIfChanged(
-        argLattice,
-        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
-  }
 }
 
 } // anonymous namespace

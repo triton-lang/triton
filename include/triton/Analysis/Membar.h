@@ -47,8 +47,7 @@ public:
 private:
   std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>>
   asTuple() const {
-    return std::make_tuple(allocationInterval, accessTy.getAsOpaquePointer(),
-                           subsliceOffsets);
+    return {allocationInterval, accessTy.getAsOpaquePointer(), subsliceOffsets};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;

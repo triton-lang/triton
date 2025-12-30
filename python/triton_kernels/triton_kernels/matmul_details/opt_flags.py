@@ -63,8 +63,9 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn"]
-    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn", "num_warps"}
+    unsupported = set(constraints.keys()) - constraints_supported
+    assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per slice
     if ragged_metadata is None:
         slice_size = m
@@ -129,13 +130,12 @@ def make_default_opt_flags_amd(
         num_stages = 1
 
     # specific configs for F16 x MXFP4 on CDNA4
-    # Note that these configs will exceed LDS usage with async copy enabled
     if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.b_mx_scale is not None:
         split_k = 1
         if m <= 1024:
             target_kernel_kwargs["waves_per_eu"] = 3
             block_n = 128
-            block_k = 256
+            block_k = 128
             num_warps = 4
         else:
             target_kernel_kwargs["waves_per_eu"] = 0
@@ -154,7 +154,7 @@ def make_default_opt_flags_amd(
         block_m=replace_with_valid_constraint('block_m', block_m),
         block_n=replace_with_valid_constraint('block_n', block_n),
         block_k=replace_with_valid_constraint('block_k', block_k),
-        num_warps=num_warps,
+        num_warps=replace_with_valid_constraint('num_warps', num_warps),
         num_stages=num_stages,
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
@@ -188,8 +188,9 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn"]
-    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    constraints_supported = {"block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
+    unsupported = set(constraints.keys()) - constraints_supported
+    assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per expert
     if routing_data is None or batch_size > 1:
         slice_size = m
@@ -230,12 +231,16 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
+    a_mx_scale_layout = get_layout(precision_config.a_mx_scale)
+    b_mx_scale_layout = get_layout(precision_config.b_mx_scale)
+    if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
+        # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
+        supports_persistent = False
 
-    def _layout_name(tensor):
-        layout = get_layout(tensor)
-        return layout.name if layout is not None else None
+    def _layout_name(layout):
+        return None if layout is None else layout.name
 
-    requires_persistent = (_layout_name(precision_config.a_mx_scale) is not None or _layout_name(precision_config.b_mx_scale) is not None) and target_info.has_native_mxfp()
+    requires_persistent = (_layout_name(a_mx_scale_layout) is not None or _layout_name((b_mx_scale_layout)) is not None) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
@@ -247,12 +252,10 @@ def make_default_opt_flags_nvidia(
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
-        if (
-            (b_scale_layout := get_layout(precision_config.b_mx_scale)) is not None and
-            isinstance(b_scale_layout, HopperMXScaleLayout)
-        ):
+        if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
             # TODO: persistent kernel is currently slower than non-persistent
             is_persistent = False
+
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
     # adjust block_m based on is_persistent signal
@@ -303,8 +306,7 @@ def make_default_opt_flags_nvidia(
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     assert num_stages >= 1
-    # Handshake with the HBM swizzling
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config)
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,

@@ -623,3 +623,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// COMMON: test_contiguity_set
+// COMMON: scf.for
+// COMMON: %[[OFFSET:.*]] = arith.addi
+// COMMON: amdg.buffer_load %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : tensor<128x64xf16, #blocked>
+// COMMON: amdg.buffer_store %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : tensor<128x64xf16, #blocked>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @test_contiguity_set(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %stride_am: i32 {tt.divisibility = 16 : i32}) -> tensor<128x64xf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c2 = arith.constant dense<64> : tensor<128x64xi32, #blocked>
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %3 = tt.splat %stride_am : i32 -> tensor<128x1xi32, #blocked>
+    %4 = arith.muli %2, %3 : tensor<128x1xi32, #blocked>
+    %5 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %6 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %7 = tt.broadcast %6 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %8 = arith.addi %5, %7 : tensor<128x64xi32, #blocked>
+    %cst_result = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked>
+    %9:2 = scf.for %acc_149 = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%b = %8, %result = %cst_result) -> (tensor<128x64xi32, #blocked>, tensor<128x64xf16, #blocked>)  : i32 {
+      %10 = arith.addi %b, %c2 : tensor<128x64xi32, #blocked>
+      %11 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+      %12 = tt.addptr %11, %10 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+      %13 = tt.load %12 : tensor<128x64x!tt.ptr<f16>, #blocked>
+      %14 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+      %15 = tt.addptr %14, %10 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+      tt.store %15, %13 : tensor<128x64x!tt.ptr<f16>, #blocked>
+      scf.yield %10, %13 : tensor<128x64xi32, #blocked>, tensor<128x64xf16, #blocked>
+    }
+    tt.return %9#1 : tensor<128x64xf16, #blocked>
+  }
+}
