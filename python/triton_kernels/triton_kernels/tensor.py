@@ -10,6 +10,7 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
+from typing import TypeAlias
 
 
 # storage
@@ -93,6 +94,12 @@ class FloatType:
 
 BIT = IntegerType(1)
 FP4 = FloatType(bitwidth_exponent=2, bitwidth_mantissa=1, is_signed=True)
+FP8_E4M3FN = FloatType(bitwidth_exponent=4, bitwidth_mantissa=3, is_signed=True)
+BF16 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=7, is_signed=True)
+FP16 = FloatType(bitwidth_exponent=5, bitwidth_mantissa=10, is_signed=True)
+FP32 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=23, is_signed=True)
+
+DataType: TypeAlias = IntegerType | FloatType
 
 
 def bitwidth(type: IntegerType | FloatType | torch.dtype):
