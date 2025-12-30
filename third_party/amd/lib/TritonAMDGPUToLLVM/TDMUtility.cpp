@@ -78,83 +78,6 @@ SmallVector<int> getWarpDistribution(ArrayRef<int64_t> blockShape,
 }
 } // namespace
 
-triton::LinearLayout
-computeTDMPrefetchLinearLayout(MLIRContext *ctx, ArrayRef<int64_t> blockShape,
-                               int numLanes, int numWarps, int numCTAs,
-                               int elementBitWidth) {
-  int numDims = blockShape.size();
-
-  // Prefetches 256 bytes into L2
-  const int bytesPerPrefetch = 256;
-  int elemPerPrefetch = (bytesPerPrefetch * 8) / elementBitWidth;
-
-  // Scale the block shape by the number of elements per prefetch
-  SmallVector<int> scaledBlockShape(blockShape.begin(), blockShape.end());
-  scaledBlockShape.back() = ceil(scaledBlockShape.back(), elemPerPrefetch);
-
-  // Helper to distribute a total count (CTAs/warps/lanes) across dimensions.
-  // This assigns resources from the first dimension to the last. Remaining
-  // resources will be assigned to the last dimension.
-  auto unassignedShape = to_vector(scaledBlockShape);
-  auto distributeToOutDims = [numDims, &unassignedShape](int numTotal) {
-    SmallVector<unsigned> perOutDim(numDims, 1);
-    int consumed = 1;
-    // Distribute across first N-1 dimensions
-    for (size_t i = 0; i < numDims - 1; i++) {
-      // Assign as many units as possible without exceeding the total count.
-      // Note that this assigns 1 if we have no units left to distribute.
-      perOutDim[i] =
-          std::min(numTotal / consumed, unassignedShape[i] / consumed);
-      consumed *= perOutDim[i];
-      unassignedShape[i] /= perOutDim[i];
-    }
-    // Remaining count goes to the last dimension (this will produce broadcasts)
-    perOutDim.back() += (numTotal - consumed) / consumed;
-    return perOutDim;
-  };
-
-  // Distribute CTAs, warps, and lanes across tile dimensions. We start from the
-  // slowest dimension and exhaust CTAs then warps and finally lanes. This is
-  // similar to how we distribute tensor elements for blockedLayouts. ctaPerDim
-  // mirrors CTAsPerCGA, warpsPerDim mirrors WarpsPerCTA and lanesPerDim mirrors
-  // ThreadsPerWarp.
-  auto ctaPerDim = distributeToOutDims(numCTAs);
-  auto warpsPerDim = distributeToOutDims(numWarps);
-  auto lanesPerDim = distributeToOutDims(numLanes);
-
-  // Create standard dimension order [0, 1, ..., numDims-1]
-  SmallVector<unsigned> order(numDims);
-  std::iota(order.begin(), order.end(), 0);
-
-  // Based on the assignment computed above we build a LL defining the base
-  // tile per prefetch instruction. We use the register dimension to represent
-  // prefetch instructions.
-  auto kRegister = StringAttr::get(ctx, "register");
-  auto kWarp = StringAttr::get(ctx, "warp");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kBlock = StringAttr::get(ctx, "block");
-  triton::LinearLayout baseTile =
-      triton::identityStandardND(kRegister, SmallVector<unsigned>(numDims, 1),
-                                 order) *
-      identityStandardND(kLane, lanesPerDim, order) *
-      identityStandardND(kWarp, warpsPerDim, order) *
-      identityStandardND(kBlock, ctaPerDim, order);
-
-  // Now we reshape the base tile to match the actual scaled block shape. This
-  // will add additional reg bases if we require multiple prefetch instructions
-  // to cover the entire tile; or rewrite bases to broadcasts if the base tile
-  // is larger than the actual tile.
-  llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
-  auto outDimNames = to_vector(baseTile.getOutDimNames());
-  for (auto dim : order) {
-    namedShape[outDimNames[dim]] = scaledBlockShape[dim];
-  }
-  auto fullTile = ensureLayoutNotSmallerThan(baseTile, namedShape);
-  fullTile = ensureLayoutNotLargerThan(fullTile, namedShape);
-
-  return fullTile;
-}
-
 SmallVector<Value> TDMDescriptor::getAllGroups() const {
   SmallVector<Value> result;
   llvm::append_range(result, group0);
@@ -733,13 +656,20 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   // Calculate maximum allowed offset from tilePtr before going out of bounds
   Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
 
-  // Compute LL to map from reg, lane, warp, block to the prefetch locations.
-  auto ll = computeTDMPrefetchLinearLayout(loc.getContext(), blockShape,
-                                           numLanes, numWarps, numCTAs,
-                                           elementType.getIntOrFloatBitWidth());
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
 
-  SmallVector<unsigned> order(numDims);
-  std::iota(order.begin(), order.end(), 0);
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto blockedEnc = triton::gpu::getDefaultBlockedEncoding(
+      loc.getContext(), scaledBlockShape, numWarps, numLanes, numCTAs);
+  auto ll = triton::gpu::toLinearLayout(scaledBlockShape, blockedEnc);
 
   auto kRegister = rewriter.getStringAttr("register");
   auto kLane = rewriter.getStringAttr("lane");
@@ -747,9 +677,6 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   auto kBlock = rewriter.getStringAttr("block");
 
   // Adjust the inner stride (always 1) to the number of elements per prefetch
-  int bytesPerPrefetch = 256;
-  int elemPerPrefetch =
-      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
   auto scaledStride = tensorStride;
   scaledStride.back() = b.i32_val(elemPerPrefetch);
 
@@ -798,7 +725,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     int llvmTemporalHint = cache_scope | speculative;
     Value scope = LLVM::ConstantOp::create(
         rewriter, loc, i32_ty, rewriter.getI32IntegerAttr(llvmTemporalHint));
-    auto p = LLVM::createLLVMIntrinsicCallOp(
+    LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, scope});
 
     rewriter.setInsertionPointToEnd(prefetchBlock);

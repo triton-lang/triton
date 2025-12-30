@@ -68,13 +68,6 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                    Type elementType, Value laneId, Value warpId,
                                    Value ctaId, bool isSpeculative);
 
-// Compute the linear layout used by TDM prefetch lowering. The returned layout
-// contains the `register` dimension representing each prefetch instruction.
-triton::LinearLayout
-computeTDMPrefetchLinearLayout(MLIRContext *ctx, ArrayRef<int64_t> blockShape,
-                               int numLanes, int numWarps, int numCTAs,
-                               int elementBitWidth);
-
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H

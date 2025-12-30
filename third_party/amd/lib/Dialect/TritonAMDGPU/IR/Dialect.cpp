@@ -847,20 +847,21 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   auto numWarps = triton::gpu::lookupNumWarps(mod);
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
 
-  // Compute the mapping to unroll the TDM tile across CTAs, warps, and lanes
-  auto ll = mlir::LLVM::AMD::computeTDMPrefetchLinearLayout(
-      context, blockShape, threadsPerWarp, numWarps, numCTAs,
-      elementType.getIntOrFloatBitWidth());
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
 
-  auto outShape = ll.getOutDimSizes();
-  SmallVector<int64_t> outShapeI64(outShape.begin(), outShape.end());
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
 
-  // The expected shape for the return tensor is scaled by the elements per
-  // prefetch here, we assume scaling by the last dimension (elements per
-  // prefetch)
-  auto llEnc = triton::gpu::LinearEncodingAttr::get(context, ll);
+  // Use the default blocked encoding to unroll the TDM tile
+  auto enc = triton::gpu::getDefaultBlockedEncoding(
+      context, scaledBlockShape, numWarps, threadsPerWarp, numCTAs);
   IntegerType i64Type = IntegerType::get(context, 64);
-  auto tensorTy = RankedTensorType::get(outShapeI64, i64Type, llEnc);
+  auto tensorTy = RankedTensorType::get(scaledBlockShape, i64Type, enc);
 
   inferredReturnTypes.push_back(tensorTy);
 
