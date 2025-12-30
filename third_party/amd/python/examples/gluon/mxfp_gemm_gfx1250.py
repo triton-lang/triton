@@ -108,17 +108,24 @@ class MXFPGEMMConfig:
         BLOCK_K_SCALE = BLOCK_K // SCALE_BLOCK
         self.SCALE_KWIDTH = gl.constexpr(4 if BLOCK_K_SCALE >= 4 else BLOCK_K_SCALE)
         self.PRESHUFFLE_FACTOR = gl.constexpr(128 if SCALE_PRESHUFFLE else 1)
+
+        if SCALE_PRESHUFFLE:
+            reg_bases: gl.constexpr = [[0, 1], [1, 0]]
+            warp_bases: gl.constexpr = [[0, 2], [2, 0]]
+        else:
+            reg_bases: gl.constexpr = []
+            warp_bases: gl.constexpr = [[0, 1], [1, 0]]
+
         self.tiles_per_warp = gl.constexpr([2, 2] if SCALE_PRESHUFFLE else [1, 1])
 
         self.BLOCK_M_PRESHUFFLED = gl.constexpr(BLOCK_M // self.PRESHUFFLE_FACTOR)
         self.BLOCK_N_PRESHUFFLED = gl.constexpr(BLOCK_N // self.PRESHUFFLE_FACTOR)
         self.BLOCK_K_SCALE_PRESHUFFLED = gl.constexpr(BLOCK_K_SCALE * self.PRESHUFFLE_FACTOR)
 
-        WMMA_LAYOUT: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
-                                                         instr_shape=[16, 16, 128], tiles_per_warp=self.tiles_per_warp)
-        WMMA_LAYOUT_PACKED: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
-                                                                instr_shape=[16, 16,
-                                                                             64], tiles_per_warp=self.tiles_per_warp)
+        WMMA_LAYOUT: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=warp_bases, reg_bases=reg_bases,
+                                                         instr_shape=[16, 16, 128])
+        WMMA_LAYOUT_PACKED: gl.constexpr = gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=warp_bases,
+                                                                reg_bases=reg_bases, instr_shape=[16, 16, 64])
 
         self.dot_layout_a = gl.constexpr(
             gl.DotOperandLayout(operand_index=0, parent=WMMA_LAYOUT_PACKED if DTYPE_A == "e2m1" else WMMA_LAYOUT,
