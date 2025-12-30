@@ -753,14 +753,25 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   auto scaledStride = tensorStride;
   scaledStride.back() = b.i32_val(elemPerPrefetch);
 
+  auto baseIndices = applyLinearLayout(loc, rewriter, ll,
+                                       {{kRegister, b.i32_val(0)},
+                                        {kLane, laneId},
+                                        {kWarp, warpId},
+                                        {kBlock, ctaId}});
   // Iterate over each register and emit a prefetch intrinsic
   SmallVector<Value> offsets(ll.getInDimSize(kRegister));
   for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
-    auto indices = applyLinearLayout(loc, rewriter, ll,
-                                     {{kRegister, b.i32_val(reg)},
-                                      {kLane, laneId},
-                                      {kWarp, warpId},
-                                      {kBlock, ctaId}});
+    auto regIndices =
+        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+    // XOR the base indices with the register specific indices
+    SmallVector<std::pair<StringAttr, Value>> indices;
+    for (auto [base, regIdx] : llvm::zip(baseIndices, regIndices)) {
+      assert(base.first == regIdx.first);
+      Value combined = b.xor_(base.second, b.i32_val(regIdx.second));
+      indices.emplace_back(base.first, combined);
+    }
+
     // Compute the local offset from tile ptr for this prefetch based on the
     // computed indices
     Value localOffset =
