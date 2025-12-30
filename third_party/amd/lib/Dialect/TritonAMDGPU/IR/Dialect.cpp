@@ -828,25 +828,24 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
 
   // Lookup the module to get the number of threads per warp, number of warps
   // and number of CTAs
-  ModuleOp module;
+  ModuleOp mod;
   for (auto operand : operands) {
     if (auto op = operand.getDefiningOp()) {
-      module = op->getParentOfType<ModuleOp>();
+      mod = op->getParentOfType<ModuleOp>();
       break;
     } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
       auto parentOp = blockArg.getOwner()->getParentOp();
       if (parentOp) {
-        module = parentOp->getParentOfType<ModuleOp>();
+        mod = parentOp->getParentOfType<ModuleOp>();
         break;
       }
     }
   }
-  assert(module);
+  assert(mod);
 
-  auto threadsPerWarp =
-      triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
-  auto numWarps = triton::gpu::lookupNumWarps(module);
-  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
+  auto threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numWarps = triton::gpu::lookupNumWarps(mod);
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
 
   // Compute the mapping to unroll the TDM tile across CTAs, warps, and lanes
   auto ll = mlir::LLVM::AMD::computeTDMPrefetchLinearLayout(
