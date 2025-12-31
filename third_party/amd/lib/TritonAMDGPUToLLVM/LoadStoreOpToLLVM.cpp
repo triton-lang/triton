@@ -434,14 +434,12 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   //   vals: Values to process (packed pointers/masks)
   //   llShared: LLVM value for shared memory struct
   //   isLoad: true for global→shared, false for shared→global
-  //   numCTAs: Number of CTAs (only used for load multicast)
   //   isaFamily: ISA family (only used for load multicast)
   //   lowerInst: Callback to emit the actual load/store instruction
   LogicalResult lowerDirectLDSAsyncCopy(
       RewriterBase &rewriter, Location loc, RankedTensorType globalTy,
       MemDescType sharedTy, SmallVector<Value> vals, Value llShared,
-      Type resElemTy, unsigned vec, bool isLoad, int numCTAs,
-      triton::AMD::ISAFamily isaFamily,
+      Type resElemTy, unsigned vec, bool isLoad,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType,
                                        Value)>
@@ -475,7 +473,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // Multicast is only supported for loads
     Value ctaMulticastMask;
-    if (isLoad && numCTAs > 1 && isaFamily == ISAFamily::GFX1250) {
+    if (isLoad && targetInfo.supportsMultiCTALaunch()) {
       ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
           rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
           globalLayout);
@@ -590,9 +588,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
     Value multicastMask;
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
-    if (numCTAs > 1) {
+    if (targetInfo.supportsMultiCTALaunch()) {
       Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
       auto regLayout =
           triton::gpu::toLinearLayout(cast<RankedTensorType>(ptr.getType()));
@@ -872,10 +868,9 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
-    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, ptrType, flatDstTy, loadVals, llDst, resElemTy, vec,
-        /*isLoad=*/true, numCTAs, targetInfo.getISAFamily(), emitBufferLoadLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, ptrType, flatDstTy,
+                                       loadVals, llDst, resElemTy, vec,
+                                       /*isLoad=*/true, emitBufferLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1005,10 +1000,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
-    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, srcTy, flatDstTy, loadVals, llDst, resElemTy, vec,
-        /*isLoad=*/true, numCTAs, targetInfo.getISAFamily(), emitGlobalLoadLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, srcTy, flatDstTy,
+                                       loadVals, llDst, resElemTy, vec,
+                                       /*isLoad=*/true, emitGlobalLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1138,11 +1132,9 @@ struct AsyncCopyLocalToGlobalOpConversion
       return {};
     };
 
-    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, dstTy, srcTy, storeVals, llSrc, resElemTy, vec,
-        /*isLoad=*/false, numCTAs, targetInfo.getISAFamily(),
-        emitGlobalStoreLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, dstTy, srcTy, storeVals,
+                                       llSrc, resElemTy, vec,
+                                       /*isLoad=*/false, emitGlobalStoreLds);
     if (failed(res)) {
       return failure();
     }
@@ -1198,7 +1190,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
     triton::LinearLayout sharedLayout;
     unsigned padInterval = 0;
@@ -1213,7 +1204,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
     Value multicastMask;
-    if (numCTAs > 1) {
+    if (targetInfo.supportsMultiCTALaunch()) {
       multicastMask = LLVM::AMD::emitCtaMulticastMask(
           rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
           sharedLayout);
@@ -1249,8 +1240,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
-    auto ctaId =
-        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMOperation(
@@ -1284,7 +1274,6 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    int numCTAs = TritonGPUDialect::getNumCTAs(op->getParentOfType<ModuleOp>());
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
@@ -1318,8 +1307,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
-    auto ctaId =
-        numCTAs > 1 ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMOperation(
