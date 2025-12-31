@@ -101,7 +101,9 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  if (supportsMultiCTALaunch()) {
+  int numCTAs =
+      triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front());
+  if (supportsMultiCTALaunch() && numCTAs > 1) {
     // We dispatch only along x; return the workgroup id x
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                            "llvm.amdgcn.cluster.workgroup.id.x",

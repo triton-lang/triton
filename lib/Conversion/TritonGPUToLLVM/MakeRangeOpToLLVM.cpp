@@ -25,8 +25,7 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto numCTAs = triton::gpu::getNumCTAs(layout);
-    auto idxs = emitIndices(loc, rewriter, targetInfo, layout, ty, numCTAs > 1);
+    auto idxs = emitIndices(loc, rewriter, targetInfo, layout, ty, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
