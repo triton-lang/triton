@@ -2186,6 +2186,61 @@ struct AsyncCopyMbarrierArriveOpConversion
   }
 };
 
+struct TDMPrefetchConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::TDMPrefetchOp> {
+  TDMPrefetchConversion(LLVMTypeConverter &converter,
+                        const AMD::TargetInfo &targetInfo,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::TDMPrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto tdescType = op.getDesc().getType();
+    auto tensorType = tdescType.getBlockType();
+    SmallVector<int64_t> blockShape = llvm::to_vector(tensorType.getShape());
+    Type elementType =
+        getTypeConverter()->convertType(tensorType.getElementType());
+    SmallVector<Value> desc =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    SmallVector<Value> offset = adaptor.getIndices();
+
+    auto mod = op->getParentOfType<ModuleOp>();
+    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = lookupNumWarps(op);
+    int numCTAs = lookupNumCTAs(op);
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+
+    auto offsets = mlir::LLVM::AMD::emitTDMPrefetch(
+        rewriter, loc, desc, blockShape, threadsPerWarp, numWarps, numCTAs,
+        offset, op.getPred(), elementType, laneId, warpId, ctaId,
+        op.getSpeculative());
+
+    // If the op has no results, just erase it
+    if (op->getNumResults() == 0) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Return offsets
+    Type llvmResultStructTy = getTypeConverter()->convertType(op.getType(0));
+    auto structType = dyn_cast<LLVM::LLVMStructType>(
+        getTypeConverter()->convertType(op.getType(0)));
+    Value resultStruct = packLLElements(loc, getTypeConverter(), offsets,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2203,6 +2258,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                AsyncTDMCopyLocalToGlobalOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);

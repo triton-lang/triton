@@ -3967,7 +3967,10 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
 }
 
 int triton::gpu::lookupNumCTAs(Operation *op) {
-  auto mod = op->getParentOfType<ModuleOp>();
+  auto mod = dyn_cast<ModuleOp>(op);
+  if (!mod)
+    mod = op->getParentOfType<ModuleOp>();
+
   if (!mod) {
     op->emitOpError(
         "is not contained within a module, cannot lookup number of CTAs");
