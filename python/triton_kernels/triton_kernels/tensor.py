@@ -268,3 +268,28 @@ def convert_layout(tensor: Tensor, layout_cls: Type[Layout], **layout_kwargs):
     new_data = new_layout.swizzle_data(old_data)
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, new_layout), **attrs)
+
+
+def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
+    if dtype is None:
+        return None
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    if dtype == FP4:
+        return torch.uint8
+    elif dtype == FP8_E4M3FN:
+        return torch.float8_e4m3fn
+    elif dtype == BF16:
+        return torch.bfloat16
+    elif dtype == FP32:
+        return torch.float32
+    assert False, f"Unsupported dtype: {dtype}"
+
+
+def empty(shape: tuple[int], dtype: DataType, device: torch.device, mx_axis: int = 1):
+    storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
+    storage_shape = (*shape[:1], shape[1] // 2, *shape[2:]) if dtype == FP4 else shape
+    storage = torch.empty(storage_shape, device=device, dtype=storage_dtype)
+    if dtype == FP4:
+        storage = storage.mT.contiguous().mT
+    return Tensor(Storage(storage), dtype=FP4 if dtype == FP4 else storage_dtype, shape=shape)

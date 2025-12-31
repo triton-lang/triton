@@ -26,11 +26,7 @@ class BlackwellMXScaleLayout(Layout):
 
     def __init__(self, shape) -> None:
         super().__init__(shape)
-        (
-            *self.leading_shape,
-            self.K,
-            self.N,
-        ) = shape
+        *self.leading_shape, self.K, self.N = shape
         self.B = math.prod(self.leading_shape)
         self.ALIGN_K = 8
         self.ALIGN_N = 128
