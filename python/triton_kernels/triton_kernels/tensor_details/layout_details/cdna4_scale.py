@@ -3,22 +3,31 @@ import torch
 from dataclasses import dataclass
 import triton
 import triton.language as tl
-from .base import Layout
+from .base import Layout, LayoutTransformation
+
+
+# ------------------- CDNA4 MX Scale Layout -------------------
+@dataclass(frozen=True)
+class CDNA4MXScaleLayout(Layout):
+
+    @property
+    def name(self):
+        return "CDNA4_MX_SCALE"
+
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return CDNA4MXScaleLayoutTransformation(shape)
+
+
+# ------------------- CDNA4 MX Scale Layout Transformation -------------------
 
 NON_K_PRESHUFFLE_BLOCK_SIZE = 32
 
 
-@dataclass
-class CDNA4MXScaleLayout(Layout):
-    name: str = "CDNA4_SCALE"
+@dataclass(frozen=True)
+class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
 
-    def __init__(self, shape) -> None:
-        super().__init__(shape)
-        (
-            *self.leading_shape,
-            self.K_SCALE,
-            self.N,
-        ) = shape
+    def __post_init__(self) -> None:
+        *self.leading_shape, self.K_SCALE, self.N = self.shape
         self.B = math.prod(self.leading_shape)
         self.ALIGN_K_SCALE = 8
         self.ALIGN_N = 32

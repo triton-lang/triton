@@ -2,25 +2,39 @@ from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-from .base import Layout
+from .base import Layout, LayoutTransformation
+
+# ------------------- Hopper MX Scale Layout -------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class HopperMXScaleLayout(Layout):
     mx_axis: int
     num_warps: int
-    leading_shape: list[int]
-    name: str = "HOPPER_SCALE"
 
-    def __init__(self, shape, mx_axis, num_warps=8) -> None:
-        if mx_axis is not None and mx_axis < 0:
-            mx_axis += len(shape)
-        assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
-        super().__init__(shape)
-        self.mx_axis = mx_axis
-        self.num_warps = num_warps
-        *self.leading_shape, self.M, self.K = shape
-        assert len(self.leading_shape) <= self.mx_axis < len(shape)
+    def __post_init__(self):
+        assert self.num_warps & (self.num_warps - 1) == 0, "warps_n must be a power of 2"
+
+    @property
+    def name(self):
+        return "HOPPER_MX_SCALE"
+
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return HopperMXScaleLayoutTransformation(shape, self.mx_axis, self.num_warps)
+
+
+# ------------------- Hopper MX Scale Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class HopperMXScaleLayoutTransformation(LayoutTransformation):
+    mx_axis: int
+    num_warps: int
+
+    def __post_init__(self):
+        if self.mx_axis < 0:
+            self.mx_axis += len(self.shape)
+        *self.leading_shape, self.M, self.K = self.shape
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):

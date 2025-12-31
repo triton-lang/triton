@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
-@dataclass
-class Layout(ABC):
-    initial_shape: list[int]
+@dataclass(frozen=True)
+class LayoutTransformation(ABC):
+
+    shape: list[int]
 
     @abstractmethod
     def swizzle_data(self, data):
@@ -16,4 +17,12 @@ class Layout(ABC):
 
     @abstractmethod
     def swizzle_block_shape(self, block_shape):
+        pass
+
+
+@dataclass(frozen=True)
+class Layout(ABC):
+
+    @abstractmethod
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         pass

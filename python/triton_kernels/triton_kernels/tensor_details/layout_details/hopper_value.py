@@ -2,103 +2,38 @@ import torch
 import triton
 import triton.language as tl
 from dataclasses import dataclass
-from .base import Layout
+from .base import Layout, LayoutTransformation
 
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 
 
-def right_shift_unsigned(x, shift):
-    return (x >> shift) & ((1 << (32 - shift)) - 1)
-
-
-# -----------------------------------------------------------------------
-# Interleave the bits of four consecutive fp4 values (i.e. 16-bits) as:
-#     1000000111000000         (first fp4)
-#        1000000111000000      (second fp4)
-#           1000000111000000   (third fp4)
-#     0110110000000000         (fourth fp4)
-# This is done so that dequantization can be done in 14 SASS instructions
-# -----------------------------------------------------------------------
-
-
-def _compress_fp4(x):
-    x = x.to(torch.int32)
-    return ((x & 0x8) << 12) | ((x & 0x7) << 6)
-
-
-def _compress_fourth(x):
-    x = x.to(torch.int32)
-    return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
-
-
-def _pack_bits(x: torch.Tensor, mx_axis: int):
-    x = x.contiguous()
-    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
-    x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
-    first = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
-    second = _compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16)
-    third = _compress_fp4(x[..., 2]) | (_compress_fp4(x[..., 2] >> 4) << 16)
-    fourth = _compress_fourth(x[..., 3]) | (_compress_fourth(x[..., 3] >> 4) << 16)
-    x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
-    assert x.is_contiguous()
-    x = x.view(torch.uint8)
-    return x
-
-
-# -----------------------------------------------------------------------
-# inverse operation of _pack_bits
-# -----------------------------------------------------------------------
-
-
-def _bf16_to_fp4e2m1(x):
-    # 0bAxxxxxxBCDxxxxxx (int16) -> 0b0000ABCD (uint8)
-    assert x.dtype == torch.int16
-    s = (right_shift_unsigned(x, 15) & 0x1) << 3
-    em = right_shift_unsigned(x, 6) & 0x7
-    return (s | em).to(torch.uint8)
-
-
-def _bf16x2_to_fp4e2m1x2(x):
-    # 0bAxxxxxxBCDxxxxxx_0bExxxxxxFGHxxxxxx  (int32) -> 0bABCD_EFGH (uint8)
-    assert x.dtype == torch.int32
-    lo = (x & 0xFFFF).to(torch.int16)
-    hi = (right_shift_unsigned(x, 16) & 0xFFFF).to(torch.int16)
-    ret_lo = _bf16_to_fp4e2m1(lo)
-    ret_hi = _bf16_to_fp4e2m1(hi)
-    return ret_lo | (ret_hi << 4)
-
-
-def _unpack_bits(x, mx_axis: int):
-    x = x.view(torch.int32)
-    m = 0b10000001110000001000000111000000
-    a = (x << 1) & 0b10000000000000001000000000000000
-    b = right_shift_unsigned(x, 3) & 0b00000001100000000000000110000000
-    c = right_shift_unsigned(x, 7) & 0b00000000010000000000000001000000
-    unpacked = [x & m, (x << 3) & m, (x << 6) & m, (a | b) | c]
-    x = torch.stack(unpacked, dim=-1)
-    x = x.flatten(-2, -1)
-    x = _bf16x2_to_fp4e2m1x2(x)
-    return x
-
-
-# -----------------------------------------------------------------------
-
-
-@dataclass
+# ------------------- Hopper MX Value Layout -------------------
+@dataclass(frozen=True)
 class HopperMXValueLayout(Layout):
     mx_axis: int
     mma_version: int
-    leading_shape: list[int]
-    name: str = "HOPPER_VALUE"
 
-    def __init__(self, shape, mx_axis, mma_version=3):
-        super().__init__(shape)
-        if mx_axis < 0:
-            mx_axis += len(shape)
-        self.mx_axis = mx_axis
-        self.mma_version = mma_version
-        *self.leading_shape, self.K, self.N, = shape
+    @property
+    def name(self):
+        return "HOPPER_MX_VALUE"
+
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return HopperMXValueLayoutTransformation(shape, self.mx_axis, self.mma_version)
+
+
+# ------------------- Hopper MX Value Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class HopperMXValueLayoutTransformation(LayoutTransformation):
+    mx_axis: int
+    mma_version: int
+
+    def __post_init__(self):
+        if self.mx_axis < 0:
+            self.mx_axis += len(self.shape)
+        *self.leading_shape, self.K, self.N, = self.shape
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -221,6 +156,83 @@ class HopperMXValueLayout(Layout):
             *head, K, N = block_shape
             assert N % 4 == 0
             return [*head, K * 4, N // 4]
+
+
+def right_shift_unsigned(x, shift):
+    return (x >> shift) & ((1 << (32 - shift)) - 1)
+
+
+# -----------------------------------------------------------------------
+# Interleave the bits of four consecutive fp4 values (i.e. 16-bits) as:
+#     1000000111000000         (first fp4)
+#        1000000111000000      (second fp4)
+#           1000000111000000   (third fp4)
+#     0110110000000000         (fourth fp4)
+# This is done so that dequantization can be done in 14 SASS instructions
+# -----------------------------------------------------------------------
+
+
+def _compress_fp4(x):
+    x = x.to(torch.int32)
+    return ((x & 0x8) << 12) | ((x & 0x7) << 6)
+
+
+def _compress_fourth(x):
+    x = x.to(torch.int32)
+    return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
+
+
+def _pack_bits(x: torch.Tensor, mx_axis: int):
+    x = x.contiguous()
+    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
+    x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
+    first = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
+    second = _compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16)
+    third = _compress_fp4(x[..., 2]) | (_compress_fp4(x[..., 2] >> 4) << 16)
+    fourth = _compress_fourth(x[..., 3]) | (_compress_fourth(x[..., 3] >> 4) << 16)
+    x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
+    assert x.is_contiguous()
+    x = x.view(torch.uint8)
+    return x
+
+
+# -----------------------------------------------------------------------
+# inverse operation of _pack_bits
+# -----------------------------------------------------------------------
+
+
+def _bf16_to_fp4e2m1(x):
+    # 0bAxxxxxxBCDxxxxxx (int16) -> 0b0000ABCD (uint8)
+    assert x.dtype == torch.int16
+    s = (right_shift_unsigned(x, 15) & 0x1) << 3
+    em = right_shift_unsigned(x, 6) & 0x7
+    return (s | em).to(torch.uint8)
+
+
+def _bf16x2_to_fp4e2m1x2(x):
+    # 0bAxxxxxxBCDxxxxxx_0bExxxxxxFGHxxxxxx  (int32) -> 0bABCD_EFGH (uint8)
+    assert x.dtype == torch.int32
+    lo = (x & 0xFFFF).to(torch.int16)
+    hi = (right_shift_unsigned(x, 16) & 0xFFFF).to(torch.int16)
+    ret_lo = _bf16_to_fp4e2m1(lo)
+    ret_hi = _bf16_to_fp4e2m1(hi)
+    return ret_lo | (ret_hi << 4)
+
+
+def _unpack_bits(x, mx_axis: int):
+    x = x.view(torch.int32)
+    m = 0b10000001110000001000000111000000
+    a = (x << 1) & 0b10000000000000001000000000000000
+    b = right_shift_unsigned(x, 3) & 0b00000001100000000000000110000000
+    c = right_shift_unsigned(x, 7) & 0b00000000010000000000000001000000
+    unpacked = [x & m, (x << 3) & m, (x << 6) & m, (a | b) | c]
+    x = torch.stack(unpacked, dim=-1)
+    x = x.flatten(-2, -1)
+    x = _bf16x2_to_fp4e2m1x2(x)
+    return x
+
+
+# -----------------------------------------------------------------------
 
 
 @triton.jit

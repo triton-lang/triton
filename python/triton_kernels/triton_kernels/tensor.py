@@ -1,5 +1,4 @@
 from dataclasses import dataclass, fields
-from typing import Type
 
 import torch
 from triton.tools.ragged_tma import create_ragged_descriptor
@@ -23,7 +22,8 @@ class Storage:
     def __post_init__(self):
         assert isinstance(self.data, torch.Tensor)
         if self.layout is None:
-            self.layout = StridedLayout(self.data.shape)
+            self.layout = StridedLayout()
+        self.layout_transformation = self.layout.make_transformation(self.data.shape)
 
     @property
     def device(self):
@@ -51,7 +51,7 @@ class Storage:
     def make_dense_tma(self, block_shape, is_scale):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
-        block_shape = self.layout.swizzle_block_shape(block_shape)
+        block_shape = self.layout_transformation.swizzle_block_shape(block_shape)
         transpose = strides[-1] != 1
         if transpose:
             # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
@@ -260,14 +260,15 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
     return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
 
 
-def convert_layout(tensor: Tensor, layout_cls: Type[Layout], **layout_kwargs):
+def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
     assert isinstance(tensor, Tensor)
+    old_layout_transformation = tensor.storage.layout.make_transformation(tensor.shape)
+    new_layout_transformation = layout.make_transformation(tensor.shape, **layout_transformation_kwargs)
     old_storage = tensor.storage
-    old_data = old_storage.layout.unswizzle_data(old_storage.data)
-    new_layout = layout_cls(old_data.shape, **layout_kwargs)
-    new_data = new_layout.swizzle_data(old_data)
+    old_data = old_layout_transformation.unswizzle_data(old_storage.data)
+    new_data = new_layout_transformation.swizzle_data(old_data)
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
-    return Tensor(Storage(new_data, new_layout), **attrs)
+    return Tensor(Storage(new_data, layout), **attrs)
 
 
 def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:

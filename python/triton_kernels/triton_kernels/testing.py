@@ -288,8 +288,7 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
-                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, value_hbm_swizzling_args={},
-                       scale_hbm_swizzling=None, scale_hbm_swizzling_args={}):
+                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
     # allocate buffer
     buffer_shape = ((n_slices, ) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
@@ -321,12 +320,9 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
         scales = wrap_torch_tensor(scales)
         if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout
-            buffer_layout, buffer_layout_opts = value_hbm_swizzling(**value_hbm_swizzling_args)
-            buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
+            buffer = convert_layout(buffer, value_hbm_swizzling)
         if scale_hbm_swizzling is not None:
-            # convert scales to swizzled hbm layout
-            if "ragged_metadata" in scale_hbm_swizzling_args:
-                scale_hbm_swizzling_args["ragged_metadata"] = ragged_metadata
-            scale_layout, scale_layout_opts = scale_hbm_swizzling(**scale_hbm_swizzling_args)
-            scales = convert_layout(scales, scale_layout, **scale_layout_opts)
+            has_ragged_metadata = dtype.torch_dtype == torch.float8_e4m3fn and dtype.has_mx_scale
+            layout_transformation_kwargs = ragged_metadata if has_ragged_metadata else {}
+            scales = convert_layout(scales, scale_hbm_swizzling, **layout_transformation_kwargs)
     return buffer, scales, ragged_metadata

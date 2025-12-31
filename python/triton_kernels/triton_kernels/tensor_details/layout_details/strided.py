@@ -1,13 +1,25 @@
 from dataclasses import dataclass
-from .base import Layout
+from .base import Layout, LayoutTransformation
+
+# ------------------- Strided Layout -------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class StridedLayout(Layout):
-    name: str = None
 
-    def __init__(self, shape) -> None:
-        super().__init__(shape)
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return StridedLayoutTransformation(shape)
+
+    @property
+    def name(self):
+        return "STRIDED"
+
+
+# ------------------- Strided Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class StridedLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         return data

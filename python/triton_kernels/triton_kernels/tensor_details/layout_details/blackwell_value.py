@@ -1,16 +1,23 @@
 from dataclasses import dataclass
 import torch
-from .base import Layout
+from .base import Layout, LayoutTransformation
 
 
-@dataclass
+# ------------------- Blackwell MX Value Layout -------------------
+@dataclass(frozen=True)
 class BlackwellMXValueLayout(Layout):
-    shape: list[int]
-    name: str = "BLACKWELL_VALUE"
 
-    def __init__(self, shape) -> None:
-        super().__init__(shape)
-        self.shape = shape
+    @property
+    def name(self):
+        return "BLACKWELL_MX_VALUE"
+
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return BlackwellMXValueLayoutTransformation(shape)
+
+
+# ------------------- Blackwell MX Value Layout Transformation -------------------
+@dataclass(frozen=True)
+class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         # permutation needed to make `data` row major
