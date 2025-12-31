@@ -12,7 +12,7 @@ class StridedLayout(Layout):
 
     @property
     def name(self):
-        return "STRIDED"
+        return None
 
 
 # ------------------- Strided Layout Transformation -------------------

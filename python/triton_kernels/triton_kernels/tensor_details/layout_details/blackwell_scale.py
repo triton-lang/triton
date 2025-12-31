@@ -42,43 +42,36 @@ class BlackwellActMXScaleLayout(Layout):
 class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
     ragged_metadata: RaggedTensorMetadata
+    ALIGN_K: int = 8
+    ALIGN_M: int = 128
+    SWIZZLE_K: int = 4
 
     def __post_init__(self):
+        assert len(self.shape) in [2, 3]
         if len(self.shape) == 2:
-            (
-                self.M,
-                self.K,
-            ) = self.shape
-            self.B = 1
-            self.mode = "ragged"
-        else:
-            assert len(self.shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {self.shape}"
-            (
-                self.B,
-                self.M,
-                self.K,
-            ) = self.shape
-            self.mode = "batched"
-        self.ALIGN_K = 8
-        self.ALIGN_M = 128
-        self.SWIZZLE_K = 4
-        self.K_pad = (self.K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
-
-        if self.mode == "batched":
-            self.M_pad = (self.M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
-        else:
+            B, M, K = 1, *self.shape
             # In ragged mode, input often include padded tokens
             # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
             # And the rest of rows are padded tokens
             self.ragged_metadata = self.ragged_metadata
-
             n_slices = self.ragged_metadata.slice_sizes.shape[0]
-            max_n_blocks = self.ragged_metadata.n_blocks(
-                n_slices, self.M, self.ALIGN_M
-            )  # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
-
+            # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
+            max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
             # create a static size scratchpad for output
-            self.M_pad = self.ALIGN_M * max_n_blocks
+            M_pad = self.ALIGN_M * max_n_blocks
+            mode = "ragged"
+        else:
+            B, M, K = self.shape
+            M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+            mode = "batched"
+        K_pad = (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
+        # initialize attributes
+        object.__setattr__(self, "B", B)
+        object.__setattr__(self, "M", M)
+        object.__setattr__(self, "K", K)
+        object.__setattr__(self, "M_pad", M_pad)
+        object.__setattr__(self, "K_pad", K_pad)
+        object.__setattr__(self, "mode", mode)
 
     def swizzle_data(self, data):
         if self.mode == "batched":

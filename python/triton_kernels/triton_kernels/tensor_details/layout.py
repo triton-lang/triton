@@ -7,7 +7,6 @@ from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
 from .layout_details.strided import StridedLayout
 from ..target_info import cuda_capability_geq, is_hip_cdna4
-from ..tensor_details.ragged_tensor import RaggedTensorMetadata
 
 __all__ = [
     "Layout",
@@ -42,7 +41,7 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     return StridedLayout()
 
 
-def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata: RaggedTensorMetadata | None = None):
+def make_default_matmul_mxfp8_act_scale_layout():
     if cuda_capability_geq(10):
-        return BlackwellActMXScaleLayout, {"ragged_metadata": ragged_metadata}
-    return StridedLayout, dict()
+        return BlackwellActMXScaleLayout()
+    return StridedLayout()
