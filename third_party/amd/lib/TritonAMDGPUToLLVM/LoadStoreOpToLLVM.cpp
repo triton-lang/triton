@@ -440,7 +440,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       RewriterBase &rewriter, Location loc, RankedTensorType globalTy,
       MemDescType sharedTy, SmallVector<Value> vals, Value llShared,
       Type resElemTy, unsigned vec, bool isLoad,
-      triton::AMD::ISAFamily isaFamily,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType,
                                        Value)>
@@ -474,7 +473,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // Multicast is only supported for loads
     Value ctaMulticastMask;
-    if (isLoad && isaFamily == ISAFamily::GFX1250) {
+    if (isLoad && targetInfo.supportsMultiCTALaunch()) {
       ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
           rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
           globalLayout);
@@ -869,9 +868,9 @@ struct BufferLoadToLocalOpConversion
       return {};
     };
 
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, ptrType, flatDstTy, loadVals, llDst, resElemTy, vec,
-        /*isLoad=*/true, targetInfo.getISAFamily(), emitBufferLoadLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, ptrType, flatDstTy,
+                                       loadVals, llDst, resElemTy, vec,
+                                       /*isLoad=*/true, emitBufferLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1001,9 +1000,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       return {};
     };
 
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, srcTy, flatDstTy, loadVals, llDst, resElemTy, vec,
-        /*isLoad=*/true, targetInfo.getISAFamily(), emitGlobalLoadLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, srcTy, flatDstTy,
+                                       loadVals, llDst, resElemTy, vec,
+                                       /*isLoad=*/true, emitGlobalLoadLds);
     if (failed(res)) {
       return failure();
     }
@@ -1133,9 +1132,9 @@ struct AsyncCopyLocalToGlobalOpConversion
       return {};
     };
 
-    auto res = lowerDirectLDSAsyncCopy(
-        rewriter, loc, dstTy, srcTy, storeVals, llSrc, resElemTy, vec,
-        /*isLoad=*/false, targetInfo.getISAFamily(), emitGlobalStoreLds);
+    auto res = lowerDirectLDSAsyncCopy(rewriter, loc, dstTy, srcTy, storeVals,
+                                       llSrc, resElemTy, vec,
+                                       /*isLoad=*/false, emitGlobalStoreLds);
     if (failed(res)) {
       return failure();
     }
