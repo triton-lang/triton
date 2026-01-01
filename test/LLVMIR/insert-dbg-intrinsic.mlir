@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | FileCheck %s
+// RUN: triton-opt %s -split-input-file -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | FileCheck %s
 
 #loc = loc("01-vector-add.py":30:0)
 #loc7 = loc("x_ptr"(#loc))
@@ -45,3 +45,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32 } {
 #loc15 = loc("block_start"(#loc3))
 #loc16 = loc("offsets"(#loc5))
 #loc17 = loc("mask"(#loc6))
+
+
+// -----
+
+// COM: Check llvm struct, llvm array can be successfully converted to DIType
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK: #llvm.di_basic_type<tag = DW_TAG_base_type, name = "int"
+  // CHECK: #llvm.di_composite_type<tag = DW_TAG_structure_type, name = "struct"
+  // CHECK: #llvm.di_composite_type<tag = DW_TAG_array_type, name = "array"
+  // CHECK: #llvm.di_derived_type<tag = DW_TAG_pointer_type, name = "pointer"
+  llvm.func @multi_arg_type_kernel(%arg0: !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
+                                %arg1: !llvm.array<4 x i8>,
+                                %arg2: !llvm.ptr<1> {tt.pointee_type = i16},
+                                %arg3: i32) attributes {noinline = false} {
+    %constant_i32 = llvm.mlir.constant(3 : index) : i32
+    %pid = rocdl.workgroup.id.x : i32
+    %block_start = llvm.mul %pid, %constant_i32 : i32
+    %offsets = llvm.add %block_start, %constant_i32 : i32
+    %mask = llvm.icmp "slt" %offsets, %arg3 : i32
+    llvm.return
+  }
+}

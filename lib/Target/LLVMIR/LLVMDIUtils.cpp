@@ -57,27 +57,64 @@ LLVM::DITypeAttr LLVMDIUtils::convertType(MLIRContext *context,
 }
 
 LLVM::DITypeAttr LLVMDIUtils::convertPtrType(MLIRContext *context,
-                                             mlir::Type pointerType,
+                                             LLVM::LLVMPointerType pointerType,
                                              mlir::Type pointeeType,
-                                             unsigned sizeInBits) {
+                                             DataLayout datalayout) {
   // LLVMPointerType does not include pointee info, need to pass from external
   // source
-  if (auto ptrType = dyn_cast<LLVM::LLVMPointerType>(pointerType)) {
-    unsigned addrSpace = ptrType.getAddressSpace();
+  unsigned addrSpace = pointerType.getAddressSpace();
 
-    LLVM::DITypeAttr diElTypeAttr = convertType(context, pointeeType);
-    LLVM::DITypeAttr diTypeAttr = mlir::LLVM::DIDerivedTypeAttr::get(
-        context, llvm::dwarf::DW_TAG_pointer_type,
-        mlir::StringAttr::get(context, "pointer"), diElTypeAttr, sizeInBits,
-        /*alignInBits=*/0, /*offset=*/0, addrSpace, /*extra data=*/nullptr);
-    return diTypeAttr;
+  unsigned sizeInBits = datalayout.getTypeSizeInBits(pointerType);
+  LLVM::DITypeAttr diElTypeAttr = convertType(context, pointeeType);
+  LLVM::DITypeAttr diTypeAttr = mlir::LLVM::DIDerivedTypeAttr::get(
+      context, llvm::dwarf::DW_TAG_pointer_type,
+      mlir::StringAttr::get(context, "pointer"), diElTypeAttr, sizeInBits,
+      /*alignInBits=*/0, /*offset=*/0, addrSpace, /*extra data=*/nullptr);
+  return diTypeAttr;
+}
+
+LLVM::DITypeAttr LLVMDIUtils::convertStructType(MLIRContext *context,
+                                                LLVM::LLVMStructType structType,
+                                                LLVM::DIFileAttr fileAttr,
+                                                DataLayout datalayout,
+                                                int64_t line) {
+
+  assert(!structType.isPacked() && !structType.isIdentified() &&
+         "Only accepts NON-Packed and Literal struct type");
+
+  unsigned sizeInBits = datalayout.getTypeSizeInBits(structType);
+  SmallVector<LLVM::DINodeAttr> elTypes;
+  for (auto [idx, element] : llvm::enumerate(structType.getBody())) {
+    LLVM::DITypeAttr tyAttr = convertType(context, element);
+    elTypes.push_back(tyAttr);
   }
-  // Return unknown_type if fail to construct DIDerivedTypeAttr with
-  // WD_TAG_pointer_type.
-  return LLVM::DIBasicTypeAttr::get(
-      context, llvm::dwarf::DW_TAG_base_type,
-      mlir::StringAttr::get(context, "unknown_type"), 0,
-      llvm::dwarf::DW_ATE_signed);
+
+  return LLVM::DICompositeTypeAttr::get(
+      context, llvm::dwarf::DW_TAG_structure_type,
+      mlir::StringAttr::get(context, "struct"), fileAttr, /*line=*/line,
+      /*scope=*/fileAttr, /*baseType=*/nullptr, mlir::LLVM::DIFlags::Zero,
+      sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
+      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
+}
+
+LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
+                                               LLVM::LLVMArrayType arrayType,
+                                               LLVM::DIFileAttr fileAttr,
+                                               DataLayout datalayout,
+                                               int64_t line) {
+  unsigned sizeInBits = datalayout.getTypeSizeInBits(arrayType);
+
+  mlir::Type elementType = arrayType.getElementType();
+  LLVM::DITypeAttr baseType = convertType(context, elementType);
+  SmallVector<LLVM::DINodeAttr> elTypes(arrayType.getNumElements(),
+                                        convertType(context, elementType));
+
+  return LLVM::DICompositeTypeAttr::get(
+      context, llvm::dwarf::DW_TAG_array_type,
+      mlir::StringAttr::get(context, "array"), fileAttr, /*line=*/line,
+      /*scope=*/fileAttr, /*baseType=*/baseType, mlir::LLVM::DIFlags::Zero,
+      sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
+      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
 }
 
 std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
