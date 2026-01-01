@@ -106,10 +106,8 @@ LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
 
   mlir::Type elementType = arrayType.getElementType();
   LLVM::DITypeAttr baseType = convertType(context, elementType);
-  SmallVector<LLVM::DINodeAttr> elTypes;
-  for (unsigned i = 0; i < arrayType.getNumElements(); i++) {
-    elTypes.push_back(convertType(context, elementType));
-  }
+  SmallVector<LLVM::DINodeAttr> elTypes(arrayType.getNumElements(),
+                                        convertType(context, elementType));
 
   return LLVM::DICompositeTypeAttr::get(
       context, llvm::dwarf::DW_TAG_array_type,
