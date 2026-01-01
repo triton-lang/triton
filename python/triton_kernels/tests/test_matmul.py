@@ -339,7 +339,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         transpose = a_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
-        scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout() if a_hbm_swizzling else None,
+        scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
     )
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),

@@ -26,13 +26,14 @@ class BlackwellMXScaleLayout(Layout):
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayout(Layout):
 
+    ragged_metadata: RaggedTensorMetadata
+
     @property
     def name(self):
         return "BLACKWELL_ACT_SCALE"
 
-    def make_transformation(self, shape: list[int],
-                            ragged_metadata: RaggedTensorMetadata | None = None) -> LayoutTransformation:
-        return BlackwellActMXScaleLayoutTransformation(shape, ragged_metadata)
+    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        return BlackwellActMXScaleLayoutTransformation(shape, self.ragged_metadata)
 
 
 # ------------------- Blackwell MX Scale Layout Transformation -------------------
@@ -53,7 +54,6 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
             # In ragged mode, input often include padded tokens
             # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
             # And the rest of rows are padded tokens
-            self.ragged_metadata = self.ragged_metadata
             n_slices = self.ragged_metadata.slice_sizes.shape[0]
             # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
             max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)

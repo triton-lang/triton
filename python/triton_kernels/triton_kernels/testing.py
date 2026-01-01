@@ -322,7 +322,8 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             # convert buffer to swizzled hbm layout
             buffer = convert_layout(buffer, value_hbm_swizzling)
         if scale_hbm_swizzling is not None:
-            has_ragged_metadata = dtype.torch_dtype == torch.float8_e4m3fn and dtype.has_mx_scale
-            layout_transformation_kwargs = {"ragged_metadata": ragged_metadata} if has_ragged_metadata else {}
-            scales = convert_layout(scales, scale_hbm_swizzling, **layout_transformation_kwargs)
+            # hack to avoid circular dependency
+            if callable(scale_hbm_swizzling):
+                scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata)
+            scales = convert_layout(scales, scale_hbm_swizzling)
     return buffer, scales, ragged_metadata
