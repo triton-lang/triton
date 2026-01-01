@@ -17,7 +17,7 @@ class BlackwellMXScaleLayout(Layout):
 
     @property
     def name(self):
-        return "BLACKWELL_MX_SCALE"
+        return "BLACKWELL_SCALE"
 
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         return BlackwellMXScaleLayoutTransformation(shape)
@@ -28,7 +28,7 @@ class BlackwellActMXScaleLayout(Layout):
 
     @property
     def name(self):
-        return "BLACKWELL_MX_SCALE"
+        return "BLACKWELL_ACT_SCALE"
 
     def make_transformation(self, shape: list[int],
                             ragged_metadata: RaggedTensorMetadata | None = None) -> LayoutTransformation:
