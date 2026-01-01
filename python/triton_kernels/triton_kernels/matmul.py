@@ -593,16 +593,18 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.a_mx_scale is not None:
         mx_axis = x_tri.storage.data.ndim -1
-        x_tri = convert_layout(x_tri, layout.StridedLayout())
-        x_tri_scale = convert_layout(precision_config.a_mx_scale, layout.StridedLayout())
+        canonical_layout = layout.StridedLayout(range(x_tri.ndim - 1, -1, -1))
+        x_tri = convert_layout(x_tri, canonical_layout)
+        x_tri_scale = convert_layout(precision_config.a_mx_scale, canonical_layout)
         x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
         x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
 
     if precision_config.b_mx_scale is not None:
         mx_axis = w_tri.storage.data.ndim - 2
-        w_tri = convert_layout(w_tri, layout.StridedLayout())
-        w_tri_scale = convert_layout(precision_config.b_mx_scale, layout.StridedLayout())
+        canonical_layout = layout.StridedLayout(range(w_tri.ndim - 1, -1, -1))
+        w_tri = convert_layout(w_tri, canonical_layout)
+        w_tri_scale = convert_layout(precision_config.b_mx_scale, canonical_layout)
         w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
         w_ref = apply(w_tri, flex_ctx.rhs_data.scale)

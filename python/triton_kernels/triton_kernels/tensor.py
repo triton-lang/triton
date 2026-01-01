@@ -17,12 +17,7 @@ from typing import TypeAlias
 @dataclass
 class Storage:
     data: torch.Tensor
-    layout: Layout = None
-
-    def __post_init__(self):
-        assert isinstance(self.data, torch.Tensor)
-        if self.layout is None:
-            self.layout = StridedLayout()
+    layout: Layout
 
     @property
     def device(self):
@@ -263,15 +258,19 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
         dtype = torch_tensor.dtype
     shape = list(torch_tensor.shape)
     shape[torch_tensor.stride().index(1)] *= bitwidth(torch_tensor.dtype) // bitwidth(dtype)
-    return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
+    order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
+    order = [x for x in order]
+    return Tensor(Storage(torch_tensor, StridedLayout(order)), dtype=dtype, shape=shape)
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
     assert isinstance(tensor, Tensor)
-    old_layout_transformation = tensor.storage.layout.make_transformation(tensor.shape)
-    new_layout_transformation = layout.make_transformation(tensor.shape, **layout_transformation_kwargs)
-    old_storage = tensor.storage
-    old_data = old_layout_transformation.unswizzle_data(old_storage.data)
+    shape = list(tensor.shape)
+    print(tensor.shape)
+    shape[-1] //= bitwidth(tensor.storage.data.dtype) // bitwidth(tensor.dtype)
+    old_layout_transformation = tensor.storage.layout.make_transformation(shape)
+    old_data = old_layout_transformation.unswizzle_data(tensor.storage.data)
+    new_layout_transformation = layout.make_transformation(old_data.shape, **layout_transformation_kwargs)
     new_data = new_layout_transformation.swizzle_data(old_data)
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, layout), **attrs)
