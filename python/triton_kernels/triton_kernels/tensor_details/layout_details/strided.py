@@ -26,3 +26,6 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def unswizzle_data(self, data):
         return data
+
+    def swizzle_block_shape(self, block_shape):
+        return block_shape

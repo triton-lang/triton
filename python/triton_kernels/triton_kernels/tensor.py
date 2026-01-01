@@ -23,56 +23,10 @@ class Storage:
         assert isinstance(self.data, torch.Tensor)
         if self.layout is None:
             self.layout = StridedLayout()
-        self.layout_transformation = self.layout.make_transformation(self.data.shape)
 
     @property
     def device(self):
         return self.data.device
-
-    def is_tma_compliant(self):
-        # TMAs didn't exist until Hopper
-        if not cuda_capability_geq(9, 0):
-            return False
-        # TMAs only exist for 2D, 3D, 5D inputs
-        if len(self.data.shape) not in [2, 3, 5]:
-            return False
-        # TMAs need at most one stride equal to 1
-        # and all other strides divisble by 16
-        strides = list(self.data.stride())
-        try:
-            major_dim = strides.index(1)
-        except ValueError:
-            major_dim = -1
-        ndim = self.data.ndim
-        bitwidth = 4 if self.data.dtype == torch.uint8 else self.data.element_size() * 8
-        compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
-        return all(compliant)
-
-    def make_dense_tma(self, block_shape, is_scale):
-        strides = list(self.data.stride())
-        shape = list(self.data.shape)
-        block_shape = self.layout_transformation.swizzle_block_shape(block_shape)
-        transpose = strides[-1] != 1
-        if transpose:
-            # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
-            # https://github.com/triton-lang/triton/blob/e5e0081db3335e7755e2c67c784cb1c92769812f/python/triton/tools/tensor_descriptor.py#L26
-            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
-            shape = shape[:-2] + [shape[-1], shape[-2]]
-            strides = strides[:-2] + [strides[-1], strides[-2]]
-        if self.data.dtype == torch.uint8 and not is_scale:
-            indx = strides.index(1)
-            block_shape[indx] = block_shape[indx] // 2
-            if isinstance(self.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
-                raise ValueError(
-                    "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
-        return TensorDescriptor(self.data, shape, strides, block_shape)
-
-    def make_tma(self, block_shape, mode, is_scale=False):
-        if mode in ["dense", "gather", "scatter"]:
-            return self.make_dense_tma(block_shape, is_scale)
-        assert mode == "ragged"
-        ragged_dim = len(self.data.shape) - 2
-        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
 # data types
@@ -179,6 +133,58 @@ class Tensor:
         if i is None:
             return self.shape
         return self.shape[i]
+
+
+def is_tma_compliant(tensor):
+    storage = tensor.storage
+    # TMAs didn't exist until Hopper
+    if not cuda_capability_geq(9, 0):
+        return False
+    # TMAs only exist for 2D, 3D, 5D inputs
+    if len(storage.data.shape) not in [2, 3, 5]:
+        return False
+    # TMAs need at most one stride equal to 1
+    # and all other strides divisble by 16
+    strides = list(storage.data.stride())
+    try:
+        major_dim = strides.index(1)
+    except ValueError:
+        major_dim = -1
+    ndim = storage.data.ndim
+    bitwidth = 4 if storage.data.dtype == torch.uint8 else storage.data.element_size() * 8
+    compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
+    return all(compliant)
+
+
+def make_dense_tma(tensor, block_shape, is_scale):
+    storage = tensor.storage
+    layout_transformation = storage.layout.make_transformation(tensor.shape)
+    strides = list(storage.data.stride())
+    shape = list(storage.data.shape)
+    block_shape = layout_transformation.swizzle_block_shape(block_shape)
+    transpose = strides[-1] != 1
+    if transpose:
+        # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
+        # https://github.com/triton-lang/triton/blob/e5e0081db3335e7755e2c67c784cb1c92769812f/python/triton/tools/tensor_descriptor.py#L26
+        block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
+        shape = shape[:-2] + [shape[-1], shape[-2]]
+        strides = strides[:-2] + [strides[-1], strides[-2]]
+    if storage.data.dtype == torch.uint8 and not is_scale:
+        indx = strides.index(1)
+        block_shape[indx] = block_shape[indx] // 2
+        if isinstance(storage.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
+            raise ValueError(
+                "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
+    return TensorDescriptor(storage.data, shape, strides, block_shape)
+
+
+def make_tma(tensor, block_shape, mode, is_scale=False):
+    if mode in ["dense", "gather", "scatter"]:
+        return make_dense_tma(tensor, block_shape, is_scale)
+    assert mode == "ragged"
+    storage = tensor.storage
+    ragged_dim = len(storage.data.shape) - 2
+    return create_ragged_descriptor(storage.data, block_shape, ragged_dim=ragged_dim)
 
 
 # ---------------------------------------------------------------------------- #

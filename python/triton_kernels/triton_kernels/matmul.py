@@ -21,7 +21,7 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata, get_layout
+from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata, get_layout, is_tma_compliant, make_tma
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
@@ -309,9 +309,9 @@ def matmul(a, b, bias,
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
     can_use_tma = (
-        a.numel() > 0 and a.storage.is_tma_compliant() and
-        b.numel() > 0 and b.storage.is_tma_compliant() and
-        (b_scale is None or b_scale.storage.is_tma_compliant()) and
+        a.numel() > 0 and is_tma_compliant(a) and
+        b.numel() > 0 and is_tma_compliant(b) and
+        (b_scale is None or is_tma_compliant(b_scale)) and
         (ragged_dimension != "M" or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (c is None or c.stride(-1) == 1) and
@@ -420,7 +420,7 @@ def matmul(a, b, bias,
 
     a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
     a_tma_mode = None if not a_has_tma else "ragged" if ragged_dimension == "M" and not has_gather_tma else "dense"
-    a_tensor_or_tma = a_storage.make_tma(a_tma_block_size, a_tma_mode) if a_has_tma else a_storage.data
+    a_tensor_or_tma = make_tma(a, a_tma_block_size, a_tma_mode) if a_has_tma else a_storage.data
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
@@ -430,10 +430,10 @@ def matmul(a, b, bias,
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
-    c_tensor_or_tma = c_storage.make_tma(c_tma_block_size, c_tma_mode) if c_has_tma else c_storage.data
+    c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c_storage.data
     # create tma descriptor for w
     b_has_tma = opt_flags.is_persistent
-    b_tensor_or_tma = b_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b_storage.data
+    b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b_storage.data
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
     b_transpose = b_storage.data.stride()[-2] == 1
@@ -444,7 +444,7 @@ def matmul(a, b, bias,
         if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
             b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
-        b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense", is_scale=True)
+        b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
         b_scale_tensor_or_tma = b_scale
     # create tma descriptor for x_scale
@@ -459,7 +459,7 @@ def matmul(a, b, bias,
         a_scale.dtype = torch.uint8
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
-        a_scale_tensor_or_tma = a_scale.storage.make_tma(a_scale_tma_block_size, "dense", is_scale=True)
+        a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
         a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
     # canonicalize strides
