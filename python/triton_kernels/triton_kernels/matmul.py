@@ -404,9 +404,9 @@ def matmul(a, b, bias,
     # canonicalize storage
     has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
-    a_storage = _canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data)
-    b_storage = _canonicalize_storage(b.storage, 3, flex.rhs_data)
-    c_storage = _canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data)
+    a.storage = _canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data)
+    b.storage = _canonicalize_storage(b.storage, 3, flex.rhs_data)
+    c.storage = _canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
     if c_acc_in is not None:
         assert opt_flags.split_k == 1, "c_acc_in + split_k is not supported."
@@ -420,7 +420,7 @@ def matmul(a, b, bias,
 
     a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
     a_tma_mode = None if not a_has_tma else "ragged" if ragged_dimension == "M" and not has_gather_tma else "dense"
-    a_tensor_or_tma = make_tma(a, a_tma_block_size, a_tma_mode) if a_has_tma else a_storage.data
+    a_tensor_or_tma = make_tma(a, a_tma_block_size, a_tma_mode) if a_has_tma else a.storage.data
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
@@ -430,19 +430,19 @@ def matmul(a, b, bias,
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
-    c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c_storage.data
+    c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c.storage.data
     # create tma descriptor for w
     b_has_tma = opt_flags.is_persistent
-    b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b_storage.data
+    b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b.storage.data
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
-    b_transpose = b_storage.data.stride()[-2] == 1
+    b_transpose = b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
         b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
-            b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
+            b_scale.storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
@@ -463,7 +463,7 @@ def matmul(a, b, bias,
     else:
         a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
     # canonicalize strides
-    a_strides = [0]*(3 - a_storage.data.ndim) + list(a_storage.data.stride())
+    a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
     a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
     a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
@@ -486,13 +486,13 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
-                   c_tensor_or_tma, c_storage.data, *out_matmul.stride(),
+                   c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
-                   a_tensor_or_tma, a_storage.data, *a_strides, a_transpose,
+                   a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
-                   b_tensor_or_tma, b_storage.data, *b_storage.data.stride(), b_transpose,
+                   b_tensor_or_tma, b.storage.data, *b.storage.data.stride(), b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
