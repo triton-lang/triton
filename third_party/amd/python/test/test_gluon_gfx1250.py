@@ -193,7 +193,8 @@ def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
                    BLOCK_B: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
                    INSTR_SHAPE_K: ttgl.constexpr, K_WIDTH: ttgl.constexpr):
     load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 8], [1, 4, 8], [1, 4, 1], [2, 1, 0])
-    wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 2, 2], [16, 16, INSTR_SHAPE_K])
+    wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 0, 1], [0, 1, 0]],
+                                                         reg_bases=[], instr_shape=[16, 16, INSTR_SHAPE_K], rank=3)
 
     load_dim0_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.SliceLayout(2, load_layout))
     load_dim1_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(2, load_layout))
