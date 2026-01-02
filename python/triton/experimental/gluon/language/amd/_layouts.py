@@ -112,7 +112,8 @@ class AMDWMMALayout(DistributedLayout):
     Args:
         version (int): Indicates the GPU architecture.
         transposed (bool): Indicates the result tensor is transposed.
-        warps_per_cta (List[int]): Number of warps per CTA.
+        warp_bases (List[List[int]]): Warp bases for CTA layout.
+        reg_bases (Optional[List[List[int]]]): Repetition (register) bases for CTA layout.
         instr_shape (Optional[List[int]]): Instruction shape (M, N, K). Defaults to (16, 16, 16).
         cga_layout (Optional[List[List[int]]]): Bases describing CTA tiling.
 
@@ -124,36 +125,35 @@ class AMDWMMALayout(DistributedLayout):
     """
     version: int
     transposed: bool
-    warps_per_cta: List[int]
+    warp_bases: List[List[int]]
+    reg_bases: Optional[List[List[int]]] = None
     instr_shape: Optional[List[int]] = None
-    tiles_per_warp: Optional[List[int]] = None
     cga_layout: List[List[int]] = field(default_factory=list)
+    rank: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
-        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
-
-        if self.tiles_per_warp is None:
-            tiles_per_warp = [1] * len(self.warps_per_cta)
-        else:
-            tiles_per_warp = _unwrap_if_constexpr(self.tiles_per_warp)
-
-        super().__setattr__("tiles_per_warp", tiles_per_warp)
-
+        super().__setattr__("warp_bases", [list(inner) for inner in _unwrap_if_constexpr(self.warp_bases)])
+        super().__setattr__("reg_bases",
+                            [list(inner)
+                             for inner in _unwrap_if_constexpr(self.reg_bases)] if self.reg_bases is not None else [])
         instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
         super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        if self.rank is None:
+            super().__setattr__("rank", 2)
         self.verify()
 
     def _to_ir(self, builder):
         return builder.get_amd_wmma_layout(
             self.version,
             self.transposed,
-            self.warps_per_cta,
-            self.tiles_per_warp,
+            self.warp_bases,
+            self.reg_bases,
             self.cga_layout,
             self.instr_shape,
+            self.rank,
         )
 
     def mangle(self) -> str:
@@ -164,24 +164,21 @@ class AMDWMMALayout(DistributedLayout):
             return "_".join(map(str, x))
 
         cga_layout = stringify(["~".join(map(str, vec)) for vec in self.cga_layout] if self.cga_layout else None)
-        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{cga_layout}_WMMA"
+        return f"WMMA_{self.version}_{self.transposed}_{self.warp_bases}_{self.reg_bases}_{stringify(self.instr_shape)}_{cga_layout}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
-
-        rank = len(self.warps_per_cta)
-        assert all(len(vec) == rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
+        if len(self.warp_bases) > 0:
+            assert len(self.warp_bases[0]) == self.rank, "warp_bases basis rank mismatch"
+        assert all(len(vec) == self.rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
 
     def __hash__(self):
         return hash((
             self.version,
             self.transposed,
-            tuple(self.warps_per_cta),
-            tuple(self.tiles_per_warp) if self.tiles_per_warp else None,
+            tuple(tuple(vec) for vec in self.warp_bases),
+            tuple(tuple(vec) for vec in self.reg_bases),
             tuple(self.instr_shape) if self.instr_shape else None,
             tuple(tuple(vec) for vec in self.cga_layout),
+            self.rank,
         ))
-
-    @property
-    def rank(self):
-        return len(self.warps_per_cta)

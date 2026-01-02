@@ -548,7 +548,8 @@ def TTG_WarpSpecializePartitionsOp
              [IsolatedFromAbove, RecursiveMemoryEffects,
               RecursivelySpeculatable, Terminator,
               HasParent<"WarpSpecializeOp">,
-              DeclareOpInterfaceMethods<RegionBranchOpInterface>]> {
+              DeclareOpInterfaceMethods<
+                  RegionBranchOpInterface, ["getEntrySuccessorOperands"]>]> {
   let summary = "container op for `ttg.warp_specialize`";
   let description = [{
     Because MLIR requires entire operations be isolated from above, this op

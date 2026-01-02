@@ -173,18 +173,6 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
 
-        # When issuing a TMA transaction to TMA tensor descriptors with fp4 padded operands, we need to multiply
-        # the offset along the contiguous dimension by 2 to account for the padding. This applies to async TMA
-        # loads, stores, gather, and scatter. Failing to do this can result in illegal instruction errors. If you
-        # catch the illegal instruction error inside `cuda-gdb`, it may point to the TMA instruction or the
-        # `mbarrier.wait` on the instruction completion barrier. When breaking on the illegal instruction error,
-        # you can use `x/i $pc` to print the instruction at the faulting address, and for example use `x/-50i $pc`
-        # to print the previous 50 instructions.
-        if a_desc.layout.fp4_padded:
-            off_k_a *= 2
-        if b_desc.layout.fp4_padded:
-            off_k_b *= 2
-
         # Load the A and B tiles.
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
@@ -495,10 +483,6 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
     for k in range(0, K, BLOCK_K):
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
-        if a_desc.layout.fp4_padded:
-            off_k_a *= 2
-        if b_desc.layout.fp4_padded:
-            off_k_b *= 2
 
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
@@ -741,13 +725,9 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     for k in range(0, K, BLOCK_K):
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
-        if a_desc.layout.fp4_padded:
-            off_k_a *= 2
-        if b_desc.layout.fp4_padded:
-            off_k_b *= 2
         # Index the K subtile along REP_K for each scale.
-        off_k_a_scale = k // BLOCK_K * A_REP_K
-        off_k_b_scale = k // BLOCK_K * B_REP_K
+        off_k_a_scale = (k // BLOCK_K) * A_REP_K
+        off_k_b_scale = (k // BLOCK_K) * B_REP_K
 
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
@@ -1029,12 +1009,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     for k in range(0, K, BLOCK_K):
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
-        if a_desc.layout.fp4_padded:
-            off_k_a *= 2
-        if b_desc.layout.fp4_padded:
-            off_k_b *= 2
-        off_k_a_scale = k // BLOCK_K * A_REP_K
-        off_k_b_scale = k // BLOCK_K * B_REP_K
+        off_k_a_scale = (k // BLOCK_K) * A_REP_K
+        off_k_b_scale = (k // BLOCK_K) * B_REP_K
 
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
@@ -1213,10 +1189,6 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     off_n_b_scale = pid_n * REP_N
     off_k_a = k // A_ELEM_PER_BYTE
     off_k_b = k // B_ELEM_PER_BYTE
-    if a_desc.layout.fp4_padded:
-        off_k_a *= 2
-    if b_desc.layout.fp4_padded:
-        off_k_b *= 2
     off_k_a_scale = (k // BLOCK_K) * A_REP_K
     off_k_b_scale = (k // BLOCK_K) * B_REP_K
 

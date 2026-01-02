@@ -51,12 +51,12 @@ test-unit: all
 test-distributed: all
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install "python/triton_kernels[tests]" -v
-	$(PYTEST) --tb=short -s python/triton_kernels/bench/distributed.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
+	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 
 .PHONY: test-regression
 test-regression: all
