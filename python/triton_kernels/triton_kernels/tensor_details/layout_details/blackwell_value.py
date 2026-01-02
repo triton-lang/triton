@@ -37,20 +37,21 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
-        assert list(data.shape[:-1]) == list(self.shape[:-1]), f"{data.shape[:-1]} != {self.shape[:-1]}"
-        assert data.shape[-1] == self.shape[-1] // 2, f"{data.shape[-1]} != {self.shape[-1] // 2}"
+        # re-pack as column-major
+        data = unpack(data, -1, self.is_fp4)
+        data = pack(data.mT.contiguous().mT, -2, self.is_fp4)
         # leading dimension must be padded to be aligned to 128
         align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        pad = align_dim(data.shape[-1]) - data.shape[-1]
-        ret = torch.nn.functional.pad(data, (0, pad)).mT
+        pad = align_dim(data.shape[1]) - data.shape[1]
+        ret = torch.nn.functional.pad(data.mT, (0, pad)).mT
         return ret
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(1) == 1
         data = unpack(data, data.stride().index(1), self.is_fp4)
         assert data.ndim == len(self.shape), "Rank mismatch between data and recorded shape"
-        ret = data.mT[..., :self.shape[-1]].contiguous()
-        assert ret.stride(-1) == 1
+        sizes = [min(data.size(i), self.shape[i]) for i in range(data.ndim)]
+        ret = data[tuple(slice(0, s) for s in sizes)]
         assert list(ret.shape) == list(self.shape), f"{ret.shape} != {self.shape}"
         ret = pack(ret, -1, self.is_fp4)
         return ret
