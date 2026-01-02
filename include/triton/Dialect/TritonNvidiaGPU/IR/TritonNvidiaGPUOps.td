@@ -61,13 +61,29 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   }];
 }
 
+def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
+    "fence_mbarrier_init_release_cluster"> {
+  let summary = "fence mbarrier init release.cluster";
+
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 //
