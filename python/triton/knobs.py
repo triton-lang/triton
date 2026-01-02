@@ -527,6 +527,10 @@ class amd_knobs(base_knobs):
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
+    use_lds_prefetch: env_opt_bool = env_opt_bool("TRITON_HIP_USE_LDS_PREFETCH")
+    # Overrides the target number of matrix instructions per slice tile used by the LDS prefetch
+    # pass (only takes effect when LDS prefetch is enabled). 0 keeps the arch/dtype default.
+    lds_prefetch_num_insts: env_int = env_int("TRITON_HIP_LDS_PREFETCH_NUM_INSTS", 0)
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
