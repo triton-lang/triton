@@ -17,7 +17,7 @@ from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
+from .._utils import get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
 
@@ -388,6 +388,56 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
+def _is_specialization_iterable(x: Any) -> bool:
+    """
+    Hot-path helper used by the JIT binder.
+
+    We want the same behavior as `triton._utils.is_iterable` (list/tuple and
+    `triton.language.core.tuple`), but without importing `triton.language.core`
+    on every kernel invocation.
+    """
+    if isinstance(x, (list, tuple)):
+        return True
+    # Best-effort detection of `triton.language.core.tuple` / `tuple_type`
+    # instances without importing `triton.language.core`.
+    t = type(x)
+    mod = getattr(t, "__module__", "")
+    name = getattr(t, "__name__", "")
+    return mod == "triton.language.core" and name in ("tuple", "tuple_type")
+
+
+def _find_paths_if_leaf_is_constexpr(obj: Any) -> tuple[tuple[int, ...], ...]:
+    """Find paths to leaves equal to the string 'constexpr'."""
+    ret: list[tuple[int, ...]] = []
+    stack: list[tuple[tuple[int, ...], Any]] = [((), obj)]
+    while stack:
+        path, cur = stack.pop()
+        if _is_specialization_iterable(cur):
+            # Reverse to preserve the left-to-right DFS order used by find_paths_if.
+            items = list(enumerate(cur))
+            for idx, item in reversed(items):
+                stack.append(((*path, idx), item))
+        elif cur == "constexpr":
+            ret.append(path)
+    return tuple(ret)
+
+
+def _find_paths_if_leaf_is_str(obj: Any) -> tuple[tuple[int, ...], ...]:
+    """Find paths to leaves that are strings (used for specialization attrs)."""
+    ret: list[tuple[int, ...]] = []
+    stack: list[tuple[tuple[int, ...], Any]] = [((), obj)]
+    while stack:
+        path, cur = stack.pop()
+        if _is_specialization_iterable(cur):
+            # Reverse to preserve the left-to-right DFS order used by find_paths_if.
+            items = list(enumerate(cur))
+            for idx, item in reversed(items):
+                stack.append(((*path, idx), item))
+        elif isinstance(cur, str):
+            ret.append(path)
+    return tuple(ret)
+
+
 def create_function_from_signature(sig, kparams, backend):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
@@ -426,8 +476,10 @@ def create_function_from_signature(sig, kparams, backend):
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
-    constexpr_paths = tuple((idx,) for idx, spec in enumerate(specialization) if spec[0] == "constexpr")
-    attr_paths = tuple((idx,) for idx, spec in enumerate(specialization) if isinstance(spec[1], str))
+    sigvals = [x[0] for x in specialization]
+    attrvals = [x[1] for x in specialization]
+    constexpr_paths = _find_paths_if_leaf_is_constexpr(sigvals)
+    attr_paths = _find_paths_if_leaf_is_str(attrvals)
     return params, specialization, constexpr_paths, attr_paths, options
 """
 
@@ -442,6 +494,8 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     func_namespace["specialize_impl"] = specialize_impl
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
+    func_namespace["_find_paths_if_leaf_is_constexpr"] = _find_paths_if_leaf_is_constexpr
+    func_namespace["_find_paths_if_leaf_is_str"] = _find_paths_if_leaf_is_str
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
 
