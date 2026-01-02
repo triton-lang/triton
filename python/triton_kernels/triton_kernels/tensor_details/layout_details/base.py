@@ -16,14 +16,14 @@ class LayoutTransformation(ABC):
     def unswizzle_data(self, data):
         pass
 
-    @abstractmethod
-    def swizzle_block_shape(self, block_shape):
-        pass
-
 
 @dataclass(frozen=True)
 class Layout(ABC):
 
     @abstractmethod
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
+        pass
+
+    @abstractmethod
+    def swizzle_block_shape(self, block_shape):
         pass

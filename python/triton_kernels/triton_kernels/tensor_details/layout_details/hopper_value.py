@@ -18,6 +18,17 @@ class HopperMXValueLayout(Layout):
     def name(self):
         return "HOPPER_MX_VALUE"
 
+    def swizzle_block_shape(self, block_shape):
+        if self.mx_axis == -2:
+            *head, N, K = block_shape
+            assert N % 4 == 0
+            return [*head, N // 4, K * 4]
+        else:
+            assert self.mx_axis == -1
+            *head, K, N = block_shape
+            assert N % 4 == 0
+            return [*head, K * 4, N // 4]
+
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         return HopperMXValueLayoutTransformation(shape, self.mx_axis, self.mma_version)
 
@@ -146,16 +157,6 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.reshape(*batch, M * 4, K // 4)
         data = self._maybe_mT(data)
         return data[..., :self.K, :self.N]
-
-    def swizzle_block_shape(self, block_shape):
-        if self.mx_axis == len(self.leading_shape) + 1:
-            *head, N, K = block_shape
-            assert N % 4 == 0
-            return [*head, N // 4, K * 4]
-        else:
-            *head, K, N = block_shape
-            assert N % 4 == 0
-            return [*head, K * 4, N // 4]
 
 
 def right_shift_unsigned(x, shift):

@@ -9,7 +9,7 @@ from triton_kernels.tensor import FP4
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
-from triton_kernels.tensor import bitwidth, get_layout
+from triton_kernels.tensor import bitwidth
 
 @dataclass
 class OptFlags:
@@ -231,8 +231,8 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
-    a_mx_scale_layout = get_layout(precision_config.a_mx_scale)
-    b_mx_scale_layout = get_layout(precision_config.b_mx_scale)
+    a_mx_scale_layout = precision_config.a_mx_scale and precision_config.a_mx_scale.storage.layout
+    b_mx_scale_layout = precision_config.b_mx_scale and precision_config.b_mx_scale.storage.layout
     if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
         # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
         supports_persistent = False

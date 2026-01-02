@@ -20,6 +20,9 @@ class StridedLayout(Layout):
     def name(self):
         return None
 
+    def swizzle_block_shape(self, block_shape):
+        return block_shape
+
 
 # ------------------- Strided Layout Transformation -------------------
 
@@ -71,6 +74,3 @@ class StridedLayoutTransformation(LayoutTransformation):
         ret = data.contiguous()
         assert ret.stride(-1) == 1
         return ret
-
-    def swizzle_block_shape(self, block_shape):
-        return block_shape

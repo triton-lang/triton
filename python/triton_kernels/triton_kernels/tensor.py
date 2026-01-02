@@ -19,9 +19,6 @@ class Storage:
     data: torch.Tensor
     layout: Layout
 
-    def __post_init__(self):
-        assert self.layout is not None
-
     @property
     def device(self):
         return self.data.device
@@ -72,13 +69,7 @@ class Tensor:
     shape_max: list[int] | None = None
 
     def __post_init__(self):
-        if isinstance(self.storage, torch.Tensor):
-            shape = list(self.storage.shape)
-            shape[self.storage.stride().index(1)] *= bitwidth(self.storage.dtype) // bitwidth(self.dtype)
-            order = sorted(range(self.storage.ndim), key=lambda d: self.storage.stride()[d])
-            order = [x for x in order]
-            layout = StridedLayout(list(range(self.storage.ndim)))
-            self.storage = Storage(self.storage, layout)
+        assert isinstance(self.storage, Storage)
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.storage.data.dtype
@@ -160,10 +151,9 @@ def is_tma_compliant(tensor):
 
 def make_dense_tma(tensor, block_shape, is_scale):
     storage = tensor.storage
-    layout_transformation = storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
     strides = list(storage.data.stride())
     shape = list(storage.data.shape)
-    block_shape = layout_transformation.swizzle_block_shape(block_shape)
+    block_shape = storage.layout.swizzle_block_shape(block_shape)
     transpose = strides[-1] != 1
     if transpose:
         # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
@@ -250,14 +240,6 @@ class SparseMatrix:
 
 # layout utilities
 # ---------------------------------------------------------------------------- #
-
-
-def get_layout(tensor: torch.Tensor | Tensor | None):
-    if tensor is None:
-        return None
-    if isinstance(tensor, Tensor):
-        return tensor.storage.layout
-    return StridedLayout
 
 
 def wrap_torch_tensor(torch_tensor, dtype=None):

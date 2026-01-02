@@ -21,7 +21,7 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata, get_layout, is_tma_compliant, make_tma
+from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
@@ -122,7 +122,7 @@ def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
         return precision_config.b_mx_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
     elif target_info.cuda_capability_geq(9, 0):
-        b_scale_layout = get_layout(precision_config.b_mx_scale)
+        b_scale_layout = precision_config.b_mx_scale and precision_config.b_mx_scale.storage.layout
         return isinstance(b_scale_layout, HopperMXScaleLayout)
 
     return False
@@ -271,7 +271,7 @@ def matmul(a, b, bias,
     if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
         assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if b_scale is not None and not isinstance(b_scale, Tensor):
-        b_scale = Tensor(b_scale)
+        b_scale = wrap_torch_tensor(b_scale)
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
         b_scale.dtype = torch.uint8
@@ -280,9 +280,9 @@ def matmul(a, b, bias,
     a_has_mx = a_scale is not None
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
     if a_scale is not None and not isinstance(a_scale, Tensor):
-        a_scale = Tensor(a_scale)
+        a_scale = wrap_torch_tensor(a_scale)
     if not isinstance(a, Tensor):
-        a = Tensor(a, dtype=a.dtype)
+        a = wrap_torch_tensor(a, dtype=a.dtype)
     a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None

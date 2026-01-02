@@ -22,6 +22,11 @@ class BlackwellMXScaleLayout(Layout):
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return BlackwellMXScaleLayoutTransformation(shape, is_fp4)
 
+    def swizzle_block_shape(self, block_shape):
+        K, N = block_shape
+        assert N >= 128, f"{block_shape[1]=} must be >= 128"
+        return [1, N // 128, K // 4, 2, 256]
+
 
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayout(Layout):
@@ -31,6 +36,10 @@ class BlackwellActMXScaleLayout(Layout):
     @property
     def name(self):
         return "BLACKWELL_ACT_SCALE"
+
+    def swizzle_block_shape(self, block_shape):
+        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
+        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata)
@@ -117,10 +126,6 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         )
         return data
 
-    def swizzle_block_shape(self, block_shape):
-        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
-        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
-
 
 @dataclass(frozen=True)
 class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
@@ -153,11 +158,6 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
         data = data.transpose(-1, -2)
         return data[..., :self.K, :self.N].contiguous()
-
-    def swizzle_block_shape(self, block_shape):
-        K, N = block_shape
-        assert N >= 128, f"{block_shape[1]=} must be >= 128"
-        return [1, N // 128, K // 4, 2, 256]
 
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)

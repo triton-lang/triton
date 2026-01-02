@@ -22,6 +22,17 @@ class HopperMXScaleLayout(Layout):
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         return HopperMXScaleLayoutTransformation(shape, self.mx_axis, self.num_warps)
 
+    def swizzle_block_shape(self, block_shape):
+        if self.mx_axis == -2:
+            *head, N, K = block_shape
+            assert N % 32 == 0, N
+            return [*head, N // 32, K * 32]
+        else:
+            assert self.mx_axis == -1
+            *head, K, N = block_shape
+            assert N % 32 == 0, N
+            return [*head, K * 32, N // 32]
+
 
 # ------------------- Hopper MX Scale Layout Transformation -------------------
 
@@ -78,16 +89,6 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(*batch, M * 32, K // 32)
         data = self._maybe_mT(data)
         return data[..., :self.M, :self.K]
-
-    def swizzle_block_shape(self, block_shape):
-        if self.mx_axis == len(self.leading_shape) + 1:
-            *head, N, K = block_shape
-            assert N % 32 == 0, N
-            return [*head, N // 32, K * 32]
-        else:
-            *head, K, N = block_shape
-            assert N % 32 == 0, N
-            return [*head, K * 32, N // 32]
 
 
 @triton.jit

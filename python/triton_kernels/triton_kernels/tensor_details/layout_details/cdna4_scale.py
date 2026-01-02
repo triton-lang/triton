@@ -17,6 +17,11 @@ class CDNA4MXScaleLayout(Layout):
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         return CDNA4MXScaleLayoutTransformation(shape)
 
+    def swizzle_block_shape(self, block_shape):
+        SCALE_K = block_shape[-2]
+        N = block_shape[-1]
+        return block_shape[:-2] + [N // 32, SCALE_K * 32]
+
 
 # ------------------- CDNA4 MX Scale Layout Transformation -------------------
 
@@ -48,11 +53,6 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         data = data.permute(0, 1, 6, 4, 2, 5, 3, 7)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_SCALE_pad)
         return data.transpose(-1, -2)[..., :self.K_SCALE, :self.N]
-
-    def swizzle_block_shape(self, block_shape):
-        SCALE_K = block_shape[-2]
-        N = block_shape[-1]
-        return block_shape[:-2] + [N // 32, SCALE_K * 32]
 
 
 @triton.jit

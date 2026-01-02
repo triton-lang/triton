@@ -14,6 +14,9 @@ class BlackwellMXValueLayout(Layout):
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return BlackwellMXValueLayoutTransformation(shape, is_fp4)
 
+    def swizzle_block_shape(self, block_shape):
+        return block_shape
+
 
 def unpack(data: torch.Tensor, dim: int, is_fp4: bool):
     if not is_fp4:
@@ -54,6 +57,3 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         assert list(data.shape) == list(self.shape)
         data = pack(data, -1, self.is_fp4)
         return data
-
-    def swizzle_block_shape(self, block_shape):
-        return block_shape
