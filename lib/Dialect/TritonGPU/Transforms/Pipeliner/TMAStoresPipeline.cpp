@@ -60,17 +60,9 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
   if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
-    auto indices = ttng::translateTMAIndices(
-        builder, storeOp.getLoc(),
-        storeOp.getDesc().getType().getBlockType().getEncoding(),
-        storeOp.getIndices());
     ttng::AsyncTMACopyLocalToGlobalOp::create(builder, loc, desc,
                                               storeOp.getIndices(), alloc);
   } else if (auto reduceOp = dyn_cast<tt::DescriptorReduceOp>(store.op)) {
-    auto indices = ttng::translateTMAIndices(
-        builder, reduceOp.getLoc(),
-        reduceOp.getDesc().getType().getBlockType().getEncoding(),
-        reduceOp.getIndices());
     ttng::AsyncTMAReduceOp::create(builder, loc, reduceOp.getKind(), desc,
                                    reduceOp.getIndices(), alloc);
   } else {

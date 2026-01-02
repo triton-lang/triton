@@ -16,10 +16,6 @@ inline bool isFp4Padded(Attribute encoding) {
   return mmaEnc && mmaEnc.getFp4Padded();
 }
 
-SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
-                                       Attribute encoding,
-                                       SmallVector<Value> indices);
-
 gpu::CGAEncodingAttr updateCGALayoutForShape(gpu::CGAEncodingAttr cgaLayout,
                                              ArrayRef<int64_t> shape);
 

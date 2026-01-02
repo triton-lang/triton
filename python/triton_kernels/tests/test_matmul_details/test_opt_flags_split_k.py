@@ -69,7 +69,7 @@ def setup_nvidia(monkeypatch):
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
         "compute_num_warps",
-        lambda block_m, block_n, is_persistent, precision_config: 4,
+        lambda block_m, block_n, is_persistent, precision_config, constraints: 4,
     )
 
     fake_target = types.SimpleNamespace(backend="cuda")
