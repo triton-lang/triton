@@ -224,7 +224,6 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
-    print("convert from ", tensor.storage.layout, "to", layout)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
     canonical_data = transformation.unswizzle_data(tensor.storage.data)

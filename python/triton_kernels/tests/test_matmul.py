@@ -417,10 +417,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
-    print("tri_y")
-    print(tri_y)
-    print("ref_y")
-    print(ref_y)
     # --- check results ---
     if c_dtype.has_mx_scale:
         tri_y = upcast_from_mxfp(tri_y, precision_opt.c_mx_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)

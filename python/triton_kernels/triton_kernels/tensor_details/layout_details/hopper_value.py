@@ -3,9 +3,9 @@ import triton
 import triton.language as tl
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
-
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
+from .torch_utils import unpack, pack
 
 
 # ------------------- Hopper MX Value Layout -------------------
@@ -74,6 +74,9 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
+        # re-pack as column-major
+        data = unpack(data, -1, self.is_fp4)
+        data = pack(data, -2, self.is_fp4)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
@@ -103,11 +106,11 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         pads = []
         # [rest, K, tile, threads] per dimension
         for i, (a, b, c, s, d) in enumerate(zip(k_tile, warp_tile, threads, scott_trick, contig)):
-            pack = a * b * c * s * d
+            packed = a * b * c * s * d
             size = data.shape[batch + i]
-            pad = (pack - size % pack) % pack
+            pad = (packed - size % packed) % packed
             pads += [(0, pad)]
-            sizes.append((size + pad) // pack)
+            sizes.append((size + pad) // packed)
             sizes += [a, b, c, s, d]
 
         pads = tuple(x for t in pads[::-1] for x in t)
@@ -159,6 +162,8 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
         data = self._maybe_mT(data)
+        data = unpack(data, -2, self.is_fp4)
+        data = pack(data, -1, self.is_fp4)
         data = data[..., :self.K, :self.N // 2]
         data = data.contiguous()
         return data
