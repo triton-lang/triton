@@ -277,9 +277,11 @@ class GlobalScaledAttentionConfig:
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                 P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS):
+                 P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3']
+
+        NUM_WARPS: ttgl.constexpr = 2**len(WARP_BASES)
         assert NUM_WARPS == 4 or NUM_WARPS == 8
         assert P_K_WIDTH == 16 or P_K_WIDTH == 8
 
@@ -287,7 +289,7 @@ class GlobalScaledAttentionConfig:
                                         BLOCK_N, NUM_BUFFERS, NUM_WARPS)
 
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[NUM_WARPS, 1], instr_shape=[16, 16, 128])
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 128])
         self.q_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, 16))
         self.k_layout = ttgl.constexpr(ttgl.DotOperandLayout(1, wmma_layout, 16))
         self.p_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, P_K_WIDTH))
@@ -880,9 +882,11 @@ class BlockScaledAttentionConfig:
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                 P_SCALING, P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS):
+                 P_SCALING, P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3', 'e2m1']
+
+        NUM_WARPS: ttgl.constexpr = 2**len(WARP_BASES)
         assert NUM_WARPS == 4 or NUM_WARPS == 8
         assert P_K_WIDTH == 16 or (KV_TYPE != 'e2m1' and P_K_WIDTH == 8)
         KV_PACK_DIV: ttgl.constexpr = 2 if KV_TYPE == 'e2m1' else 1
@@ -890,15 +894,10 @@ class BlockScaledAttentionConfig:
         self.base = AttentionConfigBase(Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M,
                                         BLOCK_N, NUM_BUFFERS, NUM_WARPS)
 
-        tiles_per_warp: ttgl.constexpr = [2, 2]
-        num_warps: ttgl.constexpr = NUM_WARPS
-
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[num_warps, 1], instr_shape=[16, 16, 128],
-            tiles_per_warp=tiles_per_warp)
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 128])
         wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[num_warps, 1], instr_shape=[16, 16, 64],
-            tiles_per_warp=tiles_per_warp)
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 64])
 
         self.q_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, k_width=16))
         if KV_TYPE == 'e2m1':
@@ -921,8 +920,8 @@ class BlockScaledAttentionConfig:
         self.v_scale_layout = ttgl.constexpr(
             ttgl.amd.gfx1250.get_wmma_scale_layout(self.v_layout, [HEAD_SZ, BLOCK_N // 32]))
 
-        self.k_scale_load_layout = ttgl.constexpr(get_load_layout([HEAD_SZ // 32, BLOCK_N], num_warps))
-        self.v_scale_load_layout = ttgl.constexpr(get_load_layout([BLOCK_N // 32, HEAD_SZ], num_warps))
+        self.k_scale_load_layout = ttgl.constexpr(get_load_layout([HEAD_SZ // 32, BLOCK_N], NUM_WARPS))
+        self.v_scale_load_layout = ttgl.constexpr(get_load_layout([BLOCK_N // 32, HEAD_SZ], NUM_WARPS))
 
         self.k_smem_layout = ttgl.constexpr(  #
             get_padded_shared_layout([BLOCK_N, HEAD_SZ // KV_PACK_DIV]))
@@ -1657,20 +1656,23 @@ def attn_fwd_kernel(  #
         SUBTILE: ttgl.constexpr,  #
         PIPELINED: ttgl.constexpr,  #
         P_SCALING: ttgl.constexpr,  #
-        P_K_WIDTH: ttgl.constexpr):
+        P_K_WIDTH: ttgl.constexpr,  #
+        WARP_BASES: ttgl.constexpr):
 
     NUM_WARPS: ttgl.constexpr = ttgl.num_warps()
+    ttgl.static_assert(2**len(WARP_BASES) == NUM_WARPS)
+
     NUM_BUFFERS: ttgl.constexpr = 2 if PIPELINED else 1
     if BLOCK_SCALING:
         cfg = BlockScaledAttentionConfig(  #
             Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N, P_SCALING,
-            P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS)
+            P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES)
         pgm = BlockScaledAttentionProgram.initialize(  #
             cfg, q_ptr, q_scale_ptr, k_ptr, k_scale_ptr, v_ptr, v_scale_ptr, o_ptr, sm_scale)
     else:
         cfg = GlobalScaledAttentionConfig(  #
             Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N, P_K_WIDTH,
-            SUBTILE, NUM_BUFFERS, NUM_WARPS)
+            SUBTILE, NUM_BUFFERS, WARP_BASES)
         pgm = GlobalScaledAttentionProgram.initialize(  #
             cfg, q_ptr, q_scale_ptr, k_ptr, k_scale_ptr, v_ptr, v_scale_ptr, o_ptr, sm_scale)
 
@@ -1749,10 +1751,15 @@ def attn_fwd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,  #
 
     # Use (NUM_Q_HEADS, NUM_BLOCKS, BATCH) for better xcd locality
     grid = (num_q_heads, cdiv(seqlen_q, block_m), batch)
+    warp_bases = []
+    for i in range(int(math.log2(num_warps))):
+        warp_bases.append((1 << i, 0))
+    warp_bases = tuple(warp_bases)
+
     args = [
         q, k, v, q_scale, k_scale, v_scale, o, sm_scale,  #
         q_type, kv_type, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz, block_m, block_n,  #
-        block_scaling, subtile, pipelined, p_scaling, p_k_width
+        block_scaling, subtile, pipelined, p_scaling, p_k_width, warp_bases
     ]
     kwargs = {"num_warps": num_warps, "waves_per_eu": 1}
     kernel = attn_fwd_kernel[grid](*args, **kwargs)

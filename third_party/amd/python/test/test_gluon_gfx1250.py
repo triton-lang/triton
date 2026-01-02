@@ -28,7 +28,7 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
                 INSTR_SHAPE_K: ttgl.constexpr, K_WIDTH: ttgl.constexpr):
 
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [2, 2], [16, 16, INSTR_SHAPE_K])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -199,7 +199,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
 
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [2, 2], [16, 16, 32])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32])
     SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_M, BLOCK_K],
                                                                                 [1, 0])
     SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_K, BLOCK_N],
@@ -406,7 +406,7 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
                       INSTR_SHAPE_K: ttgl.constexpr, K_WIDTH: ttgl.constexpr, USE_TDM: ttgl.constexpr):
 
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [2, 2], [16, 16, INSTR_SHAPE_K])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
     SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_K], [1, 0])
     SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_K, BLOCK_N], [1, 0])
 
@@ -648,9 +648,9 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type):
             self.load_b = ttgl.constexpr(ttgl.BlockedLayout([1, 16], [16, 2], [4, 1], [1, 0]))
             self.load_scale = ttgl.constexpr(ttgl.BlockedLayout([1, 1], [8, 4], [4, 1], [1, 0]))
 
-            wmma_layout = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+            wmma_layout = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
                                                  instr_shape=[16, 16, 128])
-            wmma_layout_packed = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+            wmma_layout_packed = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
                                                         instr_shape=[16, 16, 64])
             a_layout = ttgl.DotOperandLayout(0, wmma_layout_packed if a_type == "e2m1" else wmma_layout, k_width=16)
             b_layout = ttgl.DotOperandLayout(1, wmma_layout_packed if b_type == "e2m1" else wmma_layout, k_width=16)
@@ -780,9 +780,10 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
         SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]],
                                                                                     [PACKED_BLOCK_K_B, BLOCK_N], [1, 0])
 
-        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
                                                              instr_shape=[16, 16, 128])
-        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1],
+                                                                                                            [1, 0]],
                                                                     instr_shape=[16, 16, 64])
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
@@ -1351,9 +1352,9 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
     A_BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0])
     B_BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [16, 2], [4, 1], [1, 0])
 
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warp_bases=[[0, 1], [1, 0]],
                                                          instr_shape=[16, 16, 128])
-    WMMA_LAYOUT_PACKED: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
+    WMMA_LAYOUT_PACKED: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warp_bases=[[0, 1], [1, 0]],
                                                                 instr_shape=[16, 16, 64])
 
     DOT_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(
@@ -1706,18 +1707,18 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
     SCALE_BLOCK_K: ttgl.constexpr = BLOCK_K // 32
     SCALE_KWIDTH: ttgl.constexpr = 4 if SCALE_BLOCK_K >= 4 else SCALE_BLOCK_K
 
-    tiles_per_warp: ttgl.constexpr = [2, 2]
     NON_K_PRESHUFFLE_BLOCK_SIZE: ttgl.constexpr = 64
 
     scale_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 4], [4, 1], [1, 0])
     a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0])
     b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [16, 2], [4, 1], [1, 0])
 
-    wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=TRANSPOSED_WMMA, warps_per_cta=[2, 2],
-                                                         instr_shape=[16, 16, 128], tiles_per_warp=tiles_per_warp)
+    wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=TRANSPOSED_WMMA, reg_bases=[[0, 1],
+                                                                                                           [1, 0]],
+                                                         warp_bases=[[0, 2], [2, 0]], instr_shape=[16, 16, 128])
     wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=TRANSPOSED_WMMA,
-                                                                warps_per_cta=[2, 2], instr_shape=[16, 16, 64],
-                                                                tiles_per_warp=tiles_per_warp)
+                                                                reg_bases=[[0, 1], [1, 0]], warp_bases=[[0, 2], [2, 0]],
+                                                                instr_shape=[16, 16, 64])
 
     operand_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(
         operand_index=0, parent=wmma_layout_packed if type_a == "e2m1" else wmma_layout, k_width=16)
@@ -2466,3 +2467,135 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
     out_tri = out_handle.cpu()
     out_ref = a.cpu()
     assert torch.equal(out_tri, out_ref)
+
+
+# ==============================================================================
+# Test async_copy shared_to_global with various layouts and vectorization
+# ==============================================================================
+
+
+@gluon.jit
+def async_store_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                      blocked_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    """
+    Test kernel for async_copy.shared_to_global with 2D tensors.
+    Loads from global -> shared (regular), then stores from shared -> global (async).
+    """
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+
+    # Regular load from global and store to shared
+    value = ttgl.load(a_ptrs, mask=mask)
+    buffer.store(value)
+
+    # Async store from shared to global
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+
+@gluon.jit
+def async_copy_shared_to_global_multi_cta_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                 blocked_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    """
+    Test kernel for async_copy.shared_to_global with multi-CTA and 2D tensors.
+    """
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+
+    # Regular load from global and store to shared
+    value = ttgl.load(a_ptrs, mask=mask)
+    buffer.store(value)
+
+    # Async store from shared to global
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+
+@ASYNC_COPY_TEST_PARAM_SIZE
+@ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
+@ASYNC_COPY_TEST_PARAM_DTYPE
+def test_runtime_async_store(M, N, vec_size, shared_layout, dtype):
+    """Test async_copy.shared_to_global with various layouts, sizes, and dtypes."""
+    BLOCK_M = 128
+    BLOCK_N = 128
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    if dtype == torch.float8_e4m3fn:
+        # range from min normal (0 00001 00) to max normal (0 11110 11)
+        a = torch.randint(0x04, 0x7B, (M, N), dtype=torch.uint8).view(dtype)
+    else:
+        a = torch.rand((M, N), dtype=dtype)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out_handle = out.cuda()
+
+    run_kernel = lambda: async_store_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
+                                                                 blocked_layout, shared_layout)
+
+    if (vec_size * dtype.itemsize) == 2:
+        # since 16 bit stores are not supported, we have to abort compilation
+        with pytest.raises(RuntimeError):
+            run_kernel()
+    else:
+        run_kernel()
+        out_tri = out_handle.cpu()
+        out_ref = a.cpu()
+        assert torch.equal(out_tri, out_ref)
+
+
+@pytest.mark.parametrize("blocked_layout", [
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[1, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 2], [0, 0], [0, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 0], [1, 0], [0, 0]]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       cga_layout=[[0, 1], [0, 2], [0, 4], [0, 0]]),
+])
+def test_async_copy_shared_to_global_multi_cta(blocked_layout):
+    """Test async_copy.shared_to_global with multi-CTA configurations."""
+    M, N = 1024, 1024
+    BLOCK_M, BLOCK_N = 128, 128
+    num_ctas = 2**len(blocked_layout.cga_layout)
+
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], blocked_layout.cga_layout)
+
+    a = torch.rand((M, N), dtype=torch.float32)
+    out = torch.empty_like(a)
+
+    a_d = a.cuda()
+    out_d = out.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+
+    async_copy_shared_to_global_multi_cta_kernel[grid](a_d, out_d, M, N, BLOCK_M, BLOCK_N, blocked_layout,
+                                                       shared_layout, num_warps=1, num_ctas=num_ctas)
+    out_tri = out_d.cpu()
+    assert torch.equal(out_tri, a)

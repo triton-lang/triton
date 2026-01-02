@@ -124,7 +124,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 SmallVector<int64_t> &shapePerCTA) {
+                                 ArrayRef<int64_t> shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -895,12 +895,13 @@ LogicalResult getConvertBackwardSlice(
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
-    Value existing;
+    // If there is already an existing conversion to the target layout, we don't
+    // need to propagate to the operands.
+    // Note that this is per-use rather than per-value, so if another use fails
+    // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
-        (existing = getExistingConversion(*currentValueUse, encoding))) {
-      if (failed(updateLayout(existing, encoding)))
-        return failure();
-      currentValue = existing;
+        getExistingConversion(*currentValueUse, encoding)) {
+      continue;
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
@@ -1710,10 +1711,11 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
 
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
+  auto numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (!(barrierType.getElementType().isInteger(64) &&
+        barrierType.getRank() == 1 && barrierType.getShape()[0] <= numCTAs))
+    return op->emitOpError("barrier allocation must be a descriptor of "
+                           "Nxi64 type with N <= number of CTAs");
   return success();
 }
 

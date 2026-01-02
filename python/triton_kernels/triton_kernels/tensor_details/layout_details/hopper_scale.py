@@ -20,6 +20,7 @@ class HopperMXScaleLayout(Layout):
         self.mx_axis = mx_axis
         self.num_warps = num_warps
         *self.leading_shape, self.M, self.K = shape
+        assert len(self.leading_shape) <= self.mx_axis < len(shape)
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -65,9 +66,14 @@ class HopperMXScaleLayout(Layout):
         return data[..., :self.M, :self.K]
 
     def swizzle_block_shape(self, block_shape):
-        N, K = block_shape[-2:]
-        assert N % 32 == 0
-        return [*block_shape[:-2], N // 32, K * 32]
+        if self.mx_axis == len(self.leading_shape) + 1:
+            *head, N, K = block_shape
+            assert N % 32 == 0, N
+            return [*head, N // 32, K * 32]
+        else:
+            *head, K, N = block_shape
+            assert N % 32 == 0, N
+            return [*head, K * 32, N // 32]
 
 
 @triton.jit

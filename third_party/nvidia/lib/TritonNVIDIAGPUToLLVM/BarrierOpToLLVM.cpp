@@ -27,6 +27,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
@@ -120,18 +121,35 @@ struct BarrierExpectConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
-        typeConverter->convertType(op.getAlloc().getType().getElementType()),
-        rewriter);
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+    // If several CTAs cast to the same barrier, that barrier will receive all
+    // the bytes from its broadcast group
+    auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
+    auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
 
     auto id = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     pred = b.and_(pred, adaptor.getPred());
+
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    auto maskCGABroadcast =
+        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+    if (maskCGABroadcast) {
+      // If several CTAs cast to the same barrier, as when we do a TMA into a
+      // tcgen05.mma 2CTA, we just register the expect in the lead barrier, as
+      // it is the only one that will receive the mbarrier signals
+      auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
+    }
+
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx =
         "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], " +
-        std::to_string(op.getSize()) + ";";
+        std::to_string(expectedBytes) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},

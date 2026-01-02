@@ -50,7 +50,7 @@ public:
   NvidiaMmaEncodingAttr mma(unsigned versionMaj, unsigned versionMin,
                             ArrayRef<unsigned> instrShape,
                             ArrayRef<unsigned> numWarps) {
-    auto cgaLayout = CGAEncodingAttr::getDefault(&ctx, numWarps.size());
+    auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, numWarps.size());
     return NvidiaMmaEncodingAttr::get(&ctx, versionMaj, versionMin, numWarps,
                                       std::move(cgaLayout), instrShape);
   }
@@ -86,9 +86,12 @@ public:
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
+    SmallVector<unsigned> tpw(warps.size(), 1u);
     std::iota(cOrd.begin(), cOrd.end(), 0);
+    LinearLayout ctaLayout =
+        chooseWmmaCTALinearLayout(&ctx, warps.size(), warps, tpw);
     return AMDWmmaEncodingAttr::get(
-        &ctx, version, transposed, warps,
+        &ctx, version, ctaLayout, transposed,
         CGAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd), instrShape);
   }
 

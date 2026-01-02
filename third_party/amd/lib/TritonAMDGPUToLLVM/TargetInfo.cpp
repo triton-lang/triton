@@ -101,14 +101,14 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  if (supportsMultiCTALaunch()) {
-    // We dispatch only along x; return the workgroup id x
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                           "llvm.amdgcn.cluster.workgroup.id.x",
-                                           {rewriter.getI32Type()}, {})
-        .getResult(0);
-  }
-  return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+  if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
+    return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+
+  // We dispatch only along x; return the workgroup id x
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                         "llvm.amdgcn.cluster.workgroup.id.x",
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -644,12 +644,7 @@ bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return true;
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return false;
   default:
-    llvm::report_fatal_error(
-        "Unsupported architecture for direct to lds loads");
     return false;
   }
 }
@@ -690,6 +685,13 @@ bool TargetInfo::supportsMultiCTALaunch() const {
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
     return llvm::is_contained({32, 64, 128}, biwWidth);
+  }
+  return false;
+}
+
+bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
 }

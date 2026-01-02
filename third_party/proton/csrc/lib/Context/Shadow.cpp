@@ -37,6 +37,12 @@ void ShadowContextSource::exitScope(const Scope &scope) {
   threadContextStack[this].pop_back();
 }
 
+void ShadowContextSource::clear() {
+  ContextSource::clear();
+  threadContextStack[this].clear();
+  threadContextInitialized[this] = false;
+}
+
 /*static*/ thread_local std::map<ShadowContextSource *, bool>
     ShadowContextSource::threadContextInitialized;
 

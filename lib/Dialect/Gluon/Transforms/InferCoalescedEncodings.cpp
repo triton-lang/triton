@@ -29,8 +29,8 @@ ttg::CGAEncodingAttr getDefaultCGALayout(RankedTensorType refTensorType,
                                          int numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CGAEncodingAttr::getDefault(refTensorType.getContext(),
-                                          refTensorType.getShape().size());
+  return ttg::CGAEncodingAttr::get1CTALayout(refTensorType.getContext(),
+                                             refTensorType.getShape().size());
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {
