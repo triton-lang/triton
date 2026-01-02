@@ -426,7 +426,9 @@ def create_function_from_signature(sig, kparams, backend):
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
-    return params, specialization, options
+    constexpr_paths = tuple((idx,) for idx, spec in enumerate(specialization) if spec[0] == "constexpr")
+    attr_paths = tuple((idx,) for idx, spec in enumerate(specialization) if isinstance(spec[1], str))
+    return params, specialization, constexpr_paths, attr_paths, options
 """
 
     # Prepare defaults to be inserted into function namespace
@@ -440,7 +442,6 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     func_namespace["specialize_impl"] = specialize_impl
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
-
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
 
@@ -675,7 +676,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, {}, target, backend, binder
 
-    def _pack_args(self, backend, kwargs, bound_args, specialization, options):
+    def _pack_args(self, backend, kwargs, bound_args, specialization, constexpr_paths, attr_paths, options):
         # options
         options = backend.parse_options(kwargs)
         # signature
@@ -690,12 +691,10 @@ class JITFunction(JITCallable, KernelInterface[T]):
             if k not in options.__dict__ and k not in sigkeys:
                 raise KeyError("Keyword argument %s was specified but unrecognised" % k)
         # constexprs
-        constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
-        constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
+        constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexpr_paths}
         # attributes
         attrvals = ['' if x[0] == 'constexpr' else x[1] for x in specialization]
-        attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
-        attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
+        attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attr_paths}
 
         return options, signature, constexprs, attrs
 
@@ -714,7 +713,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
-        bound_args, specialization, options = binder(*args, **kwargs)
+        bound_args, specialization, constexpr_paths, attr_paths, options = binder(*args, **kwargs)
 
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines
@@ -727,8 +726,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
-                                                                    options)
+            options, signature, constexprs, attrs = self._pack_args(
+                backend, kwargs, bound_args, specialization, constexpr_paths, attr_paths, options
+            )
 
             kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
             if kernel is None:
