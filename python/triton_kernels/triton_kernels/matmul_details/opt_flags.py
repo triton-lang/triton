@@ -9,7 +9,6 @@ from triton_kernels.tensor import FP4
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
-from triton_kernels.tensor import bitwidth
 
 @dataclass
 class OptFlags:
@@ -126,11 +125,11 @@ def make_default_opt_flags_amd(
         epilogue_subtile = 1
 
     # prevents OutOfSharedMemoryError for mxfp8 on CDNA3
-    if get_cdna_version() == 3 and bitwidth(rhs_dtype) == 8 and precision_config.b_mx_scale is not None:
+    if get_cdna_version() == 3 and rhs_dtype.bitwidth == 8 and precision_config.b_mx_scale is not None:
         num_stages = 1
 
     # specific configs for F16 x MXFP4 on CDNA4
-    if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.b_mx_scale is not None:
+    if is_cdna4 and lhs_dtype.bitwidth == 16 and rhs_dtype.bitwidth == 4 and precision_config.b_mx_scale is not None:
         split_k = 1
         if m <= 1024:
             target_kernel_kwargs["waves_per_eu"] = 3

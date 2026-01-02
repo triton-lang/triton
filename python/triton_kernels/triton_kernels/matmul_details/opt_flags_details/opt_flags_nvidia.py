@@ -4,7 +4,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, Tensor, bitwidth
+from triton_kernels.tensor import FP4, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 
@@ -40,8 +40,8 @@ def compute_block_n(n: int, arch, precision_config):
 
 
 def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
-    lhs_width = bitwidth(lhs_dtype)
-    rhs_width = bitwidth(rhs_dtype)
+    lhs_width = lhs_dtype.bitwidth
+    rhs_width = rhs_dtype.bitwidth
     # block_k needs to match the cacheline size (1024 bits)
     block_k = int(1024 // min(lhs_width, rhs_width))
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
@@ -101,7 +101,7 @@ def compute_num_stages(
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
-    weight_size = bitwidth(rhs_dtype) / 8
+    weight_size = rhs_dtype.bitwidth / 8
     if precision_config.b_mx_scale is not None and lhs_dtype in [torch.float16, torch.bfloat16]:
         # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
         # smem_capacity accordingly.
@@ -110,7 +110,8 @@ def compute_num_stages(
         # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
         # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
         weight_size = 2
-    stage_size = block_m * block_k * lhs_dtype.itemsize + block_k * block_n * weight_size
+
+    stage_size = block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8) + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)

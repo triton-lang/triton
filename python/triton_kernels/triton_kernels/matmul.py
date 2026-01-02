@@ -21,7 +21,7 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
+from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
@@ -262,11 +262,10 @@ def matmul(a, b, bias,
     # unpack b scale
     b_scale = precision_config.b_mx_scale
     b_has_mx = b_scale is not None
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(b.dtype) == 8
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(b, Tensor):
-        # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
-        dtype = FP4 if b.dtype == torch.uint8 else b.dtype
+        dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
     if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
         assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
@@ -274,7 +273,6 @@ def matmul(a, b, bias,
         b_scale = wrap_torch_tensor(b_scale)
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
-        b_scale.dtype = torch.uint8
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
@@ -282,7 +280,7 @@ def matmul(a, b, bias,
     if a_scale is not None and not isinstance(a_scale, Tensor):
         a_scale = wrap_torch_tensor(a_scale)
     if not isinstance(a, Tensor):
-        a = wrap_torch_tensor(a, dtype=a.dtype)
+        a = wrap_torch_tensor(a)
     a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
@@ -354,7 +352,7 @@ def matmul(a, b, bias,
         assert K == K_W
         a_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
-    if b_scale is not None and b_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
+    if b_scale is not None and b_scale.storage.layout.name != "STRIDED" and not opt_flags.is_persistent and target_info.has_native_mxfp():
         raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # fused activation
     matmul_fused_activation = fused_activation
@@ -446,7 +444,7 @@ def matmul(a, b, bias,
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
-        b_scale_tensor_or_tma = b_scale
+        b_scale_tensor_or_tma = b_scale.storage.data
     # create tma descriptor for x_scale
     a_scale_has_tma = False
     if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
@@ -456,7 +454,6 @@ def matmul(a, b, bias,
         a_scale_has_tma = True
     if a_scale_has_tma:
         a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
-        a_scale.dtype = torch.uint8
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
@@ -523,8 +520,8 @@ def matmul(a, b, bias,
                    opt_flags.block_k,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
-                   SWIZZLE_MX_VALUE=None if b.storage.layout.name == "STRIDED" else b.storage.layout.name,
-                   SWIZZLE_MX_SCALE=None if b_scale is None else b_scale.storage.layout.name,
+                   SWIZZLE_MX_VALUE=b.storage.layout.name,
+                   SWIZZLE_MX_SCALE=b_scale.storage.layout.name,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
@@ -592,19 +589,21 @@ def apply_precision(x_tri, w_tri, precision_config):
         return x.float() * scale
 
     if precision_config.a_mx_scale is not None:
+        a_scale = precision_config.a_mx_scale
         mx_axis = x_tri.storage.data.ndim -1
         canonical_layout = layout.StridedLayout([2, 1, 0] if mx_axis == 2 else [1, 0])
         x_tri = convert_layout(x_tri, canonical_layout)
-        x_tri_scale = convert_layout(precision_config.a_mx_scale, canonical_layout)
+        x_tri_scale = convert_layout(a_scale, canonical_layout)
         x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
         x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
 
     if precision_config.b_mx_scale is not None:
+        b_scale = precision_config.b_mx_scale
         mx_axis = w_tri.storage.data.ndim - 2
         canonical_layout = layout.StridedLayout([1, 2, 0] if mx_axis == 1 else [0, 1])
         w_tri = convert_layout(w_tri, canonical_layout)
-        w_tri_scale = convert_layout(precision_config.b_mx_scale, canonical_layout)
+        w_tri_scale = convert_layout(b_scale, canonical_layout)
         w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
         w_ref = apply(w_tri, flex_ctx.rhs_data.scale)

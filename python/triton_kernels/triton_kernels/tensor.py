@@ -9,7 +9,7 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from typing import TypeAlias
+from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E5M2, FP16, BF16, FP32, BIT
 
 
 # storage
@@ -24,39 +24,6 @@ class Storage:
         return self.data.device
 
 
-# data types
-# ---------------------------------------------------------------------------- #
-@dataclass
-class IntegerType:
-    bitwidth: int
-
-
-@dataclass
-class FloatType:
-    bitwidth_exponent: int
-    bitwidth_mantissa: int
-    is_signed: bool
-
-    def __post_init__(self):
-        self.bitwidth = int(self.is_signed) + self.bitwidth_exponent + self.bitwidth_mantissa
-
-
-BIT = IntegerType(1)
-FP4 = FloatType(bitwidth_exponent=2, bitwidth_mantissa=1, is_signed=True)
-FP8_E4M3FN = FloatType(bitwidth_exponent=4, bitwidth_mantissa=3, is_signed=True)
-BF16 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=7, is_signed=True)
-FP16 = FloatType(bitwidth_exponent=5, bitwidth_mantissa=10, is_signed=True)
-FP32 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=23, is_signed=True)
-
-DataType: TypeAlias = IntegerType | FloatType
-
-
-def bitwidth(type: IntegerType | FloatType | torch.dtype):
-    if isinstance(type, torch.dtype):
-        return type.itemsize * 8
-    return type.bitwidth
-
-
 # main tensor class
 # ---------------------------------------------------------------------------- #
 
@@ -64,16 +31,14 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 @dataclass
 class Tensor:
     storage: Storage
-    dtype: IntegerType | FloatType | torch.dtype = None
+    dtype: IntegerType | FloatType
     shape: list[int] | None = None
     shape_max: list[int] | None = None
 
     def __post_init__(self):
         assert isinstance(self.storage, Storage)
         # initialize dtype
-        if self.dtype is None:
-            self.dtype = self.storage.data.dtype
-        if bitwidth(self.dtype) < 8 and self.shape is None:
+        if self.dtype.bitwidth < 8 and self.shape is None:
             raise ValueError("shape must be provided for sub-byte types")
         # initialize shape
         if self.shape is None:
@@ -112,7 +77,7 @@ class Tensor:
         return self.storage.data.numel()
 
     def element_size(self):
-        return bitwidth(self.dtype) // 8
+        return self.dtype.bitwidth // 8
 
     @property
     def data(self):
@@ -243,10 +208,16 @@ class SparseMatrix:
 
 
 def wrap_torch_tensor(torch_tensor, dtype=None):
-    if dtype is None:
-        dtype = torch_tensor.dtype
     shape = list(torch_tensor.shape)
-    shape[torch_tensor.stride().index(1)] *= bitwidth(torch_tensor.dtype) // bitwidth(dtype)
+    if dtype is None:
+        dtype = {
+            torch.uint8: UINT8,
+            torch.float8_e4m3fn: FP8_E4M3FN,
+            torch.float8_e5m2: FP8_E5M2,
+            torch.float16: FP16,
+            torch.bfloat16: BF16,
+        }[torch_tensor.dtype]
+    shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
     order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
     order = [x for x in order]
     return Tensor(Storage(torch_tensor, StridedLayout(order)), dtype=dtype, shape=shape)

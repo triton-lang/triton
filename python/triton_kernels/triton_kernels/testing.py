@@ -316,7 +316,7 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
         else:
             buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else buffer_dtype)
+        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None)
         scales = wrap_torch_tensor(scales)
         if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout
