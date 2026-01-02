@@ -48,13 +48,13 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(1) == 1
-        data = unpack(data, data.stride().index(1), self.is_fp4)
-        assert data.ndim == len(self.shape), "Rank mismatch between data and recorded shape"
-        sizes = [min(data.size(i), self.shape[i]) for i in range(data.ndim)]
-        ret = data[tuple(slice(0, s) for s in sizes)]
-        assert list(ret.shape) == list(self.shape), f"{ret.shape} != {self.shape}"
-        ret = pack(ret, -1, self.is_fp4)
-        return ret
+        sizes = [self.shape[i] for i in range(data.ndim)]
+        sizes[-2] //= 2
+        data = data[tuple(slice(0, s) for s in sizes)]
+        data = unpack(data, -2, self.is_fp4)
+        assert list(data.shape) == list(self.shape)
+        data = pack(data, -1, self.is_fp4)
+        return data
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
