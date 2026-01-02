@@ -216,6 +216,7 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
             torch.float8_e5m2: FP8_E5M2,
             torch.float16: FP16,
             torch.bfloat16: BF16,
+            torch.float32: FP32,
         }[torch_tensor.dtype]
     shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
     order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])

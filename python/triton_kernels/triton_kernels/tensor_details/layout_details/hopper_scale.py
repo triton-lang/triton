@@ -24,12 +24,12 @@ class HopperMXScaleLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         # wrong ? this seems like a transposition
-        if self.mx_axis == -2:
+        if self.mx_axis == -1:
             *head, N, K = block_shape
             assert N % 32 == 0, N
             return [*head, N // 32, K * 32]
         else:
-            assert self.mx_axis == -1
+            assert self.mx_axis == -2
             *head, K, N = block_shape
             assert N % 32 == 0, N
             return [*head, K * 32, N // 32]

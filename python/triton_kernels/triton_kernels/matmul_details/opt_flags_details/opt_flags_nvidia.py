@@ -138,7 +138,7 @@ def compute_num_stages(
         # note: layout conversion has some padding
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
         if x_transpose:
-            smem_capacity -= block_m * block_k * lhs_dtype.itemsize
+            smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
         if precision_config.b_mx_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))

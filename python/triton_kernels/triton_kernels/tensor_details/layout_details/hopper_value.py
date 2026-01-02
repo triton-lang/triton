@@ -19,12 +19,12 @@ class HopperMXValueLayout(Layout):
         return "HOPPER_VALUE"
 
     def swizzle_block_shape(self, block_shape):
-        if self.mx_axis == -2:
+        if self.mx_axis == -1:
             *head, N, K = block_shape
             assert N % 4 == 0
             return [*head, N // 4, K * 4]
         else:
-            assert self.mx_axis == -1
+            assert self.mx_axis == -2
             *head, K, N = block_shape
             assert N % 4 == 0
             return [*head, K * 4, N // 4]

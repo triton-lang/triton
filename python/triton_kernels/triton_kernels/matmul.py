@@ -444,7 +444,7 @@ def matmul(a, b, bias,
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
-        b_scale_tensor_or_tma = b_scale.storage.data
+        b_scale_tensor_or_tma = None if b_scale is None else b_scale.storage.data
     # create tma descriptor for x_scale
     a_scale_has_tma = False
     if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
@@ -521,7 +521,7 @@ def matmul(a, b, bias,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
                    SWIZZLE_MX_VALUE=b.storage.layout.name,
-                   SWIZZLE_MX_SCALE=b_scale.storage.layout.name,
+                   SWIZZLE_MX_SCALE="STRIDED" if b_scale is None else b_scale.storage.layout.name,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
