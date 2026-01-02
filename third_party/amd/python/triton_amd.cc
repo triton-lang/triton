@@ -38,6 +38,7 @@
 #include <pybind11/stl_bind.h>
 #include <sstream>
 #include <stdexcept>
+#include "triton/Tools/PluginUtils.h"
 
 namespace py = pybind11;
 
@@ -558,3 +559,21 @@ void init_triton_amd(py::module &&m) {
                   init.dtype, init.out_dtype, alpha, beta);
       });
 }
+
+extern "C" void init_triton_amd_opaque(void *m) {
+  pybind11::module *_m = (pybind11::module *)m;
+  init_triton_amd(_m->def_submodule("amd"));
+}
+int register_amd_backend() {
+  printf("REGISTERING AMD!\n");
+  if (std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH"); !filename.empty()) {
+    TritonPlugin TP(filename);
+    std::vector<const char *> backendNames;
+    void *init = (void*)init_triton_amd_opaque;
+    if (auto result = TP.registerBackend(init, "amd"); !result)
+      throw TP.err2exp(result.takeError());
+  }
+  return 0xC0FFEE;
+}
+volatile int amdRegistrationAnchor = register_amd_backend();
