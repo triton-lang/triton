@@ -11,7 +11,7 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
+    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950.test' }}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -31,7 +31,7 @@ jobs:
               --env-file /etc/podinfo/gha-gpu-isolation-settings
               --volume /home/runner/.triton:/github/home/.triton
           - image: rocm/pytorch:rocm7.0_ubuntu22.04_py3.10_pytorch_release_2.8.0
-            runner: ["amd-gfx950"]
+            runner: ["amd-gfx950.test"]
             # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
@@ -104,7 +104,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950.test" ]; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
@@ -148,19 +148,19 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950.test" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
             AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
           fi
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950.test" ]; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950.test" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
