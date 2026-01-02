@@ -39,13 +39,10 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         assert data.stride(-1) == 1
         # re-pack as column-major
         data = unpack(data, -1, self.is_fp4)
-        data = pack(data.mT.contiguous().mT, -2, self.is_fp4)
+        data = pack(data, -2, self.is_fp4)
         # leading dimension must be padded to be aligned to 128
-        align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        # pad = align_dim(data.shape[-1]) - data.shape[-1]
-        ret = torch.nn.functional.pad(
-            data.mT, (0, align_dim(data.shape[-2]) - data.shape[-2], 0, align_dim(data.shape[-1]) - data.shape[-1])).mT
-        print(ret.shape)
+        pad_last = (-data.size(-2)) % 128
+        ret = torch.nn.functional.pad(data.mT, (0, pad_last)).contiguous().mT
         return ret
 
     def unswizzle_data(self, data: torch.Tensor):
