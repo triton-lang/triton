@@ -10,9 +10,6 @@ class StridedLayout(Layout):
 
     order: list[int]
 
-    def __post_init__(self):
-        object.__setattr__(self, "order", [x for x in self.order])
-
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return StridedLayoutTransformation(shape, is_fp4, [x for x in self.order])
 
