@@ -133,11 +133,9 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
       ret[1] *= 2;
     }
   } while (true);
-
   if (ret[1] * shapePerWarp.second > tensorShape[1]) {
     return {ret[1], ret[0]};
   }
-
   return ret;
 }
 
@@ -766,7 +764,6 @@ public:
                              oldRetType.getElementType());
 
     rewriter.replaceOp(dotOp, dotOutput);
-
     return success();
   }
 };

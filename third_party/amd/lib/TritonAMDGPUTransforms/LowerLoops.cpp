@@ -936,7 +936,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 
 void lowerLoop(scf::ForOp forOp,
                triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               bool useAsyncCopy, bool usePingpong) {
+               bool useAsyncCopy, bool usePingpong, bool useLdsPrefetch) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;
@@ -948,7 +948,8 @@ void lowerLoop(scf::ForOp forOp,
 
   // i.e., we can still disable `waitAtTail` by explicitly disabling
   // pingpong, which is the only use case of this scheduling variant.
-  bool waitAtTail = usePingpong && (numStages == 3) && useAsyncCopy;
+  bool waitAtTail = (usePingpong && (numStages == 3) && useAsyncCopy) ||
+                    (useLdsPrefetch && useAsyncCopy);
 
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       getIndirectLevel(axisInfoAnalysis, forOp, numStages);
@@ -1000,14 +1001,16 @@ void lowerLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
-void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong) {
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong,
+                bool useLdsPrefetch) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
     return;
   for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong);
+    lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong,
+              useLdsPrefetch);
   }
 }
 

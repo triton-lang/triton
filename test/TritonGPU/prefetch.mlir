@@ -358,3 +358,100 @@ tt.func @matmul_loop_mixed_amd(%lb : index, %ub : index, %step : index, %A : !tt
   tt.return %loop#4 : tensor<128x128xf32, #C>
 }
 }  // end module
+
+// -----
+
+// matmul: local_loads with async_wait tokens
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 2], instrShape = [16, 16, 32], isTransposed = true}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 4, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+
+  // CHECK-LABEL: lds_prefetch_matmul_async_copy
+  // CHECK-DAG: %[[A_ALLOC:.*]] = ttg.local_alloc : {{.*}} -> !ttg.memdesc<2x128x256xf16
+  // CHECK-DAG: %[[B_ALLOC:.*]] = ttg.local_alloc : {{.*}} -> !ttg.memdesc<2x256x128xf16
+  // CHECK: %[[TOKEN_INIT:.*]] = ttg.async_wait {num = 0 : i32}
+  // CHECK: %[[A_IDX_INIT:.*]] = ttg.memdesc_index %[[A_ALLOC]][{{.*}}] : !ttg.memdesc<2x128x256xf16{{.*}}> -> !ttg.memdesc<128x256xf16
+  // CHECK: %[[B_IDX_INIT:.*]] = ttg.memdesc_index %[[B_ALLOC]][{{.*}}] : !ttg.memdesc<2x256x128xf16{{.*}}> -> !ttg.memdesc<256x128xf16
+  // CHECK: %[[A_SUBSLICE_INIT:.*]] = ttg.memdesc_subslice %[[A_IDX_INIT]][0, 0] : !ttg.memdesc<128x256xf16{{.*}}> -> !ttg.memdesc<128x64xf16{{.*}}, 128x256>
+  // CHECK: %[[A_PREFETCH_INIT:.*]] = ttg.local_load %[[A_SUBSLICE_INIT]] token %[[TOKEN_INIT]]
+  // CHECK: %[[B_SUBSLICE_INIT:.*]] = ttg.memdesc_subslice %[[B_IDX_INIT]][0, 0] : !ttg.memdesc<256x128xf16{{.*}}> -> !ttg.memdesc<64x128xf16{{.*}}, 256x128>
+  // CHECK: %[[B_PREFETCH_INIT:.*]] = ttg.local_load %[[B_SUBSLICE_INIT]] token %[[TOKEN_INIT]]
+  // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[TOKEN:.*]] = %[[TOKEN_INIT]], %[[A_IDX:.*]] = %[[A_IDX_INIT]], %[[B_IDX:.*]] = %[[B_IDX_INIT]], %[[A_PREFETCH:.*]] = %[[A_PREFETCH_INIT]], %[[B_PREFETCH:.*]] = %[[B_PREFETCH_INIT]]
+  // CHECK: %[[A_IDX_NEXT:.*]] = ttg.memdesc_index %[[A_ALLOC]]
+  // CHECK: %[[A_COPY:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[A_IDX_NEXT]]
+  // CHECK: %[[A_COMMIT:.*]] = ttg.async_commit_group tokens %[[A_COPY]]
+  // CHECK: %[[B_IDX_NEXT:.*]] = ttg.memdesc_index %[[B_ALLOC]]
+  // CHECK: %[[B_COPY:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[B_IDX_NEXT]]
+  // CHECK: %[[B_COMMIT:.*]] = ttg.async_commit_group tokens %[[B_COPY]]
+  // CHECK: %[[A_SUBSLICE_1:.*]] = ttg.memdesc_subslice %[[A_IDX]][0, 64]
+  // CHECK: %[[A_LOAD_1:.*]] = ttg.local_load %[[A_SUBSLICE_1]] token %[[TOKEN]]
+  // CHECK: %[[B_SUBSLICE_1:.*]] = ttg.memdesc_subslice %[[B_IDX]][64, 0]
+  // CHECK: %[[B_LOAD_1:.*]] = ttg.local_load %[[B_SUBSLICE_1]] token %[[TOKEN]]
+  // CHECK: %[[DOT_0:.*]] = tt.dot %[[A_PREFETCH]], %[[B_PREFETCH]]
+  // CHECK: %[[A_SUBSLICE_2:.*]] = ttg.memdesc_subslice %[[A_IDX]][0, 128]
+  // CHECK: %[[A_LOAD_2:.*]] = ttg.local_load %[[A_SUBSLICE_2]] token %[[TOKEN]]
+  // CHECK: %[[B_SUBSLICE_2:.*]] = ttg.memdesc_subslice %[[B_IDX]][128, 0]
+  // CHECK: %[[B_LOAD_2:.*]] = ttg.local_load %[[B_SUBSLICE_2]] token %[[TOKEN]]
+  // CHECK: %[[DOT_1:.*]] = tt.dot %[[A_LOAD_1]], %[[B_LOAD_1]], %[[DOT_0]]
+  // CHECK: %[[A_SUBSLICE_3:.*]] = ttg.memdesc_subslice %[[A_IDX]][0, 192]
+  // CHECK: %[[A_LOAD_3:.*]] = ttg.local_load %[[A_SUBSLICE_3]] token %[[TOKEN]]
+  // CHECK: %[[B_SUBSLICE_3:.*]] = ttg.memdesc_subslice %[[B_IDX]][192, 0]
+  // CHECK: %[[B_LOAD_3:.*]] = ttg.local_load %[[B_SUBSLICE_3]] token %[[TOKEN]]
+  // CHECK: %[[DOT_2:.*]] = tt.dot %[[A_LOAD_2]], %[[B_LOAD_2]], %[[DOT_1]]
+  // CHECK: %[[TOKEN_NEXT:.*]] = ttg.async_wait %[[A_COMMIT]], %[[B_COMMIT]] {num = 0 : i32}
+  // CHECK: %[[A_SUBSLICE_NEXT:.*]] = ttg.memdesc_subslice %[[A_IDX_NEXT]][0, 0]
+  // CHECK: %[[A_PREFETCH_NEXT:.*]] = ttg.local_load %[[A_SUBSLICE_NEXT]] token %[[TOKEN_NEXT]]
+  // CHECK: %[[B_SUBSLICE_NEXT:.*]] = ttg.memdesc_subslice %[[B_IDX_NEXT]][0, 0]
+  // CHECK: %[[B_PREFETCH_NEXT:.*]] = ttg.local_load %[[B_SUBSLICE_NEXT]] token %[[TOKEN_NEXT]]
+  // CHECK: %[[DOT_3:.*]] = tt.dot %[[A_LOAD_3]], %[[B_LOAD_3]], %[[DOT_2]]
+  // CHECK: scf.yield %[[DOT_3]], {{.*}}, {{.*}}, {{.*}}, %[[TOKEN_NEXT]], %[[A_IDX_NEXT]], %[[B_IDX_NEXT]], %[[A_PREFETCH_NEXT]], %[[B_PREFETCH_NEXT]]
+
+  tt.func public @lds_prefetch_matmul_async_copy(%a_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %b_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_am: i32 {tt.divisibility = 16 : i32}, %stride_bk: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<4> : tensor<128x256xi32, #blocked>
+    %cst_0 = arith.constant dense<4> : tensor<256x128xi32, #blocked1>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %a_ptr_init = tt.splat %a_ptr : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked>
+    %b_ptr_init = tt.splat %b_ptr : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #blocked1>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable>
+    %a_token_init = ttg.async_wait {num = 0 : i32}
+    %a_idx_init = ttg.memdesc_index %a[%c0_i32] : !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+    %b_idx_init = ttg.memdesc_index %b[%c0_i32] : !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<256x128xf16, #shared1, #smem, mutable>
+    %loop:10 = scf.for %iv = %c0_i32 to %K step %c1_i32 iter_args(%accumulator = %cst_1, %a_ptrs = %a_ptr_init, %b_ptrs = %b_ptr_init, %buf_idx = %c0_i32, %a_memdesc = %a, %a_token = %a_token_init, %b_memdesc = %b, %b_token = %a_token_init, %a_idx_arg = %a_idx_init, %b_idx_arg = %b_idx_init) -> (tensor<128x128xf32, #mma>, tensor<128x256x!tt.ptr<f16>, #blocked>, tensor<256x128x!tt.ptr<f16>, #blocked1>, i32, !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.memdesc<128x256xf16, #shared, #smem, mutable>, !ttg.memdesc<256x128xf16, #shared1, #smem, mutable>)  : i32 {
+      %a_ptrs_next = tt.addptr %a_ptrs, %cst : tensor<128x256x!tt.ptr<f16>, #blocked>, tensor<128x256xi32, #blocked>
+      %b_ptrs_next = tt.addptr %b_ptrs, %cst_0 : tensor<256x128x!tt.ptr<f16>, #blocked1>, tensor<256x128xi32, #blocked1>
+      %buf_idx_next = arith.addi %buf_idx, %c1_i32 : i32
+      %should_reset = arith.cmpi slt, %buf_idx_next, %c1_i32 : i32
+      %buf_idx_wrapped = arith.select %should_reset, %buf_idx_next, %c0_i32 : i32
+      %iv_next = arith.addi %iv, %c1_i32 : i32
+
+      %a_loaded = ttg.local_load %a_idx_arg token %a_token : !ttg.memdesc<128x256xf16, #shared, #smem, mutable> -> tensor<128x256xf16, #blocked>
+      %b_loaded = ttg.local_load %b_idx_arg token %b_token : !ttg.memdesc<256x128xf16, #shared1, #smem, mutable> -> tensor<256x128xf16, #blocked1>
+
+      %a_idx_next = ttg.memdesc_index %a_memdesc[%buf_idx_wrapped] : !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+      %a_copy_token = ttg.async_copy_global_to_local %a_ptrs_next, %a_idx_next : tensor<128x256x!tt.ptr<f16>, #blocked> -> <128x256xf16, #shared, #smem, mutable>
+      %a_commit_token = ttg.async_commit_group tokens %a_copy_token
+
+      %b_idx_next = ttg.memdesc_index %b_memdesc[%buf_idx_wrapped] : !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<256x128xf16, #shared1, #smem, mutable>
+      %b_copy_token = ttg.async_copy_global_to_local %b_ptrs_next, %b_idx_next : tensor<256x128x!tt.ptr<f16>, #blocked1> -> <256x128xf16, #shared1, #smem, mutable>
+      %b_commit_token = ttg.async_commit_group tokens %b_copy_token
+
+      %a_converted = ttg.convert_layout %a_loaded : tensor<128x256xf16, #blocked> -> tensor<128x256xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %b_converted = ttg.convert_layout %b_loaded : tensor<256x128xf16, #blocked1> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+      %accumulator_next = tt.dot %a_converted, %b_converted, %accumulator : tensor<128x256xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<256x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
+      %wait_token = ttg.async_wait %a_commit_token, %b_commit_token {num = 0 : i32}
+      scf.yield %accumulator_next, %a_ptrs_next, %b_ptrs_next, %buf_idx_wrapped, %a_memdesc, %wait_token, %b_memdesc, %wait_token, %a_idx_next, %b_idx_next : tensor<128x128xf32, #mma>, tensor<128x256x!tt.ptr<f16>, #blocked>, tensor<256x128x!tt.ptr<f16>, #blocked1>, i32, !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.memdesc<128x256xf16, #shared, #smem, mutable>, !ttg.memdesc<256x128xf16, #shared1, #smem, mutable>
+    }
+    ttg.local_dealloc %b : !ttg.memdesc<2x256x128xf16, #shared1, #smem, mutable>
+    ttg.local_dealloc %a : !ttg.memdesc<2x128x256xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}  // end module
