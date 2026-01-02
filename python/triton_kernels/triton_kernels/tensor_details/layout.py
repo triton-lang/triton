@@ -24,7 +24,7 @@ def make_default_matmul_mxfp4_w_layout(mx_axis: int):
     if cuda_capability_geq(10):
         return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
-        return HopperMXValueLayout(mx_axis=mx_axis)
+        return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
     else:
         return StridedLayout()
 

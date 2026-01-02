@@ -17,10 +17,10 @@ class HopperMXScaleLayout(Layout):
 
     @property
     def name(self):
-        return "HOPPER_MX_SCALE"
+        return "HOPPER_SCALE"
 
-    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
-        return HopperMXScaleLayoutTransformation(shape, self.mx_axis, self.num_warps)
+    def make_transformation(self, shape: list[int], is_fp4) -> LayoutTransformation:
+        return HopperMXScaleLayoutTransformation(shape, is_fp4, self.mx_axis, self.num_warps)
 
     def swizzle_block_shape(self, block_shape):
         # wrong ? this seems like a transposition
@@ -44,9 +44,12 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
     num_warps: int
 
     def __post_init__(self):
+        *leading_shape, M, K = self.shape
         if self.mx_axis < 0:
-            self.mx_axis += len(self.shape)
-        *self.leading_shape, self.M, self.K = self.shape
+            object.__setattr__(self, "mx_axis", self.mx_axis + len(self.shape))
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "M", M)
+        object.__setattr__(self, "K", K)
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -89,7 +92,9 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 32, K // 32)
         data = self._maybe_mT(data)
-        return data[..., :self.M, :self.K]
+        data = data[..., :self.M, :self.K]
+        data = data.contiguous()
+        return data
 
 
 @triton.jit

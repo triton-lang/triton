@@ -262,8 +262,6 @@ def matmul(a, b, bias,
     # unpack b scale
     b_scale = precision_config.b_mx_scale
     b_has_mx = b_scale is not None
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(b, Tensor):
         dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
@@ -273,6 +271,8 @@ def matmul(a, b, bias,
         b_scale = wrap_torch_tensor(b_scale)
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
+    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None

@@ -16,7 +16,7 @@ class HopperMXValueLayout(Layout):
 
     @property
     def name(self):
-        return "HOPPER_MX_VALUE"
+        return "HOPPER_VALUE"
 
     def swizzle_block_shape(self, block_shape):
         if self.mx_axis == -2:
@@ -29,8 +29,8 @@ class HopperMXValueLayout(Layout):
             assert N % 4 == 0
             return [*head, K * 4, N // 4]
 
-    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
-        return HopperMXValueLayoutTransformation(shape, self.mx_axis, self.mma_version)
+    def make_transformation(self, shape: list[int], is_fp4) -> LayoutTransformation:
+        return HopperMXValueLayoutTransformation(shape, is_fp4, self.mx_axis, self.mma_version)
 
 
 # ------------------- Hopper MX Value Layout Transformation -------------------
@@ -42,9 +42,12 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
     mma_version: int
 
     def __post_init__(self):
+        *leading_shape, K, N, = self.shape
         if self.mx_axis < 0:
-            self.mx_axis += len(self.shape)
-        *self.leading_shape, self.K, self.N, = self.shape
+            object.__setattr__(self, "mx_axis", self.mx_axis + len(self.shape))
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "K", K)
+        object.__setattr__(self, "N", N)
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -156,7 +159,9 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
         data = self._maybe_mT(data)
-        return data[..., :self.K, :self.N]
+        data = data[..., :self.K, :self.N // 2]
+        data = data.contiguous()
+        return data
 
 
 def right_shift_unsigned(x, shift):
