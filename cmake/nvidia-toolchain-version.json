@@ -1,6 +1,6 @@
 {
   "ptxas-blackwell": "12.9.86",
-  "ptxas": "12.8.93",
+  "ptxas": "12.9.86",
   "cuobjdump": "13.1.80",
   "nvdisasm": "13.1.80",
   "cudacrt": "13.1.80",
