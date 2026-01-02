@@ -72,6 +72,13 @@ class Tensor:
     shape_max: list[int] | None = None
 
     def __post_init__(self):
+        if isinstance(self.storage, torch.Tensor):
+            shape = list(self.storage.shape)
+            shape[self.storage.stride().index(1)] *= bitwidth(self.storage.dtype) // bitwidth(self.dtype)
+            order = sorted(range(self.storage.ndim), key=lambda d: self.storage.stride()[d])
+            order = [x for x in order]
+            layout = StridedLayout(list(range(self.storage.ndim)))
+            self.storage = Storage(self.storage, layout)
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.storage.data.dtype

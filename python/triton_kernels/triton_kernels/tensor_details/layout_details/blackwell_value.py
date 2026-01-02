@@ -42,12 +42,14 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         data = pack(data.mT.contiguous().mT, -2, self.is_fp4)
         # leading dimension must be padded to be aligned to 128
         align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        pad = align_dim(data.shape[1]) - data.shape[1]
-        ret = torch.nn.functional.pad(data.mT, (0, pad)).mT
+        # pad = align_dim(data.shape[-1]) - data.shape[-1]
+        ret = torch.nn.functional.pad(
+            data.mT, (0, align_dim(data.shape[-2]) - data.shape[-2], 0, align_dim(data.shape[-1]) - data.shape[-1])).mT
+        print(ret.shape)
         return ret
 
     def unswizzle_data(self, data: torch.Tensor):
-        assert data.stride(1) == 1
+        assert data.stride(-2) == 1
         sizes = [self.shape[i] for i in range(data.ndim)]
         sizes[-2] //= 2
         data = data[tuple(slice(0, s) for s in sizes)]
