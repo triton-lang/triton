@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class LayoutTransformation(ABC):
 
     shape: list[int]
+    is_fp4: bool
 
     @abstractmethod
     def swizzle_data(self, data):

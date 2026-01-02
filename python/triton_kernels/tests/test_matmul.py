@@ -397,6 +397,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
 
     # --- triton implementation ---
+    # print(a.storage.data.shape)
+    # print(a.storage.data.stride())
+    # print(b.storage.data.shape)
+    # print(b.storage.data.stride())
     try:
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,

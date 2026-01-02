@@ -11,8 +11,24 @@ class BlackwellMXValueLayout(Layout):
     def name(self):
         return "BLACKWELL_MX_VALUE"
 
-    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
-        return BlackwellMXValueLayoutTransformation(shape)
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellMXValueLayoutTransformation(shape, is_fp4)
+
+
+def unpack(data: torch.Tensor, dim: int, is_fp4: bool):
+    if not is_fp4:
+        return data
+    data_lo = (data >> 0) & 0x0F
+    data_hi = (data >> 4) & 0x0F
+    return torch.cat([data_lo, data_hi], dim=dim)
+
+
+def pack(data: torch.Tensor, dim: int, is_fp4: bool):
+    if not is_fp4:
+        return data
+    data_lo, data_hi = torch.chunk(data, 2, dim=dim)
+    data = (data_hi << 4) | data_lo
+    return data
 
 
 # ------------------- Blackwell MX Value Layout Transformation -------------------
@@ -20,26 +36,24 @@ class BlackwellMXValueLayout(Layout):
 class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
-        # permutation needed to make `data` row major
-        to_row_major = sorted(range(data.ndim), key=lambda d: (data.stride(d), d))[::-1]
-        # permutation  needed to retrieve original order
-        inv = [0] * data.ndim
-        for i, d in enumerate(to_row_major):
-            inv[d] = i
+        assert data.stride(-1) == 1
+        assert list(data.shape[:-1]) == list(self.shape[:-1]), f"{data.shape[:-1]} != {self.shape[:-1]}"
+        assert data.shape[-1] == self.shape[-1] // 2, f"{data.shape[-1]} != {self.shape[-1] // 2}"
         # leading dimension must be padded to be aligned to 128
         align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        major_dim = data.stride().index(1)
-        pad = align_dim(data.shape[major_dim]) - data.shape[major_dim]
-        data = torch.nn.functional.pad(data.permute(to_row_major), (0, pad)).permute(inv).mT
-        print(data.stride())
-        return data
+        pad = align_dim(data.shape[-1]) - data.shape[-1]
+        ret = torch.nn.functional.pad(data, (0, pad)).mT
+        return ret
 
     def unswizzle_data(self, data: torch.Tensor):
-        # Trim padding along all dims back to the original shape recorded at init.
+        assert data.stride(1) == 1
+        data = unpack(data, data.stride().index(1), self.is_fp4)
         assert data.ndim == len(self.shape), "Rank mismatch between data and recorded shape"
-        sizes = [min(data.size(i), self.shape[i]) for i in range(data.ndim)]
-        assert all(s == self.shape[i] for i, s in enumerate(sizes))
-        return data[tuple(slice(0, s) for s in sizes)]
+        ret = data.mT[..., :self.shape[-1]].contiguous()
+        assert ret.stride(-1) == 1
+        assert list(ret.shape) == list(self.shape), f"{ret.shape} != {self.shape}"
+        ret = pack(ret, -1, self.is_fp4)
+        return ret
 
     def swizzle_block_shape(self, block_shape):
         return block_shape

@@ -19,6 +19,9 @@ class Storage:
     data: torch.Tensor
     layout: Layout
 
+    def __post_init__(self):
+        assert self.layout is not None
+
     @property
     def device(self):
         return self.data.device
@@ -63,15 +66,12 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 
 @dataclass
 class Tensor:
-    storage: Storage | torch.Tensor
+    storage: Storage
     dtype: IntegerType | FloatType | torch.dtype = None
     shape: list[int] | None = None
     shape_max: list[int] | None = None
 
     def __post_init__(self):
-        # set storage
-        if isinstance(self.storage, torch.Tensor):
-            self.storage = Storage(self.storage)
         # initialize dtype
         if self.dtype is None:
             self.dtype = self.storage.data.dtype
@@ -153,7 +153,7 @@ def is_tma_compliant(tensor):
 
 def make_dense_tma(tensor, block_shape, is_scale):
     storage = tensor.storage
-    layout_transformation = storage.layout.make_transformation(tensor.shape)
+    layout_transformation = storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
     strides = list(storage.data.stride())
     shape = list(storage.data.shape)
     block_shape = layout_transformation.swizzle_block_shape(block_shape)
@@ -264,14 +264,14 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
-    assert isinstance(tensor, Tensor)
-    shape = list(tensor.shape)
-    print(tensor.shape)
-    shape[-1] //= bitwidth(tensor.storage.data.dtype) // bitwidth(tensor.dtype)
-    old_layout_transformation = tensor.storage.layout.make_transformation(shape)
-    old_data = old_layout_transformation.unswizzle_data(tensor.storage.data)
-    new_layout_transformation = layout.make_transformation(old_data.shape, **layout_transformation_kwargs)
-    new_data = new_layout_transformation.swizzle_data(old_data)
+    print("convert layout", tensor.storage.layout, "to", layout)
+    # convert `tensor` into canonical form
+    transformation = tensor.storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+    canonical_data = transformation.unswizzle_data(tensor.storage.data)
+    # convert canonical form to `layout`
+    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    new_data = transformation.swizzle_data(canonical_data)
+    # return new tensor
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, layout), **attrs)
 
