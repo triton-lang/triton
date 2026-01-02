@@ -19,7 +19,8 @@ constexpr char AttrBypassLDS[] = "amdg.bypass_lds_load";
 //   possible.
 // - schedule these new ops.
 // - serialize schedule to IR for the next expandLoops function.
-void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong,
+                bool useLdsPrefetch);
 
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.

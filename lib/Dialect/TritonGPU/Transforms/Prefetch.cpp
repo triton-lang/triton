@@ -71,8 +71,14 @@ class Prefetcher {
 
   LogicalResult isForOpOperand(Value v);
 
+  FailureOr<Value> getAsyncWaitTokenForLocalLoad(Operation *cvt,
+                                                 bool fromPriorIter,
+                                                 OpBuilder &builder,
+                                                 IRMapping *mapping = nullptr);
+
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
+                         std::optional<Value> asyncWaitToken = std::nullopt,
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt);
 
@@ -114,8 +120,99 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
     ret = mapping.lookup(vals.back());
 }
 
+/*
+Get correct async wait token (AWT), if any, for new LocalLoad based on old
+LocalLoad. Parameters fromPriorIter and mapping specify from where to get AWT.
+
+Case 0 - Prologue. AWT is loop arg; returns init value before loop.
+ - fromPriorIter=false
+ - mapping=nullptr
+Case 1 - Slice[1,N-1]. AWT is loop arg; returns same arg but mapped to
+newForLoop.
+ - fromPriorIter=false
+ - mapping=valid
+Case 2 - Slice[0] prefetched. AWT comes from end of prior loop iteration.
+ - fromPriorIter=true
+ - mapping=valid
+
+ NOTE: fromPriorIter=true & mapping=nullptr is invalid combination.
+*/
+FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
+                                                           bool fromPriorIter,
+                                                           OpBuilder &builder,
+                                                           IRMapping *mapping) {
+  // If convert op is local_load
+  if (auto llOp = dyn_cast<triton::gpu::LocalLoadOp>(cvt)) {
+    // If local_load has extra operand; assumed to be async wait token.
+    if (llOp->getNumOperands() > 1) {
+      // old async_wait token
+      Value awt = llOp->getOperand(1);
+      assert(isa<AsyncTokenType>(awt.getType()));
+      if (!fromPriorIter) {
+        if (!mapping) {
+          // Case 0: return async wait token in prologue.
+          if (mlir::BlockArgument loopArg =
+                  dyn_cast<mlir::BlockArgument>(awt)) {
+            unsigned argIdx =
+                loopArg.getArgNumber() - forOp.getNumInductionVars();
+            Value initAwt = forOp.getInitArgs()[argIdx];
+            return initAwt;
+          } else {
+            assert(false);
+          }
+          return awt;
+        } else {
+          // Case 1: return new async wait token from for(args) for
+          // local_load[1, N-1].
+          return mapping->lookup(awt);
+        }
+      }
+
+      // Case 2: return new async wait token from end of prior iteration,
+      // this occurs for the prefetching local_loads at the end of the loop.
+      // which may or may not have been created yet i.e. is in mapping.
+      // Note: it may already be in mapping for two reasons,
+      // (a) it is a duplicate of async_wait created below,
+      // (b) associated async_wait was already created previously in new loop
+      // even though want prior iter of it. Now we want to wrap around the loop
+      // body and find this token in the previous iteration because it was
+      // prefetched.
+      assert(mapping);
+      assert(fromPriorIter);
+
+      // Want awt from prior iter, but it isn't in map yet, so follow across
+      // loop backedge and create.
+      if (mlir::BlockArgument loopArg = dyn_cast<mlir::BlockArgument>(awt)) {
+        unsigned argIdx = loopArg.getArgNumber() - forOp.getNumInductionVars();
+        Value initAwt = forOp.getInitArgs()[argIdx];
+        Value yieldedAwt = yieldOp.getOperand(argIdx);
+        if (mapping->contains(yieldedAwt)) {
+          return mapping->lookup(yieldedAwt);
+        }
+        LDBG("Case 2 yieldedAwt not yet in map");
+        auto awOp = yieldedAwt.getDefiningOp();
+        // Create new async_wait op in new loop
+        Operation *newAwOp = builder.clone(*awOp, *mapping);
+        for (unsigned dstIdx : llvm::seq(unsigned(0), awOp->getNumResults()))
+          mapping->map(awOp->getResult(dstIdx), newAwOp->getResult(dstIdx));
+        return newAwOp->getResult(0);
+      } else {
+        assert(false || "Want awt fromPriorIter but it wasn't a loop arg?");
+        return failure();
+      }
+    } else {
+      // LocalLoad doesn't have async wait token.
+      return failure();
+    }
+  } else {
+    assert(false || "LocalLoad isn't a LocalLoad!");
+  }
+  return failure();
+}
+
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    Attribute dotEncoding, OpBuilder &builder,
+                                   std::optional<Value> asyncWaitToken,
                                    std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
@@ -145,9 +242,17 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
-  Value prefetchSlice = triton::gpu::LocalLoadOp::create(
-      builder, v.getLoc(),
-      RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem);
+  Value prefetchSlice;
+  if (asyncWaitToken) {
+    prefetchSlice = triton::gpu::LocalLoadOp::create(
+        builder, v.getLoc(),
+        RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem,
+        *asyncWaitToken);
+  } else {
+    prefetchSlice = triton::gpu::LocalLoadOp::create(
+        builder, v.getLoc(),
+        RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem);
+  }
 
   return prefetchSlice;
 }
@@ -190,8 +295,6 @@ LogicalResult Prefetcher::initialize() {
     rets.push_back(op->getResult(0));
     LDBG("Prefetch src: " << *op);
     while (op) {
-      if (op->getNumOperands() != 1)
-        break;
       if (!op->getResult(0).hasOneUse())
         break;
       rets.push_back(op->getOperand(0));
@@ -279,12 +382,18 @@ void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
   for (triton::DotOp dot : dots) {
+    FailureOr<Value> awtA = getAsyncWaitTokenForLocalLoad(
+        dot2aVals[dot].back().getDefiningOp(), false, builder);
+    FailureOr<Value> awtB = getAsyncWaitTokenForLocalLoad(
+        dot2bVals[dot].back().getDefiningOp(), false, builder);
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aPrefetched =
-        generatePrefetch(dot2aHeaderDef[dot], 0, true, dotEncoding, builder);
+    Value aPrefetched = generatePrefetch(
+        dot2aHeaderDef[dot], 0, true, dotEncoding, builder,
+        failed(awtA) ? std::nullopt : std::optional<Value>(*awtA));
     cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
-    Value bPrefetched =
-        generatePrefetch(dot2bHeaderDef[dot], 1, true, dotEncoding, builder);
+    Value bPrefetched = generatePrefetch(
+        dot2bHeaderDef[dot], 1, true, dotEncoding, builder,
+        failed(awtB) ? std::nullopt : std::optional<Value>(*awtB));
     cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
 
     operand2headPrefetch[dot.getA()] = aPrefetched;
@@ -368,13 +477,19 @@ scf::ForOp Prefetcher::createNewForOp() {
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
-        Value aRem =
-            generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
-                             dotEncoding, builder, kOff, kShape);
+        FailureOr<Value> awtA = getAsyncWaitTokenForLocalLoad(
+            dot2aVals[dot].back().getDefiningOp(), false, builder, &mapping);
+        FailureOr<Value> awtB = getAsyncWaitTokenForLocalLoad(
+            dot2bVals[dot].back().getDefiningOp(), false, builder, &mapping);
+        Value aRem = generatePrefetch(
+            mapping.lookup(dot2aLoopArg[dot]), 0, false, dotEncoding, builder,
+            failed(awtA) ? std::nullopt : std::optional<Value>(*awtA), kOff,
+            kShape);
         cloneElementwiseOps(aRem, dot2aVals[dot], builder);
-        Value bRem =
-            generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
-                             dotEncoding, builder, kOff, kShape);
+        Value bRem = generatePrefetch(
+            mapping.lookup(dot2bLoopArg[dot]), 1, false, dotEncoding, builder,
+            failed(awtB) ? std::nullopt : std::optional<Value>(*awtB), kOff,
+            kShape);
         cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
@@ -404,13 +519,19 @@ scf::ForOp Prefetcher::createNewForOp() {
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield = generatePrefetch(mapping.lookup(dot2aYield[dot]), 0, true,
-                                      dotEncoding, builder);
+    // Get async wait tokens from async_wait at end of prior iteration.
+    FailureOr<Value> awtA = getAsyncWaitTokenForLocalLoad(
+        dot2aVals[dot].back().getDefiningOp(), true, builder, &mapping);
+    FailureOr<Value> awtB = getAsyncWaitTokenForLocalLoad(
+        dot2bVals[dot].back().getDefiningOp(), true, builder, &mapping);
+    Value aToYield = generatePrefetch(
+        mapping.lookup(dot2aYield[dot]), 0, true, dotEncoding, builder,
+        failed(awtA) ? std::nullopt : std::optional<Value>(*awtA));
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
-    // bToYield
-    Value bToYield = generatePrefetch(mapping.lookup(dot2bYield[dot]), 1, true,
-                                      dotEncoding, builder);
+    Value bToYield = generatePrefetch(
+        mapping.lookup(dot2bYield[dot]), 1, true, dotEncoding, builder,
+        failed(awtB) ? std::nullopt : std::optional<Value>(*awtB));
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
@@ -426,6 +547,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
   void runOnOperation() override {
 
+    llvm::outs() << "PrefetchPass - Running...\n";
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
@@ -448,6 +570,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
+      llvm::outs() << "PrefetchPass - SUCCEEDED\n";
     });
   }
 };
