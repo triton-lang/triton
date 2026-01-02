@@ -693,7 +693,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
         constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
         # attributes
-        attrvals = [x[1] for x in specialization]
+        attrvals = ['' if x[0] == 'constexpr' else x[1] for x in specialization]
         attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
         attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
 
