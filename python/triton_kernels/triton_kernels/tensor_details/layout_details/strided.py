@@ -2,9 +2,8 @@ import torch
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
 
-# ------------------- Strided Layout -------------------
 
-
+# ------------------- Layout Definition -------------------
 @dataclass(frozen=True)
 class StridedLayout(Layout):
 
@@ -19,9 +18,6 @@ class StridedLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
-
-
-# ------------------- Strided Layout Transformation -------------------
 
 
 def unpack(data: torch.Tensor, dim: int, is_fp4: bool):
@@ -40,15 +36,6 @@ def pack(data: torch.Tensor, dim: int, is_fp4: bool):
     return data
 
 
-def re_layout(x: torch.Tensor, fastest_to_slowest: list[int]) -> torch.Tensor:
-    slowest_to_fastest = list(reversed(fastest_to_slowest))
-    tmp = x.permute(*slowest_to_fastest).contiguous()
-    inv = [0] * x.ndim
-    for i, d in enumerate(slowest_to_fastest):
-        inv[d] = i
-    return tmp.permute(*inv)
-
-
 @dataclass(frozen=True)
 class StridedLayoutTransformation(LayoutTransformation):
 
@@ -59,7 +46,10 @@ class StridedLayoutTransformation(LayoutTransformation):
         data = unpack(data, -1, self.is_fp4)
         assert list(data.shape) == list(self.shape), f"{data.shape} != {self.shape}"
         ret = pack(data, self.order[0], self.is_fp4)
-        ret = re_layout(ret, self.order)
+        inv = [0] * len(self.order)
+        for i, d in enumerate(reversed(self.order)):
+            inv[d] = i
+        ret = ret.permute(*reversed(self.order)).contiguous().permute(*inv)
         assert ret.stride(self.order[0]) == 1
         return ret
 
