@@ -133,11 +133,11 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
       ret[1] *= 2;
     }
   } while (true);
-
   if (ret[1] * shapePerWarp.second > tensorShape[1]) {
+    //llvm::outs() << "warpsPerTile0: " << ret[1] << "x" << ret[0] << "\n";
     return {ret[1], ret[0]};
   }
-
+  //llvm::outs() << "warpsPerTile1: " << ret[0] << "x" << ret[1] << "\n";
   return ret;
 }
 
@@ -759,7 +759,6 @@ public:
                              oldRetType.getElementType());
 
     rewriter.replaceOp(dotOp, dotOutput);
-
     return success();
   }
 };
