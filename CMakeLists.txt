@@ -169,6 +169,15 @@ endif()
 
 
 # -----
+# Build extensions
+if (DEFINED TRITON_EXT_DIRS)
+  foreach(EXT_DIR ${TRITON_EXT_DIRS})
+    get_filename_component(EXT_NAME ${EXT_DIR} NAME)
+    cmake_path(APPEND TRITON_BINARY_DIR "third_party" ${EXT_NAME} OUTPUT_VARIABLE EXT_DIR_BUILD_OUTPUT)
+    message(STATUS "Building extension '${EXT_NAME}' from ${EXT_DIR} with output ${EXT_DIR_BUILD_OUTPUT}")
+    add_subdirectory(${EXT_DIR} ${EXT_DIR_BUILD_OUTPUT})
+  endforeach()
+endif()
 
 # ------
 if(TRITON_BUILD_PYTHON_MODULE)
