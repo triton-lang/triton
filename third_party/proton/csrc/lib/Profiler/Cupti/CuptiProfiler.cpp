@@ -188,6 +188,7 @@ constexpr std::array<CUpti_CallbackId, 22> kDriverApiLaunchCallbacks = {
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz,
     CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture};
 
+
 constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
     CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020,
     CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000,
@@ -201,6 +202,28 @@ constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
     CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_v10000,
     CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_ptsz_v10000,
 };
+
+constexpr std::array<CUpti_CallbackId, 22> kKernelLaunchCallbacks =
+    { // Driver and runtime kernel launch APIs, excluding graph and stream capture
+        CUPTI_DRIVER_TRACE_CBID_cuLaunch,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz,
+        CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000,
+        CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000};
 
 constexpr std::array<CUpti_CallbackId, 6> kGraphResourceCallbacks = {
     CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
@@ -262,6 +285,12 @@ bool isDriverAPILaunch(CUpti_CallbackId cbId) {
   return std::find(kDriverApiLaunchCallbacks.begin(),
                    kDriverApiLaunchCallbacks.end(),
                    cbId) != kDriverApiLaunchCallbacks.end();
+}
+
+bool isKernelLaunch(CUpti_CallbackId cbId) {
+  return std::find(kKernelLaunchCallbacks.begin(),
+                   kKernelLaunchCallbacks.end(),
+                   cbId) != kKernelLaunchCallbacks.end();
 }
 
 // TODO: Move it to GPUProfiler.h once AMD side is settled
@@ -648,12 +677,20 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         return;
       }
       size_t numNodes = 1;
+      if (isKernelLaunch(cbId)) {
+        // Symbol name is only available for kernel launch APIs
+        const auto symbolName =
+            callbackData->context && callbackData->symbolName
+                ? std::string(callbackData->symbolName)
+                : "";
+        threadState.enterOp(Scope(symbolName));
+      } else {
+        threadState.enterOp(Scope(""));
+      }
+      const auto &scope = threadState.scopeStack.back();
       auto &dataToEntry = threadState.dataToEntry;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
-        const auto scope = Scope();
-        threadState.enterOp(scope);
-
         auto graphExec = static_cast<const cuGraphLaunch_params *>(
                              callbackData->functionParams)
                              ->hGraph;
@@ -708,14 +745,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             }
           }
         }
-      } else { // Individual kernel launches
-        const auto symbolName =
-            callbackData->context && callbackData->symbolName
-                ? std::string(callbackData->symbolName)
-                : "";
-        threadState.enterOp(Scope(symbolName));
       }
-      const auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
                                      numNodes, scope.name.empty(), dataToEntry);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
