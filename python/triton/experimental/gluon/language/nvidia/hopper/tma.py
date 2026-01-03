@@ -97,8 +97,35 @@ class tensor_descriptor(base_value):
         return self.type.layout
 
 
+def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
+    coord = list(coord)[-1]
+    align_bytes = 16
+    if desc.layout.fp4_padded:
+        align_bytes = 64
+    dtype = desc.dtype
+    assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
+    elem_bytes = dtype.primitive_bitwidth // 8
+    align = align_bytes // elem_bytes
+
+    align_val = ttgl.to_tensor(align, _semantic=_semantic)
+    zero = ttgl.to_tensor(0, _semantic=_semantic)
+
+    coord = ttgl.to_tensor(coord, _semantic=_semantic)
+    rem = coord.__mod__(align_val, _semantic=_semantic)
+    is_zero = rem.__eq__(zero, _semantic=_semantic)
+
+    fp4_padded = "with fp4_padded=True " if desc.layout.fp4_padded else ""
+    ttgl.device_assert(
+        is_zero, f"{fn_name} {fp4_padded}{arg_name} must be {align_bytes}-byte aligned, "
+        f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}", _semantic=_semantic)
+
+
 @builtin
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
+                              _semantic=_semantic)
+
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
@@ -114,6 +141,9 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate",
+                              _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 

@@ -293,8 +293,10 @@ def async_gather(input, x_offsets, y_offset, BLOCK_X, BLOCK_Y):
 @pytest.mark.parametrize("BLOCK_X", [8, 128])
 @pytest.mark.parametrize("BLOCK_Y", [16, 128])
 @pytest.mark.parametrize("y_offset", [-16, 0, 48, 1000])
+@pytest.mark.parametrize("X_MAX, Y_MAX", [(1024, 1024)])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_async_gather(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX=1024, Y_MAX=1024):
+def test_async_gather(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX, Y_MAX, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = "iisan"
     torch.manual_seed(0)
 
     input = torch.randn((X_MAX, Y_MAX), dtype=dtype, device="cuda")
@@ -408,8 +410,10 @@ def async_scatter(input, x_offsets, y_offset, src, BLOCK_X, BLOCK_Y):
 @pytest.mark.parametrize("BLOCK_X", [8, 128])
 @pytest.mark.parametrize("BLOCK_Y", [16, 128])
 @pytest.mark.parametrize("y_offset", [0, 48, 1000])
+@pytest.mark.parametrize("X_MAX, Y_MAX", [(1024, 1024)])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_async_scatter(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX=1024, Y_MAX=1024):
+def test_async_scatter(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX, Y_MAX, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = "iisan"
     torch.manual_seed(0)
 
     input = torch.randn((X_MAX, Y_MAX), dtype=dtype, device="cuda")

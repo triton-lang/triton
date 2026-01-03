@@ -447,8 +447,8 @@ class Counter:
 
 @gluon.jit
 def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -474,8 +474,8 @@ def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
 
 @gluon.jit
 def matmul_mma_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -525,8 +525,8 @@ def _split_n(x, SUBTILE_FACTOR: gl.constexpr):
 
 @gluon.jit
 def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_empty_bars = p.acc_empty_bars
@@ -571,8 +571,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
 @gluon.jit
 def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.constexpr, num_buffers: gl.constexpr,
                                    SUBTILE_FACTOR: gl.constexpr, num_warps: gl.constexpr):
-    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = b_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
 
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
@@ -609,7 +609,8 @@ def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUB
 
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+    # Reduce the block size of the C tensor descriptor to account for the subtiled epilogue.
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N // SUBTILE_FACTOR], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)

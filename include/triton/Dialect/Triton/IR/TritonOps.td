@@ -1354,6 +1354,7 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
     $kind `,` $desc `[` $indices `]` `,` $src
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
+  let hasVerifier = 1;
 }
 
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface]> {
@@ -1380,13 +1381,6 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface
   }];
 
   let hasVerifier = 1;
-
-  let extraClassDeclaration = [{
-    // TMA gathers have restrictions on the minimum size of the gather result.
-    // This function verifies the result type.
-    static LogicalResult verifyResultType(Operation *op, ShapedType resultType,
-                                          RankedTensorType indicesType);
-  }];
 }
 
 def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {

@@ -430,7 +430,9 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch):
             smemA.store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, blocked_layout))
         elif MEM_ACCESS_KIND == "tmem_load":
             res = acc.load(blocked_layout)
-            smemAcc = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], input_desc.layout, res)
+            smemAcc = ttgl.allocate_shared_memory(input_desc.dtype, [XBLOCK, XBLOCK], input_desc.layout,
+                                                  res.to(input_desc.dtype))
+            blackwell.fence_async_shared()
             tma.async_copy_shared_to_global(input_desc, [0, 0], smemAcc)
             tma.store_wait(0)
         elif MEM_ACCESS_KIND == "tmem_store":
