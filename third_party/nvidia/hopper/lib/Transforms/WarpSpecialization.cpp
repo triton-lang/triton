@@ -2,6 +2,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
