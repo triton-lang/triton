@@ -655,17 +655,32 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `ttg.warp_id` (triton::gpu::WarpIdOp)
 
+_Return the GPU warp ID_
+
 Syntax:
 
 ```
 operation ::= `ttg.warp_id` attr-dict
 ```
 
+This operation returns the GPU warp ID. This can translate to reading
+hardware registers if there are, or just thread ID divided by warp size.
+
+The `omitUniformHint` attribute is indicating in NVIDIA backend whether to
+omit emitting nvvm.shfl.sync idx 0 for LLVM.
+
 Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>omitUniformHint</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
 
 #### Results:
 
