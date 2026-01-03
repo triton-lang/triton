@@ -207,7 +207,7 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def wrap_torch_tensor(torch_tensor, shape=None, shape_max=None, dtype=None):
+def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None):
     if dtype is None:
         dtype = {
             torch.uint8: UINT8,

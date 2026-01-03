@@ -96,12 +96,6 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     scale_block = x_fp4_scale.storage.layout.swizzle_block_shape(scale_block)
     value_block = [s // 2 if i == mx_axis else s for i, s in enumerate(shape)]
     value_block = x_fp4_val.storage.layout.swizzle_block_shape(value_block)
-    print(x_fp4_val.storage.data.shape, x_fp4_val.storage.data.stride())
-    print(x_fp4_val.storage.data)
-    print(x_fp4_scale.storage.data.shape, x_fp4_scale.storage.data.stride())
-    print(x_fp4_scale.storage.data)
-    print(scale_block)
-    print(value_block)
     _upcast_mxfp4_to_bf16[(1, )](
         y, x_fp4_val.storage.data, x_fp4_scale.storage.data,  #
         x_fp4_val.storage.data.stride(0), x_fp4_val.storage.data.stride(1),  #

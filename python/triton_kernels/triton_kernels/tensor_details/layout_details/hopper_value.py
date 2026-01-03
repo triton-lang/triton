@@ -76,7 +76,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         """
         # re-pack as column-major
         data = unpack(data, -1, self.is_fp4)
-        data = pack(data, -2, self.is_fp4)
+        data = pack(data, self.mx_axis, self.is_fp4)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)

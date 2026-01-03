@@ -21,6 +21,8 @@ from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
+from triton_kernels.tensor_details.dtype import FP32
+
 # ---------------
 # numerics stuff
 # ---------------
@@ -438,6 +440,6 @@ def test_set_idle_sms():
     from triton_kernels.matmul_details.opt_flags import make_opt_flags
     num_idle_sms = 24
     matmul_set_idle_sms(num_idle_sms)
-    flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
+    flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
