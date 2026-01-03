@@ -529,7 +529,7 @@ static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
   auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
   std::string opcode =
       "tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".mbarrier::arrive::one.b64";
+      ".mbarrier::arrive::one.shared::cluster.b64";
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(barrierOperand).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));

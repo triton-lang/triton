@@ -444,7 +444,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async,
-    UnitAttr:$two_ctas
+    UnitAttr:$two_ctas,
+    UnitAttr:$multicast
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -452,6 +453,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     OpBuilder<(ins "Type":$token,
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
+      CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async)>

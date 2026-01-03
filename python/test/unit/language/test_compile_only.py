@@ -65,7 +65,7 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*"
                r"tcgen05\.mma\.cta_group::1.kind::f16"
                r"(.|\n)*"
-               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64"
+               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64"
                r"(.|\n)*"
                r"mbarrier.try_wait.parity.shared::cta.b64"
                r"(.|\n)*"

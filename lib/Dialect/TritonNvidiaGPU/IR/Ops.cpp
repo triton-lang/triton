@@ -579,14 +579,16 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isAsync) {
+                        Value pred, bool twoCtas, bool multicast,
+                        ValueRange barriers, ValueRange barrierPreds,
+                        bool isAsync) {
   if (!barriers.empty()) {
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        twoCtas ? builder.getUnitAttr() : UnitAttr(),
+        multicast ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
