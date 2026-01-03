@@ -70,8 +70,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         symmetric_memory_pool.hdl.barrier(channel=0)
     bitmatrix_shape = [n_rows * symmetric_memory_pool.mesh.world_size if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
-    _bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
-    bitmatrix = Bitmatrix(_bitmatrix.storage, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
+    bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
 
 

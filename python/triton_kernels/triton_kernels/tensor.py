@@ -9,7 +9,7 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E5M2, FP16, BF16, FP32, BIT
+from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E5M2, FP16, BF16, FP32
 
 
 # storage
@@ -147,13 +147,6 @@ def make_tma(tensor, block_shape, mode, is_scale=False):
 # ---------------------------------------------------------------------------- #
 # bitmatrix
 # ---------------------------------------------------------------------------- #
-@dataclass
-class Bitmatrix(Tensor):
-
-    def __post_init__(self):
-        assert self.dtype == BIT
-        super().__post_init__()
-
 
 make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
 make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
@@ -197,7 +190,7 @@ remap_ragged_tensor_metadata_torch = ragged_tensor_details.remap_ragged_tensor_m
 class SparseMatrix:
     indx: torch.Tensor
     vals: torch.Tensor
-    mask: Bitmatrix
+    mask: Tensor
 
     def __post_init__(self):
         self.mask_metadata = make_bitmatrix_metadata(self.indx, self.mask)
