@@ -647,15 +647,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         threadState.isStreamCapturing = false;
         return;
       }
-      const auto symbolName = callbackData->context && callbackData->symbolName
-                                  ? std::string(callbackData->symbolName)
-                                  : "";
-      threadState.enterOp(Scope(std::move(symbolName)));
-      const auto &scope = threadState.scopeStack.back();
-      auto &dataToEntry = threadState.dataToEntry;
       size_t numNodes = 1;
+      auto &dataToEntry = threadState.dataToEntry;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
+        const auto scope = Scope();
+        threadState.enterOp(scope);
+
         auto graphExec = static_cast<const cuGraphLaunch_params *>(
                              callbackData->functionParams)
                              ->hGraph;
@@ -710,10 +708,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             }
           }
         }
+      } else { // Individual kernel launches
+        const auto symbolName =
+            callbackData->context && callbackData->symbolName
+                ? std::string(callbackData->symbolName)
+                : "";
+        threadState.enterOp(Scope(symbolName));
       }
-      bool isMissingName = scope.name.empty();
+      const auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                     numNodes, isMissingName, dataToEntry);
+                                     numNodes, scope.name.empty(), dataToEntry);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
