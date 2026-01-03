@@ -539,7 +539,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         worker_args = [flatten_values_to_ir(args) for _, args in workers]
         mlir_args = sum(worker_args, [])
         builder.restore_insertion_point(insert_pt)
-        ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
+        ws_op = builder.create_warp_specialize(result_types, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
 
         if worker_num_regs is not None:
@@ -547,7 +547,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         # Emit the partition regions.
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
-        partitions_op = builder.create_warp_specialize_partitions(num_partitions)
+        partitions_op = builder.create_warp_specialize_partitions(mlir_args, num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
         arg_it = 0
         for i, (func, args) in enumerate(workers):

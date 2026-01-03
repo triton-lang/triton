@@ -136,8 +136,8 @@ private:
 
     // look through `ttg.warp_specialize`.
     if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(argOwner)) {
-      findCopyRegToSharedOps(wsOp.getParentOp().getExplicitCaptures()[argNum],
-                             visited, result);
+      findCopyRegToSharedOps(wsOp.getExplicitCaptures()[argNum], visited,
+                             result);
       return;
     }
 

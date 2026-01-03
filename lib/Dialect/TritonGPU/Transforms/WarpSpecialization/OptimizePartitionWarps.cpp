@@ -53,7 +53,8 @@ static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
   auto *funcInfo =
       axisInfo.getFuncData(wsOp->getParentOfType<FunctionOpInterface>());
   assert(funcInfo && "expected to find function axis info");
-  for (auto [i, capture] : llvm::enumerate(wsOp.getExplicitCaptures())) {
+  for (auto [i, capture] :
+       llvm::enumerate(wsOp.getPartitionOp().getExplicitCaptures())) {
     AxisInfo info = funcInfo->lookup(capture);
     containerFunc.setArgAttr(i, "tt.contiguity",
                              b.getI64IntegerAttr(info.getContiguity(0)));
