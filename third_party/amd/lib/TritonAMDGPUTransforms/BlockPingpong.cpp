@@ -796,10 +796,12 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // s_barrier
   //
   // Check note 2 and 3 for details.
+  // MODIFIED: Use fine-grained lgkmcnt(4) instead of lgkmcnt(0)
+  // to allow overlapping memory operations with compute
   updateOpInsertion(dotOps[1]);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  auto dsAttr = builder.getI32IntegerAttr(0);
+  auto dsAttr = builder.getI32IntegerAttr(4);  // Was 0, now allow 4 outstanding
   prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
                 builder, loc, /* load= */ nullptr, /* store= */ nullptr,
                 /* ds= */ dsAttr),
