@@ -30,7 +30,8 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
 
   auto partitions = cast<WarpSpecializePartitionsOp>(
       op.getPartitionOpHolder().front().front());
-  OperationState state(partitions.getLoc(), partitions.getOperationName());
+  OperationState state(partitions.getLoc(), partitions.getOperationName(),
+                       partitions.getOperands(), /*types=*/{});
   for (Region *region : partitions.getRegions())
     state.addRegion()->takeBody(*region);
 
@@ -39,7 +40,7 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
     partitionNumWarps.push_back(paddingSize);
 
     Block &body = state.addRegion()->emplaceBlock();
-    for (Value capture : op.getExplicitCaptures())
+    for (Value capture : op.getPartitionOp().getExplicitCaptures())
       body.addArgument(capture.getType(), capture.getLoc());
     OpBuilder b(op.getContext());
     b.setInsertionPointToStart(&body);

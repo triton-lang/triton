@@ -124,8 +124,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
 
     // Look through `ttg.warp_specialize` explicit captures.
     if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
-      return findBufferAccess(
-          wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+      return findBufferAccess(wsOp.getExplicitCaptures()[arg.getArgNumber()]);
     }
 
     // Unknown block argument.
