@@ -647,8 +647,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         threadState.isStreamCapturing = false;
         return;
       }
-      const auto symbolName =
-          callbackData->symbolName ? std::string(callbackData->symbolName) : "";
+      const auto symbolName = callbackData->context && callbackData->symbolName
+                                  ? std::string(callbackData->symbolName)
+                                  : "";
       threadState.enterOp(Scope(std::move(symbolName)));
       const auto &scope = threadState.scopeStack.back();
       auto &dataToEntry = threadState.dataToEntry;
