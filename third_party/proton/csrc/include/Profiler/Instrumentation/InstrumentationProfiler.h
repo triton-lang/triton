@@ -9,6 +9,8 @@
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
 
+#include <set>
+
 namespace proton {
 
 class InstrumentationProfiler : public Profiler,
@@ -44,12 +46,11 @@ protected:
 
   // OpInterface
   void startOp(const Scope &scope) override {
-    for (auto data : getDataSet()) {
-      auto scopeId = data->addOp(scope.scopeId, scope.name);
-      dataScopeIdMap[data] = scopeId;
+    for (auto data : dataSet) {
+      dataToEntryMap.insert_or_assign(data, data->addOp(scope.name));
     }
   }
-  void stopOp(const Scope &scope) override { dataScopeIdMap.clear(); }
+  void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }
 
 private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
@@ -71,7 +72,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // data -> scopeId
-  static thread_local std::map<Data *, size_t> dataScopeIdMap;
+  DataToEntryMap dataToEntryMap;
 };
 
 } // namespace proton
