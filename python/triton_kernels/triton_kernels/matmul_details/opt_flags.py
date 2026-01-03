@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
-from triton_kernels.tensor import FP4
+from triton_kernels.tensor import FP4, FP32
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
@@ -284,7 +284,7 @@ def make_default_opt_flags_nvidia(
         block_m,
         block_n,
         block_k,
-        torch.float32 if split_k > 1 else out_dtype,
+        FP32 if split_k > 1 else out_dtype,
         lhs_dtype,
         rhs_dtype,
         x_transpose,

@@ -21,7 +21,7 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
+from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, dtype_to_torch_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
@@ -166,9 +166,10 @@ def init_allocation(x, w, precision_config, fused_activation,
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
+    dtype = dtype_to_torch_dtype(allocation.output[1])
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.empty(allocation.output[0], device=allocation.device, dtype=dtype)
     else:
         if output.ndim == 2:
             output = output[None, :, :]

@@ -257,8 +257,8 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, mx_axis: int = 1):
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
-    storage_shape = (*shape[:1], shape[1] // 2, *shape[2:]) if dtype == FP4 else shape
+    storage_shape = (*shape[:mx_axis], shape[mx_axis] // 2, *shape[mx_axis + 1:]) if dtype == FP4 else shape
     storage = torch.empty(storage_shape, device=device, dtype=storage_dtype)
     if dtype == FP4:
         storage = storage.mT.contiguous().mT
-    return Tensor(Storage(storage), dtype=FP4 if dtype == FP4 else storage_dtype, shape=shape)
+    return wrap_torch_tensor(storage, dtype=FP4 if dtype == FP4 else None, shape=shape)

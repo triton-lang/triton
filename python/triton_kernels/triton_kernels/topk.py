@@ -10,6 +10,7 @@ from triton_kernels.tensor import wrap_torch_tensor, dtype_to_torch_dtype
 
 
 def make_empty(offset, shape, dtype, device, all_gather, symmetric_memory_pool):
+    dtype = dtype_to_torch_dtype(dtype)
     if all_gather:
         rank_id = symmetric_memory_pool.mesh.local_rank
         ret_bufs = symmetric_memory_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
@@ -17,7 +18,7 @@ def make_empty(offset, shape, dtype, device, all_gather, symmetric_memory_pool):
         offset = symmetric_memory_pool.align_up(offset + ret.numel() * ret.element_size(),
                                                 symmetric_memory_pool.regions["topk"].alignment)
         return ret_bufs, ret, offset
-    ret = torch.empty(shape, dtype=dtype_to_torch_dtype(dtype), device=device)
+    ret = torch.empty(shape, dtype=dtype, device=device)
     return (ret, ), ret, 0
 
 

@@ -124,7 +124,7 @@ def compute_num_stages(
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8
-        out_itemsize = out_dtype.itemsize * (1.25 if has_y_acc_in else 1.0)
+        out_itemsize = (out_dtype.bitwidth / 8) * (1.25 if has_y_acc_in else 1.0)
         if target_info.cuda_capability_geq(10, 0):
             acc_size = epilogue_effective_itemsize or out_itemsize
         else:
