@@ -111,6 +111,11 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
 
+// Return true if the result of op is stored contiguously or reduced along the
+// dimension of mfmaLayout's order[0].
+bool isAccessedContigWithMfmaLayout(
+    Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
+    const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout);
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);

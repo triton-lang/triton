@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "llvm/ADT/TypeSwitch.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -684,6 +685,79 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   }
 
   return true;
+}
+
+bool isAccessedContigWithMfmaLayout(
+    Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
+    const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout) {
+  assert(isa<DotOp>(op) && "expected DotOp");
+  auto dotOp = cast<DotOp>(op);
+  RankedTensorType dotOpType = dotOp.getType();
+  assert(dotOpType.getEncoding() &&
+         isa<mlir::triton::gpu::BlockedEncodingAttr>(dotOpType.getEncoding()) &&
+         "expect Blocked layout for DotOp");
+
+  const ForwardSliceOptions fwdOpt;
+  SetVector<mlir::Operation *> forwardSliceSet;
+  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+
+  auto shape = dotOpType.getShape();
+  auto order = getOrder(mfmaLayout, shape);
+  auto blockedLayout =
+      cast<triton::gpu::BlockedEncodingAttr>(dotOpType.getEncoding());
+  bool orderHasChanged = false;
+  // Look for the first use of dotOp that is a store or a reduceOp
+  // TODO: handle multiple users of op
+  for (Operation *fop : forwardSliceSet) {
+    // Check if the result of dotOp is reduced along mfma order[0]
+    if (auto reduceOp = dyn_cast<triton::ReduceOp>(*fop)) {
+      auto axis = reduceOp.getAxis();
+      return !orderHasChanged && order[0] == axis;
+    }
+
+    // Check if this operation changes the shape of dotOp's data type
+    if (fop->getNumResults() > 1)
+      break;
+    if (fop->getNumResults() == 1) {
+      auto resultType = fop->getResult(0).getType();
+      auto shapedType = dyn_cast<mlir::RankedTensorType>(resultType);
+      if (!shapedType || !shapedType.hasRank() ||
+          shapedType.getShape() != shape)
+        break;
+    }
+
+    if (auto cvtLayoutOp = dyn_cast<triton::gpu::ConvertLayoutOp>(fop)) {
+      // Check if convertLauyoutOp preserves order[0]
+      RankedTensorType cvtType = cvtLayoutOp.getType();
+      if (auto newEnc = dyn_cast<triton::gpu::BlockedEncodingAttr>(
+              cvtType.getEncoding())) {
+        auto newOrder = newEnc.getOrder();
+        if (order[0] != newOrder[0])
+          orderHasChanged = true;
+      } else
+        break;
+    } else {
+      // Check if the result of dotOp is stored continuously along order[0]
+      Value ptr =
+          llvm::TypeSwitch<Operation *, Value>(fop)
+              .Case<triton::StoreOp, triton::amdgpu::MaskedStoreOp,
+                    triton::amdgpu::BufferStoreOp,
+                    triton::amdgpu::BufferAtomicRMWOp,
+                    triton::amdgpu::BufferAtomicCASOp>(
+                  [&](auto storeOp) -> Value { return storeOp.getPtr(); })
+              .Default([&](Operation *) -> Value { return Value(); });
+
+      if (!ptr)
+        continue;
+
+      AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+
+      if (axisInfo->getRank() != order.size())
+        return false;
+      return !orderHasChanged && axisInfo->getContiguity(order[0]) != 1;
+    }
+  }
+  return false;
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
