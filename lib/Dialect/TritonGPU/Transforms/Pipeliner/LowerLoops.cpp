@@ -643,10 +643,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 /////////////////////////////
 
 std::pair<Operation *, Operation *>
-getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
+getTmemUseStageBoundOps(Value alloc, scf::ForOp forOp,
                         CoarseSchedule &schedule) {
   std::pair<Operation *, Operation *> bounds = {nullptr, nullptr};
-  for (auto user : alloc->getUsers()) {
+  for (auto user : alloc.getUsers()) {
     if (!forOp->isAncestor(user->getParentOp())) {
       continue;
     }
@@ -704,7 +704,7 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
-                             ttng::TMEMAllocOp alloc, int phaseArgIdx,
+                             Value alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
@@ -712,7 +712,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   llvm::SmallDenseSet<Operation *> syncCandidates;
 
-  for (auto user : alloc->getUsers()) {
+  for (auto user : alloc.getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (load->getBlock() != mma->getBlock()) {
         continue;
@@ -797,7 +797,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
 
   // Add waits before loads in conditional blocks
-  for (auto user : alloc->getUsers()) {
+  for (auto user : alloc.getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (load->getBlock() == mma->getBlock()) {
         continue;
@@ -964,10 +964,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
-  auto alloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!alloc) {
-    return forOp;
-  }
+  Value alloc = mma.getAccumulator();
 
   int mmaSelfLatency = getSelfLatencyFromAttr(mma.getOperation());
   if (mmaSelfLatency == 0) {
@@ -989,6 +986,11 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
            tmemUseStageBoundOps.second))) {
     tmemUseNumStages += 1;
   }
+
+  // If the accumulator needs to be double-buffered but we can't find the alloc
+  // op, then bail out.
+  if (tmemUseNumStages > 1 && !alloc.getDefiningOp<ttng::TMEMAllocOp>())
+    return forOp;
 
   OpBuilder builder(forOp);
   Value minusOne =
@@ -1028,8 +1030,9 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                           phaseArgIdx, barrierIdxArgIdx);
 
   if (tmemUseNumStages > 1) {
-    multibufferTensorMemory(forOp, schedule, alloc, bufIdxArgIdx,
-                            tmemUseNumStages);
+    multibufferTensorMemory(forOp, schedule,
+                            alloc.getDefiningOp<ttng::TMEMAllocOp>(),
+                            bufIdxArgIdx, tmemUseNumStages);
   }
 
   return forOp;
