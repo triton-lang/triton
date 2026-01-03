@@ -692,6 +692,18 @@ void TreeData::clear() {
   tree.swap(newTree);
 }
 
+void TreeData::reset() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  tree->walk<Tree::WalkPolicy::PostOrder>([&](Tree::TreeNode &node) {
+    for (auto &[_, metric] : node.metrics) {
+      metric->reset();
+    }
+    for (auto &[_, flexibleMetric] : node.flexibleMetrics) {
+      flexibleMetric.reset();
+    }
+  });
+}
+
 void TreeData::dumpHatchet(std::ostream &os) const {
   auto output = buildHatchetJson(tree.get());
   os << std::endl << output.dump(4) << std::endl;

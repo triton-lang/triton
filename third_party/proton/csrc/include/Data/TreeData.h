@@ -39,6 +39,8 @@ public:
 
   void clear() override;
 
+  void reset() override;
+
 protected:
   // ScopeInterface
   void enterScope(const Scope &scope) override;

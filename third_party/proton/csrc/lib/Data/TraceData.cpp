@@ -119,6 +119,10 @@ public:
     return it->second;
   }
 
+  void removeEvent(size_t eventId) {
+    traceEvents.erase(eventId);
+  }
+
   const std::map<size_t, TraceEvent> &getEvents() const { return traceEvents; }
 
 private:
@@ -219,6 +223,16 @@ void TraceData::clear() {
   auto newTrace = std::make_unique<Trace>();
   trace.swap(newTrace);
 }
+
+void TraceData::reset() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto &[eventId, event] : trace->getEvents()) {
+    if (!event.metrics.empty()) {
+      trace->removeEvent(eventId);
+    }
+  }
+}
+
 namespace {
 
 // Structure to pair CycleMetric with its context for processing

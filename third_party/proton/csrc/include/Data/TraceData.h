@@ -27,6 +27,8 @@ public:
 
   void clear() override;
 
+  void reset() override;
+
   std::string toJsonString() const override;
 
   std::vector<uint8_t> toMsgPack() const override;
