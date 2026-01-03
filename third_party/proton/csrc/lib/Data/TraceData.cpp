@@ -119,9 +119,7 @@ public:
     return it->second;
   }
 
-  void removeEvent(size_t eventId) {
-    traceEvents.erase(eventId);
-  }
+  void removeEvent(size_t eventId) { traceEvents.erase(eventId); }
 
   const std::map<size_t, TraceEvent> &getEvents() const { return traceEvents; }
 
