@@ -264,7 +264,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.AMDWMMALayout(
         amdWmma.getVersion(), amdWmma.getIsTransposed(),
         ctaLayout.getBases().lookup(kWarp), ctaLayout.getBases().lookup(kReg),
-        toStdVector(amdWmma.getInstrShape()), cgaBases);
+        toStdVector(amdWmma.getInstrShape()), cgaBases, amdWmma.getRank());
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
     auto *ctx = paddedShared.getContext();

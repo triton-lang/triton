@@ -116,6 +116,7 @@ class AMDWMMALayout(DistributedLayout):
         reg_bases (Optional[List[List[int]]]): Repetition (register) bases for CTA layout.
         instr_shape (Optional[List[int]]): Instruction shape (M, N, K). Defaults to (16, 16, 16).
         cga_layout (Optional[List[List[int]]]): Bases describing CTA tiling.
+        rank (Optional[int]): rank of warp and register bases. Default to 2 if missing.
 
     Current supported versions:
 
@@ -141,8 +142,8 @@ class AMDWMMALayout(DistributedLayout):
         instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
         super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
-        if self.rank is None:
-            super().__setattr__("rank", 2)
+        rank = _unwrap_if_constexpr(self.rank) if self.rank is not None else 2
+        super().__setattr__("rank", rank)
         self.verify()
 
     def _to_ir(self, builder):
@@ -163,8 +164,13 @@ class AMDWMMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        cga_layout = stringify(["~".join(map(str, vec)) for vec in self.cga_layout] if self.cga_layout else None)
-        return f"WMMA_{self.version}_{self.transposed}_{self.warp_bases}_{self.reg_bases}_{stringify(self.instr_shape)}_{cga_layout}_WMMA"
+        def nested_stringify(x):
+            return stringify(["~".join(map(str, vec)) for vec in x] if x else None)
+
+        warp_bases = nested_stringify(self.warp_bases)
+        reg_bases = nested_stringify(self.reg_bases)
+        cga_layout = nested_stringify(self.cga_layout)
+        return f"WMMA_{self.version}_{self.transposed}_{warp_bases}_{reg_bases}_{stringify(self.instr_shape)}_{cga_layout}_{self.rank}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
