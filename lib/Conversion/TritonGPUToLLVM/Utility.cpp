@@ -1404,13 +1404,14 @@ Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
 static void
 makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
   SetVector<Value> captures;
-  getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+  auto partOp = wsOp.getPartitionOp();
+  getUsedValuesDefinedAbove(partOp.getPartitionRegions(), captures);
   for (Value capture : captures) {
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
-    for (Region *region : wsOp.getPartitionRegions()) {
+    partOp->insertOperands(partOp.getNumOperands(), capture);
+    for (Region &region : partOp.getPartitionRegions()) {
       BlockArgument arg =
-          region->addArgument(capture.getType(), capture.getLoc());
-      replaceAllUsesInRegionWith(capture, arg, *region);
+          region.addArgument(capture.getType(), capture.getLoc());
+      replaceAllUsesInRegionWith(capture, arg, region);
     }
   }
 }

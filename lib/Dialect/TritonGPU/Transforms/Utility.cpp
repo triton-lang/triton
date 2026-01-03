@@ -887,10 +887,10 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op/while op results for now.
+    // Skip propagating through for op/while op/ws op results for now.
     // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>() ||
-        currentValue.getDefiningOp<scf::WhileOp>())
+    auto defOp = currentValue.getDefiningOp();
+    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
@@ -1548,9 +1548,9 @@ void replaceUsesAndPropagateType(
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Propagate through `ttg.warp_specialize`.
-    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
-      for (Region *region : wsOp.getPartitionRegions())
-        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(use.getOwner())) {
+      for (Region &region : wsOp.getPartitionRegions())
+        region.getArgument(use.getOperandNumber()).setType(val.getType());
     }
 
     // Non-subview/trans ops will be replaced by `val`.

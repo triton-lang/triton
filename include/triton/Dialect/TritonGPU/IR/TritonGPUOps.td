@@ -507,13 +507,10 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     ```
   }];
 
-  let arguments = (ins
-    Variadic<AnyType>:$explicitCaptures,
-    DenseI32ArrayAttr:$partitionNumWarps,
-    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds,
-    OptionalAttr<DenseI32ArrayAttr>:$requestedRegisters,
-    OptionalAttr<DenseI32ArrayAttr>:$actualRegisters
-  );
+  let arguments = (ins DenseI32ArrayAttr:$partitionNumWarps,
+      OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds,
+      OptionalAttr<DenseI32ArrayAttr>:$requestedRegisters,
+      OptionalAttr<DenseI32ArrayAttr>:$actualRegisters);
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
 
   let regions = (region
@@ -523,6 +520,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let extraClassDeclaration = [{
     RegionRange getPartitionRegions();
+    WarpSpecializePartitionsOp getPartitionOp();
 
     // Get the size and alignment of the capture list.
     std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
@@ -530,12 +528,11 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     unsigned getTotalPartitionWarps();
   }];
 
-  let builders = [
-    OpBuilder<(ins "TypeRange":$resultTypes,
-                   "ArrayRef<int32_t>":$partitionNumWarps,
-                   "unsigned":$numPartitionRegions)>,
-    OpBuilder<(ins "TypeRange":$resultTypes, "ValueRange":$explicitCaptures,
-                   "ArrayRef<int32_t>":$partitionNumWarps)>,
+  let builders = [OpBuilder<(ins "TypeRange":$resultTypes,
+                      "ArrayRef<int32_t>":$partitionNumWarps,
+                      "unsigned":$numPartitionRegions)>,
+                  OpBuilder<(ins "TypeRange":$resultTypes,
+                      "ArrayRef<int32_t>":$partitionNumWarps)>,
   ];
 
   let hasVerifier = 1;
@@ -556,7 +553,11 @@ def TTG_WarpSpecializePartitionsOp
     contains the actual isolated from above regions of `ttg.warp_specialize`.
   }];
 
+  let arguments = (ins Variadic<AnyType>:$explicitCaptures);
   let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
+
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [

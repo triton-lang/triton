@@ -521,23 +521,23 @@ void AuxDataMap::getBuffersAndBarriers(
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
                                       RegionToValueMap &map) {
-  func.walk([&](WarpSpecializeOp op) {
+  func.walk([&](WarpSpecializePartitionsOp op) {
     op->insertOperands(op.getNumOperands(), {valueType.value});
-    for (Region *region : op.getPartitionRegions()) {
+    for (Region &region : op.getPartitionRegions()) {
       // Pass the value as a pointer type (instead of the type of underlying
       // memory)
-      region->addArgument(valueType.value.getType(), op.getLoc());
+      region.addArgument(valueType.value.getType(), op.getLoc());
       Type newType = valueType.type;
       if (auto tensorType = dyn_cast<RankedTensorType>(newType)) {
         // If this is a tensor, make sure the layout matches the region's warp
         // count
         newType = getIntTensorType(
-            region, tensorType.getShape(),
+            &region, tensorType.getShape(),
             tensorType.getElementType().getIntOrFloatBitWidth());
       }
-      map.insert(region,
-                 ValueType{region->getArgument(region->getNumArguments() - 1),
-                           newType});
+      map.insert(
+          &region,
+          ValueType{region.getArgument(region.getNumArguments() - 1), newType});
     }
   });
 }
