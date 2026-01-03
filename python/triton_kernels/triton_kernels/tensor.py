@@ -207,8 +207,7 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def wrap_torch_tensor(torch_tensor, dtype=None):
-    shape = list(torch_tensor.shape)
+def wrap_torch_tensor(torch_tensor, shape=None, shape_max=None, dtype=None):
     if dtype is None:
         dtype = {
             torch.uint8: UINT8,
@@ -218,10 +217,14 @@ def wrap_torch_tensor(torch_tensor, dtype=None):
             torch.bfloat16: BF16,
             torch.float32: FP32,
         }[torch_tensor.dtype]
-    shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
+    if shape is None:
+        shape = list(torch_tensor.shape)
+        shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
+    if shape_max is None:
+        shape_max = shape
     order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
     order = [x for x in order]
-    return Tensor(Storage(torch_tensor, StridedLayout(order)), dtype=dtype, shape=shape)
+    return Tensor(Storage(torch_tensor, StridedLayout(order)), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
