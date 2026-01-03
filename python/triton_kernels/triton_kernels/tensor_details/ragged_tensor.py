@@ -126,12 +126,11 @@ def _cdiv_pow2(n, log2_k):
 
 
 @triton.jit
-def _ragged_tensor_metadata_memset(SliceSizes, n_slices, BlockOffs, slice_offs_stride_m, BlockSchedule,
+def _ragged_tensor_metadata_memset(SliceSizes, n_slices, BlockOffs, slice_offs_stride_m, numel, BlockSchedule,
                                    first_block_size_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     if pid <= SIZES:
-        BlockOffs += pid * slice_offs_stride_m
-        BlockOffsPtrs = BlockOffs + tl.arange(0, BLOCK)
+        block_offs = pid * slice_offs_stride_m + tl.arange(0, BLOCK)
         block_size_log2 = tl.where(pid == 0, 0, pid + first_block_size_log2 - 1)
         # total number of blocks in slice processed as the loop iterates
         n_blocks_tot = tl.zeros([BLOCK], dtype=BlockOffs.dtype.element_ty)
@@ -145,8 +144,8 @@ def _ragged_tensor_metadata_memset(SliceSizes, n_slices, BlockOffs, slice_offs_s
             # start index of the blocks for the slices loaded
             block_starts = tl.cumsum(n_blocks, 0) + n_blocks_tot
             n_blocks_tot += tl.sum(n_blocks, 0)
-            tl.store(BlockOffsPtrs, block_starts - n_blocks)
-            BlockOffsPtrs += BLOCK
+            tl.store(BlockOffs + block_offs, block_starts - n_blocks, mask=block_offs < numel)
+            block_offs += BLOCK
     else:
         # initialize block schedule to -1
         pid -= (SIZES + 1)
@@ -194,10 +193,11 @@ def make_ragged_tensor_metadata(slice_sizes, n_total_rows):
     slice_offs, block_offs_data = slice_offs_combined[0], slice_offs_combined[1:]
     n_memset_blocks = exact_div(n_memset_elts, MEMSET_BLOCK)
 
+    numel = sum((d - 1) * s for d, s in zip(slice_offs_combined.shape, slice_offs_combined.stride()) if d > 0) + 1
     _ragged_tensor_metadata_memset[(slice_offs_combined.shape[0] + n_memset_blocks, )](
         slice_sizes, n_slices,  #
         slice_offs_combined, slice_offs_combined.stride(0),  #
-        block_schedule_data,  #
+        numel, block_schedule_data,  #
         block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=MEMSET_BLOCK,  # optimization parameters
         num_warps=4)
 
