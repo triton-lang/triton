@@ -15,7 +15,7 @@ class CDNA4MXScaleLayout(Layout):
         return "CDNA4_MX_SCALE"
 
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
-        return CDNA4MXScaleLayoutTransformation(shape)
+        return CDNA4MXScaleLayoutTransformation(shape, False)
 
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]
@@ -32,12 +32,20 @@ NON_K_PRESHUFFLE_BLOCK_SIZE = 32
 class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
 
     def __post_init__(self) -> None:
-        *self.leading_shape, self.K_SCALE, self.N = self.shape
-        self.B = math.prod(self.leading_shape)
-        self.ALIGN_K_SCALE = 8
-        self.ALIGN_N = 32
-        self.K_SCALE_pad = math.ceil(self.K_SCALE / self.ALIGN_K_SCALE) * self.ALIGN_K_SCALE
-        self.N_pad = math.ceil(self.N / self.ALIGN_N) * self.ALIGN_N
+        *leading_shape, K_SCALE, N = self.shape
+        B = math.prod(leading_shape)
+        ALIGN_K_SCALE = 8
+        ALIGN_N = 32
+        K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
+        N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "B", B)
+        object.__setattr__(self, "ALIGN_K_SCALE", ALIGN_K_SCALE)
+        object.__setattr__(self, "ALIGN_N", ALIGN_N)
+        object.__setattr__(self, "K_SCALE_pad", K_SCALE_pad)
+        object.__setattr__(self, "N_pad", N_pad)
+        object.__setattr__(self, "K_SCALE", K_SCALE)
+        object.__setattr__(self, "N", N)
 
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
