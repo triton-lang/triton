@@ -107,13 +107,19 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
         auto pointeeTy =
             funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
-        auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
         // If no valid pointee type for this function argument, use null type as
         // unknown type.
         mlir::Type elTy =
             pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
+        LLVM::DITypeAttr tyAttr = convertPtrType(context, ptrTy, elTy, dl);
+        types.push_back(tyAttr);
+      } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(inTy)) {
         LLVM::DITypeAttr tyAttr =
-            convertPtrType(context, ptrTy, elTy, sizeInBits);
+            convertStructType(context, structTy, fileAttr, dl, line);
+        types.push_back(tyAttr);
+      } else if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(inTy)) {
+        LLVM::DITypeAttr tyAttr =
+            convertArrayType(context, arrayTy, fileAttr, dl, line);
         types.push_back(tyAttr);
       } else {
         // Here assume remaining inTys are only scalar types

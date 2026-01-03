@@ -33,6 +33,12 @@
 #include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+namespace mlir::triton::amd {
+struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
+  StringRef getName() final { return "<AMDGPU::L2Cache>"; }
+};
+} // namespace mlir::triton::amd
+
 // clang-format off
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc"
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.h.inc"

@@ -617,7 +617,19 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
 }
 
 def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
+  let summary = "Return the GPU warp ID";
+
+  let description = [{
+    This operation returns the GPU warp ID. This can translate to reading
+    hardware registers if there are, or just thread ID divided by warp size.
+
+    The `omitUniformHint` attribute is indicating in NVIDIA backend whether to
+    omit emitting nvvm.shfl.sync idx 0 for LLVM.
+  }];
+
+  let arguments = (ins UnitAttr:$omitUniformHint);
   let results = (outs I32:$result);
+
   let assemblyFormat = "attr-dict";
 }
 
