@@ -158,11 +158,13 @@ bool ReduceOpHelper::isAssociative() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
-  return getEncoding().getContigPerThread()[getAxis()];
+  return getEncoding().getContigPerThread(
+      /*handleBroadcastDims=*/true)[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  auto contigPerThread = getEncoding().getContigPerThread();
+  auto contigPerThread =
+      getEncoding().getContigPerThread(/*handleBroadcastDims=*/true);
   contigPerThread[getAxis()] = 1;
   return product<unsigned>(contigPerThread);
 }
@@ -190,7 +192,8 @@ unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
-  auto contigPerThread = getEncoding().getContigPerThread();
+  auto contigPerThread =
+      getEncoding().getContigPerThread(/*handleBroadcastDims=*/true);
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   unsigned axis = getAxis();
@@ -200,7 +203,8 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
-  auto contigPerThread = getEncoding().getContigPerThread();
+  auto contigPerThread =
+      getEncoding().getContigPerThread(/*handleBroadcastDims=*/true);
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   auto rank = contigPerThread.size();
@@ -734,11 +738,13 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
   auto order = getOrder();
+  auto contigPerThread =
+      getEncoding().getContigPerThread(/*handleBroadcastDims=*/true);
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getEncoding().getContigPerThread()[dim];
+    stride *= contigPerThread[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
@@ -762,7 +768,8 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
 unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto order = getOrder();
   unsigned stride = 1;
-  auto contigPerThread = getEncoding().getContigPerThread();
+  auto contigPerThread =
+      getEncoding().getContigPerThread(/*handleBroadcastDims=*/true);
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   for (unsigned dim : order) {

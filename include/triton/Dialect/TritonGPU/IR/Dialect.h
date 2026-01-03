@@ -127,7 +127,17 @@ inline SmallVector<unsigned> getWarpsPerCTA(RankedTensorType type) {
 // for thread 0 would be [A_{0, 0}, A_{0, 0}, A_{0, 0}, A_{0, 0}], returns [1,
 // 1]. Whereas for a tensor shape [128, 128], the elements for thread 0 would be
 // [A_{0, 0}, A_{0, 1}, A_{0, 2}, A_{0, 3}], returns [1, 4].
-SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
+// The logic to find contiguity extent fails in the presence of zero basis
+// vectors. These are created due to the presence of broadcast dimensions along
+// which several registers and lanes might share the same value. We can simply
+// ignore these zero basis vectors when we want to find true contiguity in the
+// presence of broadcast dimensions (controlled by `handleBroadcastDims`).
+// TODO: Consider enabling this in the general case for finding contiguity after
+// considering observed effects on e2e performance (heuristics not accounting
+// for this can be one of the reasons for performance difference).
+SmallVector<unsigned>
+getContigPerThread(RankedTensorType tensorType,
+                   const bool handleBroadcastDims = false);
 
 // Returns the number of threads per warp that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,

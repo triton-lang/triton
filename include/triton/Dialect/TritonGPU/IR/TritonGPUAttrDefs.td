@@ -671,14 +671,23 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
 
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
-  let extraClassDeclaration = extraDistributedDeclaration # [{
+  let extraClassDeclaration = extraDistributedDeclaration#[{
     // Generic distributed encoding methods
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
 
-    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>) const;
-    SmallVector<unsigned> getContigPerThread() const;
-    SmallVector<unsigned> getContigPerWarp() const;
+    // The logic to find contiguity extent fails in the presence of zero basis
+    // vectors. These are created due to the presence of broadcast dimensions along
+    // which several registers and lanes might share the same value. We can simply
+    // ignore these zero basis vectors when we want to find true contiguity in the
+    // presence of broadcast dimensions (controlled by `handleBroadcastDims`).
+    // TODO: Consider enabling this in the general case for finding contiguity after
+    // considering observed effects on e2e performance (heuristics not accounting
+    // for this can be one of the reasons for performance difference).
+    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>, const bool handleBroadcastDims = false) const;
+    SmallVector<unsigned> getContigPerThread(const bool handleBroadcastDims = false) const;
+    SmallVector<unsigned> getContigPerWarp(const bool handleBroadcastDims = false) const;
+
     SmallVector<unsigned> getOrder() const;
     SmallVector<unsigned> getWarpOrder() const;
     SmallVector<unsigned> getThreadOrder() const;
