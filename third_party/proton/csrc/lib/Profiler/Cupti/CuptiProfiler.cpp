@@ -188,7 +188,6 @@ constexpr std::array<CUpti_CallbackId, 22> kDriverApiLaunchCallbacks = {
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz,
     CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture};
 
-
 constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
     CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020,
     CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000,
@@ -204,7 +203,8 @@ constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
 };
 
 constexpr std::array<CUpti_CallbackId, 19> kKernelLaunchCallbacks =
-    { // Driver and runtime kernel launch APIs, excluding graph and stream capture
+    { // Driver and runtime kernel launch APIs, excluding graph and stream
+      // capture
         CUPTI_DRIVER_TRACE_CBID_cuLaunch,
         CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid,
         CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync,
@@ -288,8 +288,7 @@ bool isDriverAPILaunch(CUpti_CallbackId cbId) {
 }
 
 bool isKernelLaunch(CUpti_CallbackId cbId) {
-  return std::find(kKernelLaunchCallbacks.begin(),
-                   kKernelLaunchCallbacks.end(),
+  return std::find(kKernelLaunchCallbacks.begin(), kKernelLaunchCallbacks.end(),
                    cbId) != kKernelLaunchCallbacks.end();
 }
 
