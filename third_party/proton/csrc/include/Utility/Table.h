@@ -10,8 +10,7 @@
 namespace proton {
 
 // Dense table for ids in a contiguous range [minId, maxId].
-template <typename T, typename IdT = uint64_t>
-class RangeTable {
+template <typename T, typename IdT = uint64_t> class RangeTable {
   static_assert(std::is_integral_v<IdT>, "RangeTable IdT must be integral");
 
 public:
@@ -72,9 +71,7 @@ private:
     return offset < nodes.size();
   }
 
-  size_t indexFor(IdT id) const {
-    return static_cast<size_t>(id - minId);
-  }
+  size_t indexFor(IdT id) const { return static_cast<size_t>(id - minId); }
 
   IdT minId{0};
   std::vector<T> nodes;

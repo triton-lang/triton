@@ -117,20 +117,19 @@ uint32_t processActivityKernel(
     if (nodeState && !nodeState->isMetricNode) {
       const bool isMissingName = nodeState->isMissingName;
       if (!isMissingName) {
-        nodeState->forEachEntry(
-            [activity](Data *, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertMetric(std::move(kernelMetric));
-              }
-            });
+        nodeState->forEachEntry([activity](Data *, DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            entry.upsertMetric(std::move(kernelMetric));
+          }
+        });
       } else {
-        nodeState->forEachEntry(
-            [kernel, activity](Data *data, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
-                childEntry.upsertMetric(std::move(kernelMetric));
-              }
-            });
+        nodeState->forEachEntry([kernel, activity](Data *data,
+                                                   DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+            childEntry.upsertMetric(std::move(kernelMetric));
+          }
+        });
       }
     }
     // Decrease the expected kernel count
@@ -551,7 +550,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             if (name.empty() || (threadState.isApiExternOp &&
                                  threadState.isMetricKernelLaunching)) {
               nodeState.isMissingName = true;
-            } 
+            }
             if (threadState.isMetricKernelLaunching) {
               nodeState.isMetricNode = true;
               graphState.metricKernelNodeIds.insert(nodeId);
@@ -563,9 +562,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                 contexts.push_back(name);
               }
               nodeState.captureContexts[data] = std::move(contexts);
-              graphState.dataToCallpathToNodeStates
-                  [data][nodeState.captureContexts[data]]
-                      .push_back(std::ref(nodeState));
+              graphState
+                  .dataToCallpathToNodeStates[data]
+                                             [nodeState.captureContexts[data]]
+                  .push_back(std::ref(nodeState));
             }
           } // else no op in progress, the creation is triggered by graph
             // clone/instantiate
