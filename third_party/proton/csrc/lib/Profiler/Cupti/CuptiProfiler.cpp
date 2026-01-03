@@ -203,7 +203,7 @@ constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
     CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_ptsz_v10000,
 };
 
-constexpr std::array<CUpti_CallbackId, 22> kKernelLaunchCallbacks =
+constexpr std::array<CUpti_CallbackId, 19> kKernelLaunchCallbacks =
     { // Driver and runtime kernel launch APIs, excluding graph and stream capture
         CUPTI_DRIVER_TRACE_CBID_cuLaunch,
         CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid,
