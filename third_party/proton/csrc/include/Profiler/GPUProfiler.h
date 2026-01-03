@@ -97,6 +97,19 @@ protected:
     threadState.dataToEntry.clear();
   }
 
+  void periodicFlush() {
+    if (this->periodicFlushingEnabled) {
+      auto period = this->period.fetch_add(1);
+      auto dataSet = this->getDataSet();
+      for (auto *data : dataSet) {
+        auto &path = data->getPath();
+        auto pathWithPeriod = path + ".part_" + std::to_string(period);
+        data->dump("", pathWithPeriod);
+        data->clear();
+      }
+    }
+  }
+
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
@@ -248,6 +261,8 @@ protected:
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
+  bool periodicFlushingEnabled{false};
+  std::atomic<uint64_t> period{0};
 };
 
 } // namespace proton

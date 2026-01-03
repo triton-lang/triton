@@ -387,6 +387,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
+  profiler.periodicFlush();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {

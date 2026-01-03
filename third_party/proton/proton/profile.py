@@ -83,7 +83,7 @@ def start(
         mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
                                                Can be a string or an instance of BaseMode (or any subclass thereof).
                                                Defaults to None.
-                                               For "cupti", available options are [None, "pcsampling"].
+                                               For "cupti", available options are [None, "pcsampling", "periodic_flushing].
                                                For "roctracer", available options are [None].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.

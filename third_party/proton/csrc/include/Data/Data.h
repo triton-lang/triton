@@ -49,6 +49,8 @@ public:
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
 
+  const std::string &getPath() const { return path; }
+
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
   /// is not empty. Return the entry id of the added op.
@@ -90,7 +92,7 @@ public:
   virtual std::vector<uint8_t> toMsgPack() const = 0;
 
   /// Dump the data to the given output format.
-  void dump(const std::string &outputFormat);
+  void dump(const std::string &outputFormat, const std::string &outputPath = "");
 
   /// Get the contexts associated with the data.
   std::vector<Context> getContexts() const {

@@ -445,6 +445,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   std::free(buffer);
 
   profiler.correlation.complete(maxCorrelationId);
+  profiler.periodicFlush();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
@@ -855,6 +856,8 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "pcsampling") {
     pcSamplingEnabled = true;
+  } else if (proton::toLower(mode) == "periodic_flushing") {
+    periodicFlushingEnabled = true;
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
                                 mode);
