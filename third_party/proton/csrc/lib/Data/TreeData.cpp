@@ -695,12 +695,8 @@ void TreeData::clear() {
 void TreeData::reset() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   tree->walk<Tree::WalkPolicy::PostOrder>([&](Tree::TreeNode &node) {
-    for (auto &[_, metric] : node.metrics) {
-      metric->reset();
-    }
-    for (auto &[_, flexibleMetric] : node.flexibleMetrics) {
-      flexibleMetric.reset();
-    }
+    node.metrics.clear();
+    node.flexibleMetrics.clear();
   });
 }
 

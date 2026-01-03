@@ -123,20 +123,6 @@ public:
 
   MetricKind getKind() const { return kind; }
 
-  void reset() {
-    for (auto &value : values) {
-      if (std::holds_alternative<uint64_t>(value)) {
-        value = uint64_t{0};
-      } else if (std::holds_alternative<int64_t>(value)) {
-        value = int64_t{0};
-      } else if (std::holds_alternative<double>(value)) {
-        value = double{0.0};
-      } else {
-        value = std::string{};
-      }
-    }
-  }
-
 private:
   const MetricKind kind;
 
