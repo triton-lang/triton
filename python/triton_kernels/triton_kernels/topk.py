@@ -5,46 +5,47 @@ from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import SparseMatrix, Tensor
 from triton_kernels.tensor import Bitmatrix, BIT
 from typing import Optional, Union
-import torch.distributed as dist
 from triton_kernels.distributed import SymmetricMemoryPool
+from triton_kernels.tensor import wrap_torch_tensor, dtype_to_torch_dtype
 
 
-def make_empty(offset, shape, dtype, device, all_gather, symm_mem_pool):
+def make_empty(offset, shape, dtype, device, all_gather, symmetric_memory_pool):
     if all_gather:
-        rank_id = dist.get_rank()
-        ret_bufs = symm_mem_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
+        rank_id = symmetric_memory_pool.mesh.local_rank
+        ret_bufs = symmetric_memory_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
         ret = ret_bufs[rank_id]
-        offset = symm_mem_pool.align_up(offset + ret.numel() * ret.element_size(),
-                                        symm_mem_pool.regions["topk"].alignment)
+        offset = symmetric_memory_pool.align_up(offset + ret.numel() * ret.element_size(),
+                                                symmetric_memory_pool.regions["topk"].alignment)
         return ret_bufs, ret, offset
-    ret = torch.empty(shape, dtype=dtype, device=device)
+    ret = torch.empty(shape, dtype=dtype_to_torch_dtype(dtype), device=device)
     return (ret, ), ret, 0
 
 
-def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None):
+def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False,
+                 symmetric_memory_pool=None):
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
-        x = Tensor(x, shape=x_shape, shape_max=x_shape_max)
+        x = wrap_torch_tensor(x, shape=x_shape, shape_max=x_shape_max)
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
     use_provided_indx = y_indx is not None
-    assert symm_mem_pool is not None or not all_gather
+    assert symmetric_memory_pool is not None or not all_gather
     assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
     n_rows, n_cols = x.shape
     n_rows_max, _ = x.shape_max
     dev = x.device
-    n_rows_out_max = n_rows_max * dist.get_world_size() if all_gather else n_rows_max
+    n_rows_out_max = n_rows_max * symmetric_memory_pool.mesh.world_size if all_gather else n_rows_max
     # scratchpad tensors
     # NOTE: these are not returned
     y_vals_bufs, y_vals, offset = make_empty(0, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather,
-                                             symm_mem_pool=symm_mem_pool)
+                                             symmetric_memory_pool=symmetric_memory_pool)
     if y_indx is None:
         y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather,
-                                                 symm_mem_pool=symm_mem_pool)
+                                                 symmetric_memory_pool=symmetric_memory_pool)
     else:
         y_indx_bufs = (y_indx, )
     # create bitmatrix in transposed memory layout:
@@ -52,22 +53,24 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     n_cols_words = n_cols_pad // 32
     bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
                                                         torch.uint32, dev, all_gather=all_gather,
-                                                        symm_mem_pool=symm_mem_pool)
+                                                        symmetric_memory_pool=symmetric_memory_pool)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
-        x, x.stride(0),  # inputs
+        x.storage.data, x.stride(0),  # inputs
         y_vals_bufs, y_indx_bufs, y_vals.stride(0), use_provided_indx,  # output [topk]
         bitmatrix_bufs, bitmatrix_data.stride(0), bitmatrix_data.stride(1),  # output [bitmatrix]
         n_rows, n_cols,  # shapes
-        dist.get_rank() * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
+        symmetric_memory_pool.mesh.local_rank * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     if all_gather:
-        symm_mem_pool.hdl.barrier(channel=0)
-    bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
+        symmetric_memory_pool.hdl.barrier(channel=0)
+    bitmatrix_shape = [n_rows * symmetric_memory_pool.mesh.world_size if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
-    bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
+    _bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
+    bitmatrix = Bitmatrix(_bitmatrix.storage, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
 
 
@@ -109,7 +112,7 @@ def topk(
     y_indx: Optional[torch.Tensor] = None,
     n_rows: Optional[int] = None,
     all_gather: bool = False,
-    symm_mem_pool: SymmetricMemoryPool | None = None,
+    symmetric_memory_pool: SymmetricMemoryPool | None = None,
 ):
     """
     Computes the top-k values and indices along a specified dimension of a tensor.
@@ -135,7 +138,7 @@ def topk(
     -------
     SparseMatrix: sparse matrix equal to `x` with non-selected entries set to 0
     """
-    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool)
+    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symmetric_memory_pool)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
 
 
@@ -178,5 +181,7 @@ def topk_torch(
     masks = torch.ones_like(bit_idx) << bit_idx
     bitmatrix_data.index_put_((rows, word_idx), masks, accumulate=True)
     bitmatrix_data = bitmatrix_data.view(torch.uint32)
-    bitmatrix = Bitmatrix(bitmatrix_data, shape=x.shape, dtype=BIT)
+
+    _bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=x.shape)
+    bitmatrix = Bitmatrix(_bitmatrix.storage, dtype=BIT, shape=x.shape)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)

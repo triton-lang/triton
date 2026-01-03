@@ -1,12 +1,11 @@
 import torch
 import triton
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
-from triton_kernels.tensor import bitwidth
 
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config):
-    lhs_width = bitwidth(lhs_dtype) / 8
-    rhs_width = bitwidth(rhs_dtype) / 8
+    lhs_width = lhs_dtype.bitwidth / 8
+    rhs_width = rhs_dtype.bitwidth / 8
 
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count
