@@ -543,8 +543,8 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
   return chosen;
 }
 
-// Detect if transposed layout is needed to enable large vectorization of global
-// stores or intra warp conversion.
+// Detect if transposed layout is needed in order to enable large vectorization
+// of global stores, efficient reduceOp lowering, or intra warp conversion
 bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
                               int nDim, bool is16BitElemTy,
                               bool hasPreShuffledScale,
@@ -560,14 +560,15 @@ bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
   if (mDim == 4 && nDim == 64)
     return false;
 
-  // Set isTransposed based on how the result of dotOp is stored.
-  // If the store’s contiguity aligns with the MFMA layout order, keep the
-  // isTranposed flag set to true. Otherwise, set it to false. This allows us to
-  // vectorize the store along the dimension where elements are accessed
-  // contiguously.
+  // Set isTransposed to improve store vectorization or reduceOp lowering.
+  // If the result of dotOp is stored, we set isTransposed so that the data is
+  // laid out contiguously along MFMA order[0], enabling vectorized stores.
+  // If the result of dotOp is reduced, we set isTransposed so that the
+  // reduction is applied along MFMA order[0], allowing reduceOp lowering to use
+  // more efficient bpermute instructions.
   if (!isChainDotHead(dotOp))
-    return mlir::LLVM::AMD::isStoredContigWithMfmaLayout(
-        dotOp, axisAnalysisPass, mfmaEnc);
+    return !(mlir::LLVM::AMD::isAccessedContigWithMfmaLayout(
+        dotOp, axisAnalysisPass, mfmaEnc));
 
   RankedTensorType oldRetType = dotOp.getType();
   auto retShape = oldRetType.getShape();
@@ -711,16 +712,16 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
-        /*isTransposed=*/true, CGALayout, tilesPerWarp,
+        /*isTransposed=*/false, CGALayout, tilesPerWarp,
         mfmaAccType.getIntOrFloatBitWidth());
 
-    if (!needTransposedMfmaLayout(dotOp, mfmaVersion, mDim, nDim, is16BitElemTy,
-                                  hasPreShuffledScale, warpsPerTile, mfmaEnc,
-                                  axisAnalysisPass)) {
+    if (needTransposedMfmaLayout(dotOp, mfmaVersion, mDim, nDim, is16BitElemTy,
+                                 hasPreShuffledScale, warpsPerTile, mfmaEnc,
+                                 axisAnalysisPass)) {
       mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
           oldRetType.getContext(), mfmaVersion, warpsPerTile,
           {mDim, nDim, kDim},
-          /*isTransposed=*/false, CGALayout, tilesPerWarp,
+          /*isTransposed=*/true, CGALayout, tilesPerWarp,
           mfmaAccType.getIntOrFloatBitWidth());
     }
     // convert accumulator

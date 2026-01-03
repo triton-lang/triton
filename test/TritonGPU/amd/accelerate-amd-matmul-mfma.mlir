@@ -91,21 +91,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// Don't use transposed mfmaLayout to allow store vectorrize along dimension 0.
+// Don't use transposed mfmaLayout to allow store vectorization along dimension 0.
 
 // MFMA0: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [32, 32, 8], isTransposed = false}>
 // MFMA16: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = false}>
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [2, 4], order = [0, 1]}>
 // CHECK-LABLE: mfma_dot_not_transposed
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_dot_not_transposed(
       %arg0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
       %arg1: tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
-      %arg2: tensor<128x256x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 1]> : tensor<2xi32>}) {
+      %arg2: tensor<128x256x!tt.ptr<f32>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 1]> : tensor<2xi32>}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
     %1 = tt.dot %arg0, %arg1, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
-    tt.store %arg2, %1 : tensor<128x256x!tt.ptr<f32>, #blocked>
+    %2 = ttg.convert_layout %1 : tensor<128x256xf32, #blocked> -> tensor<128x256xf32, #blocked1>
+    tt.store %arg2, %2 : tensor<128x256x!tt.ptr<f32>, #blocked1>
     tt.return
+  }
+}
+
+// -----
+
+// Don't use transposed mfmaLayout to allow reduction along dimension 0.
+
+// MFMA0: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [32, 32, 8], isTransposed = false}>
+// MFMA16: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = false}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
+// CHECK-LABLE: mfma_dot_not_transposed_2
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_not_transposed_2(
+      %arg0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %arg1: tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>)
+      -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    %1 = tt.dot %arg0, %arg1, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    %2 = "tt.reduce"(%1) <{axis = 0 : i32}> ({
+      ^bb0(%arg8: f32, %arg9: f32):
+        %20 = arith.maxnumf %arg8, %arg9 : f32
+        tt.reduce.return %20 : f32
+      }) : (tensor<128x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    tt.return %2 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
   }
 }
 
