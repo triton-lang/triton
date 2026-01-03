@@ -39,7 +39,7 @@ public:
 
   void clear() override;
 
-  void reset() override;
+  void clearMetrics() override;
 
 protected:
   // ScopeInterface

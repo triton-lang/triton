@@ -222,7 +222,7 @@ void TraceData::clear() {
   trace.swap(newTrace);
 }
 
-void TraceData::reset() {
+void TraceData::clearMetrics() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   for (auto &[eventId, event] : trace->getEvents()) {
     if (!event.metrics.empty()) {

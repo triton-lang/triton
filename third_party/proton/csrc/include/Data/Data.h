@@ -85,8 +85,8 @@ public:
   /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;
 
-  /// Do not clear the structure of the data, but reset all metrics to zero.
-  virtual void reset() = 0;
+  /// Clear all recorded metrics while preserving the data structure.
+  virtual void clearMetrics() = 0;
 
   /// To Json
   virtual std::string toJsonString() const = 0;

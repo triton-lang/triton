@@ -830,3 +830,18 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(data) > 1
     cuda_devices = data[1].get("CUDA", {})
     assert len(cuda_devices) >= 2
+
+
+def test_periodic_flushing(tmp_path):
+    temp_file = tmp_path / "test_periodic_flushing.hatchet"
+    proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing")
+
+    for i in range(50000):
+        with proton.scope(f"test_{i}"):
+            torch.randn((100), device="cuda")
+            torch.zeros((100), device="cuda")
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)

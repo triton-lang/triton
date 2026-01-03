@@ -105,7 +105,7 @@ protected:
         auto &path = data->getPath();
         auto pathWithPeriod = path + ".part_" + std::to_string(period);
         data->dump("", pathWithPeriod);
-        data->reset();
+        data->clearMetrics();
       }
     }
   }

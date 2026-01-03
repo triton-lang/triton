@@ -27,7 +27,7 @@ public:
 
   void clear() override;
 
-  void reset() override;
+  void clearMetrics() override;
 
   std::string toJsonString() const override;
 
