@@ -58,6 +58,7 @@ void Canonicalize::runOnOperation() {
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
+  ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);
 
   (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

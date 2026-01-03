@@ -845,15 +845,16 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::WarpYieldOp>(values);
            })
       .def("create_warp_specialize_partitions",
-           [](GluonOpBuilder &self, int numPartitions) -> Operation * {
-             return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
+           [](GluonOpBuilder &self, std::vector<Value> &explicitCaptures,
+              int numPartitions) -> Operation * {
+             return self.create<ttg::WarpSpecializePartitionsOp>(
+                 explicitCaptures, numPartitions);
            })
       .def("create_warp_specialize",
            [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
-              std::vector<Value> &explicitCaptures,
               std::vector<int> &partitionNumWarps) {
-             return self.create<ttg::WarpSpecializeOp>(
-                 resultTypes, explicitCaptures, partitionNumWarps);
+             return self.create<ttg::WarpSpecializeOp>(resultTypes,
+                                                       partitionNumWarps);
            })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
