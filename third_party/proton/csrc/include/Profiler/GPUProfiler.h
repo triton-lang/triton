@@ -104,6 +104,8 @@ protected:
       for (auto *data : dataSet) {
         auto &path = data->getPath();
         auto pathWithPeriod = path + ".part_" + std::to_string(period);
+        // TODO(Keren): dump and clear metrics should be atomic.
+        // Or I should get the data snapshot first, which is low cost.
         data->dump("", pathWithPeriod);
         data->clearMetrics();
       }
