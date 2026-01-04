@@ -183,6 +183,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         const auto contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
+        if (jsonNode == nullptr)
+          // This node and its children are not initialized because of zero metrics
+          return;
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
