@@ -239,8 +239,12 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
         return dtype
     if dtype == FP4:
         return torch.uint8
+    if dtype == UINT8:
+        return torch.uint8
     elif dtype == FP8_E4M3FN:
         return torch.float8_e4m3fn
+    if dtype == FP8_E5M2:
+        return torch.float8_e5m2
     elif dtype == BF16:
         return torch.bfloat16
     elif dtype == FP32:

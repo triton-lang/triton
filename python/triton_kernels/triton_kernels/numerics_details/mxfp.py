@@ -8,12 +8,12 @@ import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton_kernels.tensor import Tensor, wrap_torch_tensor
+from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
 from triton_kernels.tensor_details.layout import StridedLayout
+from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
-
 
 class DequantScaleRoundingMode(Enum):
     # 2^round_up(log2(max/max_q)) avoids clipping the max value
@@ -36,28 +36,31 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     if not isinstance(src_tensor, Tensor):
         src_tensor = wrap_torch_tensor(src_tensor)
     assert isinstance(src_tensor.storage.layout, StridedLayout), "input data must be strided"
-    src_tensor = src_tensor.storage.data
+
+    out_quant_type = FP4 if out_quant_type == torch.uint8 else FP8_E4M3FN if out_quant_type == torch.float8_e4m3fn else FP8_E5M2
 
     ndim = src_tensor.ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
     axis = axis if axis >= 0 else axis + ndim
     # downcast
-    src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
-    is_fp4 = out_quant_type == torch.uint8
-    is_fp8 = out_quant_type in (torch.float8_e4m3fn, torch.float8_e5m2)
+    is_fp4 = out_quant_type == FP4
+    is_fp8 = out_quant_type in (FP8_E4M3FN, FP8_E5M2)
     assert is_fp4 or is_fp8
     divisor = 2 if is_fp4 else 1
-    L = src_tensor.shape[-1]
+    L = src_tensor.shape[axis]
     if is_fp4:
         assert L % 2 == 0, f"axis dim must be divisible by 2 for e2m1. Got {L}"
     # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
     padded_L = triton.cdiv(L, MXFP_BLOCK_SIZE.value) * MXFP_BLOCK_SIZE.value
     needs_padding = padded_L != L
-    out_shape_padded = src_tensor.shape[:-1] + (padded_L // divisor, )
+
+    src_tensor = src_tensor.storage.data
+    src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
+    out_shape_padded = src_tensor.shape[:-1] + (padded_L // 1, )
     out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, MXFP_BLOCK_SIZE), )
 
-    out_quant_tensor = src_tensor.new_empty(out_shape_padded, dtype=out_quant_type)
-    out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
+    out_quant_tensor = empty(out_shape_padded, dtype=out_quant_type, device=src_tensor.device).storage.data
+    out_scale = empty(out_scale_shape, dtype=UINT8, device=src_tensor.device).storage.data
 
     if src_tensor.numel() > 0:
         src_tensor_padded = F.pad(src_tensor, (0, padded_L - L)) if needs_padding else src_tensor
@@ -87,6 +90,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
+
     return out_quant_tensor, out_scale
 
 
