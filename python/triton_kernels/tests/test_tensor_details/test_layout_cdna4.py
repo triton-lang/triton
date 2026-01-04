@@ -20,6 +20,6 @@ from triton_kernels.tensor_details.layout import CDNA4MXScaleLayout
 def test_mxfp4_scale_roundtrip(shape):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
     layout = CDNA4MXScaleLayout()
-    transformation = layout.make_transformation(x.shape)
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
     res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res == x).all()
