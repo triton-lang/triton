@@ -52,13 +52,16 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         assert data.stride(-1) == 1
         # re-pack as column-major
         data = unpack(data, -1, self.is_fp4)
+        data = data.mT.contiguous().mT
         data = pack(data, -2, self.is_fp4)
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
         data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()
         data = data.reshape(self.B, self.N_pad // 32, self.K_SCALE_pad * 32)
-        return data.transpose(-1, -2)
+        data = data.transpose(-1, -2)
+        assert data.stride(-2) == 1
+        return data
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)
