@@ -3,7 +3,6 @@
 #include "Data/Metric.h"
 #include "Device.h"
 #include "Utility/MsgPackWriter.h"
-
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -13,6 +12,7 @@
 #include <ostream>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +40,11 @@ public:
     inline static const size_t RootId = 0;
     inline static const size_t DummyId = std::numeric_limits<size_t>::max();
 
+    struct ChildEntry {
+      std::string_view name;
+      size_t id = DummyId;
+    };
+
     TreeNode() = default;
     explicit TreeNode(size_t id, const std::string &name)
         : id(id), Context(name) {}
@@ -47,24 +52,21 @@ public:
         : id(id), parentId(parentId), Context(name) {}
     virtual ~TreeNode() = default;
 
-    void addChild(const Context &context, size_t id) {
-      children.emplace(context.name, id);
-      childIds.push_back(id);
+    void addChild(std::string_view childName, size_t id) {
+      children.push_back({childName, id});
+      childIndex.emplace(childName, id);
     }
 
-    bool hasChild(const Context &context) const {
-      return children.find(context.name) != children.end();
-    }
-
-    size_t getChild(const Context &context) const {
-      return children.at(context.name);
+    size_t findChild(std::string_view childName) const {
+      auto it = childIndex.find(childName);
+      return it != childIndex.end() ? it->second : DummyId;
     }
 
     size_t parentId = DummyId;
     size_t id = DummyId;
-    std::unordered_map<std::string, size_t> children = {};
-    std::vector<size_t> childIds = {};
-    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    std::vector<ChildEntry> children = {};
+    std::unordered_map<std::string_view, size_t> childIndex = {};
+    std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
     friend class Tree;
   };
@@ -83,11 +85,14 @@ public:
 
   size_t addNode(const Context &context, size_t parentId) {
     auto &parent = treeNodeMap.at(parentId);
-    if (parent.hasChild(context))
-      return parent.getChild(context);
+    std::string_view contextName = context.name;
+    auto existingChildId = parent.findChild(contextName);
+    if (existingChildId != TreeNode::DummyId)
+      return existingChildId;
     auto id = nextContextId++;
-    treeNodeMap.try_emplace(id, id, parentId, context.name);
-    parent.addChild(context, id);
+    auto [it, inserted] =
+        treeNodeMap.try_emplace(id, id, parentId, context.name);
+    parent.addChild(it->second.name, id);
     return id;
   }
 
@@ -101,40 +106,6 @@ public:
 
   TreeNode &getNode(size_t id) { return treeNodeMap.at(id); }
 
-  void upsertMetric(size_t contextId, std::shared_ptr<Metric> metric) {
-    auto &node = treeNodeMap.at(contextId);
-    auto it = node.metrics.find(metric->getKind());
-    if (it == node.metrics.end()) {
-      node.metrics.emplace(metric->getKind(), metric);
-      metricKinds.insert(metric->getKind());
-      if (metric->getKind() == MetricKind::Kernel) {
-        auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
-        uint64_t deviceId =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceType));
-        if (deviceType < static_cast<uint64_t>(DeviceType::COUNT) &&
-            deviceId < kMaxRegisteredDeviceIds) {
-          deviceIdMasks[static_cast<size_t>(deviceType)] |=
-              (1u << static_cast<uint32_t>(deviceId));
-        }
-      } else if (metric->getKind() == MetricKind::Cycle) {
-        auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
-        uint64_t deviceId =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
-        uint64_t deviceType =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        if (deviceType < static_cast<uint64_t>(DeviceType::COUNT) &&
-            deviceId < kMaxRegisteredDeviceIds) {
-          deviceIdMasks[static_cast<size_t>(deviceType)] |=
-              (1u << static_cast<uint32_t>(deviceId));
-        }
-      }
-    } else {
-      it->second->updateMetric(*metric);
-    }
-  }
-
   void upsertFlexibleMetric(size_t contextId,
                             const FlexibleMetric &flexibleMetric) {
     auto &node = treeNodeMap.at(contextId);
@@ -142,19 +113,9 @@ public:
     if (it == node.flexibleMetrics.end()) {
       node.flexibleMetrics.emplace(flexibleMetric.getValueName(0),
                                    flexibleMetric);
-      flexibleMetricNames.insert(flexibleMetric.getValueName(0));
     } else {
       it->second.updateMetric(flexibleMetric);
     }
-  }
-
-  bool hasMetricKind(MetricKind kind) const {
-    return metricKinds.find(kind) != metricKinds.end();
-  }
-
-  const std::array<uint32_t, static_cast<size_t>(DeviceType::COUNT)> &
-  getDeviceIdMasks() const {
-    return deviceIdMasks;
   }
 
   enum class WalkPolicy { PreOrder, PostOrder };
@@ -169,14 +130,14 @@ public:
 
   template <typename FnT> void walkPreOrder(size_t contextId, FnT &&fn) {
     fn(getNode(contextId));
-    for (auto childId : getNode(contextId).childIds) {
-      walkPreOrder(childId, fn);
+    for (const auto &child : getNode(contextId).children) {
+      walkPreOrder(child.id, fn);
     }
   }
 
   template <typename FnT> void walkPostOrder(size_t contextId, FnT &&fn) {
-    for (auto childId : getNode(contextId).childIds) {
-      walkPostOrder(childId, fn);
+    for (const auto &child : getNode(contextId).children) {
+      walkPostOrder(child.id, fn);
     }
     fn(getNode(contextId));
   }
@@ -187,12 +148,6 @@ private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
   std::unordered_map<size_t, TreeNode> treeNodeMap;
-  // all available metric kinds
-  std::set<MetricKind> metricKinds;
-  // all available flexible metric names
-  std::set<std::string> flexibleMetricNames;
-  // device type -> bitmask for active device ids
-  std::array<uint32_t, static_cast<size_t>(DeviceType::COUNT)> deviceIdMasks{};
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
@@ -215,8 +170,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         for (auto &[metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             hasKernelMetric = true;
-            std::shared_ptr<KernelMetric> kernelMetric =
-                std::static_pointer_cast<KernelMetric>(metric);
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
@@ -253,8 +207,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             metricsJson[deviceTypeNameKey] = deviceTypeName;
           } else if (metricKind == MetricKind::PCSampling) {
             hasPCSamplingMetric = true;
-            auto pcSamplingMetric =
-                std::static_pointer_cast<PCSamplingMetric>(metric);
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric->getValueName(i);
               std::visit([&](auto &&value) { metricsJson[valueName] = value; },
@@ -262,7 +216,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
             }
           } else if (metricKind == MetricKind::Cycle) {
             hasCycleMetric = true;
-            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(
@@ -310,10 +264,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
         childrenArray.get_ref<json::array_t &>().reserve(
-            treeNode.childIds.size());
-        for (auto childId : treeNode.childIds) {
+            treeNode.children.size());
+        for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
-          jsonNodes[childId] = &childrenArray.back();
+          jsonNodes[child.id] = &childrenArray.back();
         }
       });
 
@@ -376,9 +330,48 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
   MsgPackWriter writer;
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
-  bool hasKernelMetric = tree->hasMetricKind(MetricKind::Kernel);
-  bool hasPCSamplingMetric = tree->hasMetricKind(MetricKind::PCSampling);
-  bool hasCycleMetric = tree->hasMetricKind(MetricKind::Cycle);
+  bool hasKernelMetric = false;
+  bool hasPCSamplingMetric = false;
+  bool hasCycleMetric = false;
+  std::array<uint32_t, static_cast<size_t>(DeviceType::COUNT)> deviceIdMasks{};
+
+  auto updateDeviceIdMask = [&](uint64_t deviceType, uint64_t deviceId) {
+    if (deviceId < kMaxRegisteredDeviceIds) {
+      deviceIdMasks[static_cast<size_t>(deviceType)] |=
+          (1u << static_cast<uint32_t>(deviceId));
+    } else {
+      throw std::runtime_error("[PROTON] DeviceId " + std::to_string(deviceId) +
+                               " exceeds MaxRegisteredDeviceIds " +
+                               std::to_string(kMaxRegisteredDeviceIds) +
+                               " for deviceType " + std::to_string(deviceType));
+    }
+  };
+
+  tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+      [&](TreeData::Tree::TreeNode &treeNode) {
+        for (auto &[metricKind, metric] : treeNode.metrics) {
+          if (metricKind == MetricKind::Kernel) {
+            hasKernelMetric = true;
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
+            uint64_t deviceId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceType));
+            updateDeviceIdMask(deviceType, deviceId);
+          } else if (metricKind == MetricKind::PCSampling) {
+            hasPCSamplingMetric = true;
+          } else if (metricKind == MetricKind::Cycle) {
+            hasCycleMetric = true;
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
+            uint64_t deviceId = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceType));
+            updateDeviceIdMask(deviceType, deviceId);
+          }
+        }
+      });
+
   // We only need these metrics for tree data
   KernelMetric kernelMetric;
   auto &kernelMetricDurationName =
@@ -406,8 +399,6 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
       cycleMetricDurationName, cycleMetricNormalizedDurationName};
   std::set<std::string> cycleExclusiveValueNames = {cycleMetricDeviceIdName,
                                                     cycleMetricDeviceTypeName};
-  const auto &deviceIdMasks = tree->getDeviceIdMasks();
-
   std::function<void(TreeData::Tree::TreeNode &)> packNode =
       [&](TreeData::Tree::TreeNode &treeNode) {
         writer.packMap(3);
@@ -466,7 +457,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               continue;
             }
 
-            auto kernelMetric = std::static_pointer_cast<KernelMetric>(metric);
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
             uint64_t invocations = std::get<uint64_t>(
@@ -486,8 +477,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
             writer.packStr(kernelMetricDeviceTypeName);
             writer.packStr(deviceTypeName);
           } else if (metricKind == MetricKind::PCSampling) {
-            auto pcSamplingMetric =
-                std::static_pointer_cast<PCSamplingMetric>(metric);
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
             for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
               const auto &valueName = pcSamplingMetric->getValueName(i);
               writer.packStr(valueName);
@@ -507,7 +498,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               continue;
             }
 
-            auto cycleMetric = std::static_pointer_cast<CycleMetric>(metric);
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
             uint64_t duration = std::get<uint64_t>(
                 cycleMetric->getValue(CycleMetric::Duration));
             double normalizedDuration = std::get<double>(
@@ -577,9 +568,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         writer.packStr("children");
-        writer.packArray(static_cast<uint32_t>(treeNode.childIds.size()));
-        for (auto childId : treeNode.childIds) {
-          packNode(tree->getNode(childId));
+        writer.packArray(static_cast<uint32_t>(treeNode.children.size()));
+        for (const auto &child : treeNode.children) {
+          packNode(tree->getNode(child.id));
         }
       };
 
@@ -650,81 +641,44 @@ void TreeData::enterScope(const Scope &scope) {
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
-void TreeData::exitScope(const Scope &scope) {}
-
-size_t TreeData::addOp(size_t scopeId, const std::string &name) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> contexts;
-    if (contextSource != nullptr)
-      contexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!name.empty())
-      contexts.emplace_back(name);
-    scopeIdToContextId[scopeId] = tree->addNode(contexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        tree->addNode(Context(name), scopeIdIt->second);
-  }
-  return scopeId;
+void TreeData::exitScope(const Scope &scope) {
+  scopeIdToContextId.erase(scope.scopeId);
 }
 
-size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
+DataEntry TreeData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> currentContexts;
-    if (contextSource != nullptr)
-      currentContexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!currentContexts.empty())
-      std::merge(currentContexts.begin(), currentContexts.end(),
-                 contexts.begin(), contexts.end(), currentContexts.begin());
-    scopeIdToContextId[scopeId] = tree->addNode(currentContexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] = tree->addNode(contexts, scopeIdIt->second);
-  }
-  return scopeId;
+  std::vector<Context> contexts;
+  if (contextSource != nullptr)
+    contexts = contextSource->getContexts();
+  if (!name.empty())
+    contexts.emplace_back(name);
+  auto contextId = tree->addNode(contexts);
+  auto &node = tree->getNode(contextId);
+  return DataEntry(contextId, node.metrics);
 }
 
-void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
+DataEntry TreeData::addOp(size_t contextId,
+                          const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
-  tree->upsertMetric(contextId, metric);
+  auto newContextId = tree->addNode(contexts, contextId);
+  auto &node = tree->getNode(newContextId);
+  return DataEntry(newContextId, node.metrics);
 }
 
-void TreeData::addOpAndMetric(size_t scopeId, const std::string &opName,
-                              std::shared_ptr<Metric> metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-
-  auto contextId = scopeIdIt->second;
-  contextId = tree->addNode(Context(opName), contextId);
-  tree->upsertMetric(contextId, metric);
-}
-
-void TreeData::addMetrics(
+void TreeData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
+  auto contextId = scopeIdToContextId.at(scopeId);
+  auto &node = tree->getNode(contextId);
+  for (auto [metricName, metricValue] : metrics) {
+    tree->upsertFlexibleMetric(contextId,
+                               FlexibleMetric(metricName, metricValue));
+  }
+}
+
+void TreeData::addEntryMetrics(
+    size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
@@ -736,12 +690,6 @@ void TreeData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto newTree = std::make_unique<Tree>();
   tree.swap(newTree);
-  scopeIdToContextId.clear();
-}
-
-void TreeData::clearCache() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  scopeIdToContextId.clear();
 }
 
 void TreeData::dumpHatchet(std::ostream &os) const {
@@ -763,7 +711,7 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::Hatchet) {
     dumpHatchet(os);
   } else {
-    std::logic_error("Output format not supported");
+    throw std::logic_error("Output format not supported");
   }
 }
 

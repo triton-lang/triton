@@ -7,10 +7,41 @@
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <utility>
 
 namespace proton {
 
 enum class OutputFormat { Hatchet, ChromeTrace, Count };
+
+/// An "entry" is a data specific unit of operation, e.g., a node in a tree
+/// data structure or an event in a trace data structure.
+struct DataEntry {
+  /// `entryId` is a unique identifier for the entry in the data.
+  size_t id{Scope::DummyScopeId};
+  /// `metrics` is a map from metric kind to metric accumulator associated
+  /// with the entry.
+  /// Flexible metrics cannot be directly stored here since they maybe added by
+  /// both the frontend and the backend.
+  /// Use `Data::addScopeMetrics` and `Data::addEntryMetrics` to add flexible
+  /// metrics.
+  std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
+
+  explicit DataEntry(size_t id,
+                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
+      : id(id), metrics(metrics) {}
+
+  void upsertMetric(std::unique_ptr<Metric> metric) {
+    if (!metric)
+      return;
+    auto &metricsMap = metrics.get();
+    auto it = metricsMap.find(metric->getKind());
+    if (it == metricsMap.end()) {
+      metricsMap.emplace(metric->getKind(), std::move(metric));
+    } else {
+      it->second->updateMetric(*metric);
+    }
+  }
+};
 
 class Data : public ScopeInterface {
 public:
@@ -19,40 +50,38 @@ public:
   virtual ~Data() = default;
 
   /// Add an op to the data.
-  /// If scopeId is already present, add an op under/inside it.
-  /// Otherwise obtain the current context and append opName to it if opName is
-  /// not empty.
-  virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
+  /// Otherwise obtain the current context and append `opName` to it if `opName`
+  /// is not empty. Return the entry id of the added op.
+  virtual DataEntry addOp(const std::string &opName = {}) = 0;
 
   /// Add an op with custom contexts to the data.
   /// This is often used when context source is not available or when
   /// the profiler itself needs to supply the contexts, such as
   /// instruction samples in GPUs whose contexts are
   /// synthesized from the instruction address (no unwinder).
-  virtual size_t addOp(size_t scopeId,
-                       const std::vector<Context> &contexts) = 0;
+  virtual DataEntry addOp(size_t entryId,
+                          const std::vector<Context> &contexts) = 0;
 
-  /// Add a single metric to the data.
-  virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
-
-  /// Add an op and a metric with one call.
-  /// The default implementation forwards to addOp + addMetric.
-  virtual void addOpAndMetric(size_t scopeId, const std::string &opName,
-                              std::shared_ptr<Metric> metric) {
-    scopeId = this->addOp(scopeId, opName);
-    this->addMetric(scopeId, metric);
-  }
-
-  /// Add multiple metrics to the data.
+  /// Record a batch of named metrics for a scope.
+  ///
+  /// This is primarily intended for user-defined metrics defined in Python and
+  /// directly associated with a scope.
+  /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
-  addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
+  addScopeMetrics(size_t scopeId,
+                  const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Clear all non-persistent data.
+  /// Record a batch of named metrics for an entry.
+  ///
+  /// This is primarily intended for user-defined metrics defined in Python and
+  /// added lazily by the backend profiler.
+  /// `metrics` is a map from metric name to value to be applied to `entryId`.
+  virtual void
+  addEntryMetrics(size_t entryId,
+                  const std::map<std::string, MetricValueType> &metrics) = 0;
+
+  /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;
-
-  /// Clear caching data only.
-  virtual void clearCache() = 0;
 
   /// To Json
   virtual std::string toJsonString() const = 0;
@@ -78,6 +107,8 @@ protected:
   const std::string path{};
   ContextSource *contextSource{};
 };
+
+typedef std::map<Data *, DataEntry> DataToEntryMap;
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
 
