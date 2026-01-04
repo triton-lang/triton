@@ -14,8 +14,8 @@ class CDNA4MXScaleLayout(Layout):
     def name(self):
         return "CDNA4_MX_SCALE"
 
-    def make_transformation(self, shape: list[int]) -> LayoutTransformation:
-        return CDNA4MXScaleLayoutTransformation(shape, False)
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return CDNA4MXScaleLayoutTransformation(shape, is_fp4)
 
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]
