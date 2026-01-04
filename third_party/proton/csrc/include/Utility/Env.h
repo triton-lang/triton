@@ -10,6 +10,14 @@ namespace proton {
 
 static std::mutex getenv_mutex;
 
+inline int64_t getIntEnv(const std::string &env, int64_t defaultValue) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
+  const char *s = std::getenv(env.c_str());
+  if (s == nullptr)
+    return defaultValue;
+  return std::stoll(s);
+}
+
 inline bool getBoolEnv(const std::string &env, bool defaultValue) {
   std::lock_guard<std::mutex> lock(getenv_mutex);
   const char *s = std::getenv(env.c_str());

@@ -168,6 +168,22 @@ def test_metrics(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
 
 
+def test_empty_scope_pruned(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_empty_scope_pruned.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    with proton.scope("has_kernel"):
+        torch.ones((2, 2), device="cuda")
+    with proton.scope("empty"):
+        pass
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    root_child_names = [child["frame"]["name"] for child in data[0]["children"]]
+    assert "empty" not in root_child_names
+    assert "has_kernel" in root_child_names
+
+
 def test_scope_backward(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -832,13 +848,13 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
-def test_periodic_flushing(tmp_path):
+def test_periodic_flushing(tmp_path, fresh_knobs):
+    fresh_knobs.proton.cupti_buffer_size = 1024 * 1024  # 1MB
     temp_file = tmp_path / "test_periodic_flushing.hatchet"
     proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing")
 
-    for i in range(50000):
+    for i in range(10000):
         with proton.scope(f"test_{i}"):
-            torch.randn((100), device="cuda")
             torch.zeros((100), device="cuda")
 
     proton.finalize()

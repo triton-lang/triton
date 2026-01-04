@@ -396,7 +396,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
                          CUpti_CallbackId cbId, const void *cbData);
 
   static constexpr size_t AlignSize = 8;
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
   static constexpr size_t AttributeSize = sizeof(size_t);
   static constexpr const char *CaptureTag = "<captured_at>";
 
@@ -432,11 +431,13 @@ private:
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                     size_t *bufferSize,
                                                     size_t *maxNumRecords) {
-  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+  const auto envBufferSize =
+      getIntEnv("TRITON_CUPTI_BUFFER_SIZE", 64 * 1024 * 1024);
+  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
   if (*buffer == nullptr) {
     throw std::runtime_error("[PROTON] aligned_alloc failed");
   }
-  *bufferSize = BufferSize;
+  *bufferSize = envBufferSize;
   *maxNumRecords = 0;
 }
 
