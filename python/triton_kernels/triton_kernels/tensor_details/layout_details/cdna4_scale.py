@@ -72,6 +72,8 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         data = unpack(data, -2, self.is_fp4)
         assert list(data.shape) == list(self.shape)
         data = pack(data, -1, self.is_fp4)
+        data = data.contiguous()
+        assert data.stride(-1) == 1
         return data
 
 
