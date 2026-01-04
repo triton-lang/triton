@@ -849,7 +849,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 
 def test_periodic_flushing(tmp_path, fresh_knobs):
-    fresh_knobs.proton.cupti_buffer_size = 1024 * 1024  # 1MB
+    fresh_knobs.proton.cupti_buffer_size = 256 * 1024 # 256KB
     temp_file = tmp_path / "test_periodic_flushing.hatchet"
     proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing")
 
@@ -859,5 +859,15 @@ def test_periodic_flushing(tmp_path, fresh_knobs):
 
     proton.finalize()
 
-    with temp_file.open() as f:
-        data = json.load(f)
+    # Find all *.hatchet files under the directory `tmp_path`
+    import glob
+    hatchet_files = glob.glob(str(tmp_path / "*.hatchet"))
+    assert len(hatchet_files) > 1
+    num_scopes = 0
+    for hatchet_file in hatchet_files:
+        with open(hatchet_file, "r") as f:
+            data = json.load(f)
+            assert len(data[0]["children"]) > 0
+            num_scopes += len(data[0]["children"])
+    assert num_scopes == 10000
+
