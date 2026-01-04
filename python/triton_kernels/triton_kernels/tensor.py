@@ -200,7 +200,7 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None):
+def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
     if dtype is None:
         dtype = {
             torch.uint8: UINT8,
@@ -215,9 +215,11 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None):
         shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
     if shape_max is None:
         shape_max = shape
-    order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
-    order = [x for x in order]
-    return Tensor(Storage(torch_tensor, StridedLayout(order)), dtype=dtype, shape=shape, shape_max=shape_max)
+    if layout is None:
+        order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
+        order = [x for x in order]
+        layout = StridedLayout(order)
+    return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
@@ -252,10 +254,21 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
     assert False, f"Unsupported dtype: {dtype}"
 
 
-def empty(shape: tuple[int], dtype: DataType, device: torch.device):
+def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
     storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
     # pack sub-byte datatype along last dimension
-    storage_shape[-1] = storage_shape[-1] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
-    storage = torch.empty(storage_shape, device=device, dtype=storage_dtype)
-    return wrap_torch_tensor(storage, dtype=dtype, shape=shape)
+    if layout is None:
+        layout = StridedLayout(list(reversed(range(len(storage_shape)))))
+    # storage shape
+    assert isinstance(layout, StridedLayout)
+    dim = layout.order[0]
+    storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
+    # storage strides
+    strides = [0] * len(storage_shape)
+    running = 1
+    for d in layout.order:  # iterate minor -> major
+        strides[d] = running
+        running *= shape[d]
+    storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
+    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
