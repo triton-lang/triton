@@ -8,7 +8,8 @@ import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
 from triton.tools.tensor_descriptor import TensorDescriptor
-
+from triton_kernels.tensor import Tensor, wrap_torch_tensor
+from triton_kernels.tensor_details.layout import StridedLayout
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
@@ -32,6 +33,11 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
          If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
          in their respective formats.
     """
+    if not isinstance(src_tensor, Tensor):
+        src_tensor = wrap_torch_tensor(src_tensor)
+    assert isinstance(src_tensor.storage.layout, StridedLayout), "input data must be strided"
+    src_tensor = src_tensor.storage.data
+
     ndim = src_tensor.ndim
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
     axis = axis if axis >= 0 else axis + ndim

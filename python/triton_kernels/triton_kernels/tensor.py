@@ -248,10 +248,10 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
     assert False, f"Unsupported dtype: {dtype}"
 
 
-def empty(shape: tuple[int], dtype: DataType, device: torch.device, mx_axis: int = 1):
+def empty(shape: tuple[int], dtype: DataType, device: torch.device):
+    storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
-    storage_shape = (*shape[:mx_axis], shape[mx_axis] // 2, *shape[mx_axis + 1:]) if dtype == FP4 else shape
+    # pack sub-byte datatype along last dimension
+    storage_shape[-1] = storage_shape[-1] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
     storage = torch.empty(storage_shape, device=device, dtype=storage_dtype)
-    if dtype == FP4:
-        storage = storage.mT.contiguous().mT
-    return wrap_torch_tensor(storage, dtype=FP4 if dtype == FP4 else None, shape=shape)
+    return wrap_torch_tensor(storage, dtype=dtype, shape=shape)
