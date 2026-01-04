@@ -780,9 +780,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            options, signature, constexprs, attrs = self._pack_args(
-                backend, kwargs, bound_args, specialization, constexpr_paths, attr_paths, options
-            )
+            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                    constexpr_paths, attr_paths, options)
 
             kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
             if kernel is None:

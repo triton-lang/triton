@@ -32,13 +32,13 @@ def _available_backends():
         # nested tuple constexpr markers at deeper paths
         ((1, 1), (2, 1)),
         # tuple attrs (e.g. alignment divisibility "D") at nested paths
-        (torch.empty((16,), device="cpu"), torch.empty((16,), device="cpu")),
+        (torch.empty((16, ), device="cpu"), torch.empty((16, ), device="cpu")),
     ],
 )
 def test_jit_precomputed_paths_match_find_paths_if(backend, arg):
     # Specialize a *single* Python argument that itself may be a tuple/nested tuple.
     # native_specialize_impl returns a nested (tys, keys) structure for tuple inputs.
-    tys, keys = native_specialize_impl(backend, arg, is_const=False, specialize_value=True, align=True)
+    tys, keys = native_specialize_impl(backend, arg, False, True, True)
 
     # Mirror the old _pack_args behavior:
     #   sigvals = [x[0] for x in specialization]
@@ -54,4 +54,3 @@ def test_jit_precomputed_paths_match_find_paths_if(backend, arg):
 
     assert got_constexpr == expected_constexpr
     assert got_attrs == expected_attrs
-
