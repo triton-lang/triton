@@ -155,7 +155,7 @@ def _p_matmul(
     else:
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
-        tl.static_assert(SWIZZLE_MX_SCALE is None)
+        tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
     if is_x_microscaled:
         x_type: tl.constexpr = get_dtype(X)
         tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
