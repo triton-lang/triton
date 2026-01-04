@@ -849,7 +849,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 
 def test_periodic_flushing(tmp_path, fresh_knobs):
-    fresh_knobs.proton.cupti_buffer_size = 256 * 1024 # 256KB
+    fresh_knobs.proton.cupti_buffer_size = 256 * 1024  # 256KB
     temp_file = tmp_path / "test_periodic_flushing.hatchet"
     proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing")
 
@@ -870,4 +870,3 @@ def test_periodic_flushing(tmp_path, fresh_knobs):
             assert len(data[0]["children"]) >= 0
             num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
-

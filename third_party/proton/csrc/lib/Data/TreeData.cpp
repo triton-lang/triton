@@ -184,7 +184,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
         if (jsonNode == nullptr)
-          // This node and its children are not initialized because of zero metrics
+          // This node and its children are not initialized because of zero
+          // metrics
           return;
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
