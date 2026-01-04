@@ -42,6 +42,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     assert is_fp4 or is_fp8
     divisor = 2 if is_fp4 else 1
     L = src_tensor.shape[-1]
+    assert L % MXFP_BLOCK_SIZE.value == 0, f"axis dim must be divisible by {MXFP_BLOCK_SIZE.value}. Got {L}"
     if is_fp4:
         assert L % 2 == 0, f"axis dim must be divisible by 2 for e2m1. Got {L}"
     # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
