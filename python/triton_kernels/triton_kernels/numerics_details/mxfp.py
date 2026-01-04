@@ -35,19 +35,19 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     """
     if not isinstance(x, Tensor):
         x = wrap_torch_tensor(x)
-    device = x.device
+    if isinstance(out_dtype, torch.dtype):
+        out_dtype = {
+            torch.uint8: FP4,
+            torch.float8_e4m3fn: FP8_E4M3FN,
+            torch.float8_e5m2: FP8_E5M2,
+        }[out_dtype]
     assert x.shape[axis] % MXFP_BLOCK_SIZE.value == 0, f"axis dim must be divisible by {MXFP_BLOCK_SIZE.value}. Got {x.shape[axis]}"
     assert isinstance(x.storage.layout, StridedLayout), "input data must be strided"
-
-    out_dtype = FP4 if out_dtype == torch.uint8 else FP8_E4M3FN if out_dtype == torch.float8_e4m3fn else FP8_E5M2
+    assert -x.ndim <= axis < x.ndim, f"Invalid axis {axis=}"
+    assert out_dtype in (FP4, FP8_E4M3FN, FP8_E5M2), f"Invalid output dtype {out_dtype=}"
     # handle negative `axis``
-    ndim = x.ndim
-    assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
-    axis = axis if axis >= 0 else axis + ndim
+    axis = axis if axis >= 0 else axis + x.ndim
     # downcast
-    is_fp4 = out_dtype == FP4
-    is_fp8 = out_dtype in (FP8_E4M3FN, FP8_E5M2)
-    assert is_fp4 or is_fp8
     L = x.shape[axis]
     # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
     # output value storage
@@ -56,8 +56,8 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     y_order[0], y_order[major_dim] = y_order[major_dim], y_order[0]
     y_layout = StridedLayout(y_order)
     y_scale_shape = (*x.shape[:axis], triton.cdiv(L, MXFP_BLOCK_SIZE), *x.shape[axis+1:])
-    y_value = empty(x.shape, out_dtype, device, y_layout)
-    y_scale = empty(y_scale_shape, UINT8, device, y_layout)
+    y_value = empty(x.shape, out_dtype, x.device, y_layout)
+    y_scale = empty(y_scale_shape, UINT8, x.device, y_layout)
     if x.numel() > 0:
         # canonicalize to a 2D tensor that paxks 4-bit values on its inner-most dimension
         x_storage = x.storage.data.transpose(axis, -1).reshape(-1, x.shape[axis])
@@ -79,7 +79,7 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
             DEQUANT_SCALE_ROUNDING_MODE.value,
             num_warps=NUM_WARPS,
         )
-    # TODO: return actual tensor instead of storage
+    # TODO: return tensor object instead of its storage
     return y_value.storage.data, y_scale.storage.data
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):

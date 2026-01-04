@@ -21,7 +21,8 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, dtype_to_torch_dtype
+from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
+from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
@@ -307,6 +308,7 @@ def matmul(a, b, bias,
         assert a.shape[0] == b.shape[0]
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
+    out_dtype = torch_dtype_to_dtype(out_dtype)
     can_use_tma = (
         a.numel() > 0 and is_tma_compliant(a) and
         b.numel() > 0 and is_tma_compliant(b) and

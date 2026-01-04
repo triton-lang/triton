@@ -136,9 +136,9 @@ def _build_test_op_cases():
         Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
         Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
-        Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
     ])
     # mxfloat x mxfloat
     test_cases.extend([
@@ -147,11 +147,11 @@ def _build_test_op_cases():
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
         Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
-        Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
+        Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
     ])
     # amd-specific float8

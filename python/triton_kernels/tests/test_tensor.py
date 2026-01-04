@@ -1,6 +1,6 @@
 import pytest
 import torch
-from triton_kernels.tensor import BIT
+from triton_kernels.tensor_details.dtype import BIT
 from triton_kernels.tensor import (
     make_ragged_tensor_metadata,
     make_ragged_tensor_metadata_torch,
