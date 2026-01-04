@@ -13,7 +13,7 @@ class CDNA4MXScaleLayout(Layout):
 
     @property
     def name(self):
-        return "CDNA4_MX_SCALE"
+        return "CDNA4_SCALE"
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return CDNA4MXScaleLayoutTransformation(shape, is_fp4)
