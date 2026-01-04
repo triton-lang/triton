@@ -216,9 +216,10 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
     if shape_max is None:
         shape_max = shape
     if layout is None:
-        order = sorted(range(torch_tensor.ndim), key=lambda d: torch_tensor.stride()[d])
-        order = [x for x in order]
-        layout = StridedLayout(order)
+        # For a strided (dense) tensor we only track which dimension has unit stride.
+        # This is consistent with how we expand `shape` for packed sub-byte dtypes.
+        major_dim = torch_tensor.stride().index(1)
+        layout = StridedLayout(major_dim=major_dim)
     return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
@@ -269,15 +270,16 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
     # pack sub-byte datatype along last dimension
     if layout is None:
-        layout = StridedLayout(list(reversed(range(len(storage_shape)))))
+        layout = StridedLayout()
     # storage shape
     assert isinstance(layout, StridedLayout)
-    dim = layout.order[0]
+    order = layout.order(len(storage_shape))
+    dim = order[0]
     storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
     # storage strides
     strides = [0] * len(storage_shape)
     running = 1
-    for d in layout.order:  # iterate minor -> major
+    for d in order:  # iterate minor -> major
         strides[d] = running
         running *= shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
