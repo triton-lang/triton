@@ -48,6 +48,7 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N", N)
 
     def swizzle_data(self, data):
+        assert data.stride(-1) == 1
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
         data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
@@ -60,7 +61,8 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, self.K_SCALE_pad // 8, 4, 16, 2, 2, 1)
         data = data.permute(0, 1, 6, 4, 2, 5, 3, 7)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_SCALE_pad)
-        return data.transpose(-1, -2)[..., :self.K_SCALE, :self.N]
+        data = data.transpose(-1, -2)[..., :self.K_SCALE, :self.N]
+        return data
 
 
 @triton.jit
