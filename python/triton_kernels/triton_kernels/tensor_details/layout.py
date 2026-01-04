@@ -26,7 +26,7 @@ def make_default_matmul_mxfp4_w_layout(mx_axis: int):
     elif cuda_capability_geq(9):
         return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
     else:
-        return StridedLayout()
+        return StridedLayout(-2)
 
 
 def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
@@ -38,10 +38,10 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
         elif cuda_capability_geq(9):
             return HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
 
-    return StridedLayout()
+    return StridedLayout(-2)
 
 
 def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
     if cuda_capability_geq(10):
         return BlackwellActMXScaleLayout(ragged_metadata)
-    return StridedLayout()
+    return StridedLayout(-2)
