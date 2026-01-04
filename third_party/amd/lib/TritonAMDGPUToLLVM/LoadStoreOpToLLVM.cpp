@@ -589,11 +589,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     Value multicastMask;
     if (targetInfo.supportsMultiCTALaunch()) {
-      Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
-      auto regLayout =
-          triton::gpu::toLinearLayout(cast<RankedTensorType>(ptr.getType()));
-      multicastMask = LLVM::AMD::emitCtaMulticastMask(rewriter, loc,
-                                                      clusterCTAId, regLayout);
+      if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
+        Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+        auto regLayout = triton::gpu::toLinearLayout(tensorTy);
+        multicastMask = LLVM::AMD::emitCtaMulticastMask(
+            rewriter, loc, clusterCTAId, regLayout);
+      }
     }
 
     // vectorized iteration through all the pointer/mask/other elements

@@ -185,6 +185,139 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
 
 
 @gluon.jit
+def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
+                   B, M, N, K,  #
+                   stride_ab, stride_am, stride_ak,  #
+                   stride_bb, stride_bk, stride_bn,  #
+                   stride_cb, stride_cm, stride_cn,  #
+                   BLOCK_B: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                   INSTR_SHAPE_K: ttgl.constexpr, K_WIDTH: ttgl.constexpr):
+    load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 8], [1, 4, 8], [1, 4, 1], [2, 1, 0])
+    wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 0, 1], [0, 1, 0]],
+                                                         reg_bases=[], instr_shape=[16, 16, INSTR_SHAPE_K], rank=3)
+
+    load_dim0_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.SliceLayout(2, load_layout))
+    load_dim1_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(2, load_layout))
+    load_dim2_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(1, load_layout))
+
+    wmma_dim0_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.SliceLayout(2, wmma_layout))
+    wmma_dim1_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(2, wmma_layout))
+    wmma_dim2_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(1, wmma_layout))
+
+    pid_b = ttgl.program_id(axis=0)
+    pid_m = ttgl.program_id(axis=1)
+    pid_n = ttgl.program_id(axis=2)
+
+    offs_ab = ttgl.arange(0, BLOCK_B, layout=load_dim0_layout) + (pid_b * BLOCK_B)
+    offs_am = ttgl.arange(0, BLOCK_M, layout=load_dim1_layout) + (pid_m * BLOCK_M)
+    offs_ak = ttgl.arange(0, BLOCK_K, layout=load_dim2_layout)
+    offs_a = stride_ab * offs_ab[:, None, None] + \
+             stride_am * offs_am[None, :, None] + \
+             stride_ak * offs_ak[None, None, :]
+
+    offs_bb = ttgl.arange(0, BLOCK_B, layout=load_dim0_layout) + (pid_b * BLOCK_B)
+    offs_bk = ttgl.arange(0, BLOCK_K, layout=load_dim1_layout)
+    offs_bn = ttgl.arange(0, BLOCK_N, layout=load_dim2_layout) + (pid_n * BLOCK_N)
+    offs_b = stride_bb * offs_bb[:, None, None] + \
+             stride_bk * offs_bk[None, :, None] + \
+             stride_bn * offs_bn[None, None, :]
+
+    accumulator = ttgl.zeros((BLOCK_B, BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=wmma_layout)
+
+    for k in range(0, ttgl.cdiv(K, BLOCK_K)):
+        mask_a = (offs_ak[None, None, :] + k * BLOCK_K < K) & (offs_am[None, :, None] < M)
+        mask_b = (offs_bk[None, :, None] + k * BLOCK_K < K) & (offs_bn[None, None, :] < N)
+
+        a = ttgl.load(a_ptr + offs_a, mask=mask_a, other=0.0)
+        b = ttgl.load(b_ptr + offs_b, mask=mask_b, other=0.0)
+
+        a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, wmma_layout, K_WIDTH))
+        b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, wmma_layout, K_WIDTH))
+        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+
+        offs_a += BLOCK_K * stride_ak
+        offs_b += BLOCK_K * stride_bk
+
+    offs_cb = ttgl.arange(0, BLOCK_B, layout=wmma_dim0_layout) + (pid_b * BLOCK_B)
+    offs_cm = ttgl.arange(0, BLOCK_M, layout=wmma_dim1_layout) + (pid_m * BLOCK_M)
+    offs_cn = ttgl.arange(0, BLOCK_N, layout=wmma_dim2_layout) + (pid_n * BLOCK_N)
+    offs_c = stride_cb * offs_cb[:, None, None] + \
+             stride_cm * offs_cm[None, :, None] + \
+             stride_cn * offs_cn[None, None, :]
+
+    mask_c = (offs_cm[None, :, None] < M) & (offs_cn[None, None, :] < N)
+    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+
+
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", [
+    ("float16", "float16", 32),
+])
+@pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
+def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K):
+    if BLOCK_K < k_dim:
+        pytest.skip("Skip tests where BLOCK_K < k_dim")
+
+    a_dtype = str_to_triton_dtype(a_dtype).name
+    b_dtype = str_to_triton_dtype(b_dtype).name
+
+    signature = {
+        "a_ptr": f"*{a_dtype}", "b_ptr": f"*{b_dtype}", "c_ptr": "*fp32",  #
+        "B": "i32", "M": "i32", "N": "i32", "K": "i32",  #
+        "stride_ab": "i32", "stride_am": "i32", "stride_ak": "i32",  #
+        "stride_bb": "i32", "stride_bk": "i32", "stride_bn": "i32",  #
+        "stride_cb": "i32", "stride_cm": "i32", "stride_cn": "i32",  #
+        "BLOCK_B": "constexpr", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "BLOCK_K": "constexpr",  #
+        "INSTR_SHAPE_K": "constexpr", "K_WIDTH": "constexpr"
+    }
+    constexprs = {
+        "BLOCK_B": BLOCK_B, "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K,  #
+        "INSTR_SHAPE_K": k_dim, "K_WIDTH": 8
+    }
+    fn = gemm_3d_kernel
+
+    k = triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    amdgcn = k.asm["amdgcn"]
+
+    wmma_pattern = "v_wmma_f32_16x16x32_f16"
+    assert re.search(wmma_pattern, amdgcn)
+
+
+@pytest.mark.parametrize("k_dim", [32])
+@pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
+@pytest.mark.parametrize("B,M,N,K", [(16, 256, 256, 256), (16, 250, 250, 250)])
+def test_runtime_gemm_3d(k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K, B, M, N, K):
+    assert BLOCK_K >= k_dim
+    assert B % BLOCK_B == 0
+
+    torch.manual_seed(42)
+
+    a = torch.randn((B, M, K), dtype=torch.float16)
+    b = torch.randn((B, K, N), dtype=torch.float16)
+    c = torch.zeros((B, M, N), dtype=torch.float32)
+    stride_ab, stride_am, stride_ak = a.stride(0), a.stride(1), a.stride(2)
+    stride_bb, stride_bk, stride_bn = b.stride(0), b.stride(1), b.stride(2)
+    stride_cb, stride_cm, stride_cn = c.stride(0), c.stride(1), c.stride(2)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    c_device = c.cuda()
+    grid = (triton.cdiv(B, BLOCK_B), triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    gemm_3d_kernel[grid](
+        a_device, b_device, c_device,  #
+        B, M, N, K,  #
+        stride_ab, stride_am, stride_ak,  #
+        stride_bb, stride_bk, stride_bn,  #
+        stride_cb, stride_cm, stride_cn,  #
+        BLOCK_B=BLOCK_B, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
+        INSTR_SHAPE_K=k_dim, K_WIDTH=8)
+
+    c_triton = c_device.cpu()
+    c_torch = a.to(torch.float32) @ b.to(torch.float32)
+    torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
+
+
+@gluon.jit
 def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                 M, N, K,  #
                                 stride_am, stride_ak,  #
