@@ -611,7 +611,18 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
       };
 
-  writer.packArray(2);
+  uint32_t deviceTypeEntries = 0;
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    if (deviceIdMasks[deviceType] != 0) {
+      ++deviceTypeEntries;
+    }
+  }
+  if (deviceTypeEntries == 0) {
+    writer.packArray(1);
+  } else {
+    writer.packArray(2);
+  }
   packNode(tree->getNode(TreeData::Tree::TreeNode::RootId));
 
   auto countSetBits = [](uint32_t mask) -> uint32_t {
@@ -623,13 +634,6 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
     return count;
   };
 
-  uint32_t deviceTypeEntries = 0;
-  for (size_t deviceType = 0;
-       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
-    if (deviceIdMasks[deviceType] != 0) {
-      ++deviceTypeEntries;
-    }
-  }
   if (deviceTypeEntries != 0) {
     writer.packMap(deviceTypeEntries);
     for (size_t deviceType = 0;
