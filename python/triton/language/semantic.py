@@ -227,6 +227,16 @@ class TritonSemantic(Generic[TensorTy]):
         msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
         self.device_assert(cond, msg, None)
 
+    def cast_to_int(self, input):
+        sca_ty = input.type.scalar
+        assert sca_ty.is_floating()
+        bitwidth = sca_ty.primitive_bitwidth
+        try:
+            int_ty = getattr(tl, f'int{bitwidth}')
+        except AttributeError as e:
+            raise ValueError(f"unsupported float bitwidth {bitwidth} for cast_to_int") from e
+        return self.bitcast(input, int_ty)
+
     def add(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other, True, True)
@@ -250,6 +260,9 @@ class TritonSemantic(Generic[TensorTy]):
             return self.tensor(self.builder.create_addptr(input.handle, other_handle), input.type)
         # float + float
         elif input_scalar_ty.is_floating():
+            if self.builder.options.fpsan:
+                return self.bitcast(self.add(self.cast_to_int(input), self.cast_to_int(other), sanitize_overflow=False),
+                                    input_scalar_ty)
             return self.tensor(self.builder.create_fadd(input.handle, other.handle), input.type)
         # int + int
         elif input_scalar_ty.is_int():
