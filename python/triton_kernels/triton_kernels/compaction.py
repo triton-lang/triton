@@ -1,6 +1,6 @@
 import torch
 from .compaction_details._masked_compaction import _masked_compaction
-from .tensor import Tensor
+from .tensor import Bitmatrix
 
 
 def compaction(yv, yi, bitmask, sentinel=-1):
@@ -32,7 +32,7 @@ def compaction(yv, yi, bitmask, sentinel=-1):
     n_rows, n_cols = yi.shape
     ret_yv = torch.empty_like(yv)
     ret_yi = torch.empty_like(yi)
-    if isinstance(bitmask, Tensor):
+    if isinstance(bitmask, Bitmatrix):
         bitmask = bitmask.storage.data
 
     _masked_compaction[(n_rows, )](

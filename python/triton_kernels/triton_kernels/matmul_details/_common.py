@@ -179,13 +179,13 @@ def matmul_launch_metadata(grid, kernel, args):
     n_slices = args.get("N_SLICES", None)
     if slice_sizes is not None:
         n_tokens = slice_sizes.sum()
-        n_w_bytes = (W.numel() * W.element_size() // n_slices) * (slice_sizes > 0).sum()
+        n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
     else:
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
     if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else int(n_tokens)
-    repr = lambda s, x: f"{s} = {x}" if x is not None else f"{s} = <data-dependent>"
+    repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{n_slices}({s}) = <data-dependent>"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
     if batch_size > 1:
@@ -219,6 +219,7 @@ def matmul_launch_metadata(grid, kernel, args):
             n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
 
     ret["bytes"] = n_x_bytes + n_y_bytes + n_w_bytes
+
     return ret
 
 
