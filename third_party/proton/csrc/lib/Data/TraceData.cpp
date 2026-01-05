@@ -221,7 +221,7 @@ std::vector<uint8_t> TraceData::toMsgPack(bool pruning) {
   std::ostringstream os;
   dumpChromeTrace(os);
   if (pruning)
-    pruneTrace(trace.get());  
+    pruneTrace(trace.get());
   // TODO: optimize this by writing directly to MsgPackWriter
   MsgPackWriter writer;
   writer.packStr(os.str());

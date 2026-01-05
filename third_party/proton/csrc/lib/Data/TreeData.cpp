@@ -744,7 +744,7 @@ void TreeData::pruneTree(Tree *tree) {
 std::vector<uint8_t> TreeData::toMsgPack(bool pruning) {
   std::shared_lock<std::shared_mutex> lock(mutex);
   auto ret = buildHatchetMsgPack(tree.get());
-  if (pruning) 
+  if (pruning)
     pruneTree(tree.get());
   return ret;
 }
