@@ -97,6 +97,8 @@ def umulhi(x, y, _semantic=None):
 @core._tensor_member_fn
 def exp(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_exp(x.handle), x.type)
 
 
@@ -106,6 +108,8 @@ def exp(x, _semantic=None):
 @core._tensor_member_fn
 def exp2(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_exp2(x.handle), x.type)
 
 
@@ -115,6 +119,8 @@ def exp2(x, _semantic=None):
 @core._tensor_member_fn
 def log(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_log(x.handle), x.type)
 
 
@@ -124,6 +130,8 @@ def log(x, _semantic=None):
 @core._tensor_member_fn
 def log2(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_log2(x.handle), x.type)
 
 
@@ -133,6 +141,8 @@ def log2(x, _semantic=None):
 @core._tensor_member_fn
 def cos(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_cos(x.handle), x.type)
 
 
@@ -142,6 +152,8 @@ def cos(x, _semantic=None):
 @core._tensor_member_fn
 def sin(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_sin(x.handle), x.type)
 
 
@@ -151,6 +163,8 @@ def sin(x, _semantic=None):
 @core._tensor_member_fn
 def sqrt(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_sqrt(x.handle), x.type)
 
 
@@ -160,6 +174,8 @@ def sqrt(x, _semantic=None):
 @core._tensor_member_fn
 def sqrt_rn(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_precise_sqrt(x.handle), x.type)
 
 
@@ -169,6 +185,8 @@ def sqrt_rn(x, _semantic=None):
 @core._tensor_member_fn
 def rsqrt(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_rsqrt(x.handle), x.type)
 
 
@@ -216,6 +234,8 @@ def div_rn(x, y, _semantic=None):
 @core._tensor_member_fn
 def erf(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_erf(x.handle), x.type)
 
 
@@ -225,6 +245,8 @@ def erf(x, _semantic=None):
 @core._tensor_member_fn
 def floor(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_floor(x.handle), x.type)
 
 
@@ -234,6 +256,8 @@ def floor(x, _semantic=None):
 @core._tensor_member_fn
 def ceil(x, _semantic=None):
     x = _semantic.to_tensor(x)
+    if _semantic.builder.options.fpsan:
+        return x
     return core.tensor(_semantic.builder.create_ceil(x.handle), x.type)
 
 

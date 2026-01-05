@@ -32,6 +32,9 @@ class TritonSemantic(Generic[TensorTy]):
     def __init__(self, builder):
         self.builder = builder
 
+    def _full_like(self, input: TensorTy, value: numbers.Number, scalar_ty: tl.dtype) -> TensorTy:
+        return self.full(input.shape, value, scalar_ty)
+
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##
@@ -248,8 +251,8 @@ class TritonSemantic(Generic[TensorTy]):
             raise TypeError(f"fpsan_pow2_modinv expects an integer scalar type, got {sca_ty}")
         bitwidth = sca_ty.int_bitwidth
         # Create shape-matching constants.
-        one = self.full(input.shape, 1, sca_ty)
-        two = self.full(input.shape, 2, sca_ty)
+        one = self._full_like(input, 1, sca_ty)
+        two = self._full_like(input, 2, sca_ty)
 
         a = self.or_(input, one)  # ensure odd => invertible mod 2^N
         x = a
@@ -282,7 +285,7 @@ class TritonSemantic(Generic[TensorTy]):
         """
         input_i = self.cast_to_int(input)
         other_i = self.cast_to_int(other)
-        one = self.full(other_i.shape, 1, other_i.type.scalar)
+        one = self._full_like(other_i, 1, other_i.type.scalar)
         other_safe = self.or_(other_i, one)
         return self.mod(input_i, other_safe)
 
