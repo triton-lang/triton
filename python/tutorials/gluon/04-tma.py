@@ -351,7 +351,7 @@ if __name__ == "__main__":
 #
 # Note the following restrctions for TMA operations:
 # - The innermost coordinate must be 16-byte aligned. For example, for dtype float16,
-#   an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is lega.
+#   an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is legal.
 # - If the shared memory layout is fp4_padded, the innermost coordinate must be 128-byte aligned.
 #
 # Main takeaways:

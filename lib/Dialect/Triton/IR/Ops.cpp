@@ -1365,7 +1365,7 @@ LogicalResult GatherOp::inferReturnTypes(
   return success();
 }
 
-// -- Descriptor verifiers --
+// -- DescriptorGatherOp
 static LogicalResult verifyGatherScatterResultType(Operation *op,
                                                    ShapedType resultType,
                                                    ShapedType indicesType) {
@@ -1431,6 +1431,20 @@ LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
   return success();
 }
 
+LogicalResult DescriptorGatherOp::verify() {
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
+                               getResult().getType(), getXOffsets().getType());
+}
+
+// -- DescriptorScatterOp --
+LogicalResult DescriptorScatterOp::verify() {
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
+                               getSrc().getType(), getXOffsets().getType());
+}
+
+// -- DescriptorLoadOp --
 LogicalResult verifyDescriptorLoadStoreOp(Operation *op, TensorDescType desc,
                                           ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
@@ -1455,21 +1469,6 @@ LogicalResult verifyDescriptorLoadStoreOp(Operation *op, TensorDescType desc,
   return success();
 }
 
-// -- DescriptorGatherOp
-LogicalResult DescriptorGatherOp::verify() {
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               getResult().getType(), getXOffsets().getType());
-}
-
-// -- DescriptorScatterOp --
-LogicalResult DescriptorScatterOp::verify() {
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               getSrc().getType(), getXOffsets().getType());
-}
-
-// -- DescriptorLoadOp --
 LogicalResult DescriptorLoadOp::verify() {
   return verifyDescriptorLoadStoreOp(*this, getDesc().getType(), getType());
 }
