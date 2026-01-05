@@ -148,7 +148,7 @@ class CUDAOptions:
 
     @property
     def enable_iisan(self):
-        return self.instrumentation_mode == "iisan"
+        return "iisan" in self.instrumentation_mode
 
 
 class CUDABackend(BaseBackend):
@@ -175,7 +175,7 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if "instrumentation_mode" in opts and opts["instrumentation_mode"] in ["consan", "iisan"]:
+        if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
 
@@ -356,7 +356,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
-        if knobs.compilation.instrumentation_mode == "consan":
+        if "consan" in options.instrumentation_mode:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
