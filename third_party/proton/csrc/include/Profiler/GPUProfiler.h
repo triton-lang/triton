@@ -105,7 +105,7 @@ protected:
       for (auto *data : dataSet) {
         auto &path = data->getPath();
         auto pathWithPeriod = path + ".part_" + std::to_string(period) + ".hatchet";
-        if (this->periodicFlushing == "json") {
+        if (this->periodicFlushing == "raw") {
           auto jsonStr = data->toJsonString(/*pruning=*/true);
           std::ofstream ofs(pathWithPeriod);
           ofs << jsonStr;
