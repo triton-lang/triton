@@ -237,6 +237,55 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"unsupported float bitwidth {bitwidth} for cast_to_int") from e
         return self.bitcast(input, int_ty)
 
+    def fpsan_pow2_modinv(self, input: TensorTy) -> TensorTy:
+        """Multiplicative inverse modulo 2^N for N-bit integers.
+
+        Only odd values are invertible modulo 2^N. We force oddness by OR-ing the
+        input with 1 so that division is always defined in fpsan mode.
+        """
+        sca_ty = input.type.scalar
+        if not sca_ty.is_int():
+            raise TypeError(f"fpsan_pow2_modinv expects an integer scalar type, got {sca_ty}")
+        bitwidth = sca_ty.int_bitwidth
+        # Create shape-matching constants.
+        one = self.full(input.shape, 1, sca_ty)
+        two = self.full(input.shape, 2, sca_ty)
+
+        a = self.or_(input, one)  # ensure odd => invertible mod 2^N
+        x = a
+
+        # Newton iteration: x <- x * (2 - a*x)  (mod 2^N). Each step doubles #correct bits.
+        iters = 0
+        bits = 1
+        while bits < bitwidth:
+            bits *= 2
+            iters += 1
+        for _ in range(iters):
+            ax = self.tensor(self.builder.create_mul(a.handle, x.handle), input.type)
+            two_minus_ax = self.tensor(self.builder.create_sub(two.handle, ax.handle), input.type)
+            x = self.tensor(self.builder.create_mul(x.handle, two_minus_ax.handle), input.type)
+        return x
+
+    def fpsan_fdiv(self, input: TensorTy, other: TensorTy) -> TensorTy:
+        """Division in fpsan mode: num * inv(den|1) modulo 2^N on payload bits."""
+        input_i = self.cast_to_int(input)
+        other_i = self.cast_to_int(other)
+        inv = self.fpsan_pow2_modinv(other_i)
+        return self.mul(input_i, inv, sanitize_overflow=False)
+
+    def fpsan_srem(self, input: TensorTy, other: TensorTy) -> TensorTy:
+        """Remainder in fpsan mode on payload bits.
+
+        LLVM srem/urem with a zero denominator is undefined. FP remainder isn't UB, and
+        fpsan is expected to be total/deterministic for all payloads, so we force a
+        non-zero denominator via `den | 1` (no branches, works for any bit-pattern).
+        """
+        input_i = self.cast_to_int(input)
+        other_i = self.cast_to_int(other)
+        one = self.full(other_i.shape, 1, other_i.type.scalar)
+        other_safe = self.or_(other_i, one)
+        return self.mod(input_i, other_safe)
+
     def add(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other, True, True)
@@ -280,6 +329,9 @@ class TritonSemantic(Generic[TensorTy]):
             return self.add(input, self.minus(other), sanitize_overflow=False)
         # float - float
         if scalar_ty.is_floating():
+            if self.builder.options.fpsan:
+                return self.bitcast(self.sub(self.cast_to_int(input), self.cast_to_int(other), sanitize_overflow=False),
+                                    scalar_ty)
             return self.tensor(self.builder.create_fsub(input.handle, other.handle), input.type)
         # int - int
         elif scalar_ty.is_int():
@@ -294,6 +346,9 @@ class TritonSemantic(Generic[TensorTy]):
         scalar_ty = input.type.scalar
         # float * float
         if scalar_ty.is_floating():
+            if self.builder.options.fpsan:
+                return self.bitcast(self.mul(self.cast_to_int(input), self.cast_to_int(other), sanitize_overflow=False),
+                                    scalar_ty)
             return self.tensor(self.builder.create_fmul(input.handle, other.handle), input.type)
         # int * int
         elif scalar_ty.is_int():
@@ -325,6 +380,8 @@ class TritonSemantic(Generic[TensorTy]):
         # unreachable
         else:
             raise TypeError(f"unexpected type {input_scalar_ty}")
+        if self.builder.options.fpsan:
+            return self.bitcast(self.fpsan_fdiv(input, other), input.type.scalar)
         return self.tensor(self.builder.create_fdiv(input.handle, other.handle), input.type)
 
     def floordiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
@@ -347,6 +404,8 @@ class TritonSemantic(Generic[TensorTy]):
         if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
             raise TypeError("both operands of fdiv must have floating scalar type")
         input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
+        if self.builder.options.fpsan:
+            return self.bitcast(self.fpsan_fdiv(input, other), input.type.scalar)
         ret = self.builder.create_fdiv(input.handle, other.handle)
         return self.tensor(ret, input.type)
 
@@ -356,6 +415,8 @@ class TritonSemantic(Generic[TensorTy]):
         other_scalar_ty = other.type.scalar
         # float % float
         if scalar_ty.is_floating():
+            if self.builder.options.fpsan:
+                return self.bitcast(self.fpsan_srem(input, other), scalar_ty)
             return self.tensor(self.builder.create_frem(input.handle, other.handle), input.type)
         # % int
         elif scalar_ty.is_int():
