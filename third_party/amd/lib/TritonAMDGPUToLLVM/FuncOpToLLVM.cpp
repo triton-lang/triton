@@ -24,6 +24,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
 
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);
