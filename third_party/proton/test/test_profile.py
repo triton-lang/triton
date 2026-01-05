@@ -848,10 +848,11 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
+@pytest.mark.parametrize("format", ["msgpack", "raw"])
 def test_periodic_flushing(tmp_path, fresh_knobs):
     fresh_knobs.proton.cupti_buffer_size = 256 * 1024  # 256KB
     temp_file = tmp_path / "test_periodic_flushing.hatchet"
-    proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing")
+    proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={format}")
 
     for i in range(10000):
         with proton.scope(f"test_{i}"):
@@ -861,12 +862,16 @@ def test_periodic_flushing(tmp_path, fresh_knobs):
 
     # Find all *.hatchet files under the directory `tmp_path`
     import glob
+    import msgpack
     hatchet_files = glob.glob(str(tmp_path / "*.hatchet"))
     assert len(hatchet_files) > 1
     num_scopes = 0
     for hatchet_file in hatchet_files:
         with open(hatchet_file, "r") as f:
-            data = json.load(f)
+            if format == "msgpack":
+                data = msgpack.load(f)
+            else:
+                data = json.load(f)
             assert len(data[0]["children"]) >= 0
             num_scopes += len(data[0]["children"])
     assert num_scopes == 10000

@@ -926,13 +926,13 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported option key: " + key);
       }
-      if (value != "msgpack" && value != "json") {
+      if (value != "msgpack" && value != "raw") {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported format: " + value);
       }
       periodicFlushing = value;
     } else {
-      periodicFlushing = "json";
+      periodicFlushing = "raw";
     }
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
