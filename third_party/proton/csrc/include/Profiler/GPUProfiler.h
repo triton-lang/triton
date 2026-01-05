@@ -104,14 +104,17 @@ protected:
       auto dataSet = this->getDataSet();
       for (auto *data : dataSet) {
         auto &path = data->getPath();
-        auto pathWithPeriod = path + ".part_" + std::to_string(period) + ".hatchet";
-        if (this->periodicFlushing == "raw") {
+        auto pathWithPeriod =
+            path + ".part_" + std::to_string(period) + "." + this->periodicFlushing;
+        if (this->periodicFlushing == "hatchet" ||
+            this->periodicFlushing == "chrome_trace") {
           auto jsonStr = data->toJsonString(/*pruning=*/true);
-          std::ofstream ofs(pathWithPeriod);
+          std::ofstream ofs(pathWithPeriod, std::ios::out | std::ios::trunc);
           ofs << jsonStr;
-        } else if (this->periodicFlushing == "msgpack") {
+        } else if (this->periodicFlushing == "hatchet_msgpack") {
           auto msgPack = data->toMsgPack(/*pruning=*/true);
-          std::ofstream ofs(pathWithPeriod, std::ios::binary);
+          std::ofstream ofs(pathWithPeriod,
+                            std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),
                     msgPack.size());
         }

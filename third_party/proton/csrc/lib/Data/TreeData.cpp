@@ -736,6 +736,12 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   os << std::endl << output.dump(4) << std::endl;
 }
 
+void TreeData::dumpHatchetMsgPack(std::ostream &os) const {
+  auto msgPack = buildHatchetMsgPack(tree.get());
+  os.write(reinterpret_cast<const char *>(msgPack.data()),
+           static_cast<std::streamsize>(msgPack.size()));
+}
+
 void TreeData::pruneTree(Tree *tree) {
   tree->walk<Tree::WalkPolicy::PreOrder>([&](Tree::TreeNode &node) {
     node.metrics.clear();
@@ -762,6 +768,8 @@ std::string TreeData::toJsonString(bool pruning) {
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::Hatchet) {
     dumpHatchet(os);
+  } else if (outputFormat == OutputFormat::HatchetMsgPack) {
+    dumpHatchetMsgPack(os);
   } else {
     throw std::logic_error("Output format not supported");
   }

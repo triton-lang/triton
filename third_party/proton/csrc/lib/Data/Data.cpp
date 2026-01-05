@@ -20,9 +20,13 @@ void Data::dump(const std::string &outputFormat) {
   if (path.empty() || path == "-") {
     out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
   } else {
-    out.reset(new std::ofstream(
-        path + "." +
-        outputFormatToString(outputFormatEnum))); // Opening a file for output
+    const auto filePath = path + "." + outputFormatToString(outputFormatEnum);
+    const auto fileMode =
+        (outputFormatEnum == OutputFormat::HatchetMsgPack)
+            ? (std::ios::out | std::ios::binary | std::ios::trunc)
+            : (std::ios::out | std::ios::trunc);
+    out.reset(
+        new std::ofstream(filePath, fileMode)); // Opening a file for output
   }
 
   doDump(*out, outputFormatEnum);
@@ -31,6 +35,8 @@ void Data::dump(const std::string &outputFormat) {
 OutputFormat parseOutputFormat(const std::string &outputFormat) {
   if (toLower(outputFormat) == "hatchet") {
     return OutputFormat::Hatchet;
+  } else if (toLower(outputFormat) == "hatchet_msgpack") {
+    return OutputFormat::HatchetMsgPack;
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
   } else {
@@ -41,6 +47,8 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
 const std::string outputFormatToString(OutputFormat outputFormat) {
   if (outputFormat == OutputFormat::Hatchet) {
     return "hatchet";
+  } else if (outputFormat == OutputFormat::HatchetMsgPack) {
+    return "hatchet_msgpack";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
   }

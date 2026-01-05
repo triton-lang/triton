@@ -442,11 +442,12 @@ void RoctracerProfiler::doSetMode(
       const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
       if (key != "format") {
         throw std::invalid_argument(
-            "[PROTON] CuptiProfiler: unsupported option key: " + key);
+            "[PROTON] RoctracerProfiler: unsupported option key: " + key);
       }
-      if (value != "msgpack" && value != "raw") {
+      if (value != "hatchet_msgpack" && value != "chrome_trace" && 
+          value != "hatchet") {
         throw std::invalid_argument(
-            "[PROTON] CuptiProfiler: unsupported format: " + value);
+            "[PROTON] RoctracerProfiler: unsupported format: " + value);
       }
       periodicFlushing = value;
     } else {

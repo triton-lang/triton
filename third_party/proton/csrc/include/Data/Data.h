@@ -11,7 +11,7 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, ChromeTrace, Count };
+enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.

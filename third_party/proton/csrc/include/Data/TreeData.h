@@ -60,6 +60,7 @@ private:
   }
 
   void dumpHatchet(std::ostream &os) const;
+  void dumpHatchetMsgPack(std::ostream &os) const;
 
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId

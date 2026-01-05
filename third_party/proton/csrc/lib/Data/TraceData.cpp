@@ -513,7 +513,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os);
   } else {
-    std::logic_error("Output format not supported");
+    throw std::logic_error("Output format not supported");
   }
 }
 

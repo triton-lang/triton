@@ -926,7 +926,8 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported option key: " + key);
       }
-      if (value != "msgpack" && value != "raw") {
+      if (value != "hatchet_msgpack" && value != "chrome_trace" && 
+          value != "hatchet") {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported format: " + value);
       }
