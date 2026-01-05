@@ -265,8 +265,13 @@ struct DotOpMFMAConversionHelper {
         op.getLoc(), mfmaVersion, mDim, nDim, kDim, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      return op.emitError(
-          "no matching matrix core intrinsic due to unsupported element type");
+      return op.emitError("no matching matrix core intrinsic ")
+             << "for mfma version " << mfmaVersion
+             << " with instruction shape [" << mDim << ", " << nDim << ", "
+             << kDim << "] and element types A=" << elemTyA << ", B=" << elemTyB
+             << ". Check whether the mfma version,"
+             << " instruction shape, and data types "
+             << "are supported on the current AMD GPU architecture.";
 
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
@@ -614,8 +619,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                            scaleDotElemTypeToMLIRType(ctx, bElemType),
                            /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      return op.emitError(
-          "no matching matrix core intrinsic due to unsupported element type");
+      return op.emitError("no matching matrix core intrinsic ")
+             << "for mfma version " << mfmaVersion
+             << " with instruction shape [" << mDim << ", " << nDim << ", "
+             << kDim << "] and element types A=" << elemTyA << ", B=" << elemTyB
+             << ". Check whether the mfma version,"
+             << " instruction shape, and data types "
+             << "are supported on the current AMD GPU architecture.";
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;

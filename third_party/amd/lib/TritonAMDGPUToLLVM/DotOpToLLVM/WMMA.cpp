@@ -321,8 +321,13 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
           : WmmaIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2],
                                aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
-    return op.emitError(
-        "no matching matrix core intrinsic due to unsupported element type");
+    return op.emitError("no matching matrix core intrinsic ")
+           << "for wmma version " << wmmaVer << " with instruction shape ["
+           << mnkDim[0] << ", " << mnkDim[1] << ", " << mnkDim[2]
+           << "] and element types A=" << aElemTy << ", B=" << bElemTy
+           << ", D=" << dElemTy << ". Check whether the mfma version,"
+           << " instruction shape, and data types "
+           << "are supported on the current AMD GPU architecture.";
   }
 
   unsigned kDim = maybeWmmaIntrinsic->kDim;
