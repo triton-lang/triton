@@ -57,12 +57,10 @@ void throwIfSessionNotInitialized(
 
 void Session::activate() {
   profiler->start();
-  profiler->flush();
   profiler->registerData(data.get());
 }
 
 void Session::deactivate() {
-  profiler->flush();
   profiler->unregisterData(data.get());
 }
 

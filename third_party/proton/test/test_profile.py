@@ -848,11 +848,11 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
-@pytest.mark.parametrize("format", ["msgpack", "raw"])
-def test_periodic_flushing(tmp_path, fresh_knobs):
+@pytest.mark.parametrize("data_format", ["msgpack", "raw"])
+def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     fresh_knobs.proton.cupti_buffer_size = 256 * 1024  # 256KB
     temp_file = tmp_path / "test_periodic_flushing.hatchet"
-    proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={format}")
+    proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
         with proton.scope(f"test_{i}"):
