@@ -60,7 +60,9 @@ void Session::activate() {
   profiler->registerData(data.get());
 }
 
-void Session::deactivate() {
+void Session::deactivate(bool flushing) {
+  if (flushing)
+    profiler->flush();
   profiler->unregisterData(data.get());
 }
 
@@ -110,15 +112,15 @@ void SessionManager::activateAllSessions() {
   }
 }
 
-void SessionManager::deactivateSession(size_t sessionId) {
+void SessionManager::deactivateSession(size_t sessionId, bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
-  deActivateSessionImpl(sessionId);
+  deActivateSessionImpl(sessionId, flushing);
 }
 
-void SessionManager::deactivateAllSessions() {
+void SessionManager::deactivateAllSessions(bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : sessionActive) {
-    deActivateSessionImpl(iter.first);
+    deActivateSessionImpl(iter.first, flushing);
   }
 }
 
@@ -136,13 +138,13 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
-void SessionManager::deActivateSessionImpl(size_t sessionId) {
+void SessionManager::deActivateSessionImpl(size_t sessionId, bool flushing) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (!sessionActive[sessionId]) {
     return;
   }
   sessionActive[sessionId] = false;
-  sessions[sessionId]->deactivate();
+  sessions[sessionId]->deactivate(flushing);
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
   unregisterInterface<InstrumentationInterface>(sessionId,

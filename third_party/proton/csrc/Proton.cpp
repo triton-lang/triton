@@ -79,12 +79,12 @@ static void initProton(pybind11::module &&m) {
   m.def("activate_all",
         []() { SessionManager::instance().activateAllSessions(); });
 
-  m.def("deactivate", [](size_t sessionId) {
-    SessionManager::instance().deactivateSession(sessionId);
+  m.def("deactivate", [](size_t sessionId, bool flushing) {
+    SessionManager::instance().deactivateSession(sessionId, flushing);
   });
 
   m.def("deactivate_all",
-        []() { SessionManager::instance().deactivateAllSessions(); });
+        [](bool flushing) { SessionManager::instance().deactivateAllSessions(flushing); });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     SessionManager::instance().finalizeSession(sessionId, outputFormat);

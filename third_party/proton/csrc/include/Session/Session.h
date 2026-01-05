@@ -27,7 +27,7 @@ public:
 
   void activate();
 
-  void deactivate();
+  void deactivate(bool flushing);
 
   void finalize(const std::string &outputFormat);
 
@@ -87,9 +87,9 @@ public:
 
   void activateAllSessions();
 
-  void deactivateSession(size_t sessionId);
+  void deactivateSession(size_t sessionId, bool flushing);
 
-  void deactivateAllSessions();
+  void deactivateAllSessions(bool flushing);
 
   size_t getContextDepth(size_t sessionId);
 
@@ -140,7 +140,7 @@ private:
 
   void activateSessionImpl(size_t sessionId);
 
-  void deActivateSessionImpl(size_t sessionId);
+  void deActivateSessionImpl(size_t sessionId, bool flushing);
 
   size_t getSessionId(const std::string &path) { return sessionPaths[path]; }
 
