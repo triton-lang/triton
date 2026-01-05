@@ -17,6 +17,32 @@
 
 namespace mlir::triton::gpu {
 
+//
+// This pass assigns partitions to ops within each warp specialized loop.
+//
+// Ops are first categorized as either "data" ops (which operate on tiles of
+// data, for example load/store/mma ops) or "non-data" ops (for example index
+// calculations).
+//
+// A dataflow graph representation of the program is constructed: every edge in
+// the graph represents an MLIR value, and every node represents an MLIR
+// operation or block argument.
+//
+// Initially all nodes for "data" ops are assigned to a new partition. A set of
+// heuristics is then applied to every edge that crosses partitions (connects a
+// pair of nodes assigned to different partitions). When a heuristic matches,
+// the two partitions are merged into a single partition. This is done up until
+// a fixed point is reached. A second set of heuristics is run on every
+// pair of partitions, merging them until a fixed point is reached.
+//
+// After the heuristics have been applied, all data ops are assigned to a
+// single partition. These partition assignments are then propagated to all
+// "non-data" ops. This pulls all of the necessary index calculations etc. into
+// the partitions that require them (possibly multiple).
+//
+// Finally the partition assignments in the dataflow graph are serialized to
+// attributes, and the temporary data structure is discarded.
+
 #define GEN_PASS_DEF_TRITONGPUPARTITIONSCHEDULING
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
