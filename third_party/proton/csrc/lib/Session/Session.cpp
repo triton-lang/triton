@@ -207,7 +207,7 @@ void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
-    deActivateSessionImpl(sessionId);
+    deActivateSessionImpl(sessionId, /*flushing=*/true);
     session->finalize(outputFormat);
     sessionIds.push_back(sessionId);
   }
