@@ -419,11 +419,9 @@ public:
       return isa<scf::ForOp>(parentOp) ||
              parentOp->getParentOfType<scf::ForOp>();
     }
-    if (auto result = dyn_cast<OpResult>(value)) {
-      auto op = result.getOwner();
-      return isa<scf::ForOp>(op) || op->getParentOfType<scf::ForOp>();
-    }
-    llvm::report_fatal_error("unsuported value");
+    auto result = cast<OpResult>(value);
+    auto op = result.getOwner();
+    return isa<scf::ForOp>(op) || op->getParentOfType<scf::ForOp>();
   }
 
   bool containsLoopBody() {
@@ -448,11 +446,10 @@ public:
           return "ind var";
         return "iter arg " + std::to_string(blockArg.getArgNumber() - 1);
       }
-      llvm::report_fatal_error("unsuported op");
+      return "?";
     }
-    if (auto result = dyn_cast<OpResult>(value))
-      return "result " + std::to_string(result.getResultNumber());
-    llvm::report_fatal_error("unsuported value");
+    auto result = cast<OpResult>(value);
+    return "result " + std::to_string(result.getResultNumber());
   }
 
   void setPartition(Partition *partition) {
@@ -825,15 +822,10 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
   for (auto [outputPort, value] : values) {
     for (auto &use : value.getUses()) {
       auto op = use.getOwner();
-      if (op) {
-        auto key = std::make_pair(op, use.getOperandNumber());
-        if (operands.find(key) != operands.end()) {
-          auto inputPort = operands[key];
-          Node::addEdge(outputPort, inputPort);
-        }
-      } else {
-        llvm::report_fatal_error(
-            "use not owned by an op when constructing data flow graph");
+      auto key = std::make_pair(op, use.getOperandNumber());
+      if (operands.find(key) != operands.end()) {
+        auto inputPort = operands[key];
+        Node::addEdge(outputPort, inputPort);
       }
     }
   }
