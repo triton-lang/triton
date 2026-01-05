@@ -67,7 +67,6 @@ void Session::deactivate(bool flushing) {
 }
 
 void Session::finalize(const std::string &outputFormat) {
-  profiler->flush();
   profiler->stop();
   data->dump(outputFormat);
 }
@@ -199,7 +198,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   if (!hasSession(sessionId)) {
     return;
   }
-  deActivateSessionImpl(sessionId);
+  deActivateSessionImpl(sessionId, /*flushing=*/true);
   sessions[sessionId]->finalize(outputFormat);
   removeSession(sessionId);
 }
