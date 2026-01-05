@@ -252,7 +252,7 @@ def test_get_data(tmp_path: pathlib.Path):
 
     import msgpack
     msgpack_data = proton.get_data_msgpack(session)
-    database_unpacked = msgpack.loads(msgpack_data)
+    database_unpacked = msgpack.loads(msgpack_data, raw=False, strict_map_key=False)
     assert database == database_unpacked
 
     proton.finalize()

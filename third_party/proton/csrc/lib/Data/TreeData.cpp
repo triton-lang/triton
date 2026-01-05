@@ -618,11 +618,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
       ++deviceTypeEntries;
     }
   }
-  if (deviceTypeEntries == 0) {
-    writer.packArray(1);
-  } else {
-    writer.packArray(2);
-  }
+  // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
+  // the JSON serializer, even if device_metadata is empty.
+  writer.packArray(2);
   packNode(tree->getNode(TreeData::Tree::TreeNode::RootId));
 
   auto countSetBits = [](uint32_t mask) -> uint32_t {
@@ -634,38 +632,36 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
     return count;
   };
 
-  if (deviceTypeEntries != 0) {
-    writer.packMap(deviceTypeEntries);
-    for (size_t deviceType = 0;
-        deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
-      auto mask = deviceIdMasks[deviceType];
-      if (mask == 0) {
+  writer.packMap(deviceTypeEntries);
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    auto mask = deviceIdMasks[deviceType];
+    if (mask == 0) {
+      continue;
+    }
+
+    const auto &deviceTypeName = kDeviceTypeNames[deviceType];
+    writer.packStr(deviceTypeName);
+
+    writer.packMap(countSetBits(mask));
+    for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds;
+         ++deviceId) {
+      if ((mask & (1u << static_cast<uint32_t>(deviceId))) == 0) {
         continue;
       }
-
-      const auto &deviceTypeName = kDeviceTypeNames[deviceType];
-      writer.packStr(deviceTypeName);
-
-      writer.packMap(countSetBits(mask));
-      for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds;
-          ++deviceId) {
-        if ((mask & (1u << static_cast<uint32_t>(deviceId))) == 0) {
-          continue;
-        }
-        Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
-        writer.packStr(std::to_string(deviceId));
-        writer.packMap(5);
-        writer.packStr("clock_rate");
-        writer.packUInt(device.clockRate);
-        writer.packStr("memory_clock_rate");
-        writer.packUInt(device.memoryClockRate);
-        writer.packStr("bus_width");
-        writer.packUInt(device.busWidth);
-        writer.packStr("arch");
-        writer.packStr(device.arch);
-        writer.packStr("num_sms");
-        writer.packUInt(device.numSms);
-      }
+      Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
+      writer.packStr(std::to_string(deviceId));
+      writer.packMap(5);
+      writer.packStr("clock_rate");
+      writer.packUInt(device.clockRate);
+      writer.packStr("memory_clock_rate");
+      writer.packUInt(device.memoryClockRate);
+      writer.packStr("bus_width");
+      writer.packUInt(device.busWidth);
+      writer.packStr("arch");
+      writer.packStr(device.arch);
+      writer.packStr("num_sms");
+      writer.packUInt(device.numSms);
     }
   }
 
