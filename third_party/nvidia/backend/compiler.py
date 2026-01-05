@@ -127,6 +127,7 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
+    fpsan: bool = False
     arch: str = None
     instrumentation_mode: str = ""
 
