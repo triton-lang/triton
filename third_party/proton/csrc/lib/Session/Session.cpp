@@ -65,6 +65,7 @@ void Session::deactivate() {
 }
 
 void Session::finalize(const std::string &outputFormat) {
+  profiler->flush();
   profiler->stop();
   data->dump(outputFormat);
 }
