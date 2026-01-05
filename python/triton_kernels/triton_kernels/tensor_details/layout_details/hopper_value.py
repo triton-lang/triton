@@ -14,6 +14,10 @@ class HopperMXValueLayout(Layout):
     mx_axis: int
     mma_version: int
 
+    def __post_init__(self):
+        assert self.mx_axis in [-1, -2]
+        assert self.mma_version in [2, 3]
+
     @property
     def name(self):
         return "HOPPER_VALUE"

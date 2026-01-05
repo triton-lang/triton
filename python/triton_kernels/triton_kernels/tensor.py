@@ -241,7 +241,7 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
 def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
     if dtype is None:
         return None
-    if isinstance(dtype, torch.dtype):
+    if not isinstance(dtype, DataType):
         return dtype
     return {
         FP4: torch.uint8,
@@ -259,15 +259,20 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
 def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
     if isinstance(dtype, DataType):
         return dtype
-    return {
-        torch.float8_e4m3fn: FP8_E4M3FN,
-        torch.float8_e4m3fnuz: FP8_E4M3FNUZ,
-        torch.float8_e5m2: FP8_E5M2,
-        torch.float16: FP16,
-        torch.bfloat16: BF16,
-        torch.float32: FP32,
-        torch.float64: FP64,
-    }[dtype]
+    id = str(dtype).split(".")[-1]
+    vals = {
+        "float8_e4m3fn": FP8_E4M3FN,
+        "float8_e4m3fnuz": FP8_E4M3FNUZ,
+        "float8_e5m2": FP8_E5M2,
+        "float16": FP16,
+        "bfloat16": BF16,
+        "float32": FP32,
+        "float64": FP64,
+    }
+    if id in vals:
+        return vals[id]
+    if "float8" in id:
+        return FP8_E4M3FN
 
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
