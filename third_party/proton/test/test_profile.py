@@ -867,11 +867,12 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     assert len(hatchet_files) > 1
     num_scopes = 0
     for hatchet_file in hatchet_files:
-        with open(hatchet_file, "r") as f:
-            if format == "msgpack":
-                data = msgpack.load(f)
-            else:
+        if data_format == "msgpack":
+            with open(hatchet_file, "rb") as f:
+                data = msgpack.load(f, raw=False, strict_map_key=False)
+        else:
+            with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            assert len(data[0]["children"]) >= 0
-            num_scopes += len(data[0]["children"])
+        assert len(data[0]["children"]) >= 0
+        num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
