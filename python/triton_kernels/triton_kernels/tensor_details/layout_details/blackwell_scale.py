@@ -124,7 +124,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
             self.K,
             self.K_pad,
         )
-        return data
+        return data.contiguous()
 
 
 @dataclass(frozen=True)
@@ -156,8 +156,9 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
                             self.SWIZZLE_K)
         data = data.transpose(2, 4)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
-        data = data.transpose(-1, -2)
-        return data[..., :self.K, :self.N].contiguous()
+        data = data.transpose(-1, -2).contiguous()
+        data = data[..., :self.K, :self.N]
+        return data
 
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
