@@ -25,12 +25,12 @@ namespace mlir::triton::gluon {
 
 namespace {
 
-ttg::CTAEncodingAttr getDefaultCTALayout(RankedTensorType refTensorType,
+ttg::CGAEncodingAttr getDefaultCGALayout(RankedTensorType refTensorType,
                                          int numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CTAEncodingAttr::getDefault(refTensorType.getContext(),
-                                          refTensorType.getShape().size());
+  return ttg::CGAEncodingAttr::get1CTALayout(refTensorType.getContext(),
+                                             refTensorType.getShape().size());
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {
@@ -70,12 +70,12 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       int numWarps = ttg::lookupNumWarps(curr);
       int numCTAs = ttg::lookupNumCTAs(curr);
       auto tensorType = cast<RankedTensorType>(ptr.getType());
-      auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
-      auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
+      auto cgaLayout = getDefaultCGALayout(tensorType, numCTAs);
+      auto shapePerCTA = ttg::getShapePerCTA(cgaLayout.getCTASplitNum(),
                                              tensorType.getShape());
       auto layout = ttg::buildCoalescedEncoding(
           mod.getContext(), axisInfoAnalysis, curr, numWarps, threadsPerWarp,
-          ctaLayout, shapePerCTA);
+          cgaLayout, shapePerCTA);
       // set seed value
       for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});

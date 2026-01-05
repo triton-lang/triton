@@ -1973,3 +1973,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Simple GEMM kernel with a transpose between the local load and the dot
+
+// CHECK-LABEL: pingpong_gemm_with_trans
+// Check that the transpose is placed before the dot
+// CHECK-NS3: scf.for
+// CHECK-NS3: tt.trans
+// CHECK-NS3: tt.dot
+
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[0, 32], [0, 64], [32, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[32, 0], [64, 0], [0, 0]], block = []}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [32, 32, 16], isTransposed = true}>
+#shared = #ttg.padded_shared<[512:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [64, 0], [32, 0], [16, 0], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+#shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pingpong_gemm_with_trans(%A: tensor<128x64x!tt.ptr<f16>, #linear>, %B: tensor<128x64x!tt.ptr<f16>, #blocked>) -> tensor<128x128xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #mma>
+
+    %smemA = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %smemB = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable>
+    %smemA0 = ttg.memdesc_index %smemA[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    %smemB0 = ttg.memdesc_index %smemB[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+
+    %initA = ttg.async_copy_global_to_local %A, %smemA0 {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #linear> -> <128x64xf16, #shared, #smem, mutable>
+    %initB = ttg.async_copy_global_to_local %B, %smemB0 {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #blocked> -> <128x64xf16, #shared1, #smem, mutable>
+    %initTokA = ttg.async_commit_group tokens %initA
+    %initTokB = ttg.async_commit_group tokens %initB
+
+    %result:6 = scf.for %i = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%acc = %zero, %aDesc = %smemA0, %bDesc = %smemB0, %tokA = %initTokA, %tokB = %initTokB, %waitTok = %initTokA) -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token) : i32 {
+      %newADesc = ttg.memdesc_index %smemA[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      %tokANew = ttg.async_copy_global_to_local %A, %newADesc {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #linear> -> <128x64xf16, #shared, #smem, mutable>
+      %newBDesc = ttg.memdesc_index %smemB[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+      %tokBNew = ttg.async_copy_global_to_local %B, %newBDesc {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #blocked> -> <128x64xf16, #shared1, #smem, mutable>
+      %commitA = ttg.async_commit_group tokens %tokANew
+      %commitB = ttg.async_commit_group tokens %tokBNew
+
+      %loadA = ttg.local_load %aDesc token %waitTok : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %loadB = ttg.local_load %bDesc token %waitTok : !ttg.memdesc<128x64xf16, #shared1, #smem, mutable> -> tensor<128x64xf16, #linear2>
+
+      %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear2> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+
+      %dot = tt.dot %loadA, %transB, %acc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
+
+      %wait = ttg.async_wait %tokA, %tokB {num = 0 : i32}
+      scf.yield %dot, %newADesc, %newBDesc, %commitA, %commitB, %wait : tensor<128x128xf32, #mma>, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token
+    }
+
+    ttg.local_dealloc %smemA : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %smemB : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable>
+    tt.return %result#0 : tensor<128x128xf32, #mma>
+  }
+}

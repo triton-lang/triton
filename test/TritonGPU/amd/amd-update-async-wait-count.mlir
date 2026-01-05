@@ -400,6 +400,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Test async_copy_local_to_global on GFX1250
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: simple_local_to_global_waitcnt
+  tt.func public @simple_local_to_global_waitcnt(%arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %arg2: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
+    // Emits 2 async store instructions (256 bits per thread, split into 2x128-bit stores)
+    %0 = amdg.async_copy_local_to_global %arg1, %arg2 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    %1 = ttg.async_commit_group tokens %0
+    // Emits 2 async store instructions
+    %2 = amdg.async_copy_local_to_global %arg1, %arg2 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    %3 = ttg.async_commit_group tokens %2
+
+    // Do not wait on the second async_copy => waitcnt 2
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 2
+    %9 = ttg.async_wait %1 {num = 0 : i32}
+    // No async_copies in between => waitcnt 0
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 0
+    %10 = ttg.async_wait %3 {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Test mixing async_copy_global_to_local and async_copy_local_to_global on GFX1250
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mix_global_to_local_and_local_to_global
+  tt.func public @mix_global_to_local_and_local_to_global(%arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %arg2: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
+    // Emits 2 async load instructions
+    %0 = ttg.async_copy_global_to_local %arg2, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %1 = ttg.async_commit_group tokens %0
+    // Emits 2 async store instructions
+    %2 = amdg.async_copy_local_to_global %arg1, %arg2 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    %3 = ttg.async_commit_group tokens %2
+
+    // Do not wait on the store => waitcnt 2
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 2
+    %9 = ttg.async_wait %1 {num = 0 : i32}
+    // No async_copies in between => waitcnt 0
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 0
+    %10 = ttg.async_wait %3 {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 // Test mixing async_copy and async_tdm_copy
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -430,6 +484,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %cw2 = ttg.async_wait %51 {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Test scf.if without else region in def chain
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: scf_if_without_else
+  tt.func public @scf_if_without_else(%arg1: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %arg3: tensor<128x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}, %cond: i1) {
+    // Emits 1 direct to lds instruction
+    %0 = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %1 = ttg.async_commit_group tokens %0
+
+    // For scf.if without else region, the else path contributes 0 instructions;
+    // so the minimum across both paths is 0.
+    scf.if %cond {
+      // Emits 1 direct to lds instruction inside the if
+      %inner = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+      %inner_commit = ttg.async_commit_group tokens %inner
+    }
+
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 0
+    %10 = ttg.async_wait %1 {num = 0 : i32}
     tt.return
   }
 }

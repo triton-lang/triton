@@ -73,7 +73,7 @@ with proton.scope("test2"):
 proton.finalize()
 ```
 
-The *scope* utility also accepts flexible metrics, provided with a dictionary that maps from a string (metric name) to a value (int or float).
+The *scope* utility also accepts flexible metrics, provided with a dictionary that maps from a string (metric name) to a value (int, float, or a scalar (0-d) tensor).
 Proton will aggregate the metrics for each scope and write them to the profile data.
 It is useful for users to understand the performance of the model at a high level.
 
@@ -89,7 +89,6 @@ with proton.scope("test2", {"bytes": 3000}):
 
 Proton scopes coexist with NVTX ranges.
 NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics.
-
 
 ### Backend and mode
 
@@ -169,7 +168,6 @@ def kernel(...):
 
 Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/intra_kernel) that demonstrates how to use the IR-based instrumentation approach and the proton DSL approach.
 
-
 ### Hook
 
 ```python
@@ -203,6 +201,39 @@ flops32: float  # The number of 32-bit floating-point operations
 flops64: float  # The number of 64-bit floating-point operations
 bytes: int  # The number of bytes expected to be transferred
 ```
+
+### CUDA graph
+
+Proton supports profiling graph launched kernels on NVIDIA GPUs.
+
+It uniquely offers two features.
+First, it captures and concatenates the call path where the kernel is captured with the call path where it is launched.
+Second, it supports aggregating flexible metrics the same way as individually launched kernels without requiring users to change their code.
+The only requirement is to initialize profiling before capturing a CUDA graph.
+Users can deactivate it after graph capturing if they want to skip some kernels.
+
+For example:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow")
+# Capture the CUDA graph
+graph = torch.cuda.CUDAGraph()
+with torch.cuda.graph(graph):
+    with proton.scope("graph"):
+        ...
+
+proton.deactivate()
+
+# Launch the CUDA graph
+proton.activate()
+with proton.scope("graph_launch"):
+    graph.replay()
+proton.finalize()
+```
+
+We will see call the call path of the kernels launched by the CUDA graph will be like `graph_launch-><captured_at>->graph->kernel_name`. `<captured_at>` is a special scope added by Proton to indicate the boundary between graph capturing and graph launching.
 
 ### Command line
 
@@ -355,13 +386,6 @@ The call path of `foo1` will be `test->test1->state0`.
 
 ## Known issues
 
-- CUDA graph
-
-`hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
-
-If profiling is initiated after CUDA graph capturing, there may be minor memory leak issues.
-This is because the number of kernels in a graph instance (i.e., `cuGraphExec`) is unknown, preventing the deletion of mappings between the kernel ID and the graph ID.
-
 - Instruction sampling
 
 If you encounter permission related problems when using instruction sampling, you can lookup this [page](https://developer.nvidia.com/nvidia-development-tools-solutions-err_nvgpuctrperm-permission-issue-performance-counters) for help.
@@ -372,3 +396,23 @@ Continuous sampling can allow for more runtime optimizations, but it makes it mo
 - Visible devices on AMD GPUs
 
 Environment variables such as `HIP_VISIBLE_DEVICES`, and `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. Instead, `ROCR_VISIBLE_DEVICES` is recommended to be used.
+
+## Experimental features
+
+### Get profile data in memory
+
+Proton provides APIs to get profile data without dumping to files in the `data` module. These APIs are experimental and may change in the future.
+
+```python
+import triton.profiler as proton
+
+session_id = proton.start(name="profile_name")
+...
+
+# get_data_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
+proton.deactivate(session_id)
+# Get a json dictionary
+data = proton.get_data(session_id)
+# Get a msgpack bytes
+data_msgpack = proton.get_data_msgpack(session_id)
+```

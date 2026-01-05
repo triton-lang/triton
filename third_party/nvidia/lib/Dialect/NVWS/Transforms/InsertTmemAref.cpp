@@ -253,10 +253,11 @@ struct TmemAccessDag {
     return accessDag;
   }
 
-  void collectPartitions(Node *node, bool &hasRootPartition,
-                         std::set<PartitionId> &partitions) {
+  void collectPartitions(
+      Node *node, bool &hasRootPartition,
+      SmallVector<std::pair<PartitionId, Operation *>> &partitions) {
     if (node->partitionId) {
-      partitions.insert(*node->partitionId);
+      partitions.push_back(std::make_pair(*node->partitionId, node->op));
     } else {
       // root partition is considered a real owner only if there are already
       // other partitions owning tmem
@@ -272,15 +273,25 @@ struct TmemAccessDag {
     }
   };
 
-  std::pair<bool, std::set<PartitionId>> collectPartitions() {
-    std::set<PartitionId> partitions;
+  std::pair<bool, SmallVector<std::pair<PartitionId, Operation *>>>
+  collectPartitionsVec() {
+    SmallVector<std::pair<PartitionId, Operation *>> partitions;
     bool hasRootPartition = false;
     auto node = getRootNode();
     auto allocOp = getAllocOp();
     if (allocOp.getSrc() && node->partitionId)
-      partitions.insert(*node->partitionId);
+      partitions.push_back(std::make_pair(*node->partitionId, node->op));
     collectPartitions(getRootNode()->user.get(), hasRootPartition, partitions);
     return {hasRootPartition, partitions};
+  }
+
+  std::pair<bool, std::set<PartitionId>> collectPartitionsSet() {
+    auto [hasRootPartition, partitions] = collectPartitionsVec();
+    std::set<PartitionId> partitionSet;
+    for (auto [partition, _] : partitions) {
+      partitionSet.insert(partition);
+    }
+    return {hasRootPartition, partitionSet};
   }
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
@@ -302,7 +313,7 @@ struct TmemAccessDag {
         if (tmemAlloc.getSrc()) {
           os << " %src ";
         } else {
-          std::tie(hasRootPartition, partitions) = collectPartitions();
+          std::tie(hasRootPartition, partitions) = collectPartitionsSet();
         }
       }
       os << "  ";
@@ -402,21 +413,26 @@ struct TMEMAref {
       token = op.getToken();
     }
     partitionId = paritionIdStageCluster.first;
+    if (partitionId)
+      stageClusters[*partitionId] = paritionIdStageCluster.second;
     buffer = {};
   }
-  void release(OpBuilder &b, Location loc, StageCluster stageCluster) {
-    assert(asyncOp);
+  void release(OpBuilder &b, Location loc) {
+    assert(asyncOp[partitionId]);
+    StageCluster stageCluster;
+    if (partitionId)
+      stageCluster = stageClusters[*partitionId];
     if (kind == PUT) {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp)}));
+              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp)}));
+              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
       kind = PUT;
     }
   }
@@ -446,7 +462,8 @@ struct TMEMAref {
   Value token;
   Kind kind;
   std::optional<PartitionId> partitionId;
-  std::optional<AsyncOp> asyncOp;
+  llvm::MapVector<std::optional<PartitionId>, std::optional<AsyncOp>> asyncOp;
+  DenseMap<PartitionId, StageCluster> stageClusters;
 };
 
 TmemAccessDag::Node *
@@ -458,12 +475,10 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   if (curPartitionId && node->partitionId != curPartitionId) {
     OpBuilder b(node->op);
     Operation *prevOp = nullptr;
-    StageCluster prevStageCluster;
     if (node->parent) {
       // release right after the last op which owns the tmem
       prevOp = node->parent->op;
       b.setInsertionPointAfter(prevOp);
-      prevStageCluster = getStageCluster(prevOp);
     } else {
       // if we are inside if-stmt or for-stmt subdag and need to change
       // ownerhip, release at the top of the block
@@ -471,12 +486,7 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       prevOp = node->parentDag->op;
       b.setInsertionPointToStart(node->op->getBlock());
     }
-    if (!node->partitionId) {
-      // if node->partitionId is not set, it means we are outside ws-region
-      // reset prevPartitionId and prevStageCluster to defaults
-      prevStageCluster = {};
-    }
-    state.release(b, prevOp->getLoc(), prevStageCluster);
+    state.release(b, prevOp->getLoc());
 
     // acquire right before op that acquires ownership of tmem
     auto curOp = node->op;
@@ -489,6 +499,10 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       curOp = node->parentDag->op;
     }
     auto stageCluster = getStageCluster(curOp);
+    // if stage-cluster is empty, use the stage-cluster used from the last op
+    // that acquired ownership of tmem in a partition
+    if (!stageCluster && partitionId)
+      stageCluster = state.stageClusters[*partitionId];
     state.acquire(b, curOp->getLoc(), {partitionId, stageCluster});
   }
 
@@ -512,23 +526,29 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   }
 
   if (isa<MMAv5OpInterface>(node->op)) {
-    state.asyncOp = AsyncOp::TC5MMA;
+    state.asyncOp[node->partitionId] = AsyncOp::TC5MMA;
   } else if (isa<TMEMLoadOp, TMEMStoreOp>(node->op)) {
-    state.asyncOp = AsyncOp::NONE;
+    state.asyncOp[node->partitionId] = AsyncOp::NONE;
   }
 
   OpBuilder b(node->op);
   if (auto tmemLoadOp = dyn_cast<TMEMLoadOp>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     tmemLoadOp.getSrcMutable().assign(
         state.getBuffer(b, node->partitionId, node->op));
     tmemLoadOp.getDepMutable().clear();
     tmemLoadOp.getToken().replaceAllUsesWith(state.replToken);
   } else if (auto tmemStoreOp = dyn_cast<TMEMStoreOp>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     tmemStoreOp.getDstMutable().assign(
         state.getBuffer(b, node->partitionId, node->op));
     tmemStoreOp.getDepMutable().clear();
     tmemStoreOp.getToken().replaceAllUsesWith(state.replToken);
   } else if (auto mmaOp = dyn_cast<MMAv5OpInterface>(node->op)) {
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = getStageCluster(node->op);
     if (mmaOp.getAccumulator() == state.origBuffer) {
       mmaOp.getAccDepMutable().clear();
       mmaOp.getToken().replaceAllUsesWith(state.replToken);
@@ -556,29 +576,119 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   return node;
 }
 
-LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
+bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
+  auto tmemDesc = mmaOp.getAccumulator().getType();
+  auto blockM = tmemDesc.getShape()[0];
+  auto blockN = tmemDesc.getShape()[1];
+  constexpr int numTMEMColumns = 512;
+  constexpr int numTMEMRows = 128;
+  if (numTmemBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {
+    return false;
+  }
+  if (isa<TCGen5MMAScaledOp>(mmaOp) && blockN == 256) {
+    return false;
+  }
+  return true;
+};
+
+bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
+  // TMEM partitioning follows a producer-consumer pattern if it has this
+  // structure:
+  //
+  //      |alloc
+  //      |-- ops
+  //    loop (tt.ws)
+  //      |----  producer @A
+  //      |----  consumer @B
+  //      |----  producer @A
+  //
+  // We have root operations, then enter a warp-specialized loop where:
+  // - First, partition A owns TMEM and performs producer operations
+  // - Then, partition B owns TMEM and performs consumer operations
+  // - Possibly, partition A owns TMEM and performs producer operations
+  // - Loop repeats with partition A yielding
+  //
+  // Here is an example where the producer-consumer pattern is not present:
+  //   |alloc
+  //   |store
+  //   |for  (tt.ws)
+  //   |  |store @A
+  //   |  |for
+  //   |  |   mma @B
+  //   |  |load @A
+  // The partitions @A & @B are both producers.
+  //
+  // Compare to the following, where we change ownership of TMEM where partition
+  // B is the producer and partition A is the consumer:
+  //   |alloc
+  //   |store
+  //   |for  (tt.ws)
+  //   |  |store @B
+  //   |  |for
+  //   |  |   mma @B
+  //   |  |load @A
+  // Here, we may double-buffer the accumulator.
+  //
+  // This is a necessary (but not sufficient) condition for enabling TMEM
+  // multi-buffering with arefs. Additional validation will verify sufficient
+  // conditions for multi-buffering.
+
+  auto [hasRootPartition, partitions] = accessDag.collectPartitionsVec();
+  bool expectProducer = true;
+  int changeGroup = 0;
+  bool valid = true;
+
+  // Count partition transitions: producer-consumer pattern has exactly two
+  // transitions (A->B followed by B->A), where 'A' is producer and 'B' is
+  // consumer. More than two transitions (e.g., A-A-B-B-A-A-B-B-A-A) indicate a
+  // more complex pattern that doesn't fit the producer-consumer model.
+  for (size_t i = 0; i < partitions.size() - 1; ++i) {
+    auto op = partitions[i].second;
+    if (isa<TMEMLoadOp, TMEMStoreOp, MMAv5OpInterface>(op)) {
+      valid = valid && (expectProducer ? isa<TMEMStoreOp, MMAv5OpInterface>(op)
+                                       : isa<TMEMLoadOp>(op));
+    }
+    if (partitions[i].first != partitions[i + 1].first) {
+      expectProducer = !expectProducer;
+      ++changeGroup;
+    }
+  }
+  valid = valid && changeGroup == 2;
+
+  return valid;
+}
+
+int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
-  std::optional<bool> isMultiStaged;
-  for (auto user : allocOp.getResult().getUsers()) {
-    if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
-      if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
-        // Determine if the MMA accumulator can be multibuffered.
-        bool accIsMultiBuffered =
-            // MMAs in subsequent iterations can be overlapped.
-            !nvidia_gpu::hasAccReadModifyWrite(mmaOp, loop) &&
-            // The accumulator is reset at some point, thus allowing
-            // multibuffering.
-            isAccMultibufferingPossible(mmaOp, loop) &&
-            // The user didn't disable it with a flag.
-            !getDisallowAccMultiBuffer(loop);
-        isMultiStaged = isMultiStaged ? *isMultiStaged && accIsMultiBuffered
-                                      : accIsMultiBuffered;
+  auto isMultiStaged = hasProducerConsumerPartitioning(accessDag);
+  int numTmemBlock = 0;
+  if (isMultiStaged) {
+    for (auto user : allocOp.getResult().getUsers()) {
+      if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
+        if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
+          auto wsLoop = getOuterWSLoop(loop);
+          // Determine if the MMA accumulator can be multibuffered.
+          bool accIsMultiBuffered =
+              // MMAs in subsequent iterations can be overlapped.
+              !nvidia_gpu::hasAccReadModifyWrite(mmaOp, loop) &&
+              // The accumulator is reset at some point, thus allowing
+              // multibuffering.
+              isAccMultibufferingPossible(mmaOp, loop) &&
+              // The user didn't disable it with a flag.
+              !getDisallowAccMultiBuffer(wsLoop) &&
+              canDoubleBufferAcc(mmaOp, numTmemBlocks);
+          isMultiStaged = isMultiStaged && accIsMultiBuffered;
+        }
       }
     }
   }
-  auto numStages = isMultiStaged ? (1 + *isMultiStaged) : 1;
+  auto numStages = 1 + isMultiStaged;
+
+  // update numTmemBlocks for the number of TMEM blocks used by the aref buffer
+  auto allocShape = allocOp.getType().getShape();
+  numTmemBlocks += allocShape[0] * allocShape[1] * numStages;
   auto arefBufType =
       getArefMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
@@ -620,7 +730,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 
   if (auto src = allocOp.getSrc()) {
     auto buffer = state.getBuffer(b, partitionId, allocOp);
-    state.asyncOp = AsyncOp::NONE;
+    state.asyncOp[partitionId] = AsyncOp::NONE;
     auto vTrue = createInto<arith::ConstantIntOp>(
         b, allocOp.getLoc(), {partitionId, stageCluster}, true, 1);
     createInto<TMEMStoreOp>(b, allocOp.getLoc(), {partitionId, stageCluster},
@@ -640,17 +750,18 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     // aref is used outside ws-loop, find the last point in the same block as
     // create op to have matching exit
     auto op1 = arefOp->getBlock()->findAncestorOpInBlock(*node->op);
+    if (auto id = node->partitionId)
+      state.stageClusters[*id] = {};
     b.setInsertionPointAfter(op1);
   }
-  stageCluster = getStageCluster(node->op);
-  state.release(b, node->op->getLoc(), stageCluster);
+  state.release(b, node->op->getLoc());
 
   if (state.kind == TMEMAref::GET) {
     // When the state ends up in a GET operation, we need to acquire and release
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
     // posting a matching GET operation for the PUT would cause the dead-lock.
-    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
+    auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     std::optional<PartitionId> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
     // get
@@ -661,10 +772,10 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
       }
     }
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
-    state.release(b, node->op->getLoc(), {});
+    state.release(b, node->op->getLoc());
   }
 
-  return success();
+  return numTmemBlocks;
 }
 
 void workaroundForLoopScheduler(triton::FuncOp funcOp) {
@@ -751,8 +862,8 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     // patch loop.stage=1
     enterIf->setAttrs(ifOp->getAttrs());
     exitIf->setAttrs(ifOp->getAttrs());
-    enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
-    exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+    assignStage(b, enterIf, getStageCluster(putEnterOp));
+    assignStage(b, exitIf, getStageCluster(putExitOp));
 
     SetVector<int> enterExitIds, middleIds;
     enterExitIds.insert(1);
@@ -777,14 +888,15 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
     tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
+  int numTmemBlocks = 0;
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
-    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
+    auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
-    if (totalOwners > 1)
-      if (failed(insertTmemAref(accessDag)))
-        return failure();
+    if (totalOwners > 1) {
+      numTmemBlocks = insertTmemAref(accessDag, numTmemBlocks);
+    }
   }
 
   workaroundForLoopScheduler(funcOp);

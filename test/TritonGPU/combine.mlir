@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-remove-layout-conversions -cse 2>&1 | FileCheck --dump-input-context=10 %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-remove-layout-conversions -cse | FileCheck --dump-input-context=10 %s
 
 #layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -2229,7 +2229,7 @@ tt.func @scan_propagation(%arg: tensor<1024xi32, #slice1dim1>) -> tensor<1024xi3
   ^bb0(%arg3: i32, %arg4: i32):
       %add = arith.addi %arg3, %arg4 : i32
       tt.scan.return %add : i32
-  }) {axis = 1 : i32, reverse = false} : (tensor<1024xi32, #blocked2>) -> tensor<1024xi32, #blocked2>
+  }) {axis = 0 : i32, reverse = false} : (tensor<1024xi32, #blocked2>) -> tensor<1024xi32, #blocked2>
   %3 = ttg.convert_layout %2 : tensor<1024xi32, #blocked2> -> tensor<1024xi32, #slice1dim1>
   // don't allow non blocked layout to be propagated to scan
   // CHECK: ttg.convert_layout
@@ -3518,8 +3518,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK: tt.func @mma_v3_reg_push_elementwise
@@ -3540,8 +3539,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK: tt.func @mma_v3_reg_push_elementwise_chained
@@ -3969,5 +3967,63 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
     %7 = ttg.convert_layout %1 : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.store %arg4, %7 : tensor<128x128x!tt.ptr<f32>, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+// Test that when we attempt to hoist layout conversions into one branch of an
+// if/else, we validate that the layouts required by different conditionals or
+// different branches do not conflict.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hoist_into_cond_layout_conflict(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: i1) -> tensor<4x1xi64, #blocked> {
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %1 = arith.extsi %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> to tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %2 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi64, #blocked1>
+    %4 = tt.addptr %2, %1 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %5 = tt.load %4 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %6 = tt.reshape %5 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi32, #blocked1>
+    %7 = arith.extsi %6 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
+    %cst = arith.constant dense<0> : tensor<4x1xi64, #blocked>
+    %8 = scf.if %arg2 -> (tensor<4x1xi64, #blocked1>) {
+      // The backward slice from this extsi will produce a non-sliced layout for
+      // %1.
+      scf.yield %7 : tensor<4x1xi64, #blocked1>
+    } else {
+      // The backward slice from this add will produce a sliced layout for %1.
+      scf.yield %3 : tensor<4x1xi64, #blocked1>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: scf.if
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: } else {
+    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert-layout
+    %9 = scf.for %arg3 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<4x1xi64, #blocked>)  : i32 {
+      %10 = scf.if %arg2 -> (tensor<4x1xi64, #blocked1>) {
+        // The backward slice from this extsi will produce a non-sliced layout
+        // for %1 when it is rematerialized conflicting with the sliced layout
+        // produced by %3 in the else arm of the other if.
+        %14 = arith.extsi %6 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
+        scf.yield %14 : tensor<4x1xi64, #blocked1>
+      } else {
+        // The backward slice from this add will produce conflicting layouts for
+        // %1, so we try to hoist the convert into this arm.
+        %14 = arith.addi %7, %3 : tensor<4x1xi64, #blocked1>
+        scf.yield %14 : tensor<4x1xi64, #blocked1>
+      }
+      %11 = arith.addi %8, %10 : tensor<4x1xi64, #blocked1>
+      %12 = ttg.convert_layout %11 : tensor<4x1xi64, #blocked1> -> tensor<4x1xi64, #blocked>
+      %13 = arith.addi %arg4, %12 : tensor<4x1xi64, #blocked>
+      scf.yield %13 : tensor<4x1xi64, #blocked>
+    }
+    tt.return %9 : tensor<4x1xi64, #blocked>
   }
 }

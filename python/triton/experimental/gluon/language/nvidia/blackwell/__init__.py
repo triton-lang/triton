@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+import itertools
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
@@ -26,7 +27,9 @@ __all__ = [
     "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
+    "TensorMemoryScalesLayout",
     "tma",
+    "_TensorMemoryLinearLayout",
 ]
 
 
@@ -104,6 +107,25 @@ class TensorMemoryScalesLayout:
         return hash(self.cta_split_num)
 
 
+@dataclass(frozen=True)
+class _TensorMemoryLinearLayout:
+    """
+    Print-only linear layout for TMEM (row/col -> dim0/dim1).
+    """
+    rows: List[List[int]]
+    cols: List[List[int]]
+    shape: List[int]
+
+    def _to_ir(self, builder):
+        raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
+
+    def mangle(self):
+        return f"TMLL_{self.shape}_TMLL"
+
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
+
+
 @constexpr_function
 def get_tmem_reg_layout(
         element_ty,
@@ -122,7 +144,7 @@ def get_tmem_reg_layout(
         layout (TensorMemoryLayout): Tensor memory layout descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-        cga_layout (Sequence[Sequence[int]]): CTA layout bases describing CTA distribution.
+        cga_layout (Sequence[Sequence[int]]): CGA layout bases describing CTA distribution.
     """
 
     def _unwrap(x):
@@ -215,7 +237,7 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
+    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
 
@@ -247,7 +269,7 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic) -> None:
+    def slice(self, start, length, _semantic: GluonSemantic = None) -> None:
         """
         Create a slice of the tensor memory descriptor along the last dimension.
 
@@ -346,9 +368,6 @@ def tcgen05_copy(src, dst, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
 
-    WARNING: The current semantics of the instruction are not well defined and
-    the API will change in the future. Use at your own risk.
-
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
@@ -414,6 +433,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
+    assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
 
     if mbarriers is None:
         assert mbarrier_preds is None
@@ -437,7 +457,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @builtin
-def tcgen05_commit(barrier, _semantic=None):
+def tcgen05_commit(barrier, pred=True, two_ctas=False, _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when all async tcgen05 MMA and copy instructions previously issued by
@@ -445,5 +465,8 @@ def tcgen05_commit(barrier, _semantic=None):
 
     Args:
         barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        two_ctas (bool): Whether to use two-CTA mode. Defaults to False.
     """
-    _semantic.builder.create_tcgen05_commit(barrier.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, two_ctas)

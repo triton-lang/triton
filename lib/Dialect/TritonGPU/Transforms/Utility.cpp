@@ -124,7 +124,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 SmallVector<int64_t> &shapePerCTA) {
+                                 ArrayRef<int64_t> shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -895,12 +895,13 @@ LogicalResult getConvertBackwardSlice(
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
-    Value existing;
+    // If there is already an existing conversion to the target layout, we don't
+    // need to propagate to the operands.
+    // Note that this is per-use rather than per-value, so if another use fails
+    // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
-        (existing = getExistingConversion(*currentValueUse, encoding))) {
-      if (failed(updateLayout(existing, encoding)))
-        return failure();
-      currentValue = existing;
+        getExistingConversion(*currentValueUse, encoding)) {
+      continue;
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
@@ -1083,7 +1084,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
 }
 
 inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
+swizzleDotOperandLike(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
   // DotOperandEncodingAttr with a tile of this shape This works because
@@ -1117,7 +1118,7 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTAEncodingAttr ctaLayout) {
     return {};
   }
   return ttg::SwizzledSharedEncodingAttr::get(
-      ctx, opIdx, kWidth, type.getShape(), order, ctaLayout,
+      ctx, opIdx, kWidth, type.getShape(), order, cgaLayout,
       type.getElementTypeBitWidth(), false);
 }
 
@@ -1150,22 +1151,22 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto dstTy = cast<RankedTensorType>(user->getResult(0).getType());
 
-      // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
+      // FIXME This may not be correct for multiple CTA, but getCGALayout is NYI
       // for LinearEncodingAttr
-      auto CTALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
-                           ? ttg::getCTALayout(srcTy.getEncoding())
-                           : ttg::getCTALayout(dstTy.getEncoding());
+      auto CGALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
+                           ? ttg::getCGALayout(srcTy.getEncoding())
+                           : ttg::getCGALayout(dstTy.getEncoding());
 
       if (auto dot =
               dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding())) {
         auto order = getOrderForMemory(srcTy);
         unsigned bitWidth = srcTy.getElementTypeBitWidth();
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            val.getContext(), dot, srcTy.getShape(), order, CTALayout, bitWidth,
+            val.getContext(), dot, srcTy.getShape(), order, CGALayout, bitWidth,
             /*needTrans=*/false);
       } else {
         // Try to see if the layout is like an mma microtile
-        tempAttr = swizzleDotOperandLike(dstTy, CTALayout);
+        tempAttr = swizzleDotOperandLike(dstTy, CGALayout);
       }
       if (!tempAttr)
         return std::nullopt;
@@ -1710,11 +1711,24 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
 
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
+  auto numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (!(barrierType.getElementType().isInteger(64) &&
+        barrierType.getRank() == 1 && barrierType.getShape()[0] <= numCTAs))
+    return op->emitOpError("barrier allocation must be a descriptor of "
+                           "Nxi64 type with N <= number of CTAs");
   return success();
+}
+
+std::optional<bool> getBoolFromConstant(Value cst) {
+  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp) {
+    return std::nullopt;
+  }
+  assert(constantOp.getValue());
+  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
+    return boolAttr.getValue();
+  }
+  return std::nullopt;
 }
 
 } // namespace mlir::triton

@@ -22,6 +22,9 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
   int count = 0;
   for (auto op = beginOp; op != endOp; op = op->getNextNode()) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
+      if (ifOp.getElseRegion().empty())
+        continue;
+
       assert(!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty());
       auto minThen =
           deduceMinCountInBlock(ifOp.getThenRegion().front(), countFunc);
@@ -288,19 +291,19 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
       std::swap(p[0], p[1]);
   }
 
-  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+  auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
   triton::LinearLayout linearComponent(
       {
           {StringAttr::get(ctx, "offset"), bases},
       },
       triton::standardOutDimNames(ctx, rank));
   linearComponent = triton::gpu::combineCtaCgaWithShape(
-      linearComponent, ctaLayout, srcTy.getShape());
+      linearComponent, cgaLayout, srcTy.getShape());
 
   unsigned paddingInterval = 1024 / elemByteWidth;
   unsigned paddingInElems = paddingBytes / elemByteWidth;
   return ttg::PaddedSharedEncodingAttr::get(
-      ctx, {{paddingInterval, paddingInElems}}, linearComponent);
+      ctx, {{paddingInterval, paddingInElems}}, std::move(linearComponent));
 }
 
 ttg::PaddedSharedEncodingAttr

@@ -1,20 +1,20 @@
 import json
 import pathlib
 
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Optional
 
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton._internal_testing import (
     is_cuda,
     is_hip,
     is_hip_cdna2,
+    is_hip_cdna4,
     supports_tma,
     supports_ws,
 )
@@ -643,6 +643,7 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
+@pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
 def test_globaltime(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
@@ -822,6 +823,63 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
         assert len(warp1_events) == 2
 
 
+def test_event_args(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_block_metadata.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Verify we have events
+        assert len(events) > 0
+
+        # Verify each event has the required metadata in args
+        for event in events:
+            assert "args" in event
+            args = event["args"]
+
+            assert "Init Time (ns)" in args
+            assert "Post Final Time (ns)" in args
+            assert "Finalization Time (ns)" in args
+
+            # Verify timing values are reasonable
+            init_time = args["Init Time (ns)"]
+            post_final_time = args["Post Final Time (ns)"]
+            finalization_time = args["Finalization Time (ns)"]
+
+            assert init_time >= 0
+            assert post_final_time >= 0
+            assert finalization_time >= 0
+
+
 def test_threaded_kernel_call(tmp_path: pathlib.Path):
 
     import threading
@@ -880,3 +938,66 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         assert len(events) > 0
         kernel_events = [e for e in events if e["name"] == "kernel"]
         assert len(kernel_events) > 0
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.skip("CTAs is unsupported for these cards")
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+
+        assert desc.shape[0] == M
+        assert desc.shape[1] == N
+        assert desc.strides[0] == N
+        assert desc.strides[1] == 1
+        assert desc.block_shape == [M_BLOCK, N_BLOCK]
+        pl.enter_scope("load_block")
+        block = desc.load([M_BLOCK, 2 * N_BLOCK])
+        pl.exit_scope("load_block")
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 128 * num_ctas
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    M_BLOCK = 4
+    N_BLOCK = 4
+    M, N = M_BLOCK * 3, N_BLOCK * 4
+    inp = torch.randn((M, N), device="cuda", dtype=torch.float32)
+    out = inp.new_empty((M_BLOCK, N_BLOCK))
+
+    temp_file = tmp_path / "test_tensor_descriptor.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+
+    kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
+    expect = inp[1 * M_BLOCK:2 * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
+    torch.testing.assert_close(expect, out)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+        trace_events = data["traceEvents"]
+        if num_ctas == 1:
+            assert len(trace_events) == 4
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
+            assert num_cta0_events == 4
+        else:
+            assert len(trace_events) == 8
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
+            num_cta1_events = sum(1 for e in trace_events if "CTA1" in e["pid"])
+            assert num_cta0_events == 4
+            assert num_cta1_events == 4

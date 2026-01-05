@@ -534,3 +534,14 @@ def interleave(a, b):
         # understand that if we take the `if` above we definitely don't run this
         # `else`.
         return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])
+
+
+@jit
+def squeeze(x, dim: core.constexpr):
+    core.static_assert(x.shape[dim] == 1)
+    return x.reshape(x.shape[:dim] + x.shape[dim + 1:])
+
+
+@jit
+def unsqueeze(x, dim: core.constexpr):
+    return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])

@@ -4,6 +4,7 @@ from triton.testing import do_bench
 from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 import triton
 import triton.language as tl
 
@@ -59,13 +60,16 @@ def plus_a_reduce(x, a):
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
-    is_hip = triton.runtime.driver.active.get_current_target().backend == "hip"
-    is_pre_h100 = torch.cuda.get_device_capability() < (9, 0)
-    if (is_hip or is_pre_h100) and "float8" in dtype_str:
-        pytest.skip("float8 not supported on CUDA < 9.0")
+    # Check float8 hardware support
+    if "float8" in dtype_str:
+        if is_cuda() and torch.cuda.get_device_capability() < (9, 0):
+            pytest.skip("float8 not supported on CUDA < 9.0")
+        if is_hip() and not (is_hip_cdna3() or is_hip_cdna4()):
+            pytest.skip("float8 not supported on AMD GPU < CDNA3")
+
     torch.manual_seed(0)
     device = "cuda"
-    x = torch.randn((B, M, N), device=device, dtype=torch.float32)
+    x = torch.randn((B, M, N), device=device, dtype=torch.float32, requires_grad=True)
     x_mscale, x_flex = None, None
     y_flex_tri, y_flex_ref = None, None
     if is_mx := dtype_str.startswith("mx"):
@@ -91,16 +95,25 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         postprocess_fn_ref = lambda x: (x + 10).reshape([x.shape[0], x.shape[1] // 2, 2]).sum(dim=2)
     else:
         postprocess_fn_tri = postprocess_fn_ref = None
-    y_tri, y_tri_mxscale = reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
+    # run forward pass
+    x_tri = x.clone().detach().requires_grad_(True)
+    x_ref = x.clone().detach().requires_grad_(True)
+    y_tri, y_tri_mxscale = reduce(x_tri, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
                                   postprocess_fn1=postprocess_fn_tri)
-    y_ref, y_ref_mxscale = reduce_torch(x, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_ref,
+    y_ref, y_ref_mxscale = reduce_torch(x_ref, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_ref,
                                         postprocess_fn1=postprocess_fn_ref)
     if is_mx:
         y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
         y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
     if is_flex:
         torch.allclose(y_flex_tri.actual_scale, y_flex_ref.actual_scale, atol=1e-3, rtol=1e-3)
-    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    run_bwd = postprocess_fn is None and "float8" not in dtype_str
+    if run_bwd:
+        dy = torch.randn_like(y_tri)
+        y_tri.backward(dy)
+        y_ref.backward(dy)
+        assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
 def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtype: torch.dtype = torch.float16,

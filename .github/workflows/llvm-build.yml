@@ -42,7 +42,7 @@ jobs:
     steps:
 
     - name: Checkout Repo
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         path: llvm-build
 
@@ -62,7 +62,7 @@ jobs:
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
     - name: Checkout LLVM
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: llvm/llvm-project
         path: llvm-project

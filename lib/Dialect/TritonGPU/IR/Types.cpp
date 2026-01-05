@@ -143,14 +143,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << ll.getOutDimSize(dims[0]) << "x"
                          << ll.getOutDimSize(dims[1]);
     }
-    // Note the following holds for both M=64 and M=128 with 2CTA
-    auto nCol = ll.getInDimSize(StringAttr::get(ctx, "col"));
-    if (nCol / (enc.getCTASplitM() * enc.getCTASplitN()) >
-        512 * 32 / bitwidth) {
-      return emitError() << "nCol / (CTASplitM * CTASplitN) must be less than "
-                            "or equal to 512 * 32 / bitwidth but got "
-                         << nCol / (enc.getCTASplitM() * enc.getCTASplitN());
-    }
   } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
       return emitError()
@@ -197,6 +189,24 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                            << ". Expected: " << expectedShape[d]
                            << ", got: " << ll.getOutDimSize(outDims[d]);
       }
+    }
+  } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
+    auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
+    if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
+                                enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
+                                enc.getTransposed(), /*packedSize=*/false,
+                                emitError)))
+      return failure();
+  } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
+    auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
+    const LinearLayout &ll = enc.getLinearLayout();
+    for (auto [dim, size, llSize] :
+         llvm::enumerate(blockShape, ll.getOutDimSizes())) {
+      if (size == llSize)
+        continue;
+      return emitError() << "Mismatch in expected shape for dimension " << dim
+                         << ". Expected: " << size << ", got: " << llSize;
     }
   }
 
