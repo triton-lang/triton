@@ -139,13 +139,14 @@ def activate(session: Optional[int] = None) -> None:
         libproton.activate(session)
 
 
-def deactivate(session: Optional[int] = None) -> None:
+def deactivate(session: Optional[int] = None, flushing: bool = True) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
 
     Args:
         session (int): The session ID of the profiling session. Defaults to None (all sessions)
+        flushing (bool): Whether to flush the profiling data before deactivating. Defaults to True.
 
     Returns:
         None
@@ -153,12 +154,12 @@ def deactivate(session: Optional[int] = None) -> None:
     if flags.command_line and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
 
-    HookManager.deactivate(session)
+    HookManager.deactivate(session, flushing)
 
     if session is None:
-        libproton.deactivate_all()
+        libproton.deactivate_all(flushing)
     else:
-        libproton.deactivate(session)
+        libproton.deactivate(session, flushing)
 
 
 def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -> None:
