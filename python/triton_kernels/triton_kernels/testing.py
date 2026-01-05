@@ -288,7 +288,8 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
-                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
+                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, value_hbm_swizzling_args={},
+                       scale_hbm_swizzling=None, scale_hbm_swizzling_args={}):
     # allocate buffer
     buffer_shape = ((n_slices, ) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
@@ -316,14 +317,16 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
         else:
             buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None)
+        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else buffer_dtype)
         scales = wrap_torch_tensor(scales)
         if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout
-            buffer = convert_layout(buffer, value_hbm_swizzling)
+            buffer_layout, buffer_layout_opts = value_hbm_swizzling(**value_hbm_swizzling_args)
+            buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
         if scale_hbm_swizzling is not None:
-            # hack to avoid circular dependency
-            if callable(scale_hbm_swizzling):
-                scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata)
-            scales = convert_layout(scales, scale_hbm_swizzling)
+            # convert scales to swizzled hbm layout
+            if "ragged_metadata" in scale_hbm_swizzling_args:
+                scale_hbm_swizzling_args["ragged_metadata"] = ragged_metadata
+            scale_layout, scale_layout_opts = scale_hbm_swizzling(**scale_hbm_swizzling_args)
+            scales = convert_layout(scales, scale_layout, **scale_layout_opts)
     return buffer, scales, ragged_metadata
