@@ -154,7 +154,7 @@ def deactivate(session: Optional[int] = None, flushing: bool = True) -> None:
     if flags.command_line and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
 
-    HookManager.deactivate(session, flushing)
+    HookManager.deactivate(session)
 
     if session is None:
         libproton.deactivate_all(flushing)
