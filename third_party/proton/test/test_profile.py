@@ -848,17 +848,17 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
-@pytest.mark.parametrize("data_format", ["msgpack", "raw"])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     fresh_knobs.proton.cupti_buffer_size = 256 * 1024  # 256KB
-    temp_file = tmp_path / "test_periodic_flushing.hatchet"
+    temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
         with proton.scope(f"test_{i}"):
             torch.zeros((100), device="cuda")
 
-    proton.finalize()
+    proton.finalize(output_format=data_format)
 
     # Find all *.hatchet files under the directory `tmp_path`
     import glob
@@ -867,7 +867,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     assert len(hatchet_files) > 1
     num_scopes = 0
     for hatchet_file in hatchet_files:
-        if data_format == "msgpack":
+        if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
                 data = msgpack.load(f, raw=False, strict_map_key=False)
         else:
