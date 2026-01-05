@@ -2233,7 +2233,11 @@ void assignPartitionsForOpsWithNoUse(Graph *graph) {
         }
       }
       if (!done) {
-        assert(defaultPartition != nullptr);
+        if (defaultPartition == nullptr) {
+          // default partition doesn't exist, create one
+          defaultPartition = graph->addPartition();
+          defaultPartition->id = 0;
+        }
         node->setPartition(defaultPartition);
       }
     }

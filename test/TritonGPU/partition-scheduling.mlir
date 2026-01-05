@@ -175,6 +175,16 @@ tt.func @optimize_broadcast(%arg0: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @no_partitions
+tt.func @no_partitions(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    "use"(%c0_i32) : (i32) -> ()
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
 }
 
 // -----
