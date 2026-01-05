@@ -56,14 +56,28 @@ uint32_t processActivityKernel(
     CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
+  const bool isPMatmulKernel =
+      kernel->name && (std::strncmp(kernel->name, "_p_matmul", /*n=*/9) == 0);
+  if (getBoolEnv("TRITON_CUPTI_DEBUG_PRINT_KERNEL", false) && isPMatmulKernel) {
+    std::cerr << "[PROTON][CUPTI] kernel name=" << kernel->name
+              << " start=" << kernel->start << " end=" << kernel->end
+              << std::endl;
+  }
   auto correlationId = kernel->correlationId;
   size_t externId = 0;
   if (!/*not valid*/ corrIdToExternId.withRead(
           correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
+    return correlationId;
   }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
+    // Only keep track of kernels whose name starts with "_p_matmul".
+    if (!isPMatmulKernel) {
+      externIdToState.erase(externId);
+      corrIdToExternId.erase(correlationId);
+      return correlationId;
+    }
     // Non-graph kernels
     bool isMissingName = false;
     DataToEntryMap dataToEntry;
@@ -111,6 +125,18 @@ uint32_t processActivityKernel(
       state = &ref.value().get();
     }
     auto &externState = *state;
+    if (!isPMatmulKernel) {
+      // Only keep track of "_p_matmul" kernels; still update fanout bookkeeping
+      // to avoid leaking graph launch state.
+      if (externState.numNodes > 0) {
+        --externState.numNodes;
+      }
+      if (externState.numNodes == 0) {
+        externIdToState.erase(externId);
+        corrIdToExternId.erase(correlationId);
+      }
+      return correlationId;
+    }
     // We have a graph creation captured
     auto &graphNodeIdToState = externState.graphNodeIdToState;
     auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
@@ -678,6 +704,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     const auto symbolName = callbackData->context && callbackData->symbolName
                                 ? std::string(callbackData->symbolName)
                                 : "";
+    // Only keep track of kernel launches whose name starts with "_p_matmul".
+    if (symbolName.empty() ||
+        (symbolName.compare(0, /*count=*/9, "_p_matmul") != 0)) {
+      return;
+    }
     threadState.enterOp(Scope(symbolName));
   }
 
