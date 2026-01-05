@@ -79,6 +79,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
 
     auto ctx = funcOp->getContext();
 
