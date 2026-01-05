@@ -104,9 +104,7 @@ protected:
       auto dataSet = this->getDataSet();
       for (auto *data : dataSet) {
         auto &path = data->getPath();
-        const auto prefix = path.substr(0, path.find_last_of('.'));
-        const auto suffix = path.substr(path.find_last_of('.'));
-        auto pathWithPeriod = prefix + ".part_" + std::to_string(period) + suffix;
+        auto pathWithPeriod = path + ".part_" + std::to_string(period) + ".hatchet";
         if (this->periodicFlushing == "json") {
           auto jsonStr = data->toJsonString(/*pruning=*/true);
           std::ofstream ofs(pathWithPeriod);
