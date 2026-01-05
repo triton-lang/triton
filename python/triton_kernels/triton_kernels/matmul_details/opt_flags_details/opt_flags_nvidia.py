@@ -26,7 +26,7 @@ def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
 
 def compute_block_n(n: int, arch, precision_config):
     # block_n:
-    layout = precision_config.b_mx_scale and precision_config.b_mx_scale.storage.layout
+    layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         if layout.num_warps in [4, 8]:
             # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
@@ -75,7 +75,7 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
 
 
 def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints):
-    layout = precision_config.b_mx_scale and precision_config.b_mx_scale.storage.layout
+    layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
     num_warps = constraints.get("num_warps", None)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
-from triton_kernels.tensor import FP4, FP32
+from triton_kernels.tensor import FP4, FP32, Tensor
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
@@ -230,8 +230,8 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
-    a_mx_scale_layout = None if precision_config.a_mx_scale is None else precision_config.a_mx_scale.storage.layout
-    b_mx_scale_layout = None if precision_config.b_mx_scale is None else precision_config.b_mx_scale.storage.layout
+    a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
         # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
         supports_persistent = False
