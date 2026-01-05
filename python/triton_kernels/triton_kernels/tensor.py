@@ -9,7 +9,7 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32
+from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64
 
 
 # storage
@@ -211,6 +211,7 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
             torch.float16: FP16,
             torch.bfloat16: BF16,
             torch.float32: FP32,
+            torch.float64: FP64,
         }[dtype]
     if shape is None:
         shape = list(torch_tensor.shape)
@@ -251,6 +252,7 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
         BF16: torch.bfloat16,
         FP32: torch.float32,
         FP16: torch.float16,
+        FP64: torch.float64,
     }[dtype]
 
 
@@ -264,6 +266,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         torch.float16: FP16,
         torch.bfloat16: BF16,
         torch.float32: FP32,
+        torch.float64: FP64,
     }[dtype]
 
 
