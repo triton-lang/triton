@@ -62,8 +62,9 @@ def run_parser(kernel_fn, args=(), kwargs={}, target=stub_target):
         backend,
     )
 
-    bound_args, specialization, options = binder(*args, **kwargs)
-    options, signature, constexprs, attrs = kernel_fn._pack_args(backend, kwargs, bound_args, specialization, options)
+    bound_args, specialization, constexpr_paths, attr_paths, options = binder(*args, **kwargs)
+    options, signature, constexprs, attrs = kernel_fn._pack_args(backend, kwargs, bound_args, specialization,
+                                                                 constexpr_paths, attr_paths, options)
     source_cls = GluonASTSource if kernel_fn.is_gluon() else ASTSource
     src = source_cls(kernel_fn, signature, constexprs, attrs)
 
