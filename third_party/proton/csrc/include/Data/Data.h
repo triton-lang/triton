@@ -11,13 +11,15 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, ChromeTrace, Count };
+enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
   /// `entryId` is a unique identifier for the entry in the data.
   size_t id{Scope::DummyScopeId};
+  /// `phase` indicates which phase the entry belongs to.
+  size_t phase{0};
   /// `metrics` is a map from metric kind to metric accumulator associated
   /// with the entry.
   /// Flexible metrics cannot be directly stored here since they maybe added by
@@ -48,6 +50,35 @@ public:
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
+
+  /// Get the path associated with the data.
+  const std::string &getPath() const { return path; }
+
+  /// Get the current phase.
+  size_t getCurrentPhase() const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return currentPhase;
+  }
+
+  /// Get the contexts associated with the data.
+  std::vector<Context> getContexts() const {
+    return contextSource->getContexts();
+  }
+
+  /// Advance to the next phase.
+  size_t advancePhase();
+
+  /// Dump the data to the given output format.
+  void dump(const std::string &outputFormat);
+
+  /// Clear all non-persistent fields in the data.
+  void clear(size_t phase);
+
+  /// To Json
+  std::string toJsonString(size_t phase) const;
+
+  /// To MsgPack
+  std::vector<uint8_t> toMsgPack(size_t phase) const;
 
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
@@ -80,28 +111,19 @@ public:
   addEntryMetrics(size_t entryId,
                   const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// Clear all non-persistent fields in the data.
-  virtual void clear() = 0;
-
-  /// To Json
-  virtual std::string toJsonString() const = 0;
-
-  /// To MsgPack
-  virtual std::vector<uint8_t> toMsgPack() const = 0;
-
-  /// Dump the data to the given output format.
-  void dump(const std::string &outputFormat);
-
-  /// Get the contexts associated with the data.
-  std::vector<Context> getContexts() const {
-    return contextSource->getContexts();
-  }
 
 protected:
-  /// The actual implementation of the dump operation.
-  virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
-
+  /// The actual implementations
+  virtual void doAdvancePhase() = 0;
+  virtual std::string doToJsonString(size_t phase) const = 0;
+  virtual std::vector<uint8_t> doToMsgPack(size_t phase) const = 0;
+  virtual void doDump(std::ostream &os, OutputFormat outputFormat,
+                      size_t phase) const = 0;
+  virtual void doClear(size_t phase) = 0;
   virtual OutputFormat getDefaultOutputFormat() const = 0;
+
+  std::size_t currentPhase{0};
+  std::set<size_t> activePhases{};
 
   mutable std::shared_mutex mutex;
   const std::string path{};

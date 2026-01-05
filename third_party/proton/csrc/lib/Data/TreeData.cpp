@@ -144,6 +144,23 @@ public:
 
   size_t size() const { return nextContextId; }
 
+  std::vector<bool> computeSubtreeHasMetrics() {
+    std::vector<bool> subtreeHasMetrics(size(), false);
+    walk<WalkPolicy::PostOrder>([&](TreeNode &node) {
+      const bool hasOwnMetrics =
+          !node.metrics.empty() || !node.flexibleMetrics.empty();
+      bool hasChildMetrics = false;
+      for (const auto &child : node.children) {
+        if (subtreeHasMetrics[child.id]) {
+          hasChildMetrics = true;
+          break;
+        }
+      }
+      subtreeHasMetrics[node.id] = hasOwnMetrics || hasChildMetrics;
+    });
+    return subtreeHasMetrics;
+  }
+
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
@@ -151,6 +168,8 @@ private:
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
+  const auto subtreeHasMetrics = tree->computeSubtreeHasMetrics();
+
   std::vector<json *> jsonNodes(tree->size(), nullptr);
   json output = json::array();
   output.push_back(json::object());
@@ -164,6 +183,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         const auto contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
+        if (jsonNode == nullptr)
+          // This node and its children are not initialized because of zero
+          // metrics
+          return;
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
@@ -266,6 +289,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size());
         for (const auto &child : treeNode.children) {
+          if (!subtreeHasMetrics[child.id]) {
+            continue;
+          }
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
         }
@@ -327,6 +353,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
 }
 
 std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
+  const auto subtreeHasMetrics = tree->computeSubtreeHasMetrics();
+
   MsgPackWriter writer;
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
@@ -428,8 +456,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
           }
         }
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
-                                     treeNode.metrics.end()) {
+          if (hasKernelMetric &&
+              treeNode.metrics.find(MetricKind::Kernel) ==
+                  treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(kernelInclusiveValueNames.size());
           }
@@ -438,8 +467,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
                   treeNode.metrics.end()) {
             metricEntries += PCSamplingMetric::Count;
           }
-          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
-                                    treeNode.metrics.end()) {
+          if (hasCycleMetric &&
+              treeNode.metrics.find(MetricKind::Cycle) ==
+                  treeNode.metrics.end()) {
             metricEntries +=
                 static_cast<uint32_t>(cycleInclusiveValueNames.size());
           }
@@ -541,8 +571,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
-          if (hasKernelMetric && treeNode.metrics.find(MetricKind::Kernel) ==
-                                     treeNode.metrics.end()) {
+          if (hasKernelMetric &&
+              treeNode.metrics.find(MetricKind::Kernel) ==
+                  treeNode.metrics.end()) {
             writer.packStr(kernelMetricDurationName);
             writer.packUInt(0);
             writer.packStr(kernelMetricInvocationsName);
@@ -558,8 +589,9 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
               writer.packUInt(0);
             }
           }
-          if (hasCycleMetric && treeNode.metrics.find(MetricKind::Cycle) ==
-                                    treeNode.metrics.end()) {
+          if (hasCycleMetric &&
+              treeNode.metrics.find(MetricKind::Cycle) ==
+                  treeNode.metrics.end()) {
             writer.packStr(cycleMetricDurationName);
             writer.packUInt(0);
             writer.packStr(cycleMetricNormalizedDurationName);
@@ -568,12 +600,30 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         writer.packStr("children");
-        writer.packArray(static_cast<uint32_t>(treeNode.children.size()));
+        uint32_t keptChildren = 0;
         for (const auto &child : treeNode.children) {
+          if (subtreeHasMetrics[child.id]) {
+            ++keptChildren;
+          }
+        }
+        writer.packArray(keptChildren);
+        for (const auto &child : treeNode.children) {
+          if (!subtreeHasMetrics[child.id]) {
+            continue;
+          }
           packNode(tree->getNode(child.id));
         }
       };
 
+  uint32_t deviceTypeEntries = 0;
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    if (deviceIdMasks[deviceType] != 0) {
+      ++deviceTypeEntries;
+    }
+  }
+  // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
+  // the JSON serializer, even if device_metadata is empty.
   writer.packArray(2);
   packNode(tree->getNode(TreeData::Tree::TreeNode::RootId));
 
@@ -586,13 +636,6 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
     return count;
   };
 
-  uint32_t deviceTypeEntries = 0;
-  for (size_t deviceType = 0;
-       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
-    if (deviceIdMasks[deviceType] != 0) {
-      ++deviceTypeEntries;
-    }
-  }
   writer.packMap(deviceTypeEntries);
   for (size_t deviceType = 0;
        deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
@@ -637,7 +680,7 @@ void TreeData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto contextId = tree->addNode(contexts);
+  auto contextId = treePhases[currentPhase].get()->addNode(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
@@ -652,6 +695,7 @@ DataEntry TreeData::addOp(const std::string &name) {
     contexts = contextSource->getContexts();
   if (!name.empty())
     contexts.emplace_back(name);
+  auto *tree = treePhases[currentPhase].get();
   auto contextId = tree->addNode(contexts);
   auto &node = tree->getNode(contextId);
   return DataEntry(contextId, node.metrics);
@@ -660,6 +704,7 @@ DataEntry TreeData::addOp(const std::string &name) {
 DataEntry TreeData::addOp(size_t contextId,
                           const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *tree = treePhases[currentPhase].get();
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
   return DataEntry(newContextId, node.metrics);
@@ -669,7 +714,7 @@ void TreeData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto contextId = scopeIdToContextId.at(scopeId);
-  auto &node = tree->getNode(contextId);
+  auto *tree = treePhases[currentPhase].get();
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
                                FlexibleMetric(metricName, metricValue));
@@ -679,6 +724,7 @@ void TreeData::addScopeMetrics(
 void TreeData::addEntryMetrics(
     size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *tree = treePhases[currentPhase].get();
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
@@ -686,30 +732,49 @@ void TreeData::addEntryMetrics(
   }
 }
 
-void TreeData::clear() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto newTree = std::make_unique<Tree>();
-  tree.swap(newTree);
+void TreeData::doClear(size_t phase) {
+  // Clear all data collected before or at the given phase
+  for (auto it = treePhases.begin(); it != treePhases.end();) {
+    if (it->first <= phase) {
+      it = treePhases.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  // Re-initialize the current phase if it was cleared
+  if (treePhases.find(currentPhase) == treePhases.end())
+    treePhases[currentPhase] = std::make_unique<Tree>();
 }
 
-void TreeData::dumpHatchet(std::ostream &os) const {
-  auto output = buildHatchetJson(tree.get());
+void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
+  auto output = buildHatchetJson(treePhases.at(phase).get());
   os << std::endl << output.dump(4) << std::endl;
 }
 
-std::vector<uint8_t> TreeData::toMsgPack() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetMsgPack(tree.get());
+void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
+  auto msgPack = buildHatchetMsgPack(treePhases.at(phase).get());
+  os.write(reinterpret_cast<const char *>(msgPack.data()),
+           static_cast<std::streamsize>(msgPack.size()));
 }
 
-std::string TreeData::toJsonString() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetJson(tree.get()).dump();
+std::vector<uint8_t> TreeData::doToMsgPack(size_t phase) const {
+  return buildHatchetMsgPack(treePhases.at(phase).get());
 }
 
-void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
+std::string TreeData::doToJsonString(size_t phase) const {
+  return buildHatchetJson(treePhases.at(phase).get()).dump();
+}
+
+void TreeData::doAdvancePhase() {
+  treePhases[currentPhase + 1] = std::make_unique<Tree>();
+}
+
+void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
+                      size_t phase) const {
   if (outputFormat == OutputFormat::Hatchet) {
-    dumpHatchet(os);
+    dumpHatchet(os, phase);
+  } else if (outputFormat == OutputFormat::HatchetMsgPack) {
+    dumpHatchetMsgPack(os, phase);
   } else {
     throw std::logic_error("Output format not supported");
   }
@@ -717,7 +782,8 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
 
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  tree = std::make_unique<Tree>();
+  treePhases[0] = std::make_unique<Tree>();
+  activePhases.insert(0);
 }
 
 TreeData::~TreeData() {}

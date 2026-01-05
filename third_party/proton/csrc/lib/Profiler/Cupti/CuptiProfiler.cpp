@@ -48,11 +48,23 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
+void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataSet,
+                      Data *data, size_t phase) {
+  auto it = dataSet.find(data);
+  if (it == dataSet.end()) {
+    dataSet.emplace(data, std::make_pair(phase, phase));
+  } else {
+    it->second.first = std::min(it->second.first, phase); // update start phase
+    it->second.second = std::max(it->second.second, phase); // update end phase
+  }
+}
+
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
     CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
@@ -76,6 +88,7 @@ uint32_t processActivityKernel(
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
+          updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
@@ -83,6 +96,7 @@ uint32_t processActivityKernel(
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
           childEntry.upsertMetric(std::move(kernelMetric));
+          updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     }
@@ -117,17 +131,19 @@ uint32_t processActivityKernel(
     if (nodeState && !nodeState->isMetricNode) {
       const bool isMissingName = nodeState->isMissingName;
       if (!isMissingName) {
-        nodeState->forEachEntry([activity](Data *, DataEntry &entry) {
+        nodeState->forEachEntry([activity, &dataPhases](Data *data, DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             entry.upsertMetric(std::move(kernelMetric));
+            updateDataPhases(dataPhases, data, entry.phase);
           }
         });
       } else {
-        nodeState->forEachEntry([kernel, activity](Data *data,
+        nodeState->forEachEntry([kernel, activity, &dataPhases](Data *data,
                                                    DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
             childEntry.upsertMetric(std::move(kernelMetric));
+            updateDataPhases(dataPhases, data, entry.phase);
           }
         });
       }
@@ -150,13 +166,14 @@ uint32_t processActivity(
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
     CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
     correlationId = processActivityKernel(corrIdToExternId, externIdToState,
-                                          externIdToStateCache, activity);
+                                          externIdToStateCache, dataPhases, activity);
     break;
   }
   default:
@@ -189,6 +206,11 @@ constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
   X(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel)                         \
   X(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz)                    \
   X(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice)
+
+#define PROTON_KERNEL_CB_AS_ID(cbId) cbId,
+constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
+    PROTON_KERNEL_CALLBACK_LIST(PROTON_KERNEL_CB_AS_ID)};
+#undef PROTON_KERNEL_CB_AS_ID
 
 #define PROTON_KERNEL_CB_AS_ID(cbId) cbId,
 constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
@@ -396,7 +418,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
                          CUpti_CallbackId cbId, const void *cbData);
 
   static constexpr size_t AlignSize = 8;
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
   static constexpr size_t AttributeSize = sizeof(size_t);
   static constexpr const char *CaptureTag = "<captured_at>";
 
@@ -432,11 +453,13 @@ private:
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                     size_t *bufferSize,
                                                     size_t *maxNumRecords) {
-  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+  const auto envBufferSize =
+      getIntEnv("TRITON_CUPTI_BUFFER_SIZE", 64 * 1024 * 1024);
+  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
   if (*buffer == nullptr) {
     throw std::runtime_error("[PROTON] aligned_alloc failed");
   }
-  *bufferSize = BufferSize;
+  *bufferSize = envBufferSize;
   *maxNumRecords = 0;
 }
 
@@ -447,6 +470,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
   uint32_t maxCorrelationId = 0;
+  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
@@ -454,9 +478,10 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      auto correlationId = processActivity(
-          profiler.correlation.corrIdToExternId,
-          profiler.correlation.externIdToState, externIdToStateCache, activity);
+      auto correlationId =
+          processActivity(profiler.correlation.corrIdToExternId,
+                          profiler.correlation.externIdToState,
+                          externIdToStateCache, dataPhases, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -468,6 +493,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   std::free(buffer);
 
   profiler.correlation.complete(maxCorrelationId);
+  profiler.periodicFlush(dataPhases);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
@@ -915,6 +941,24 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "pcsampling") {
     pcSamplingEnabled = true;
+  } else if (proton::toLower(mode) == "periodic_flushing") {
+    auto delimiterPos = modeAndOptions[1].find('=');
+    if (delimiterPos != std::string::npos) {
+      const std::string key = modeAndOptions[1].substr(0, delimiterPos);
+      const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
+      if (key != "format") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported option key: " + key);
+      }
+      if (value != "hatchet_msgpack" && value != "chrome_trace" && 
+          value != "hatchet") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported format: " + value);
+      }
+      periodicFlushing = value;
+    } else {
+      periodicFlushing = "raw";
+    }
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
                                 mode);

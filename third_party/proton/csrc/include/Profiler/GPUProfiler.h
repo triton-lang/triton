@@ -17,6 +17,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
 
 namespace proton {
 
@@ -76,8 +77,6 @@ public:
     GraphNodeStateTable graphNodeIdToState;
   };
 
-  // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
-  // issue.
   using ExternIdToStateMap =
       ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
@@ -95,6 +94,42 @@ protected:
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
     threadState.dataToEntry.clear();
+  }
+
+  void periodicFlush(
+      const std::map<Data *,
+                     std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+          &dataPhases) {
+    if (!this->periodicFlushingEnabled)
+      return;
+    for (auto [data, phase] : dataPhases) {
+      auto currentPhase = data->getCurrentPhase();
+      if (phase.first == currentPhase)
+        continue;
+      auto completedPhase =
+          phase.second < currentPhase ? phase.second : currentPhase - 1;
+      if (completedPhase < this->periodicFlushInterval)
+        continue;
+      data->clear(completedPhase);
+      auto &path = data->getPath();
+      for (auto startPhase = phase.first; startPhase <= completedPhase;
+           startPhase++) {
+        auto pathWithPhase = path + ".part_" + std::to_string(phase.first) +
+                             "." + this->periodicFlushingFormat;
+        if (this->periodicFlushing == "hatchet" ||
+            this->periodicFlushing == "chrome_trace") {
+          auto jsonStr = data->toJsonString(/*pruning=*/true);
+          std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+          ofs << jsonStr;
+        } else if (this->periodicFlushing == "hatchet_msgpack") {
+          auto msgPack = data->toMsgPack(/*pruning=*/true);
+          std::ofstream ofs(pathWithPhase,
+                            std::ios::out | std::ios::binary | std::ios::trunc);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+        }
+      }
+    }
   }
 
   // Profiler
@@ -165,8 +200,9 @@ protected:
     }
 
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   bool isMissingName, const DataToEntryMap &dataToEntry) {
+    void correlate(uint64_t correlationId, size_t externId,
+                   size_t numNodes, bool isMissingName,
+                   const DataToEntryMap &dataToEntry) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
@@ -248,6 +284,10 @@ protected:
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
+  bool periodicFlushingEnabled{false};
+  size_t periodicFlushInterval{std::numeric_limits<size_t>::max()};
+  std::string periodicFlushing{};
+  std::string periodicFlushingFormat{};
 };
 
 } // namespace proton

@@ -11,6 +11,8 @@
 
 #include <set>
 
+#include <set>
+
 namespace proton {
 
 class InstrumentationProfiler : public Profiler,
