@@ -27,11 +27,9 @@ public:
 
   void clear() override;
 
-  void clearMetrics() override;
+  std::string toJsonString(bool pruning) override;
 
-  std::string toJsonString() const override;
-
-  std::vector<uint8_t> toMsgPack() const override;
+  std::vector<uint8_t> toMsgPack(bool pruning) override;
 
   class Trace;
 
@@ -44,6 +42,7 @@ protected:
 private:
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
   void dumpChromeTrace(std::ostream &os) const;
+  void pruneTrace(Trace *trace);
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;

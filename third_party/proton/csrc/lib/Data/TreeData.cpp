@@ -729,27 +729,32 @@ void TreeData::clear() {
   tree.swap(newTree);
 }
 
-void TreeData::clearMetrics() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  tree->walk<Tree::WalkPolicy::PostOrder>([&](Tree::TreeNode &node) {
-    node.metrics.clear();
-    node.flexibleMetrics.clear();
-  });
-}
-
 void TreeData::dumpHatchet(std::ostream &os) const {
   auto output = buildHatchetJson(tree.get());
   os << std::endl << output.dump(4) << std::endl;
 }
 
-std::vector<uint8_t> TreeData::toMsgPack() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetMsgPack(tree.get());
+void TreeData::pruneTree(Tree *tree) {
+  tree->walk<Tree::WalkPolicy::PreOrder>([&](Tree::TreeNode &node) {
+    node.metrics.clear();
+    node.flexibleMetrics.clear();
+  });
 }
 
-std::string TreeData::toJsonString() const {
+std::vector<uint8_t> TreeData::toMsgPack(bool pruning) {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetJson(tree.get()).dump();
+  auto ret = buildHatchetMsgPack(tree.get());
+  if (pruning) 
+    pruneTree(tree.get());
+  return ret;
+}
+
+std::string TreeData::toJsonString(bool pruning) {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  auto ret = buildHatchetJson(tree.get()).dump();
+  if (pruning)
+    pruneTree(tree.get());
+  return ret;
 }
 
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {

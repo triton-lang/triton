@@ -98,16 +98,22 @@ protected:
   }
 
   void periodicFlush() {
-    if (this->periodicFlushingEnabled) {
+    if (!this->periodicFlushing.empty()) {
       auto period = this->period.fetch_add(1);
       auto dataSet = this->getDataSet();
       for (auto *data : dataSet) {
         auto &path = data->getPath();
         auto pathWithPeriod = path + ".part_" + std::to_string(period);
-        // TODO(Keren): dump and clear metrics should be atomic.
-        // Or I should get the data snapshot first, which is low cost.
-        data->dump("", pathWithPeriod);
-        data->clearMetrics();
+        if (this->periodicFlushing == "json") {
+          auto jsonStr = data->toJsonString(/*pruning=*/true);
+          std::ofstream ofs(pathWithPeriod);
+          ofs << jsonStr;
+        } else if (this->periodicFlushing == "msgpack") {
+          auto msgPack = data->toMsgPack(/*pruning=*/true);
+          std::ofstream ofs(pathWithPeriod, std::ios::binary);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+        }
       }
     }
   }
@@ -263,7 +269,7 @@ protected:
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
-  bool periodicFlushingEnabled{false};
+  std::string periodicFlushing{};
   std::atomic<uint64_t> period{0};
 };
 

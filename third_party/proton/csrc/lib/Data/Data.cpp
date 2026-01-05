@@ -9,8 +9,7 @@
 
 namespace proton {
 
-void Data::dump(const std::string &outputFormat,
-                const std::string &outputPath) {
+void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 
   OutputFormat outputFormatEnum = outputFormat.empty()
@@ -18,14 +17,11 @@ void Data::dump(const std::string &outputFormat,
                                       : parseOutputFormat(outputFormat);
 
   std::unique_ptr<std::ostream> out;
-  auto fileOutputPath = outputPath;
-  if (fileOutputPath.empty())
-    fileOutputPath = path;
-  if (fileOutputPath.empty() || fileOutputPath == "-") {
+  if (path.empty() || path == "-") {
     out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
   } else {
     out.reset(new std::ofstream(
-        fileOutputPath + "." +
+        path + "." +
         outputFormatToString(outputFormatEnum))); // Opening a file for output
   }
 

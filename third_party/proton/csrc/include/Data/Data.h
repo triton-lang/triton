@@ -85,18 +85,14 @@ public:
   /// Clear all non-persistent fields in the data.
   virtual void clear() = 0;
 
-  /// Clear all recorded metrics while preserving the data structure.
-  virtual void clearMetrics() = 0;
-
   /// To Json
-  virtual std::string toJsonString() const = 0;
+  virtual std::string toJsonString(bool pruning = false) = 0;
 
   /// To MsgPack
-  virtual std::vector<uint8_t> toMsgPack() const = 0;
+  virtual std::vector<uint8_t> toMsgPack(bool pruning = false) = 0;
 
   /// Dump the data to the given output format.
-  void dump(const std::string &outputFormat,
-            const std::string &outputPath = "");
+  void dump(const std::string &outputFormat);
 
   /// Get the contexts associated with the data.
   std::vector<Context> getContexts() const {

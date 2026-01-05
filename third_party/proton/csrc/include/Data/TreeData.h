@@ -33,13 +33,11 @@ public:
       size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
-  std::vector<uint8_t> toMsgPack() const override;
+  std::vector<uint8_t> toMsgPack(bool pruning = false) override;
 
-  std::string toJsonString() const override;
+  std::string toJsonString(bool pruning = false) override;
 
   void clear() override;
-
-  void clearMetrics() override;
 
 protected:
   // ScopeInterface
@@ -54,6 +52,7 @@ private:
   class Tree;
   json buildHatchetJson(TreeData::Tree *tree) const;
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
+  void pruneTree(TreeData::Tree *tree);
 
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
   OutputFormat getDefaultOutputFormat() const override {

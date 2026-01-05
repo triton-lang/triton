@@ -199,17 +199,29 @@ void TraceData::addScopeMetrics(
   }
 }
 
-std::string TraceData::toJsonString() const {
+void TraceData::pruneTrace(Trace *trace) {
+  for (auto &[eventId, event] : trace->getEvents()) {
+    if (!event.metrics.empty()) {
+      trace->removeEvent(eventId);
+    }
+  }
+}
+
+std::string TraceData::toJsonString(bool pruning) {
   std::shared_lock<std::shared_mutex> lock(mutex);
   std::ostringstream os;
   dumpChromeTrace(os);
+  if (pruning)
+    pruneTrace(trace.get());
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::toMsgPack() const {
+std::vector<uint8_t> TraceData::toMsgPack(bool pruning) {
   std::shared_lock<std::shared_mutex> lock(mutex);
   std::ostringstream os;
   dumpChromeTrace(os);
+  if (pruning)
+    pruneTrace(trace.get());  
   // TODO: optimize this by writing directly to MsgPackWriter
   MsgPackWriter writer;
   writer.packStr(os.str());
@@ -220,15 +232,6 @@ void TraceData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto newTrace = std::make_unique<Trace>();
   trace.swap(newTrace);
-}
-
-void TraceData::clearMetrics() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  for (auto &[eventId, event] : trace->getEvents()) {
-    if (!event.metrics.empty()) {
-      trace->removeEvent(eventId);
-    }
-  }
 }
 
 namespace {

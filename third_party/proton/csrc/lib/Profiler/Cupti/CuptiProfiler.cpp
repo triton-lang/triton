@@ -918,7 +918,22 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   if (proton::toLower(mode) == "pcsampling") {
     pcSamplingEnabled = true;
   } else if (proton::toLower(mode) == "periodic_flushing") {
-    periodicFlushingEnabled = true;
+    auto delimiterPos = modeAndOptions[1].find('=');
+    if (delimiterPos != std::string::npos) {
+      const std::string key = modeAndOptions[1].substr(0, delimiterPos);
+      const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
+      if (key != "format") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported option key: " + key);
+      }
+      if (value != "msgpack" && value != "json") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported format: " + value);
+      }
+      periodicFlushing = value;
+    } else {
+      periodicFlushing = "json";
+    }
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
                                 mode);
