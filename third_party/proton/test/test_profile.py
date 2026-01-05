@@ -863,7 +863,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     # Find all *.hatchet files under the directory `tmp_path`
     import glob
     import msgpack
-    hatchet_files = glob.glob(str(tmp_path / "*.hatchet"))
+    hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
     assert len(hatchet_files) > 1
     num_scopes = 0
     for hatchet_file in hatchet_files:
