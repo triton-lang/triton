@@ -316,13 +316,14 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   auto a = cast<TypedValue<RankedTensorType>>(dotOp.getA());
   auto b = cast<TypedValue<ttg::MemDescType>>(dotOp.getB());
   auto origK = a.getType().getShape().back();
-  auto newK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
-                  .getInstrShape()[2];
-  auto numSplits = origK / newK;
+  auto instrK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
+                    .getInstrShape()[2];
   // Nothing to split
-  if (numSplits <= 1) {
+  if (origK <= instrK) {
     return {dotOp};
   }
+  constexpr int numSplits = 2;
+  uint32_t newK = origK / numSplits;
 
   assert(origK % newK == 0 && "origK must be divisible by newK");
   auto builder = OpBuilder(dotOp);
@@ -334,7 +335,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 
   Value useC = dotOp.getUseC();
   Value C = dotOp.getC();
-  auto numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
+  uint32_t numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
   std::vector<ttng::WarpGroupDotOp> dots;
   for (int i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
