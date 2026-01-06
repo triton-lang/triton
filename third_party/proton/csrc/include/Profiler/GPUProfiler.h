@@ -182,9 +182,8 @@ protected:
           }
           if (timingEnabled) {
             const auto t0 = Clock::now();
-            std::ofstream ofs(
-                pathWithPhase,
-                std::ios::out | std::ios::binary | std::ios::trunc);
+            std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::binary |
+                                                 std::ios::trunc);
             ofs.write(reinterpret_cast<const char *>(msgPack.data()),
                       msgPack.size());
             ofs.flush();
@@ -194,9 +193,8 @@ protected:
                     .count();
             ++msgPackWriteCalls;
           } else {
-            std::ofstream ofs(
-                pathWithPhase,
-                std::ios::out | std::ios::binary | std::ios::trunc);
+            std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::binary |
+                                                 std::ios::trunc);
             ofs.write(reinterpret_cast<const char *>(msgPack.data()),
                       msgPack.size());
           }
