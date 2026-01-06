@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
-from .torch_utils import unpack, pack
+from .torch_utils import repack
 
 
 # ------------------- Hopper MX Value Layout -------------------
@@ -79,8 +79,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
         # re-pack as column-major
-        data = unpack(data, -1, self.is_fp4)
-        data = pack(data, self.mx_axis, self.is_fp4)
+        data = repack(data, -1, self.mx_axis, self.is_fp4)
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
@@ -166,8 +165,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
         data = self._maybe_mT(data)
-        data = unpack(data, -2, self.is_fp4)
-        data = pack(data, -1, self.is_fp4)
+        data = repack(data, -2, -1, self.is_fp4)
         data = data[..., :self.K, :self.N // 2]
         data = data.contiguous()
         return data

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
-from .torch_utils import unpack, pack
+from .torch_utils import repack
 
 
 # ------------------- Layout Definition -------------------
@@ -60,9 +60,7 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
-        data = unpack(data, -1, self.is_fp4)
-        assert list(data.shape) == list(self.shape), f"{data.shape} != {self.shape}"
-        ret = pack(data, self.order[0], self.is_fp4)
+        ret = repack(data, -1, self.order[0], self.is_fp4)
         inv = [0] * len(self.order)
         for i, d in enumerate(reversed(self.order)):
             inv[d] = i
@@ -72,9 +70,7 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1
-        data = unpack(data, self.order[0], self.is_fp4)
-        assert list(data.shape) == list(self.shape), f"{data.shape} != {self.shape}"
-        data = pack(data, -1, self.is_fp4)
+        data = repack(data, self.order[0], -1, self.is_fp4)
         ret = data.contiguous()
         assert ret.stride(-1) == 1
         return ret
