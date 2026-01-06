@@ -212,11 +212,6 @@ constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
     PROTON_KERNEL_CALLBACK_LIST(PROTON_KERNEL_CB_AS_ID)};
 #undef PROTON_KERNEL_CB_AS_ID
 
-#define PROTON_KERNEL_CB_AS_ID(cbId) cbId,
-constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
-    PROTON_KERNEL_CALLBACK_LIST(PROTON_KERNEL_CB_AS_ID)};
-#undef PROTON_KERNEL_CB_AS_ID
-
 constexpr std::array<CUpti_CallbackId, 6> kGraphResourceCallbacks = {
     CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
