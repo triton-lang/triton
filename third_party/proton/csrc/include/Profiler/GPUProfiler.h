@@ -129,8 +129,12 @@ protected:
       auto &path = data->getPath();
       uint64_t totalToJsonUs = 0;
       uint64_t totalToMsgPackUs = 0;
+      uint64_t totalJsonWriteUs = 0;
+      uint64_t totalMsgPackWriteUs = 0;
       size_t toJsonCalls = 0;
       size_t toMsgPackCalls = 0;
+      size_t jsonWriteCalls = 0;
+      size_t msgPackWriteCalls = 0;
       for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
            startPhase++) {
         auto pathWithPhase = path + ".part_" + std::to_string(startPhase) +
@@ -149,8 +153,20 @@ protected:
           } else {
             jsonStr = data->toJsonString(startPhase);
           }
-          std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-          ofs << jsonStr;
+          if (timingEnabled) {
+            const auto t0 = Clock::now();
+            std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+            ofs << jsonStr;
+            ofs.flush();
+            const auto t1 = Clock::now();
+            totalJsonWriteUs +=
+                std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                    .count();
+            ++jsonWriteCalls;
+          } else {
+            std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+            ofs << jsonStr;
+          }
         } else if (this->periodicFlushingFormat == "hatchet_msgpack") {
           std::vector<uint8_t> msgPack;
           if (timingEnabled) {
@@ -164,10 +180,26 @@ protected:
           } else {
             msgPack = data->toMsgPack(startPhase);
           }
-          std::ofstream ofs(pathWithPhase,
-                            std::ios::out | std::ios::binary | std::ios::trunc);
-          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                    msgPack.size());
+          if (timingEnabled) {
+            const auto t0 = Clock::now();
+            std::ofstream ofs(
+                pathWithPhase,
+                std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                      msgPack.size());
+            ofs.flush();
+            const auto t1 = Clock::now();
+            totalMsgPackWriteUs +=
+                std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                    .count();
+            ++msgPackWriteCalls;
+          } else {
+            std::ofstream ofs(
+                pathWithPhase,
+                std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                      msgPack.size());
+          }
         }
       }
       uint64_t clearUs = 0;
@@ -184,6 +216,10 @@ protected:
                   << " toJsonString_calls=" << toJsonCalls
                   << " toMsgPack_us=" << totalToMsgPackUs
                   << " toMsgPack_calls=" << toMsgPackCalls
+                  << " json_write_us=" << totalJsonWriteUs
+                  << " json_write_calls=" << jsonWriteCalls
+                  << " msgpack_write_us=" << totalMsgPackWriteUs
+                  << " msgpack_write_calls=" << msgPackWriteCalls
                   << " clear_us=" << clearUs << std::endl;
       } else {
         data->clear(maxPhaseToFlush);
