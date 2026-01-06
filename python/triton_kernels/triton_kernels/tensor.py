@@ -252,6 +252,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         return dtype
     id = str(dtype).split(".")[-1]
     vals = {
+        "uint8": UINT8,
         "float8_e4m3fn": FP8_E4M3FN,
         "float8_e4m3fnuz": FP8_E4M3FNUZ,
         "float8_e5m2": FP8_E5M2,
