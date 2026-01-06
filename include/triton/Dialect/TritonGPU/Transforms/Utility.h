@@ -189,8 +189,9 @@ LogicalResult getConvertBackwardSlice(
     std::function<Value(OpOperand &, Attribute)> getExistingConversion =
         nullptr);
 
-// Populate pattern to remove dead cycles in ForOp.
-void populateForOpDeadArgumentElimination(RewritePatternSet &patterns);
+/// Run a dataflow analysis over \p top to identify block arguments to loops
+/// that are dead, and replace their usage with the corresponding init value.
+void runDeadIterArgElimination(Operation *top);
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
