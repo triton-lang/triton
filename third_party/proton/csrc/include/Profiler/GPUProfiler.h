@@ -127,12 +127,12 @@ protected:
            startPhase++) {
         auto pathWithPhase = path + ".part_" + std::to_string(startPhase) +
                              "." + this->periodicFlushingFormat;
-        if (this->periodicFlushing == "hatchet" ||
-            this->periodicFlushing == "chrome_trace") {
+        if (this->periodicFlushingFormat == "hatchet" ||
+            this->periodicFlushingFormat == "chrome_trace") {
           auto jsonStr = data->toJsonString(/*pruning=*/true);
           std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
           ofs << jsonStr;
-        } else if (this->periodicFlushing == "hatchet_msgpack") {
+        } else if (this->periodicFlushingFormat == "hatchet_msgpack") {
           auto msgPack = data->toMsgPack(/*pruning=*/true);
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
