@@ -376,6 +376,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
+  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
@@ -404,7 +405,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-  profiler.periodicFlush(dataPhases);
+  profiler.periodicFlush(dataFlushedPhases, dataPhases);
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
@@ -466,9 +467,9 @@ void RoctracerProfiler::doSetMode(
         throw std::invalid_argument(
             "[PROTON] RoctracerProfiler: unsupported format: " + value);
       }
-      periodicFlushing = value;
+      periodicFlushingFormat = value;
     } else {
-      periodicFlushing = "raw";
+      periodicFlushingFormat = "hatchet";
     }
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +

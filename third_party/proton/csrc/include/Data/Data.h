@@ -29,8 +29,9 @@ struct DataEntry {
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
 
   explicit DataEntry(size_t id,
+                     size_t phase,
                      std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
-      : id(id), metrics(metrics) {}
+      : id(id), phase(phase), metrics(metrics) {}
 
   void upsertMetric(std::unique_ptr<Metric> metric) {
     if (!metric)

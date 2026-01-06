@@ -698,7 +698,7 @@ DataEntry TreeData::addOp(const std::string &name) {
   auto *tree = treePhases[currentPhase].get();
   auto contextId = tree->addNode(contexts);
   auto &node = tree->getNode(contextId);
-  return DataEntry(contextId, node.metrics);
+  return DataEntry(contextId, currentPhase, node.metrics);
 }
 
 DataEntry TreeData::addOp(size_t contextId,
@@ -707,7 +707,7 @@ DataEntry TreeData::addOp(size_t contextId,
   auto *tree = treePhases[currentPhase].get();
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, node.metrics);
+  return DataEntry(newContextId, currentPhase, node.metrics);
 }
 
 void TreeData::addScopeMetrics(

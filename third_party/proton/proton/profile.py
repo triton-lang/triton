@@ -87,10 +87,9 @@ def start(
                                                For "roctracer", available options are ["periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
-                                               For example, "periodic_flushing" mode has two knobs:
+                                               For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
-                                               - interval: The interval in # of phases to flush the profiling data. Default is 1.
-                                               These knobs can be set via `mode="periodic_flushing:format=chrome_trace,interval=2"`.
+                                               The can be set via `mode="periodic_flushing:format=chrome_trace"`.
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "launch"].
                               Defaults to None.

@@ -97,6 +97,7 @@ protected:
   }
 
   void periodicFlush(
+      std::map<Data *, size_t> &dataFlushedPhases,
       const std::map<Data *,
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
           &dataPhases) {
@@ -104,17 +105,27 @@ protected:
       return;
     for (auto [data, phase] : dataPhases) {
       auto currentPhase = data->getCurrentPhase();
-      if (phase.first == currentPhase)
+      if (phase.first == currentPhase || phase.second == 0)
         continue;
-      auto completedPhase =
-          phase.second < currentPhase ? phase.second : currentPhase - 1;
-      if (completedPhase < this->periodicFlushInterval)
-        continue;
-      data->clear(completedPhase);
+      auto flushedPhaseIt = dataFlushedPhases.find(data);
+      size_t minPhaseToFlush = 0;
+      size_t maxPhaseToFlush = 0;
+      if (flushedPhaseIt == dataFlushedPhases.end()) {
+        minPhaseToFlush = 0;
+        maxPhaseToFlush = phase.second - 1;
+        dataFlushedPhases[data] = phase.second - 1;
+      } else {
+        auto &flushedPhase = flushedPhaseIt->second;
+        if (phase.second - 1 <= flushedPhase)
+          continue;
+        minPhaseToFlush = flushedPhase + 1;
+        maxPhaseToFlush = phase.second - 1;
+        flushedPhase = phase.second - 1;
+      }
       auto &path = data->getPath();
-      for (auto startPhase = phase.first; startPhase <= completedPhase;
+      for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
            startPhase++) {
-        auto pathWithPhase = path + ".part_" + std::to_string(phase.first) +
+        auto pathWithPhase = path + ".part_" + std::to_string(startPhase) +
                              "." + this->periodicFlushingFormat;
         if (this->periodicFlushing == "hatchet" ||
             this->periodicFlushing == "chrome_trace") {
@@ -129,6 +140,7 @@ protected:
                     msgPack.size());
         }
       }
+      data->clear(maxPhaseToFlush);
     }
   }
 
@@ -285,8 +297,6 @@ protected:
 
   bool pcSamplingEnabled{false};
   bool periodicFlushingEnabled{false};
-  size_t periodicFlushInterval{std::numeric_limits<size_t>::max()};
-  std::string periodicFlushing{};
   std::string periodicFlushingFormat{};
 };
 
