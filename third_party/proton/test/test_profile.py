@@ -234,13 +234,13 @@ def test_get_data(tmp_path: pathlib.Path):
         foo[(1, )](x, x, 4)
 
     try:
-        _ = proton.get_data(session)
+        _ = proton.data.get(session)
     except RuntimeError as e:
         assert "Cannot get data while the session is active" in str(e)
 
     proton.deactivate(session)
 
-    database = proton.get_data(session)
+    database = proton.data.get(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
     ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
@@ -251,7 +251,7 @@ def test_get_data(tmp_path: pathlib.Path):
     assert int(ones_frame["count"].values[0]) == 1
 
     import msgpack
-    msgpack_data = proton.get_data_msgpack(session)
+    msgpack_data = proton.data.get_msgpack(session)
     database_unpacked = msgpack.loads(msgpack_data, raw=False, strict_map_key=False)
     assert database == database_unpacked
 
@@ -267,8 +267,8 @@ def test_clear_data(tmp_path: pathlib.Path):
         x + x  # type: ignore
 
     proton.deactivate(session)
-    proton.clear_data(session)
-    database = proton.get_data(session)
+    proton.data.clear(session)
+    database = proton.data.get(session)
     assert database[0]["children"] == []
     assert database[0]["frame"]["name"] == "ROOT"
 
@@ -276,7 +276,7 @@ def test_clear_data(tmp_path: pathlib.Path):
     with proton.scope("test1"):
         x * x  # type: ignore
     proton.deactivate(session)
-    database = proton.get_data(session)
+    database = proton.data.get(session)
 
     proton.finalize()
     assert len(database[0]["children"]) == 1
