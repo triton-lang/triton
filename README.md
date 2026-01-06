@@ -243,6 +243,8 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
 - `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 - `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
+- `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
+  constructing the active driver (i.e., `triton.runtime.driver.active`).
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
