@@ -118,7 +118,7 @@ protected:
                       size_t phase) const = 0;
   virtual std::string doToJsonString(size_t phase) = 0;
   virtual std::vector<uint8_t> doToMsgPack(size_t phase) = 0;
-  virtual void doClear(size_t phase);
+  virtual void doClear(size_t phase) = 0;
   virtual OutputFormat getDefaultOutputFormat() const = 0;
 
   std::size_t currentPhase{0};
