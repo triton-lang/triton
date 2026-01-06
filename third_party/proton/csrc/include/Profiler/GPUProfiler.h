@@ -106,9 +106,9 @@ protected:
     for (auto [data, phase] : dataPhases) {
       if (phase.second == 0)
         continue;
-      auto flushedPhaseIt = dataFlushedPhases.find(data);
       size_t minPhaseToFlush = 0;
       size_t maxPhaseToFlush = 0;
+      auto flushedPhaseIt = dataFlushedPhases.find(data);
       if (flushedPhaseIt == dataFlushedPhases.end()) {
         minPhaseToFlush = 0;
         maxPhaseToFlush = phase.second - 1;

@@ -921,7 +921,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
-        if i % 1000 == 0:
+        if i != 0 and i % 1000 == 0:
             proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}"):
             torch.zeros((100), device="cuda")
