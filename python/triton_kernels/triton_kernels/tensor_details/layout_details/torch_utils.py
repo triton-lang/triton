@@ -17,9 +17,13 @@ def pack(data: torch.Tensor, dim: int, is_fp4: bool):
         return data
     if data.shape[dim] == 1:
         return data
-    data_lo, data_hi = torch.chunk(data, 2, dim=dim)
-    data = (data_hi << 4) | data_lo
-    return data
+    size = data.shape[dim] // 2
+    idx_lo = [slice(None)] * data.ndim
+    idx_hi = [slice(None)] * data.ndim
+    idx_lo[dim] = slice(0, size)
+    idx_hi[dim] = slice(size, 2 * size)
+    data[tuple(idx_lo)] |= (data[tuple(idx_hi)] << 4)
+    return data[tuple(idx_lo)]
 
 
 def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool):
