@@ -41,9 +41,9 @@ void Data::dump(const std::string &outputFormat) {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
       auto suffix =
-          getCurrentPhase() == 0 ? "" : "part_" + std::to_string(phase);
+          getCurrentPhase() == 0 ? "" : ".part_" + std::to_string(phase);
       const auto filePath =
-          path + "." + suffix + "." + outputFormatToString(outputFormatEnum);
+          path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
           (outputFormatEnum == OutputFormat::HatchetMsgPack)
               ? (std::ios::out | std::ios::binary | std::ios::trunc)
