@@ -523,6 +523,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
   tracePhases[0] = std::make_unique<Trace>();
+  activePhases.insert(0);
 }
 
 TraceData::~TraceData() {}

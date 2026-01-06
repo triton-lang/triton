@@ -778,6 +778,7 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
   treePhases[0] = std::make_unique<Tree>();
+  activePhases.insert(0);
 }
 
 TreeData::~TreeData() {}
