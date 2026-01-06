@@ -373,8 +373,9 @@ class KernelInterface(Generic[T]):
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {
-        key: str(value) if value.__class__.__name__ == "dtype" else
-        {"constexpr": value.value} if value.__class__.__name__ == "constexpr" else value
+        key: str(value) if value.__class__.__name__ == "dtype" else {"constexpr": value.value}
+        if value.__class__.__name__ == "constexpr" else {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
+        if value.__class__.__name__ == "JITFunction" else value
         for key, value in constants.items()
     }
 
@@ -558,6 +559,9 @@ class JITCallable:
         return self._src
 
     src = property(fget=_get_src, fset=_set_src)
+
+
+_triton_jit_function_registry = {}
 
 
 @dataclass
@@ -771,6 +775,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self._repr = repr
         self.launch_metadata = launch_metadata
+        # Register for simple deserialization of JITFunction constants
+        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -805,12 +811,21 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
-        constexprs = {
-            key:
-            tl.dtype(value) if tl.dtype.is_dtype(value) else
-            tl.constexpr(value['constexpr']) if isinstance(value, dict) and 'constexpr' in value else value
-            for key, value in zip(constant_keys, constant_vals)
-        }
+
+        def _decode_constant(value):
+            if tl.dtype.is_dtype(value):
+                return tl.dtype(value)
+            if isinstance(value, dict):
+                if 'constexpr' in value:
+                    return tl.constexpr(value['constexpr'])
+                if 'jit_function' in value:
+                    jf_key = value['jit_function']
+                    if jf_key in _triton_jit_function_registry:
+                        return _triton_jit_function_registry[jf_key]
+                    raise RuntimeError(f"Unable to resolve JITFunction {jf_key} for preload")
+            return value
+
+        constexprs = {key: _decode_constant(value) for key, value in zip(constant_keys, constant_vals)}
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
         attrs_vals = deserialized_obj['attrs_vals']
         attrs = dict(zip(attrs_keys, attrs_vals))
