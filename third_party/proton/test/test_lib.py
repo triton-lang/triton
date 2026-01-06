@@ -53,7 +53,7 @@ def test_session(tmp_path: pathlib.Path):
     libproton.deactivate(session_id, False)
     libproton.activate(session_id)
     libproton.finalize(session_id, "hatchet")
-    libproton.finalize_all(format="hatchet")
+    libproton.finalize_all("hatchet")
     assert temp_file.exists()
 
 
