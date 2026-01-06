@@ -204,15 +204,7 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
     if dtype is None:
         dtype = torch_tensor.dtype
     if isinstance(dtype, torch.dtype):
-        dtype = {
-            torch.uint8: UINT8,
-            torch.float8_e4m3fn: FP8_E4M3FN,
-            torch.float8_e5m2: FP8_E5M2,
-            torch.float16: FP16,
-            torch.bfloat16: BF16,
-            torch.float32: FP32,
-            torch.float64: FP64,
-        }[dtype]
+        dtype = torch_dtype_to_dtype(dtype)
     if shape is None:
         shape = list(torch_tensor.shape)
         shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
