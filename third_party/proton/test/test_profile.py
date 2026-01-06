@@ -898,7 +898,7 @@ def test_cudagraph_deactivate(tmp_path):
             test0_frame = child
             break
     assert test0_frame is not None
-    iter_frame = test0_frame["children"][0]["children"][0] 
+    iter_frame = test0_frame["children"][0]["children"][0]
     scope_a_frame = None
     scope_b_frame = None
     scope_c_frame = None

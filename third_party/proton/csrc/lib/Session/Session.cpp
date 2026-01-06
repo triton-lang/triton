@@ -315,7 +315,8 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   return sessions[sessionId]->getContextDepth();
 }
 
-std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId, size_t phase) {
+std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
+                                                    size_t phase) {
   // TODO: avoid duplicate code with getData()
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);

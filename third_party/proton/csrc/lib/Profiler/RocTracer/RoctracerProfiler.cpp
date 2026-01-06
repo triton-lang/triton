@@ -112,8 +112,8 @@ void processActivityKernel(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    size_t externId, const roctracer_record_t *activity) {
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t externId,
+    const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
   bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
@@ -163,8 +163,8 @@ void processActivity(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    size_t parentId, const roctracer_record_t *record) {
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t parentId,
+    const roctracer_record_t *record) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
@@ -463,7 +463,7 @@ void RoctracerProfiler::doSetMode(
         throw std::invalid_argument(
             "[PROTON] RoctracerProfiler: unsupported option key: " + key);
       }
-      if (value != "hatchet_msgpack" && value != "chrome_trace" && 
+      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
           value != "hatchet") {
         throw std::invalid_argument(
             "[PROTON] RoctracerProfiler: unsupported format: " + value);

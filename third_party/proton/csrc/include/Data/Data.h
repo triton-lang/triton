@@ -28,8 +28,7 @@ struct DataEntry {
   /// metrics.
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
 
-  explicit DataEntry(size_t id,
-                     size_t phase,
+  explicit DataEntry(size_t id, size_t phase,
                      std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
       : id(id), phase(phase), metrics(metrics) {}
 
@@ -111,7 +110,6 @@ public:
   virtual void
   addEntryMetrics(size_t entryId,
                   const std::map<std::string, MetricValueType> &metrics) = 0;
-
 
 protected:
   /// The actual implementations

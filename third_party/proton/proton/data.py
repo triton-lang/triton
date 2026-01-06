@@ -43,7 +43,7 @@ def advance_phase(session: Optional[int] = 0) -> Optional[int]:
 
     Args:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
-    
+
     Returns:
         Optional[int]: The next phase number after advancing.
     """

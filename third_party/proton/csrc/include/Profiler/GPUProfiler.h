@@ -175,12 +175,11 @@ protected:
         const auto t0 = Clock::now();
         data->clear(maxPhaseToFlush);
         const auto t1 = Clock::now();
-        clearUs =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+        clearUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                      .count();
         std::cerr << "[PROTON] periodicFlush timing: path=" << path
-                  << " format=" << this->periodicFlushingFormat
-                  << " phases=[" << minPhaseToFlush << "," << maxPhaseToFlush
+                  << " format=" << this->periodicFlushingFormat << " phases=["
+                  << minPhaseToFlush << "," << maxPhaseToFlush
                   << "] toJsonString_us=" << totalToJsonUs
                   << " toJsonString_calls=" << toJsonCalls
                   << " toMsgPack_us=" << totalToMsgPackUs
@@ -260,9 +259,8 @@ protected:
     }
 
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t externId,
-                   size_t numNodes, bool isMissingName,
-                   const DataToEntryMap &dataToEntry) {
+    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
+                   bool isMissingName, const DataToEntryMap &dataToEntry) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;

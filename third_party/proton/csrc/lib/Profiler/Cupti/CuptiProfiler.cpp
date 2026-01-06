@@ -131,15 +131,16 @@ uint32_t processActivityKernel(
     if (nodeState && !nodeState->isMetricNode) {
       const bool isMissingName = nodeState->isMissingName;
       if (!isMissingName) {
-        nodeState->forEachEntry([activity, &dataPhases](Data *data, DataEntry &entry) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertMetric(std::move(kernelMetric));
-            updateDataPhases(dataPhases, data, entry.phase);
-          }
-        });
+        nodeState->forEachEntry(
+            [activity, &dataPhases](Data *data, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                entry.upsertMetric(std::move(kernelMetric));
+                updateDataPhases(dataPhases, data, entry.phase);
+              }
+            });
       } else {
-        nodeState->forEachEntry([kernel, activity, &dataPhases](Data *data,
-                                                   DataEntry &entry) {
+        nodeState->forEachEntry([kernel, activity,
+                                 &dataPhases](Data *data, DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
             childEntry.upsertMetric(std::move(kernelMetric));
@@ -172,8 +173,9 @@ uint32_t processActivity(
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
-                                          externIdToStateCache, dataPhases, activity);
+    correlationId =
+        processActivityKernel(corrIdToExternId, externIdToState,
+                              externIdToStateCache, dataPhases, activity);
     break;
   }
   default:
@@ -949,7 +951,7 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported option key: " + key);
       }
-      if (value != "hatchet_msgpack" && value != "chrome_trace" && 
+      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
           value != "hatchet") {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported format: " + value);

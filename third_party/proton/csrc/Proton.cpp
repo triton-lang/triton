@@ -83,8 +83,9 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().deactivateSession(sessionId, flushing);
   });
 
-  m.def("deactivate_all",
-        [](bool flushing) { SessionManager::instance().deactivateAllSessions(flushing); });
+  m.def("deactivate_all", [](bool flushing) {
+    SessionManager::instance().deactivateAllSessions(flushing);
+  });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     SessionManager::instance().finalizeSession(sessionId, outputFormat);
