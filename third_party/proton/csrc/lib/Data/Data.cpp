@@ -21,7 +21,7 @@ void Data::clear(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   doClear(phase);
   activePhases.clear();
-  for (; phase <= currentPhase; phase++)
+  for (phase += 1; phase <= currentPhase; phase++)
     activePhases.insert(phase);
 }
 
