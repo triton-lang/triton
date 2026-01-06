@@ -760,6 +760,10 @@ std::string TreeData::doToJsonString(size_t phase) {
   return buildHatchetJson(tree).dump();
 }
 
+void TreeData::doAdvancePhase() {
+  treePhases[currentPhase + 1] = std::make_unique<Tree>();
+}
+
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const {
   if (outputFormat == OutputFormat::Hatchet) {

@@ -219,6 +219,10 @@ std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) {
   return std::move(writer).take();
 }
 
+void TraceData::doAdvancePhase() {
+  tracePhases[currentPhase + 1] = std::make_unique<Trace>();
+}
+
 void TraceData::doClear(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   // Clear all data collected before or at the given phase
