@@ -1,3 +1,4 @@
+import os
 import pytest
 import torch
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
@@ -59,7 +60,8 @@ def test_blaslt(m, n, k, dtype_str, device):
 
 
 @pytest.mark.parametrize("m, n, k", [(256, 256, 512), (512, 512, 512), (1024, 1024, 1024)])
-def test_block_scaled_matmul_mxfp8(m, n, k, device):
+@pytest.mark.parametrize("autotune", [False, True])
+def test_block_scaled_matmul_mxfp8(m, n, k, autotune, device):
     """Test block-scaled matmul with MXFP8 format (FP8 E4M3 inputs, E8M0 scales)."""
     if not is_cuda():
         pytest.skip("block_scaled_matmul is only supported on CUDA")
@@ -68,69 +70,85 @@ def test_block_scaled_matmul_mxfp8(m, n, k, device):
 
     from triton._C.libtriton import nvidia
 
-    torch.manual_seed(42)
+    # Set or unset autotune environment variable
+    old_autotune = os.environ.get("TRITON_CUBLASLT_AUTOTUNE")
+    if autotune:
+        os.environ["TRITON_CUBLASLT_AUTOTUNE"] = "1"
+    elif "TRITON_CUBLASLT_AUTOTUNE" in os.environ:
+        del os.environ["TRITON_CUBLASLT_AUTOTUNE"]
 
-    # Constants for MXFP8
-    VEC_SIZE = 32  # 32-element groups for E8M0 scales
+    # The try-finally block ensures proper cleanup of environment variables
+    try:
+        torch.manual_seed(42)
 
-    # Create workspace and cuBLAS handle
-    workspace_size = 32 * 1024 * 1024
-    workspace = torch.empty(workspace_size, dtype=torch.uint8, device=device)
-    handle = nvidia.cublas.CublasLt(workspace)
+        # Constants for MXFP8
+        VEC_SIZE = 32  # 32-element groups for E8M0 scales
 
-    # Generate random FP8 inputs
-    a_fp32 = torch.randn(m, k, device=device, dtype=torch.float32)
-    b_fp32 = torch.randn(n, k, device=device, dtype=torch.float32)
+        # Create workspace and cuBLAS handle
+        workspace_size = 32 * 1024 * 1024
+        workspace = torch.empty(workspace_size, dtype=torch.uint8, device=device)
+        handle = nvidia.cublas.CublasLt(workspace)
 
-    # Convert to FP8 E4M3
-    a = a_fp32.to(torch.float8_e4m3fn)
-    b = b_fp32.to(torch.float8_e4m3fn)
+        # Generate random FP8 inputs
+        a_fp32 = torch.randn(m, k, device=device, dtype=torch.float32)
+        b_fp32 = torch.randn(n, k, device=device, dtype=torch.float32)
 
-    # Generate scales in the expected 4D layout, then reshape to 5D and flatten
-    # Scale shape: [M // 128, K // VEC_SIZE // 4, 32, 16]
-    a_scale_shape = [m // 128, k // VEC_SIZE // 4, 32, 16]
-    b_scale_shape = [n // 128, k // VEC_SIZE // 4, 32, 16]
+        # Convert to FP8 E4M3
+        a = a_fp32.to(torch.float8_e4m3fn)
+        b = b_fp32.to(torch.float8_e4m3fn)
 
-    epsilon = 1e-8
-    a_scale_raw = torch.rand(a_scale_shape, device=device) + epsilon
-    b_scale_raw = torch.rand(b_scale_shape, device=device) + epsilon
+        # Generate scales in the expected 4D layout, then reshape to 5D and flatten
+        # Scale shape: [M // 128, K // VEC_SIZE // 4, 32, 16]
+        a_scale_shape = [m // 128, k // VEC_SIZE // 4, 32, 16]
+        b_scale_shape = [n // 128, k // VEC_SIZE // 4, 32, 16]
 
-    # Convert to MXScaleTensor (E8M0 format)
-    a_scale_mx = MXScaleTensor(a_scale_raw)
-    b_scale_mx = MXScaleTensor(b_scale_raw)
-    a_scale = a_scale_mx.data
-    b_scale = b_scale_mx.data
+        epsilon = 1e-8
+        a_scale_raw = torch.rand(a_scale_shape, device=device) + epsilon
+        b_scale_raw = torch.rand(b_scale_shape, device=device) + epsilon
 
-    # Reshape to 5D for TMA and flatten for cuBLAS
-    a_scale_5d = a_scale.reshape(1, a_scale_shape[0], a_scale.shape[1], 2, 256)
-    b_scale_5d = b_scale.reshape(1, b_scale_shape[0], b_scale.shape[1], 2, 256)
-    a_scale_cublas = a_scale_5d.contiguous().flatten()
-    b_scale_cublas = b_scale_5d.contiguous().flatten()
+        # Convert to MXScaleTensor (E8M0 format)
+        a_scale_mx = MXScaleTensor(a_scale_raw)
+        b_scale_mx = MXScaleTensor(b_scale_raw)
+        a_scale = a_scale_mx.data
+        b_scale = b_scale_mx.data
 
-    # Prepare output tensor
-    output = torch.empty((m, n), dtype=torch.float16, device=device)
+        # Reshape to 5D for TMA and flatten for cuBLAS
+        a_scale_5d = a_scale.reshape(1, a_scale_shape[0], a_scale.shape[1], 2, 256)
+        b_scale_5d = b_scale.reshape(1, b_scale_shape[0], b_scale.shape[1], 2, 256)
+        a_scale_cublas = a_scale_5d.contiguous().flatten()
+        b_scale_cublas = b_scale_5d.contiguous().flatten()
 
-    # Call cuBLAS block-scaled matmul
-    handle.block_scaled_matmul_mxfp8(a, b, output, a_scale_cublas, b_scale_cublas)
+        # Prepare output tensor
+        output = torch.empty((m, n), dtype=torch.float16, device=device)
 
-    # Compute reference using PyTorch
-    def unpack_scale(packed):
-        packed = packed.reshape(*packed.shape[:-2], 32, 4, 4)
-        num_chunk_m, num_chunk_k, _, _, _ = packed.shape
-        return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
+        # Call cuBLAS block-scaled matmul
+        handle.block_scaled_matmul_mxfp8(a, b, output, a_scale_cublas, b_scale_cublas)
 
-    a_scale_ref = a_scale_mx.to(torch.float32)
-    b_scale_ref = b_scale_mx.to(torch.float32)
-    a_scale_ref = unpack_scale(a_scale_ref).repeat_interleave(VEC_SIZE, dim=1)[:m, :k]
-    b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:k, :n]
+        # Compute reference using PyTorch
+        def unpack_scale(packed):
+            packed = packed.reshape(*packed.shape[:-2], 32, 4, 4)
+            num_chunk_m, num_chunk_k, _, _, _ = packed.shape
+            return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
 
-    ref = torch.matmul(a.to(torch.float32) * a_scale_ref, b.to(torch.float32).T * b_scale_ref)
+        a_scale_ref = a_scale_mx.to(torch.float32)
+        b_scale_ref = b_scale_mx.to(torch.float32)
+        a_scale_ref = unpack_scale(a_scale_ref).repeat_interleave(VEC_SIZE, dim=1)[:m, :k]
+        b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:k, :n]
 
-    torch.testing.assert_close(output.to(torch.float32), ref, atol=1e-1, rtol=1e-1)
+        ref = torch.matmul(a.to(torch.float32) * a_scale_ref, b.to(torch.float32).T * b_scale_ref)
+
+        torch.testing.assert_close(output.to(torch.float32), ref, atol=1e-1, rtol=1e-1)
+    finally:
+        # Restore original environment
+        if old_autotune is not None:
+            os.environ["TRITON_CUBLASLT_AUTOTUNE"] = old_autotune
+        elif "TRITON_CUBLASLT_AUTOTUNE" in os.environ:
+            del os.environ["TRITON_CUBLASLT_AUTOTUNE"]
 
 
 @pytest.mark.parametrize("m, n, k", [(256, 256, 512), (512, 512, 512), (1024, 1024, 1024)])
-def test_block_scaled_matmul_nvfp4(m, n, k, device):
+@pytest.mark.parametrize("autotune", [False, True])
+def test_block_scaled_matmul_nvfp4(m, n, k, autotune, device):
     """Test block-scaled matmul with NVFP4 format (packed FP4 inputs, FP8 E4M3 scales)."""
     if not is_cuda():
         pytest.skip("block_scaled_matmul is only supported on CUDA")
@@ -139,58 +157,73 @@ def test_block_scaled_matmul_nvfp4(m, n, k, device):
 
     from triton._C.libtriton import nvidia
 
-    torch.manual_seed(42)
+    # Set or unset autotune environment variable
+    old_autotune = os.environ.get("TRITON_CUBLASLT_AUTOTUNE")
+    if autotune:
+        os.environ["TRITON_CUBLASLT_AUTOTUNE"] = "1"
+    elif "TRITON_CUBLASLT_AUTOTUNE" in os.environ:
+        del os.environ["TRITON_CUBLASLT_AUTOTUNE"]
 
-    # Constants for NVFP4
-    VEC_SIZE = 16  # 16-element groups for FP8 E4M3 scales
+    # The try-finally block ensures proper cleanup of environment variables
+    try:
+        torch.manual_seed(42)
 
-    # Create workspace and cuBLAS handle
-    workspace_size = 32 * 1024 * 1024
-    workspace = torch.empty(workspace_size, dtype=torch.uint8, device=device)
-    handle = nvidia.cublas.CublasLt(workspace)
+        # Constants for NVFP4
+        VEC_SIZE = 16  # 16-element groups for FP8 E4M3 scales
 
-    # Generate random MXFP4 tensors
-    a_ref = MXFP4Tensor(size=(m, k), device=device).random()
-    b_ref = MXFP4Tensor(size=(n, k), device=device).random()
+        # Create workspace and cuBLAS handle
+        workspace_size = 32 * 1024 * 1024
+        workspace = torch.empty(workspace_size, dtype=torch.uint8, device=device)
+        handle = nvidia.cublas.CublasLt(workspace)
 
-    # Pack two FP4 elements per byte along K dimension
-    a = a_ref.to_packed_tensor(dim=1)  # (M, K//2) in uint8
-    b = b_ref.to_packed_tensor(dim=1)  # (N, K//2) in uint8
+        # Generate random MXFP4 tensors
+        a_ref = MXFP4Tensor(size=(m, k), device=device).random()
+        b_ref = MXFP4Tensor(size=(n, k), device=device).random()
 
-    # Generate scales in the expected 4D layout
-    # Scale shape: [M // 128, K // VEC_SIZE // 4, 32, 16]
-    a_scale_shape = [m // 128, k // VEC_SIZE // 4, 32, 16]
-    b_scale_shape = [n // 128, k // VEC_SIZE // 4, 32, 16]
+        # Pack two FP4 elements per byte along K dimension
+        a = a_ref.to_packed_tensor(dim=1)  # (M, K//2) in uint8
+        b = b_ref.to_packed_tensor(dim=1)  # (N, K//2) in uint8
 
-    epsilon = 1e-8
-    a_scale_raw = torch.rand(a_scale_shape, device=device) + epsilon
-    b_scale_raw = torch.rand(b_scale_shape, device=device) + epsilon
+        # Generate scales in the expected 4D layout
+        # Scale shape: [M // 128, K // VEC_SIZE // 4, 32, 16]
+        a_scale_shape = [m // 128, k // VEC_SIZE // 4, 32, 16]
+        b_scale_shape = [n // 128, k // VEC_SIZE // 4, 32, 16]
 
-    # For NVFP4, scales are FP8 E4M3
-    a_scale = a_scale_raw.to(torch.float8_e4m3fn)
-    b_scale = b_scale_raw.to(torch.float8_e4m3fn)
+        epsilon = 1e-8
+        a_scale_raw = torch.rand(a_scale_shape, device=device) + epsilon
+        b_scale_raw = torch.rand(b_scale_shape, device=device) + epsilon
 
-    # Flatten for cuBLAS (use original 4D layout, not 5D reshaped)
-    a_scale_cublas = a_scale.contiguous().flatten()
-    b_scale_cublas = b_scale.contiguous().flatten()
+        # For NVFP4, scales are FP8 E4M3
+        a_scale = a_scale_raw.to(torch.float8_e4m3fn)
+        b_scale = b_scale_raw.to(torch.float8_e4m3fn)
 
-    # Prepare output tensor
-    output = torch.empty((m, n), dtype=torch.float16, device=device)
+        # Flatten for cuBLAS (use original 4D layout, not 5D reshaped)
+        a_scale_cublas = a_scale.contiguous().flatten()
+        b_scale_cublas = b_scale.contiguous().flatten()
 
-    # Call cuBLAS block-scaled matmul
-    handle.block_scaled_matmul_nvfp4(a, b, output, a_scale_cublas, b_scale_cublas)
+        # Prepare output tensor
+        output = torch.empty((m, n), dtype=torch.float16, device=device)
 
-    # Compute reference using PyTorch
-    def unpack_scale(packed):
-        packed = packed.reshape(*packed.shape[:-2], 32, 4, 4)
-        num_chunk_m, num_chunk_k, _, _, _ = packed.shape
-        return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
+        # Call cuBLAS block-scaled matmul
+        handle.block_scaled_matmul_nvfp4(a, b, output, a_scale_cublas, b_scale_cublas)
 
-    a_scale_ref = a_scale.to(torch.float32)
-    b_scale_ref = b_scale.to(torch.float32)
-    a_scale_ref = unpack_scale(a_scale_ref).repeat_interleave(VEC_SIZE, dim=1)[:m, :k]
-    b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:k, :n]
+        # Compute reference using PyTorch
+        def unpack_scale(packed):
+            packed = packed.reshape(*packed.shape[:-2], 32, 4, 4)
+            num_chunk_m, num_chunk_k, _, _, _ = packed.shape
+            return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
 
-    ref = torch.matmul(a_ref.to(torch.float32) * a_scale_ref, b_ref.to(torch.float32).T * b_scale_ref)
+        a_scale_ref = a_scale.to(torch.float32)
+        b_scale_ref = b_scale.to(torch.float32)
+        a_scale_ref = unpack_scale(a_scale_ref).repeat_interleave(VEC_SIZE, dim=1)[:m, :k]
+        b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:k, :n]
 
-    torch.testing.assert_close(output.to(torch.float32), ref, atol=1e-1, rtol=1e-1)
+        ref = torch.matmul(a_ref.to(torch.float32) * a_scale_ref, b_ref.to(torch.float32).T * b_scale_ref)
+
+        torch.testing.assert_close(output.to(torch.float32), ref, atol=1e-1, rtol=1e-1)
+    finally:
+        # Restore original environment
+        if old_autotune is not None:
+            os.environ["TRITON_CUBLASLT_AUTOTUNE"] = old_autotune
+        elif "TRITON_CUBLASLT_AUTOTUNE" in os.environ:
+            del os.environ["TRITON_CUBLASLT_AUTOTUNE"]

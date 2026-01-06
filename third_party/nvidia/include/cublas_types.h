@@ -173,5 +173,19 @@ struct cublasLtMatmulDescOpaque_t;
 typedef cublasLtMatmulDescOpaque_t *cublasLtMatmulDesc_t;
 struct CUstream_st;
 typedef struct CUstream_st *cudaStream_t;
+struct CUevent_st;
+typedef struct CUevent_st *cudaEvent_t;
+
+// CUDA error type
+typedef enum cudaError {
+  cudaSuccess = 0,
+  cudaErrorInvalidValue = 1,
+  cudaErrorMemoryAllocation = 2,
+} cudaError_t;
+
+// Device attribute for L2 cache size query
+typedef enum cudaDeviceAttr {
+  cudaDevAttrL2CacheSize = 44,
+} cudaDeviceAttr;
 
 #endif // TRITON_CUBLAS_TYPES_H
