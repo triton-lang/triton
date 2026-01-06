@@ -1059,7 +1059,13 @@ void WarpSpecializePartitionsOp::getSuccessorRegions(
   // of the partition regions.
   if (src.isParent())
     for (Region &region : getPartitionRegions())
-      successors.emplace_back(&region);
+      successors.emplace_back(&region, region.getArguments());
+}
+
+OperandRange
+WarpSpecializePartitionsOp::getEntrySuccessorOperands(RegionSuccessor) {
+  // Pass through the explicit captures from the enclosing WarpSpecializeOp.
+  return getParentOp().getExplicitCaptures();
 }
 
 LogicalResult WarpSpecializeOp::verify() {

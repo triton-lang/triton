@@ -58,30 +58,6 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
   return success();
 }
 
-void SharedMemoryAliasAnalysis::visitNonControlFlowArguments(
-    Operation *op, const RegionSuccessor &successor,
-    ArrayRef<dataflow::Lattice<AliasInfo> *> argLattices, unsigned firstIndex) {
-  auto wsOp = dyn_cast<triton::gpu::WarpSpecializePartitionsOp>(op);
-  if (!wsOp) {
-    setAllToEntryStates(argLattices.take_front(firstIndex));
-    setAllToEntryStates(argLattices.drop_front(
-        firstIndex + successor.getSuccessorInputs().size()));
-    return;
-  }
-
-  // Propagate aliases from the parent operation's operands to the block
-  // arguments.
-  assert(!successor.isParent());
-  ProgramPoint *point = getProgramPointAfter(wsOp);
-
-  for (auto [capture, argLattice] :
-       llvm::zip(wsOp.getParentOp().getExplicitCaptures(), argLattices)) {
-    propagateIfChanged(
-        argLattice,
-        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
-  }
-}
-
 AliasResult SharedMemoryAliasAnalysis::alias(Value lhs, Value rhs) {
   // TODO: implement
   return AliasResult::MayAlias;

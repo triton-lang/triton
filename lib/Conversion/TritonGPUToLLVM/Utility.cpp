@@ -373,7 +373,8 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = b.udiv(tid, warpSizeVal);
+    warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc,
+                                                 /*omitUniformHint=*/true);
   }
 
   return {laneId, warpId};
@@ -1637,6 +1638,21 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
   rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                               amendedFuncOp.end());
   return amendedFuncOp;
+}
+
+void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp) {
+  // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
+  // the pointee datatype information.
+  // This function add back the pointee datatype information to arg attribute.
+  FunctionType fty = funcOp.getFunctionType();
+  for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
+    auto argType = fty.getInput(i);
+    if (auto argPtrType = dyn_cast<triton::PointerType>(argType)) {
+      auto argDType = argPtrType.getPointeeType();
+      llvmFuncOp.setArgAttr(i, "tt.pointee_type",
+                            mlir::TypeAttr::get(argDType));
+    }
+  }
 }
 
 } // namespace mlir
