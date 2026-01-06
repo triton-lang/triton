@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import torch
 from .base import Layout, LayoutTransformation
-from .torch_utils import unpack, pack
+from .torch_utils import repack
 
 
 # ------------------- Blackwell MX Value Layout -------------------
@@ -26,8 +26,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # re-pack as column-major
-        data = unpack(data, -1, self.is_fp4)
-        data = pack(data, -2, self.is_fp4)
+        data = repack(data, -1, -2, self.is_fp4)
         # leading dimension must be padded to be aligned to 128
         pad_last = (-data.size(-2)) % 128
         ret = torch.nn.functional.pad(data.mT, (0, pad_last)).contiguous().mT
@@ -38,8 +37,6 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         sizes = [self.shape[i] for i in range(data.ndim)]
         sizes[-2] //= 2
         data = data[tuple(slice(0, s) for s in sizes)]
-        data = unpack(data, -2, self.is_fp4)
-        assert list(data.shape) == list(self.shape)
-        data = pack(data, -1, self.is_fp4)
+        data = repack(data, -2, -1, self.is_fp4)
         data = data.contiguous()
         return data
