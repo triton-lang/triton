@@ -129,11 +129,11 @@ protected:
                              "." + this->periodicFlushingFormat;
         if (this->periodicFlushingFormat == "hatchet" ||
             this->periodicFlushingFormat == "chrome_trace") {
-          auto jsonStr = data->toJsonString(/*pruning=*/true);
+          auto jsonStr = data->toJsonString(startPhase);
           std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
           ofs << jsonStr;
         } else if (this->periodicFlushingFormat == "hatchet_msgpack") {
-          auto msgPack = data->toMsgPack(/*pruning=*/true);
+          auto msgPack = data->toMsgPack(startPhase);
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),
