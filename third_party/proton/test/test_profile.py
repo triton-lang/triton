@@ -236,7 +236,7 @@ def test_get_data(tmp_path: pathlib.Path):
     try:
         _ = proton.data.get(session)
     except RuntimeError as e:
-        assert "Cannot get data while the session is active" in str(e)
+        assert "is not active" in str(e)
 
     proton.deactivate(session, flushing=True)
 
