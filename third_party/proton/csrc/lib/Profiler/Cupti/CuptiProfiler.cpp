@@ -919,6 +919,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   } else {
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   }
+  profiler.periodicFlushingEnabled = false;
+  profiler.periodicFlushingFormat.clear();
   setGraphCallbacks(subscriber, /*enable=*/false);
   setLaunchCallbacks(subscriber, /*enable=*/false);
   nvtx::disable();
@@ -939,6 +941,7 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
     pcSamplingEnabled = true;
   } else if (proton::toLower(mode) == "periodic_flushing") {
     auto delimiterPos = modeAndOptions[1].find('=');
+    periodicFlushingEnabled = true;
     if (delimiterPos != std::string::npos) {
       const std::string key = modeAndOptions[1].substr(0, delimiterPos);
       const std::string value = modeAndOptions[1].substr(delimiterPos + 1);

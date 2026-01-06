@@ -942,5 +942,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
             with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
         assert len(data[0]["children"]) == 1000
+        assert data[0]["children"][0]["frame"]["name"].startswith("test_")
+        assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000

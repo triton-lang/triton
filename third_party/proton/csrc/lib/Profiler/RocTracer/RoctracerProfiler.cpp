@@ -455,6 +455,7 @@ void RoctracerProfiler::doSetMode(
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "periodic_flushing") {
     auto delimiterPos = modeAndOptions[1].find('=');
+    periodicFlushingEnabled = true;
     if (delimiterPos != std::string::npos) {
       const std::string key = modeAndOptions[1].substr(0, delimiterPos);
       const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
