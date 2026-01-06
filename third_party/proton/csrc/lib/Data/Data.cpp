@@ -9,27 +9,71 @@
 
 namespace proton {
 
+size_t Data::advancePhase() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  doAdvancePhase();
+  auto nextPhase = currentPhase + 1;
+  activePhases.insert(nextPhase);
+  return ++currentPhase;
+}
+
+void Data::clear(std::optional<size_t> phase) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (phase.has_value()) {
+    activePhases.erase(*phase);
+  } else {
+    activePhases.clear();
+    activePhases.insert(currentPhase);
+  }
+  doClear(phase.value_or(0));
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 
   OutputFormat outputFormatEnum = outputFormat.empty()
                                       ? getDefaultOutputFormat()
                                       : parseOutputFormat(outputFormat);
+  
+  for (auto phase : activePhases) {
+    std::unique_ptr<std::ostream> out;
+    if (path.empty() || path == "-") {
+      out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
+    } else {
+      auto suffix =
+          getCurrentPhase() == 0 ? "" : "part_" + std::to_string(phase);
+      const auto filePath =
+          path + "." + suffix + "." + outputFormatToString(outputFormatEnum);
+      const auto fileMode =
+          (outputFormatEnum == OutputFormat::HatchetMsgPack)
+              ? (std::ios::out | std::ios::binary | std::ios::trunc)
+              : (std::ios::out | std::ios::trunc);
+      out.reset(
+          new std::ofstream(filePath, fileMode)); // Opening a file for output
+    }
 
-  std::unique_ptr<std::ostream> out;
-  if (path.empty() || path == "-") {
-    out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
-  } else {
-    const auto filePath = path + "." + outputFormatToString(outputFormatEnum);
-    const auto fileMode =
-        (outputFormatEnum == OutputFormat::HatchetMsgPack)
-            ? (std::ios::out | std::ios::binary | std::ios::trunc)
-            : (std::ios::out | std::ios::trunc);
-    out.reset(
-        new std::ofstream(filePath, fileMode)); // Opening a file for output
+    doDump(*out, outputFormatEnum, phase);
   }
+}
 
-  doDump(*out, outputFormatEnum);
+std::string Data::toJsonString(std::optional<size_t> phase) {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  if (phase.has_value() &&
+      activePhases.find(phase.value()) == activePhases.end()) {
+    throw std::runtime_error("Phase ID not found");
+  }
+  auto id = phase.value_or(0);
+  return doToJsonString(id);
+}
+
+std::vector<uint8_t> Data::toMsgPack(std::optional<size_t> phase) {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  if (phase.has_value() &&
+      activePhases.find(phase.value()) == activePhases.end()) {
+    throw std::runtime_error("Phase ID not found");
+  }
+  auto id = phase.value_or(0);
+  return doToMsgPack(id);
 }
 
 OutputFormat parseOutputFormat(const std::string &outputFormat) {

@@ -97,7 +97,7 @@ public:
 
   std::string getData(size_t sessionId);
 
-  void clearData(size_t sessionId);
+  void clearData(size_t sessionId, size_t phase);
 
   void enterScope(const Scope &scope);
 

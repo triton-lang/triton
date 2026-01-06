@@ -139,6 +139,7 @@ void TraceData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
+  auto *trace = tracePhases[currentPhase].get();
   auto eventId = trace->addEvent(trace->addContexts(contexts));
   scopeIdToEventId[scope.scopeId] = eventId;
 }
@@ -153,6 +154,7 @@ DataEntry TraceData::addOp(const std::string &name) {
   contexts = contextSource->getContexts();
   if (!name.empty()) // not a placeholder event
     contexts.emplace_back(name);
+  auto *trace = tracePhases[currentPhase].get();
   auto contextId = trace->addContexts(contexts);
   auto eventId = trace->addEvent(contextId);
   auto &event = trace->getEvent(eventId);
@@ -163,6 +165,7 @@ DataEntry TraceData::addOp(size_t eventId,
                            const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   // Add a new context under it and update the context
+  auto *trace = tracePhases[currentPhase].get();
   auto &event = trace->getEvent(eventId);
   auto contextId = trace->addContexts(contexts, event.contextId);
   auto newEventId = trace->addEvent(contextId);
@@ -173,6 +176,7 @@ DataEntry TraceData::addOp(size_t eventId,
 void TraceData::addEntryMetrics(
     size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *trace = tracePhases[currentPhase].get();
   auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
@@ -188,6 +192,7 @@ void TraceData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto eventId = scopeIdToEventId.at(scopeId);
+  auto *trace = tracePhases[currentPhase].get();
   auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
@@ -199,39 +204,31 @@ void TraceData::addScopeMetrics(
   }
 }
 
-void TraceData::pruneTrace(Trace *trace) {
-  for (auto &[eventId, event] : trace->getEvents()) {
-    if (!event.metrics.empty()) {
-      trace->removeEvent(eventId);
-    }
-  }
-}
-
-std::string TraceData::toJsonString(bool pruning) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+std::string TraceData::doToJsonString(size_t phase) {
   std::ostringstream os;
-  dumpChromeTrace(os);
-  if (pruning)
-    pruneTrace(trace.get());
+  dumpChromeTrace(os, phase);
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::toMsgPack(bool pruning) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) {
   std::ostringstream os;
-  dumpChromeTrace(os);
-  if (pruning)
-    pruneTrace(trace.get());
+  dumpChromeTrace(os, phase);
   // TODO: optimize this by writing directly to MsgPackWriter
   MsgPackWriter writer;
   writer.packStr(os.str());
   return std::move(writer).take();
 }
 
-void TraceData::clear() {
+void TraceData::doClear(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto newTrace = std::make_unique<Trace>();
-  trace.swap(newTrace);
+  // Clear all data collected before or at the given phase
+  for (auto it = tracePhases.begin(); it != tracePhases.end();) {
+    if (it->first <= phase) {
+      it = tracePhases.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 namespace {
@@ -464,7 +461,8 @@ void dumpKernelMetricTrace(
 }
 } // namespace
 
-void TraceData::dumpChromeTrace(std::ostream &os) const {
+void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
+  auto *trace = tracePhases.at(phase).get();
   auto &events = trace->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
@@ -501,17 +499,18 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   }
 
   if (hasCycleMetrics) {
-    dumpCycleMetricTrace(trace.get(), cycleEvents, os);
+    dumpCycleMetricTrace(trace, cycleEvents, os);
   }
 
   if (hasKernelMetrics) {
-    dumpKernelMetricTrace(trace.get(), minTimeStamp, streamTraceEvents, os);
+    dumpKernelMetricTrace(trace, minTimeStamp, streamTraceEvents, os);
   }
 }
 
-void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
+void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
+                       size_t phase) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
-    dumpChromeTrace(os);
+    dumpChromeTrace(os, phase);
   } else {
     throw std::logic_error("Output format not supported");
   }
@@ -519,7 +518,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
 
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  trace = std::make_unique<Trace>();
+  tracePhases[0] = std::make_unique<Trace>();
 }
 
 TraceData::~TraceData() {}

@@ -330,7 +330,7 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toMsgPack();
+  return treeData->toMsgPack(sessionId);
 }
 
 std::string SessionManager::getData(size_t sessionId) {
@@ -348,10 +348,10 @@ std::string SessionManager::getData(size_t sessionId) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toJsonString();
+  return treeData->toJsonString(sessionId);
 }
 
-void SessionManager::clearData(size_t sessionId) {
+void SessionManager::clearData(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
@@ -361,7 +361,7 @@ void SessionManager::clearData(size_t sessionId) {
         "Cannot clear data while the session is active. Please deactivate the "
         "session first.");
   }
-  sessions[sessionId]->data->clear();
+  sessions[sessionId]->data->clear(phase);
 }
 
 } // namespace proton

@@ -33,12 +33,6 @@ public:
       size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
-  std::vector<uint8_t> toMsgPack(bool pruning = false) override;
-
-  std::string toJsonString(bool pruning = false) override;
-
-  void clear() override;
-
 protected:
   // ScopeInterface
   void enterScope(const Scope &scope) override;
@@ -54,15 +48,23 @@ private:
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
   void pruneTree(TreeData::Tree *tree);
 
-  void doDump(std::ostream &os, OutputFormat outputFormat) const override;
+  // Data
+  void doAdvancePhase() override;
+  void doDump(std::ostream &os, OutputFormat outputFormat,
+              size_t phase) const override;
+  std::string doToJsonString(size_t phase) override;
+  std::vector<uint8_t> doToMsgPack(size_t phase) override;
+  void doClear(size_t phase) override;
+
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::Hatchet;
   }
 
-  void dumpHatchet(std::ostream &os) const;
-  void dumpHatchetMsgPack(std::ostream &os) const;
+  void dumpHatchet(std::ostream &os, size_t phase) const;
+  void dumpHatchetMsgPack(std::ostream &os, size_t phase) const;
 
-  std::unique_ptr<Tree> tree;
+  // phase -> Tree
+  std::map<size_t, std::unique_ptr<Tree>> treePhases;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
 };

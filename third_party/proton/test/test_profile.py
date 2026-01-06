@@ -848,13 +848,80 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support cudagraph deactivation")
+def test_cudagraph_deactivate(tmp_path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn(session):
+        with proton.scope("scope_a"):
+            a = torch.ones((2, 2), device="cuda")
+        proton.deactivate(session)
+        with proton.scope("scope_b"):
+            b = torch.ones((2, 2), device="cuda")
+        proton.activate(session)
+        with proton.scope("scope_c"):
+            c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_cudagraph_deactivate.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    fn(session)
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for i in range(10):
+            with proton.scope(f"iter_{i}"):
+                fn(session)
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    # scope a and c should be recorded, b should be skipped
+    children = data[0]["children"]
+    assert len(children) == 3  # metadata + test0 + capture_at
+    test0_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    iter_frame = test0_frame["children"][0]["children"][0] 
+    scope_a_frame = None
+    scope_b_frame = None
+    scope_c_frame = None
+    for child in iter_frame["children"]:
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
+        if child["frame"]["name"] == "scope_c":
+            scope_c_frame = child
+    assert scope_a_frame is not None
+    assert scope_b_frame is None
+    assert scope_c_frame is not None
+
+
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
-    fresh_knobs.proton.cupti_buffer_size = 256 * 1024  # 256KB
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
+        if i % 1000 == 0:
+            proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}"):
             torch.zeros((100), device="cuda")
 
@@ -864,7 +931,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
     import glob
     import msgpack
     hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
-    assert len(hatchet_files) > 1
+    assert len(hatchet_files) == 11  # 10 flushes + 1 final
     num_scopes = 0
     for hatchet_file in hatchet_files:
         if data_format == "hatchet_msgpack":
@@ -873,6 +940,6 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format):
         else:
             with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        assert len(data[0]["children"]) >= 0
+        assert len(data[0]["children"]) == 1000
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000

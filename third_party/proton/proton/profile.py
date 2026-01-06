@@ -83,11 +83,14 @@ def start(
         mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
                                                Can be a string or an instance of BaseMode (or any subclass thereof).
                                                Defaults to None.
-                                               For "cupti", available options are [None, "pcsampling", "periodic_flushing].
+                                               For "cupti", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "roctracer", available options are ["periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
-                                               For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
+                                               For example, "periodic_flushing" mode has two knobs:
+                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
+                                               - interval: The interval in # of phases to flush the profiling data. Default is 1.
+                                               These knobs can be set via `mode="periodic_flushing:format=chrome_trace,interval=2"`.
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "launch"].
                               Defaults to None.
@@ -139,7 +142,7 @@ def activate(session: Optional[int] = None) -> None:
         libproton.activate(session)
 
 
-def deactivate(session: Optional[int] = None, flushing: bool = True) -> None:
+def deactivate(session: Optional[int] = None, flushing: bool = False) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
