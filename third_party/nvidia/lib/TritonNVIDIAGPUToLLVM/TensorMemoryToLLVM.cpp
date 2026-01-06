@@ -232,10 +232,6 @@ createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
     std::string redStr;
     if (elemTy.isF32()) {
       redStr = ".f32";
-    } else if (elemTy.isSignedInteger(32)) {
-      redStr = ".s32";
-    } else if (elemTy.isInteger(32)) {
-      redStr = ".u32";
     } else {
       llvm_unreachable("Unsupported type for TMEM reduction");
     }
@@ -540,6 +536,25 @@ struct TensorMemoryLoadOpConversion
       auto redTy = cast<RankedTensorType>(op.getRed().getType());
       size_t expectedSize = getTotalElemsPerThread(redTy);
 
+      assert(isa<Float32Type>(redTy.getElementType()));
+      auto isMin = *redOp == TMEMLoadReduceModifier::MIN;
+      // Apply the appropriate min/max operation based on type and flags
+      auto applyMinMax = [&](Value lhs, Value rhs) -> Value {
+        if (useNaN) {
+          // minimum/maximum propagate NaN
+          return isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
+                             ->getResult(0)
+                       : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs)
+                             ->getResult(0);
+        } else {
+          // minnum/maxnum ignore NaN
+          return isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
+                             ->getResult(0)
+                       : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs)
+                             ->getResult(0);
+        }
+      };
+
       // If we have more redvalVals than expected, we had multiple messages per
       // thread and need to combine the partial reductions
       if (redvalVals.size() > expectedSize) {
@@ -551,24 +566,7 @@ struct TensorMemoryLoadOpConversion
           Value combined = redvalVals[i * ratio];
           for (size_t j = 1; j < ratio; ++j) {
             Value other = redvalVals[i * ratio + j];
-            // Apply min or max based on redOp
-            // Use minnum/maxnum (ignores NaN) or minimum/maximum (propagates
-            // NaN) based on useNaN flag
-            StringRef intrinsic;
-            switch (*redOp) {
-            case TMEMLoadReduceModifier::MIN:
-              intrinsic = useNaN ? "llvm.minimum.f32" : "llvm.minnum.f32";
-              break;
-            case TMEMLoadReduceModifier::MAX:
-              intrinsic = useNaN ? "llvm.maximum.f32" : "llvm.maxnum.f32";
-              break;
-            default:
-              llvm_unreachable("Unsupported reduction modifier");
-            }
-            combined =
-                LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
-                                                llvmElemTy, {combined, other})
-                    .getResult(0);
+            combined = applyMinMax(combined, other);
           }
           combinedRedVals.push_back(combined);
         }
