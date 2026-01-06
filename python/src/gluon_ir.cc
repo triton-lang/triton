@@ -547,6 +547,11 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
                  ctx, ctaSplitNum[0], ctaSplitNum[1]);
            })
+      .def("get_shape_from_tensor",
+           [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
+             auto ty = dyn_cast<RankedTensorType>(tensor.getType());
+             return ty.getShape();
+           })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
