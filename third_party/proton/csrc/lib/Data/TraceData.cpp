@@ -158,7 +158,7 @@ DataEntry TraceData::addOp(const std::string &name) {
   auto contextId = trace->addContexts(contexts);
   auto eventId = trace->addEvent(contextId);
   auto &event = trace->getEvent(eventId);
-  return DataEntry(eventId, event.metrics);
+  return DataEntry(eventId, currentPhase, event.metrics);
 }
 
 DataEntry TraceData::addOp(size_t eventId,
@@ -170,7 +170,7 @@ DataEntry TraceData::addOp(size_t eventId,
   auto contextId = trace->addContexts(contexts, event.contextId);
   auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, newEvent.metrics);
+  return DataEntry(newEventId, currentPhase, newEvent.metrics);
 }
 
 void TraceData::addEntryMetrics(
