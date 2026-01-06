@@ -1646,7 +1646,7 @@ def test_tdm_prefetch_offsets(shape, block_shape):
     inp = torch.empty(shape, dtype=torch.int32)
     inp_handle = inp.cuda()
 
-    # Each prefetch touches 256B along the fastest dim; scale that axis accordingly.
+    # Each prefetch loads 256B along the fastest dim; scale that axis accordingly.
     prefetch_byte_width = 256
     elems_per_prefetch = prefetch_byte_width // inp.element_size()
     prefetches_in_fast_dim = max(1, block_shape[-1] // elems_per_prefetch)
@@ -1666,8 +1666,6 @@ def test_tdm_prefetch_offsets(shape, block_shape):
 
     # Compute reference values for prefetch offsets
     out_ref = torch.zeros(out_shape, dtype=torch.int64)
-    # Compute reference values for prefetch offsets
-    num_elements = inp.numel()
 
     # Last dimension steps by prefetch chunk size
     prefetch_strides = inp.stride()[:-1] + (elems_per_prefetch, )
@@ -1675,7 +1673,7 @@ def test_tdm_prefetch_offsets(shape, block_shape):
     cta_idx = 0
     # Pad grid and block size to 3D to generalize the loop for 1D - 3D
     grid_3d = (grid + (1, 1))[:3]
-    prefetch_block_shape_3d = (tuple(prefetch_block_shape) + (1, 1))[:3]  #
+    prefetch_block_shape_3d = (tuple(prefetch_block_shape) + (1, 1))[:3]
 
     # Compute for each CTA it's expected prefetch offsets, see TDMPrefetchOp for more details.
     for pid_x, pid_y, pid_z in product(range(grid_3d[0]), range(grid_3d[1]), range(grid_3d[2])):
@@ -1692,7 +1690,7 @@ def test_tdm_prefetch_offsets(shape, block_shape):
             indices = [x, y, z]
             offset = base + sum(indices[d] * prefetch_strides[d] for d in range(rank))
             # We only mask at the end of the tensor. Rows are allowed to wrap into the next one
-            cta_ref[flat_offset_idx] = 0 if offset >= num_elements else offset
+            cta_ref[flat_offset_idx] = 0 if offset >= inp.numel() else offset
             flat_offset_idx += 1
         cta_idx += 1
 
