@@ -237,18 +237,27 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
 }
 
+static bool isBarrierLike(Operation *op) {
+  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
+          triton::gpu::WarpSpecializePartitionsOp>(op)) {
+    return true;
+  }
+  // wgmma is as good as a barrier if there are only 4 warps
+  return isa<triton::nvidia_gpu::WarpGroupDotOp>(op) &&
+         triton::gpu::lookupNumWarps(op) == 4;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
-          triton::gpu::WarpSpecializePartitionsOp>(op)) {
+  if (isBarrierLike(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
   }
 
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op->getNextNode())) {
+      !isBarrierLike(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
