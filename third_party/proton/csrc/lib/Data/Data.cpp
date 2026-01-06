@@ -19,9 +19,10 @@ size_t Data::advancePhase() {
 
 void Data::clear(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  activePhases.clear();
-  activePhases.insert(currentPhase);
   doClear(phase);
+  activePhases.clear();
+  for (; phase <= currentPhase; phase++)
+    activePhases.insert(phase);
 }
 
 std::string Data::toJsonString(size_t phase) const {

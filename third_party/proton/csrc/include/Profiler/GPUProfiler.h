@@ -104,8 +104,7 @@ protected:
     if (!this->periodicFlushingEnabled)
       return;
     for (auto [data, phase] : dataPhases) {
-      auto currentPhase = data->getCurrentPhase();
-      if (phase.first == currentPhase || phase.second == 0)
+      if (phase.second == 0)
         continue;
       auto flushedPhaseIt = dataFlushedPhases.find(data);
       size_t minPhaseToFlush = 0;
