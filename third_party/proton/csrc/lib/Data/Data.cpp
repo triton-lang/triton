@@ -27,21 +27,11 @@ void Data::clear(size_t phase) {
 
 std::string Data::toJsonString(size_t phase) const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  if (activePhases.find(phase) == activePhases.end()) {
-    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                             " is not active.");
-  }
-  // Delegating to the actual implementation
   return doToJsonString(phase);
 }
 
 std::vector<uint8_t> Data::toMsgPack(size_t phase) const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  if (activePhases.find(phase) == activePhases.end()) {
-    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                             " is not active.");
-  }
-  // Delegating to the actual implementation
   return doToMsgPack(phase);
 }
 

@@ -205,12 +205,20 @@ void TraceData::addScopeMetrics(
 }
 
 std::string TraceData::doToJsonString(size_t phase) const {
+  if (tracePhases.find(phase) == tracePhases.end()) {
+    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
+                             " has no data.");
+  }
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   return os.str();
 }
 
 std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) const {
+  if (tracePhases.find(phase) == tracePhases.end()) {
+    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
+                             " has no data.");
+  }
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   // TODO: optimize this by writing directly to MsgPackWriter
