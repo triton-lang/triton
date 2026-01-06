@@ -203,8 +203,7 @@ class SparseMatrix:
 def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
     if dtype is None:
         dtype = torch_tensor.dtype
-    if isinstance(dtype, torch.dtype):
-        dtype = torch_dtype_to_dtype(dtype)
+    dtype = torch_dtype_to_dtype(dtype)
     if shape is None:
         shape = list(torch_tensor.shape)
         shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
@@ -265,6 +264,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         return vals[id]
     if "float8" in id:
         return FP8_E4M3FN
+    assert False, f"Unknown dtype: {id}"
 
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
