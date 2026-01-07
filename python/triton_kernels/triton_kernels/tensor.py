@@ -214,17 +214,24 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
         # For a strided (dense) tensor we only track which dimension has unit stride.
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
-        layout = StridedLayout(major_dim=major_dim)
+        layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
     return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    import sys
+    print("convert layout", tensor.storage.layout, layout)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+    print("before unswizzle", torch.cuda.mem_get_info(device=0))
+    print("tensor.storage.data refcount", sys.getrefcount(tensor.storage.data))
     canonical_data = transformation.unswizzle_data(tensor.storage.data)
+    print("after unswizzle", torch.cuda.mem_get_info(device=0))
     # convert canonical form to `layout`
     transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    print("before swizzle", torch.cuda.mem_get_info(device=0))
     new_data = transformation.swizzle_data(canonical_data)
+    print("after swizzle", torch.cuda.mem_get_info(device=0))
     # return new tensor
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, layout), **attrs)
@@ -285,6 +292,7 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None)
     running = 1
     for d in order:  # iterate minor -> major
         strides[d] = running
-        running *= shape[d]
+        running *= storage_shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
-    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
+    ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
+    return ret

@@ -51,7 +51,7 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     L = x.shape[axis]
     # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
     # output value storage
-    y_layout = StridedLayout(major_dim=axis)
+    y_layout = StridedLayout(major_dim=axis - x.ndim)
     y_scale_shape = (*x.shape[:axis], triton.cdiv(L, MXFP_BLOCK_SIZE), *x.shape[axis+1:])
     y_value = empty(x.shape, out_dtype, x.device, y_layout)
     y_scale = empty(y_scale_shape, UINT8, x.device, y_layout)
