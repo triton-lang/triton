@@ -43,6 +43,7 @@ class Tensor:
         # initialize shape
         if self.shape is None:
             self.shape = list(self.storage.data.shape)
+        self.shape = list(self.shape)
         # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
