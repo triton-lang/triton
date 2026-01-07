@@ -647,6 +647,24 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_local_gather",
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc, Value indices,
+              int32_t axis) -> Value {
+             auto ctx = self.getContext();
+             auto i32Ty = IntegerType::get(ctx, 32);
+             auto axisAttr = IntegerAttr::get(i32Ty, axis);
+             return self.create<ttg::LocalGatherOp>(resultTy, memDesc, indices,
+                                                    axisAttr);
+           })
+      .def("create_local_scatter",
+           [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
+              int32_t axis) {
+             auto ctx = self.getContext();
+             auto i32Ty = IntegerType::get(ctx, 32);
+             auto axisAttr = IntegerAttr::get(i32Ty, axis);
+             self.create<ttg::LocalScatterOp>(memDesc, values, indices,
+                                              axisAttr);
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
@@ -845,15 +863,16 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::WarpYieldOp>(values);
            })
       .def("create_warp_specialize_partitions",
-           [](GluonOpBuilder &self, int numPartitions) -> Operation * {
-             return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
+           [](GluonOpBuilder &self, std::vector<Value> &explicitCaptures,
+              int numPartitions) -> Operation * {
+             return self.create<ttg::WarpSpecializePartitionsOp>(
+                 explicitCaptures, numPartitions);
            })
       .def("create_warp_specialize",
            [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
-              std::vector<Value> &explicitCaptures,
               std::vector<int> &partitionNumWarps) {
-             return self.create<ttg::WarpSpecializeOp>(
-                 resultTypes, explicitCaptures, partitionNumWarps);
+             return self.create<ttg::WarpSpecializeOp>(resultTypes,
+                                                       partitionNumWarps);
            })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
