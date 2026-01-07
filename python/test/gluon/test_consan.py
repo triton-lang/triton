@@ -175,6 +175,58 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
+def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_async_tma_kernel_2bufs_1bar, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(a_desc, b_desc, out, FAILURE: ttgl.constexpr):
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        a_smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], a_desc.layout)
+        b_smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], b_desc.layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, 2 * XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+        tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
+        tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
+        mbarrier.wait(bar, 0, pred=(not FAILURE))
+        val = a_smem.load(blocked_layout)
+        val = val + b_smem.load(blocked_layout)
+        mbarrier.wait(bar, 0, pred=FAILURE)
+        mbarrier.invalidate(bar)
+
+        out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
+        out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+        out_ptr = out + out_m * XBLOCK + out_n
+        ttgl.store(out_ptr, val)
+
+    a = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    b = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [XBLOCK.value, XBLOCK.value], shared_layout)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](a_desc, b_desc, output, FAILURE=FAILURE, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, False, monkeypatch))

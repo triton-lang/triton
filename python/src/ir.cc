@@ -194,6 +194,9 @@ OpPrintingFlags getOpPrintingFlags() {
 }
 
 py::list getTensorDescMetadata(ModuleOp &mod) {
+  TritonSourceMgrDiagnosticHandler handler =
+      setupTritonDiagnosticHandler(mod.getContext());
+
   py::list result;
   triton::FuncOp kernelFunc;
   mod.walk([&](triton::FuncOp func) {
@@ -218,8 +221,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
       auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
-      if (!swizzle.has_value() || !elemType.has_value())
-        throw py::type_error("Invalid descriptor type");
+      if (failed(swizzle) || failed(elemType))
+        throw py::type_error("invalid TMA descriptor type");
       auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =

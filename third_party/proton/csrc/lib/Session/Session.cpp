@@ -64,7 +64,6 @@ void Session::activate() {
 void Session::deactivate() {
   profiler->flush();
   profiler->unregisterData(data.get());
-  data->clearCache();
 }
 
 void Session::finalize(const std::string &outputFormat) {
@@ -157,6 +156,17 @@ void SessionManager::removeSession(size_t sessionId) {
   if (!hasSession(sessionId)) {
     return;
   }
+  // Context source can be safely cleared here but not deactivation.
+  // Context source of each session is still sort of active after deactivation,
+  // For example, if we have
+  // ```Python
+  //   proton.deactivate_session(session0)
+  //   with proton.scope("A"):
+  //     proton.activate_session(session0)
+  // ```
+  // session0 should be aware of scope "A"'s enter and exit, otherwise the
+  // context stack will be imbalanced.
+  sessions[sessionId]->contextSource->clear();
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
   sessionActive.erase(sessionId);
@@ -302,6 +312,25 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   return sessions[sessionId]->getContextDepth();
+}
+
+std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId) {
+  // TODO: avoid duplicate code with getData()
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot get data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
+  }
+  return treeData->toMsgPack();
 }
 
 std::string SessionManager::getData(size_t sessionId) {

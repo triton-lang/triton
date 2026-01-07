@@ -1710,3 +1710,89 @@ tt.func @conditional_store_race_fix(%lb : index, %ub : index, %step : index,
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride=1>
+module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @non_pipelined_op
+  tt.func public @non_pipelined_op(%x_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %x_desc_0: i32, %x_desc_1: i32, %x_desc_2: i64, %x_desc_3: i64, %y_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %y_desc_4: i32, %y_desc_5: i32, %y_desc_6: i64, %y_desc_7: i64, %out_desc: !tt.tensordesc<tensor<64x64xf32, #shared1>>, %out_desc_8: i32, %out_desc_9: i32, %out_desc_10: i64, %out_desc_11: i64, %N: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %acc = arith.constant false
+    %true = arith.constant true
+    %c1_i32 = arith.constant 1 : i32
+    %BLOCK_N = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %x = tt.descriptor_load %x_desc[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x64xbf16, #shared>> -> tensor<64x64xbf16, #blocked>
+    %x_12 = ttg.local_alloc %x : (tensor<64x64xbf16, #blocked>) -> !ttg.memdesc<64x64xbf16, #shared, #smem>
+    %num_slices = arith.divsi %N, %BLOCK_N : i32
+    %acc_13, %acc_14 = ttng.tmem_alloc : () -> (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    // CHECK-COUNT-3: ttng.init_barrier {{.*}}
+    // CHECK: scf.for
+    %0 = scf.for %i = %c0_i32 to %num_slices step %c1_i32 iter_args(%acc_15 = %acc_14) -> (!ttg.async.token)  : i32 {
+      %y = arith.muli %i, %BLOCK_N {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      // CHECK: ttng.barrier_expect {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}, {{.*}}
+      // CHECK: ttng.async_tma_copy_global_to_local {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32} {{.*}}
+      %y_16 = tt.descriptor_load %y_desc[%c0_i32, %y] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<64x64xbf16, #shared>> -> tensor<64x64xbf16, #blocked>
+      // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32} {{.*}}
+      %y_17 = ttg.local_alloc %y_16 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : (tensor<64x64xbf16, #blocked>) -> !ttg.memdesc<64x64xbf16, #shared, #smem>
+      // CHECK:{{.*}} = ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 2 : i32, loop.stage = 0 : i32} {{.*}}
+      %acc_18 = ttng.tc_gen5_mma %x_12, %y_17, %acc_13[%acc_15], %acc, %true {loop.cluster = 1 : i32, loop.stage = 0 : i32, tt.self_latency = 1 : i32} : !ttg.memdesc<64x64xbf16, #shared, #smem>, !ttg.memdesc<64x64xbf16, #shared, #smem>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32} {{.*}}
+      // CHECK: {{.*}} = ttng.tmem_load {{.*}} {loop.cluster = 1 : i32, loop.stage = 1 : i32} {{.*}}
+      %acc_19, %acc_20 = ttng.tmem_load %acc_13[%acc_18] {loop.cluster = 0 : i32, loop.stage = 1 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #blocked1>
+      %1 = ttg.convert_layout %acc_19 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<64x64xf32, #blocked1> -> tensor<64x64xf32, #blocked>
+      // CHECK: tt.descriptor_store {{.*}} {loop.cluster = 1 : i32, loop.stage = 1 : i32} {{.*}}
+      tt.descriptor_store %out_desc[%c0_i32, %y], %1 {loop.cluster = 0 : i32, loop.stage = 1 : i32} : !tt.tensordesc<tensor<64x64xf32, #shared1>>, tensor<64x64xf32, #blocked>
+      scf.yield %acc_20 : !ttg.async.token
+    } {tt.scheduled_max_stage = 1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride=1>
+module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @non_pipelined_op_two_stage
+  tt.func public @non_pipelined_op_two_stage(%x_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %x_desc_0: i32, %x_desc_1: i32, %x_desc_2: i64, %x_desc_3: i64, %y_desc: !tt.tensordesc<tensor<64x64xbf16, #shared>>, %y_desc_4: i32, %y_desc_5: i32, %y_desc_6: i64, %y_desc_7: i64, %out_desc: !tt.tensordesc<tensor<64x64xf32, #shared1>>, %out_desc_8: i32, %out_desc_9: i32, %out_desc_10: i64, %out_desc_11: i64, %N: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %acc = arith.constant false
+    %true = arith.constant true
+    %c1_i32 = arith.constant 1 : i32
+    %BLOCK_N = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %x = tt.descriptor_load %x_desc[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x64xbf16, #shared>> -> tensor<64x64xbf16, #blocked>
+    %x_12 = ttg.local_alloc %x : (tensor<64x64xbf16, #blocked>) -> !ttg.memdesc<64x64xbf16, #shared, #smem>
+    %num_slices = arith.divsi %N, %BLOCK_N : i32
+    %acc_13, %acc_14 = ttng.tmem_alloc : () -> (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    // CHECK-COUNT-3: ttng.init_barrier {{.*}}
+    // CHECK: scf.for
+    %0 = scf.for %i = %c0_i32 to %num_slices step %c1_i32 iter_args(%acc_15 = %acc_14) -> (!ttg.async.token)  : i32 {
+      %y = arith.muli %i, %BLOCK_N {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      // CHECK: ttng.barrier_expect {{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32}, {{.*}}
+      // CHECK: ttng.async_tma_copy_global_to_local {{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32} {{.*}}
+      %y_16 = tt.descriptor_load %y_desc[%c0_i32, %y] {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<64x64xbf16, #shared>> -> tensor<64x64xbf16, #blocked>
+      // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32} {{.*}}
+      %y_17 = ttg.local_alloc %y_16 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : (tensor<64x64xbf16, #blocked>) -> !ttg.memdesc<64x64xbf16, #shared, #smem>
+      // CHECK:{{.*}} = ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 3 : i32, loop.stage = 0 : i32} {{.*}}
+      %acc_18 = ttng.tc_gen5_mma %x_12, %y_17, %acc_13[%acc_15], %acc, %true {loop.cluster = 1 : i32, loop.stage = 0 : i32, tt.self_latency = 1 : i32} : !ttg.memdesc<64x64xbf16, #shared, #smem>, !ttg.memdesc<64x64xbf16, #shared, #smem>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 2 : i32, loop.stage = 1 : i32} {{.*}}
+      // CHECK: {{.*}} = ttng.tmem_load {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32} {{.*}}
+      %acc_19, %acc_20 = ttng.tmem_load %acc_13[%acc_18] {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #blocked1>
+      %1 = ttg.convert_layout %acc_19 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<64x64xf32, #blocked1> -> tensor<64x64xf32, #blocked>
+      // CHECK: tt.descriptor_store {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32} {{.*}}
+      tt.descriptor_store %out_desc[%c0_i32, %y], %1 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !tt.tensordesc<tensor<64x64xf32, #shared1>>, tensor<64x64xf32, #blocked>
+      scf.yield %acc_20 : !ttg.async.token
+    } {tt.scheduled_max_stage = 2 : i32}
+    tt.return
+  }
+}

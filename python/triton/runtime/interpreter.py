@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict, Callable, TypeVar
+from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
 import numpy as np
@@ -17,8 +17,8 @@ from triton.runtime.jit import KernelInterface
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
-from .._C.libtriton import interpreter as _interpreter
-from .._C.libtriton import ir as _ir
+from .._C.libtriton import interpreter as _interpreter  # type: ignore
+from .._C.libtriton import ir as _ir  # type: ignore
 from .._utils import _tuple_create
 
 T = TypeVar("T")
@@ -32,7 +32,7 @@ class TensorHandle:
         we don't store block_type here because the shape information is already available in the data field
         attr: a dictionary of attributes
     '''
-    data: np.array
+    data: np.ndarray
     dtype: tl.dtype
     attr: Dict = dataclasses.field(default_factory=dict)
 
@@ -70,17 +70,17 @@ class BlockPointerHandle:
     def materialize_pointers(self, boundary_check):
         dtype_tt = self.base.get_element_ty()
         n_bytes = dtype_tt.primitive_bitwidth // 8
-        ptrs = np.broadcast_to(self.base.data, self.block_shape)
+        ptrs_data = np.broadcast_to(self.base.data, self.block_shape)
         masks = np.ones(self.block_shape, dtype=bool)
         for dim in range(len(self.block_shape)):
             bcast_dims = [1] * len(self.block_shape)
             bcast_dims[dim] = self.block_shape[dim]
             off = (self.offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
+            ptrs_data = ptrs_data + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
             if dim in boundary_check:
                 masks = masks & (off < self.shape[dim].data) & (off >= 0)
-        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
-        return ptrs, masks
+        ptrs_handle = TensorHandle(ptrs_data, self.base.dtype.scalar)
+        return ptrs_handle, masks
 
 
 class TensorDescHandle:
@@ -113,29 +113,29 @@ class TensorDescHandle:
         itemsize = scalar_ty.primitive_bitwidth // 8
         assert (offsets[-1].data * itemsize) % 16 == 0, "block offset start must be 16-byte aligned"
 
-        ptrs = np.broadcast_to(self.base.data, self.block_shape)
+        ptrs_data = np.broadcast_to(self.base.data, self.block_shape)
         masks = np.ones(self.block_shape, dtype=bool)
         for dim in range(len(self.block_shape)):
             bcast_dims = [1] * len(self.block_shape)
             bcast_dims[dim] = self.block_shape[dim]
             off = (offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (itemsize * off * self.strides[dim].data).astype(np.uint64)
+            ptrs_data = ptrs_data + (itemsize * off * self.strides[dim].data).astype(np.uint64)
             masks = masks & (0 <= off) & (off < self.shape[dim].data)
-        assert ptrs.dtype == np.uint64
-        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
-        return ptrs, masks
+        assert ptrs_data.dtype == np.uint64
+        ptrs_handle = TensorHandle(ptrs_data, self.base.dtype.scalar)
+        return ptrs_handle, masks
 
 
 @dataclass(frozen=True)
 class InterpreterOptions:
-    extern_libs: dict = None
+    extern_libs: Optional[dict] = None
     debug: bool = False
     sanitize_overflow: bool = True
-    arch: str = None
-    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
-    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
+    arch: Optional[str] = None
+    supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
+    deprecated_fp8_dot_operand_dtypes: Tuple[str, ...] = ()
     default_dot_input_precision: str = "tf32"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
+    allowed_dot_input_precisions: Tuple[str, ...] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
 
@@ -833,6 +833,8 @@ class InterpreterBuilder:
 
 
 _MISSING = object()
+interpreter_builder = InterpreterBuilder()
+interpreter_semantic: TritonSemantic = TritonSemantic(interpreter_builder)
 
 
 class _LangPatchScope:
@@ -856,11 +858,10 @@ class _LangPatchScope:
 
 
 def _patch_attr(obj, name, member, builder, scope: _LangPatchScope):
-    semantic = TritonSemantic(builder)
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
                                                                 {k: v
                                                                  for k, v in kwargs.items()
-                                                                 if k != "_semantic"}, _semantic=semantic))
+                                                                 if k != "_semantic"}, _semantic=interpreter_semantic))
     scope.set_attr(obj, name, new_member)
 
 
@@ -918,6 +919,9 @@ class ReduceScanOpInterface:
             ret = np.array([ret], dtype=np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
+
+    def apply_impl(self, input):
+        raise NotImplementedError("apply_impl must be implemented by subclasses")
 
     def apply(self, input):
         if not isinstance(input, tuple):
@@ -1221,16 +1225,11 @@ def _implicit_cvt(arg):
         strides = [_implicit_cvt(s) for s in arg.strides]
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
-        semantic = TritonSemantic(InterpreterBuilder())
-        return semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
-                                               shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
-                                               block_shape=[tl.constexpr(b)
-                                                            for b in arg.block_shape], padding_option=arg.padding)
+        return interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
+                                                           shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
+                                                           block_shape=[tl.constexpr(b) for b in arg.block_shape],
+                                                           padding_option=arg.padding)
     return arg
-
-
-interpreter_builder = InterpreterBuilder()
-interpreter_semantic = TritonSemantic(interpreter_builder)
 
 
 def _unwrap_tensor(t):

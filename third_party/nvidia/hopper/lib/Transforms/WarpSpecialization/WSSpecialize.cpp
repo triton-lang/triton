@@ -463,7 +463,8 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
                         "FIXME: capturing tensor values into warp "
                         "partitions is not supported");
     }
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
+    auto partOp = wsOp.getPartitionOp();
+    partOp->insertOperands(partOp.getNumOperands(), capture);
     for (Region *region : wsOp.getPartitionRegions()) {
       // Does this include default region?
       BlockArgument arg =

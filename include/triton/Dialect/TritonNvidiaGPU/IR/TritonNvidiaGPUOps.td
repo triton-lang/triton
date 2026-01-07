@@ -306,6 +306,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
+    UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile

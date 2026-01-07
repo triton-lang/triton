@@ -61,6 +61,10 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
+    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
+        [](triton::gpu::GlobalScratchAllocOp op) {
+          return op.getBackend() != "default";
+        });
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();
@@ -116,7 +120,7 @@ struct ConvertTritonAMDGPUToLLVM
     {
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(
+      mlir::triton::AMD::populateFuncOpConversionPattern(
           typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);

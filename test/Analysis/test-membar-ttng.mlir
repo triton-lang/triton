@@ -25,7 +25,7 @@ tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 18944 : i32} {
 // CHECK-LABEL: tma_special_cases
-tt.func @tma_special_cases(%arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>) -> (tensor<256x64xf16, #blocked>){
+tt.func @tma_special_cases(%arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>, %arg2: !tt.tensordesc<tensor<1x64xf16, #shared>>) -> (tensor<256x64xf16, #blocked>){
   %true = arith.constant 1 : i1
   %cx = arith.constant dense<1> : tensor<32xi32>
   %c0 = arith.constant 0 : i32
@@ -70,7 +70,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>) -
   // CHECK-NEXT: ttng.wait_barrier
   %view = ttg.memdesc_subslice %alloc [0, 0]  : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
   ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.async_tma_gather %arg1[%cx, %c0] %view, %barrier, %true : !tt.tensordesc<tensor<256x64xf16, #shared>>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>, i1
+  ttng.async_tma_gather %arg2[%cx, %c0] %view, %barrier, %true : !tt.tensordesc<tensor<1x64xf16, #shared>>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>, i1
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
   // CHECK-NEXT: ttg.local_barrier

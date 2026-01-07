@@ -599,7 +599,9 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
                            "shared memory descriptor ")
            << srcTy << " to tensor memory descriptor " << dstTy;
   }
-  assert(!loader->getDescriptor().transposed);
+  if (loader->getDescriptor().transposed)
+    return op->emitOpError("does not support transposed shared memory layout");
+
   bool twoCTAs = getModuleTwoCTAs(op);
   // Check correct lbo/sbo along the multicast
   auto strideRow = cvt.getBasis(kRow, llvm::Log2_32(8), kOffset);
@@ -615,8 +617,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
     auto desc = loader->smemLoad(0, col, rewriter, loc);
     auto tmemAddr =
-        b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32),
-              /*disjoint=*/true);
+        b.add(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32));
     createTcgen05Cp(rewriter, loc, tmemAddr, desc, pred, atom, twoCTAs);
   }
   return success();

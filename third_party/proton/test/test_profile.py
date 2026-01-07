@@ -142,8 +142,10 @@ def test_cudagraph(tmp_path: pathlib.Path):
             assert child["frame"]["name"] == "<captured_at>"
             # 0...9 iterations
             assert len(child["children"]) == 10
-            # check one of the iterations
-            assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+            # check all iterations
+            for i in range(10):
+                assert child["children"][i]["frame"]["name"] == f"iter_{i}"
+                assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
@@ -227,11 +229,17 @@ def test_get_data(tmp_path: pathlib.Path):
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
     ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
 
-    proton.finalize()
     assert len(foo_frame) == 1
     assert int(foo_frame["count"].values[0]) == 2
     assert len(ones_frame) == 1
     assert int(ones_frame["count"].values[0]) == 1
+
+    import msgpack
+    msgpack_data = proton.get_data_msgpack(session)
+    database_unpacked = msgpack.loads(msgpack_data)
+    assert database == database_unpacked
+
+    proton.finalize()
 
 
 def test_clear_data(tmp_path: pathlib.Path):
@@ -724,10 +732,13 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40
+    assert foo_test_frame["metrics"]["count"] == 10
     assert scope_a_frame is not None
     assert scope_a_frame["metrics"]["bytes"] == 160
+    assert "count" not in scope_a_frame["metrics"]
     assert scope_b_frame is not None
     assert scope_b_frame["metrics"]["sum"] == 40.0
+    assert "count" not in scope_b_frame["metrics"]
 
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
