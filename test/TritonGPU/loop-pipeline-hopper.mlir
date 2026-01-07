@@ -786,13 +786,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   ttg.local_load
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   ttg.async_copy_global_to_local
@@ -854,13 +850,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK: scf.for
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
@@ -948,21 +940,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // CHECK:   ttg.local_load
     // CHECK:   ttg.local_load
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   ttg.async_copy_global_to_local
