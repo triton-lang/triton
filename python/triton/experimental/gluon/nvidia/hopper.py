@@ -41,6 +41,7 @@ class TensorDescriptor:
         assert self.block_shape[-1] >= min_block, \
             f"Expected block_shape[-1] to be at least {min_block} but got {self.block_shape[-1]}"
         if self.layout.fp4_padded:
+            assert self.base.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"
             for stride in self.strides[:-1]:
                 assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
             assert tl.target_info.cuda_capability_geq(10, 0), "fp4_padded requires blackwell or newer"
