@@ -1,5 +1,12 @@
 import pytest
 import tempfile
+import sys
+import os
+
+try:
+    import patch_triton
+except ImportError:
+    pass
 
 
 def pytest_addoption(parser):

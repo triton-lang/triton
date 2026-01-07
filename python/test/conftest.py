@@ -1,6 +1,9 @@
 import pytest
 import tempfile
-
+try:
+    import patch_triton
+except ImportError:
+    pass
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
