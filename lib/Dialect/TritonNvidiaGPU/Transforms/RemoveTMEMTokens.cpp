@@ -18,6 +18,22 @@ void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
                        op->getResultTypes(), op->getAttrs());
   state.types.erase(std::next(state.types.begin(), resultIdx));
   OpBuilder b(op);
+
+  if (auto segmentSizes =
+          op->getAttrOfType<DenseI32ArrayAttr>("resultSegmentSizes")) {
+    // Update resultSegmentSizes attribute if it exists
+    SmallVector<int32_t> newSegmentSizes(segmentSizes.asArrayRef());
+    int pos = 0;
+    for (auto &segmentSize : newSegmentSizes) {
+      if (pos == resultIdx) {
+        segmentSize = 0;
+        break;
+      }
+      pos += segmentSize;
+    }
+    state.attributes.set("resultSegmentSizes",
+                         b.getDenseI32ArrayAttr(newSegmentSizes));
+  }
   Operation *newOp = b.create(state);
   SmallVector<Value> replacements = newOp->getResults();
   replacements.insert(std::next(replacements.begin(), resultIdx), replacement);
@@ -39,33 +55,8 @@ void removeTMEMToken(Operation *op, Value dummy) {
       eraseResult(alloc, 1, dummy);
   } else if (auto load = dyn_cast<TMEMLoadOp>(op)) {
     load.getDepMutable().clear();
-    if (load.getToken()) {
-      // Special case TMEMLoadOp: clone with result and red
-      OpBuilder b(op);
-      TMEMLoadReduceModifierAttr redOp = nullptr;
-      BoolAttr abs = nullptr, NaN = nullptr;
-      Type redTy = Type();
-
-      TMEMLoadOp newLoad;
-      if (load.getRed()) {
-        redTy = load.getRed().getType();
-        TMEMLoadReduceModifierAttr::get(b.getContext(),
-                                        load.getRedOp().value());
-        if (load.getAbs())
-          abs = b.getBoolAttr(load.getAbs().value());
-        if (load.getNaN())
-          NaN = b.getBoolAttr(load.getNaN().value());
-      }
-      newLoad = TMEMLoadOp::create(b, load.getLoc(), load.getResult().getType(),
-                                   Type(), redTy, load.getSrc(), Value(), redOp,
-                                   abs, NaN);
-
-      load.getToken().replaceAllUsesWith(dummy);
-      load.getResult().replaceAllUsesWith(newLoad.getResult());
-      if (load.getRed())
-        load.getRed().replaceAllUsesWith(newLoad.getRed());
-      load->erase();
-    }
+    if (load.getToken())
+      eraseResult(load, 1, dummy);
   }
 }
 
