@@ -943,9 +943,9 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier
     // CHECK-NOT: ttg.barrier
-    gpu.barrier
+    ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
   // CHECK-NEXT: () -> ()

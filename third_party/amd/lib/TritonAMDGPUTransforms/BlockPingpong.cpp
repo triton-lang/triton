@@ -508,7 +508,7 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
 // There are multiple guards at the boundary of each cluster.
 // (1) sched.barrier : with mask0 to prevent compiler backed from reordering
 //  instructions across the boundary
-// (2) gpu.barrier : ensures asymmetric synchronization at each point
+// (2) ttg.barrier : ensures asymmetric synchronization at each point
 // (3) setprio (1->0) : in order to avoid incoming warp overtaking resource
 //  while the other warp is actively using it.
 //
@@ -605,7 +605,7 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[1]);
   // The first cluster just fits into the two cluster pingpong and cannot
-  // include wait of the local_load inserted by the gpu.barrier, using s.barrier
+  // include wait of the local_load inserted by the ttg.barrier, using s.barrier
   // instead. backend will schedule the local memory fences later in the dot0
   // cluster.
   appendOp(ROCDL::SBarrierOp::create(builder, loc));

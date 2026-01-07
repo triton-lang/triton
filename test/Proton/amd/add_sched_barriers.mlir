@@ -46,7 +46,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: proton_gpu.read_counter
   // CHECK: proton_gpu.circular_store
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local|global_read|global_write
   // CHECK: proton_gpu.finalize
   // CHECK: llvm.return
     %c4 = arith.constant 4 : index
@@ -72,7 +72,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     proton_gpu.circular_store start %2, %5 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
     %6 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %2, %6 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
-    gpu.barrier
+    ttg.barrier local|global_read|global_write
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
     llvm.return
   }
