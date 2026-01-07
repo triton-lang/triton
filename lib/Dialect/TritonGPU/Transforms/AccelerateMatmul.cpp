@@ -41,7 +41,7 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   } else if (computeCapability < 100) {
     versionsSupported = {3, 2};
   } else if (computeCapability < 120) {
-    // Does not include consumer Blackwell (sm120)
+    // Exclude consumer Blackwell (sm120)
     versionsSupported = {5, 2};
   } else if (computeCapability < 130) {
     versionsSupported = {2};
