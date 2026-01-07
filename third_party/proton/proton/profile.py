@@ -55,7 +55,9 @@ def start(
     backend: Optional[str] = None,
     mode: Optional[Union[str, BaseMode]] = None,
     hook: Optional[str] = None,
-) -> Optional[int]:
+    hook_include: Optional[str] = None,
+    hook_exclude: Optional[str] = None,
+):
     """
     Start profiling with the given name and backend.
 
@@ -112,7 +114,14 @@ def start(
     session = libproton.start(name, context, data, backend, mode_str)
 
     if hook == "triton":
-        HookManager.register(LaunchHook(), session)
+        # Configure kernel filter for launch_metadata evaluation/recording.
+        # - hook_include/exclude are regexes over the compiled kernel name.
+        # - if not provided, we fall back to env vars for convenience.
+        hook_include = getenv("TRITON_PROTON_LAUNCH_METADATA_INCLUDE", None) if hook_include is None else hook_include
+        hook_exclude = getenv("TRITON_PROTON_LAUNCH_METADATA_EXCLUDE", None) if hook_exclude is None else hook_exclude
+        launch_hook = LaunchHook()
+        launch_hook.configure(include=hook_include, exclude=hook_exclude)
+        HookManager.register(launch_hook, session)
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)
 
