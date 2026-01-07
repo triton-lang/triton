@@ -779,7 +779,7 @@ public:
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
     auto CGALayout = getCGALayout(oldRetType.getEncoding());
-    if ((computeCapability) / 10 < 10 || (computeCapability) / 10 > 11)
+    if (computeCapability < 100 || computeCapability >= 120)
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();
