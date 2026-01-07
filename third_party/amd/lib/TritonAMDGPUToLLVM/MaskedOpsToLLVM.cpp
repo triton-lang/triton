@@ -9,6 +9,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <tuple>
 
@@ -20,22 +21,54 @@ namespace {
 class ConvertMaskedLoadOp
     : public OpRewritePattern<triton::amdgpu::MaskedLoadOp> {
 public:
-  using OpRewritePattern::OpRewritePattern;
+  ConvertMaskedLoadOp(MLIRContext *context, const AMD::TargetInfo &targetInfo)
+      : OpRewritePattern(context), targetInfo(targetInfo) {}
 
   LogicalResult matchAndRewrite(triton::amdgpu::MaskedLoadOp loadOp,
                                 PatternRewriter &rewriter) const override {
     auto loc = loadOp.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
     auto elemTy = loadOp.getResult().getType();
     auto ptr = loadOp.getPtr();
     auto mask = loadOp.getMask();
     auto falseVal = loadOp.getFalseVal();
+    auto multicastMask = loadOp.getMulticastMask();
+    auto cacheMod = loadOp.getCache();
 
     bool volatileFlag, nonTmpFlag;
     std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
-            loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
+            cacheMod, mlir::LLVM::AMD::MemoryOp::Load);
 
-    auto createLoadWithAttrs = [&](Location loadLoc) -> LLVM::LoadOp {
+    auto createLoadWithAttrs = [&](Location loadLoc) -> Value {
+      int vecBits = 0;
+      if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
+        vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+      } else {
+        vecBits = elemTy.getIntOrFloatBitWidth();
+      }
+      assert(vecBits != 0);
+      // We can only multicast for 32, 64, 128 bit load size (hw limitation)
+      if (multicastMask && targetInfo.supportsClusterLoadBitWidth(vecBits)) {
+        std::string intrinsic =
+            "llvm.amdgcn.cluster.load.b" + std::to_string(vecBits);
+        auto cacheModBits = LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            cacheMod, true, targetInfo);
+        // The intrinsics only works with int32 or vec of int32 for >32bit
+        Type resTy = i32_ty;
+        if (vecBits > 32) {
+          resTy = vec_ty(i32_ty, vecBits / 32);
+        }
+        auto clusterLoadOp = LLVM::createLLVMIntrinsicCallOp(
+            rewriter, loc, intrinsic, {resTy},
+            {ptr, b.i32_val(cacheModBits), multicastMask});
+        return b.bitcast(clusterLoadOp->getResult(0), elemTy);
+      } else if (multicastMask) {
+        loadOp.emitRemark()
+            << "Multicast with bit width " << vecBits << " is not supported on "
+            << targetInfo.getArch() << " falling back to regular load";
+      }
+      // Emit a regular load
       auto load =
           LLVM::LoadOp::create(rewriter, loadLoc, elemTy, ptr, /*alignment*/ 0,
                                volatileFlag, nonTmpFlag);
@@ -48,8 +81,8 @@ public:
     bool useDirectLoad = mlir::matchPattern(mask, mlir::m_One());
 
     if (useDirectLoad) {
-      auto llvmLoadOp = createLoadWithAttrs(loc);
-      rewriter.replaceOp(loadOp, llvmLoadOp.getResult());
+      auto loadResult = createLoadWithAttrs(loc);
+      rewriter.replaceOp(loadOp, loadResult);
       return success();
     }
 
@@ -68,14 +101,16 @@ public:
     // LLVM::LoadOp | 0         | 0       | (ca) global load
     //              | 0/1       | 1       | (cg) global load nt
     //              | 1         | 0       | (cv) flat load sc0 sc1
-    auto llvmLoadOp = createLoadWithAttrs(loc);
-    LLVM::BrOp::create(rewriter, loc, ValueRange{llvmLoadOp->getResult(0)},
-                       afterLoad);
+    auto loadResult = createLoadWithAttrs(loc);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{loadResult}, afterLoad);
 
     rewriter.replaceOp(loadOp, afterLoad->getArgument(0));
 
     return success();
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
 class ConvertMaskedStoreOp
@@ -144,8 +179,9 @@ public:
 
 namespace mlir::triton::AMD {
 
-void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns) {
-  patterns.add<ConvertMaskedLoadOp>(patterns.getContext());
+void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns,
+                                     const TargetInfo &targetInfo) {
+  patterns.add<ConvertMaskedLoadOp>(patterns.getContext(), targetInfo);
   patterns.add<ConvertMaskedStoreOp>(patterns.getContext());
 }
 } // namespace mlir::triton::AMD

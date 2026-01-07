@@ -27,11 +27,11 @@ struct MakeTensorDescOpConversion
 
     auto tensorDescTy = result.getType();
     auto blockTy = tensorDescTy.getBlockType();
-    auto enc = blockTy.getEncoding();
-    if (!enc) {
+    auto sharedEnc = blockTy.getEncoding();
+    if (!sharedEnc) {
       return rewriter.notifyMatchFailure(op, "Descriptor has no layout.");
     }
-    auto paddedEnc = llvm::dyn_cast<PaddedSharedEncodingAttr>(enc);
+    auto paddedEnc = llvm::dyn_cast<PaddedSharedEncodingAttr>(sharedEnc);
 
     unsigned padInterval = 0;
     unsigned padAmount = 0;
@@ -46,15 +46,17 @@ struct MakeTensorDescOpConversion
 
     Type elementType =
         getTypeConverter()->convertType(blockTy.getElementType());
-    SmallVector<int64_t> blockShape = llvm::to_vector(blockTy.getShape());
+    SmallVector<int64_t> blockShape = to_vector(blockTy.getShape());
     int numWarps = lookupNumWarps(op);
+    auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
 
-    auto [group0, group1] = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, blockShape, numWarps,
+    // Create TDM descriptor for 2D-5D tensors
+    auto tdmDesc = LLVM::AMD::createTDMDescriptor(
+        rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
         padInterval, padAmount, tensorShape, tensorStride, basePtr);
-    SmallVector<Value> groups;
-    llvm::append_range(groups, group0);
-    llvm::append_range(groups, group1);
+
+    SmallVector<Value> groups = tdmDesc.getAllGroups();
+
     auto desc =
         packLLElements(loc, getTypeConverter(), groups, rewriter, tensorDescTy);
 

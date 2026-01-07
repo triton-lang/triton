@@ -93,6 +93,12 @@ public:
 
   size_t getContextDepth(size_t sessionId);
 
+  std::vector<uint8_t> getDataMsgPack(size_t sessionId);
+
+  std::string getData(size_t sessionId);
+
+  void clearData(size_t sessionId);
+
   void enterScope(const Scope &scope);
 
   void exitScope(const Scope &scope);
@@ -114,7 +120,11 @@ public:
                           uint8_t *buffer, size_t size);
 
   void addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics);
+                  const std::map<std::string, MetricValueType> &scalarMetrics,
+                  const std::map<std::string, TensorMetric> &tensorMetrics);
+
+  void setMetricKernels(void *tensorMetricKernel, void *scalarMetricKernel,
+                        void *stream);
 
   void setState(std::optional<Context> context);
 
@@ -214,6 +224,8 @@ private:
   // {instrumentation, active count}
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
+  // {metric, active count}
+  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
   // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

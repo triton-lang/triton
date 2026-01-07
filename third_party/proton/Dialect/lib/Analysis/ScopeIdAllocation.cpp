@@ -162,17 +162,10 @@ void ScopeIdAllocation::reachability() {
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
 
   std::deque<VirtualBlock> virtualBlockList;
-  funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Seed the worklist with entry blocks of regions that are
-    // isolated-from-above.
-    if (block->isEntryBlock() &&
-        !isa<RegionBranchOpInterface>(block->getParentOp()))
-      virtualBlockList.emplace_back(block, Block::iterator());
-  });
+  virtualBlockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
 
-  DenseSet<VirtualBlock> exitVirtualBlocks;
   while (!virtualBlockList.empty()) {
-    VirtualBlock &virtualBlock = virtualBlockList.front();
+    VirtualBlock virtualBlock = virtualBlockList.front();
     virtualBlockList.pop_front();
     // Evaluate the transfer function for this block starting from the cached
     // input state.
@@ -195,9 +188,6 @@ void ScopeIdAllocation::reachability() {
           inputBlockInfo.erase(scopeId);
         }
       }
-    }
-    if (successors.empty()) {
-      exitVirtualBlocks.insert(virtualBlock);
     }
     // Skip successor propagation if the output state is unchanged.
     if (outputBlockInfoMap.count(virtualBlock) &&
@@ -246,6 +236,7 @@ void ScopeIdAllocation::reachability() {
 void ScopeIdAllocation::dominance() {
   // Stage 3: derive scope parentage and verify dominance constraints.
   mlir::DominanceInfo domInfo(funcOp);
+  mlir::PostDominanceInfo postDomInfo(funcOp);
   llvm::DenseMap<ScopeId, Operation *> startRecordMap;
   llvm::DenseMap<ScopeId, Operation *> endRecordMap;
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
@@ -281,7 +272,7 @@ void ScopeIdAllocation::dominance() {
       auto parentScopeId = opToIdMap.lookup(parentStartOp);
       auto parentEndOp = endRecordMap.lookup(parentScopeId);
       if (domInfo.dominates(parentStartOp, startOp) &&
-          domInfo.dominates(endOp, parentEndOp)) {
+          postDomInfo.postDominates(parentEndOp, endOp)) {
         auto parentId = opToIdMap.lookup(parentStartOp);
         auto childId = opToIdMap.lookup(startOp);
         scopeParentIds.push_back({childId, parentId});

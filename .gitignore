@@ -37,11 +37,11 @@ python/triton/tools/extra
 # Proton
 python/triton/profiler
 
-# Pytest
-pytest.ini
-
 # Instrumentation
 python/triton/instrumentation
+
+# MLIR Plugin
+python/triton/plugins
 
 # Python caches
 __pycache__/

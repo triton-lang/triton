@@ -108,10 +108,15 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
           record.erase();
         });
 
-        // Save warp-level context after profiling.
+        // Finalize and save warp-level context before each warp returns.
         partition.walk([&](triton::gpu::WarpReturnOp ret) {
           builder.setInsertionPoint(ret);
-          gpu::SaveCtxOp::create(builder, loc, newSegment, profileMemArg);
+          // TODO(Keren): This is not ideal if we have multiple warp specialize
+          // ops in a program. In that case, we should use SaveCtxOp here at
+          // warp return and only write back data in FinalizeOp at the end of
+          // kernel. Active warps in the default warp group can write data on
+          // behalf of inactive warps in other warp groups.
+          gpu::FinalizeOp::create(builder, loc, newSegment, profileMemArg);
         });
       }
     }
@@ -150,8 +155,8 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
   int allocSharedMemSize = numSharedEntries * bytesPerEntry;
 
-  int estimatedOccupany = maxSharedMemSize / std::max(1, sharedMemUsed);
-  if (estimatedOccupany <= 1)
+  int estimatedOccupancy = maxSharedMemSize / std::max(1, sharedMemUsed);
+  if (estimatedOccupancy <= 1)
     return allocSharedMemSize;
 
   int maxAllocSharedMemSize = maxSharedMemSize * maxSharedMemRatio;
@@ -213,8 +218,11 @@ public:
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    int allocSharedMemSize =
-        getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
+    int numCTAs = triton::gpu::lookupNumCTAs(func);
+    auto maxSharedMemSizePerCTA = maxSharedMemSize / numCTAs;
+
+    int allocSharedMemSize = getAllocSharedMemSize(maxSharedMemSizePerCTA,
+                                                   sharedMemUsed, segmentNum);
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
@@ -238,7 +246,7 @@ public:
       if (bufferSize > 0)
         allocBufferSize = bufferSize.getValue();
       else
-        allocBufferSize = 16384 * segmentNum;
+        allocBufferSize = 16384 * segmentNum; // 16KB per profiling unit
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
@@ -277,11 +285,10 @@ public:
     Value segment;
     Value buffer;
     if (bufferType == gpu::BufferType::SHARED) {
-      auto ctaLayout = triton::gpu::CTALayoutAttr::get(
-          context, /*CTAsPerCGA=*/{1},
-          /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+      auto cgaLayout =
+          triton::gpu::CGAEncodingAttr::get1DLayout(context, numCTAs);
       auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
-          context, 1, 1, 1, {0}, ctaLayout);
+          context, 1, 1, 1, {0}, cgaLayout);
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(

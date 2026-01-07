@@ -42,8 +42,16 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
-def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
-  let summary = "async wait";
+def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
+  let summary = "Ensure all specified async_copy_* operations are complete.";
+  let description = [{
+    The `async_wait` op waits until at most "num" async copy groups are outstanding without synchronising CTA execution.
+    It takes zero or more `asyncToken` plus an integer `num` that specifies how many async copy groups can remain
+    outstanding after the `async_wait` op is completed. `num = 0` waits until all groups of async copies are complete.
+
+    This operation does not provide any syncronisation in the CTA, if syncronisation is needed use `ttg.local_barrier`
+    in addition to this operation.
+  }];
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
 
@@ -59,8 +67,12 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 }
 
 def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
-  let summary = "async commit group";
-
+  let summary = "Commit pending async copies into an async group that can be waited on";
+  let description = [{
+    Closes the current batch of async_copy_* operations
+    and allows for them to be waited on with `ttg.async_wait`.
+    This is required in order to ensure async copy operations can be waited on.
+  }];
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
@@ -80,14 +92,21 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   OptionalTypesMatchWith<"infer other type from src type",
                  "src", "other", "getPointeeType($_self)">,
 ]> {
-  let summary = "copy data from global memory to local memory asynchronously";
+  let summary = "Copy data from global memory to local memory asynchronously";
 
   let hasVerifier = 1;
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
-    This is analogue to tt.load except the data are copied to local memory pointed
+    This is analogue to `tt.load` except the data are copied to local memory pointed
     to by the memory descriptor instead of a distributed tensor. The rest of the
-    operands are the same as tt.load.
+    operands are the same as `tt.load`.
+    Contiguity is the maximum number of elements that can be loaded in a single vector with
+    the given layout and mask.
+    This allows op to use `async_copy_global_to_local` even if the alignment cannot be proven based on IR.
+
+    The data will only be available in local memory after `ttg.async_wait` is issued to wait on the
+    completion of `async_copy_global_to_local`. The async copy operations must be committed using
+    `ttg.async_commit_group` to close the batch and allow for them to be waited on.
   }];
 
   let arguments = (ins
@@ -97,7 +116,8 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
 
   let results = (outs TTG_AsyncToken:$token);
@@ -124,7 +144,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     attr-dict `:` type($src) `->` type($result)
   }];
 }
-
 
 // Allocate shared memory
 def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -244,6 +263,7 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
 
   let results = (outs TTG_MemDescType:$result);
 
+  let hasFolder = 1;
   let hasVerifier = 1;
 }
 
@@ -523,10 +543,13 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let hasCanonicalizeMethod = 1;
 }
 
-def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
-  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
-  Terminator, HasParent<"WarpSpecializeOp">
-]> {
+def TTG_WarpSpecializePartitionsOp
+    : TTG_Op<"warp_specialize.partitions",
+             [IsolatedFromAbove, RecursiveMemoryEffects,
+              RecursivelySpeculatable, Terminator,
+              HasParent<"WarpSpecializeOp">,
+              DeclareOpInterfaceMethods<
+                  RegionBranchOpInterface, ["getEntrySuccessorOperands"]>]> {
   let summary = "container op for `ttg.warp_specialize`";
   let description = [{
     Because MLIR requires entire operations be isolated from above, this op
@@ -590,6 +613,23 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
 
     A `local_barrier` operation does not provide syncronization guarantees on global memory.
   }];
+  let assemblyFormat = "attr-dict";
+}
+
+def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
+  let summary = "Return the GPU warp ID";
+
+  let description = [{
+    This operation returns the GPU warp ID. This can translate to reading
+    hardware registers if there are, or just thread ID divided by warp size.
+
+    The `omitUniformHint` attribute is indicating in NVIDIA backend whether to
+    omit emitting nvvm.shfl.sync idx 0 for LLVM.
+  }];
+
+  let arguments = (ins UnitAttr:$omitUniformHint);
+  let results = (outs I32:$result);
+
   let assemblyFormat = "attr-dict";
 }
 

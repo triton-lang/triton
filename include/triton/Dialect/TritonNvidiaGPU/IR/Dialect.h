@@ -107,8 +107,8 @@ inline const char *getOpShape(TMemAccessAtom atom) {
   llvm_unreachable("Unknown TMemAccessAtom");
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked);
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp);
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
@@ -130,12 +130,12 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 
 gpu::DistributedEncodingTrait
 getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CTALayoutAttr ctaLayout);
+                            gpu::CGAEncodingAttr cgaLayout);
 
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps,
-                                gpu::CTALayoutAttr ctaLayout);
+                                gpu::CGAEncodingAttr cgaLayout);
 
 } // namespace mlir::triton::nvidia_gpu
 

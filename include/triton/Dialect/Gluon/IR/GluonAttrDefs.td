@@ -12,4 +12,12 @@ def Gluon_AutoEncodingAttr : AttrDef<Gluon_Dialect, "AutoEncoding"> {
   }];
 }
 
+def Gluon_CoalescedEncodingAttr : AttrDef<Gluon_Dialect, "CoalescedEncoding"> {
+  let mnemonic = "coalesced_encoding";
+  let attrName = "gluon.coalesced_encoding";
+  let description = [{
+    An encoding that is optimized for load/store performance.
+  }];
+}
+
 #endif

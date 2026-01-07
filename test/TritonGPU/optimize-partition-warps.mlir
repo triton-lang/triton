@@ -9,7 +9,7 @@
 #blocked_tmem = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 2], order = [0, 1]}>
 #shared_1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
-#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #smem = #ttg.shared_memory

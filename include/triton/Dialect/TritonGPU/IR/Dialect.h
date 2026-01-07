@@ -63,6 +63,7 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
@@ -209,7 +210,7 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
-CTALayoutAttr getCTALayout(Attribute layout);
+CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -293,6 +294,15 @@ bool isInnermostContiguous(MemDescType type, unsigned numElems);
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
+FailureOr<SmallVector<int64_t>>
+getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                 int swizzleBytes, bool fp4Padded, bool isTransposed,
+                 bool packedSize, function_ref<InFlightDiagnostic()> emitError);
+SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
+                                      int elementBitWidth, int swizzleBytes,
+                                      bool fp4Padded, bool isTransposed,
+                                      bool packedSize);
+
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
@@ -303,6 +313,8 @@ SetVector<int> getPartitionIds(Operation *op);
 SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
 SetVector<int> getPartitionIds(OpOperand *use);
 bool hasPartition(Operation *op);
+bool hasWarpSpecializeTag(Operation *op);
+std::optional<int> getWarpSpecializeTag(Operation *op);
 
 } // namespace mlir::triton::gpu
 

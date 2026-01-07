@@ -61,6 +61,10 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 }
 } // namespace
 
+llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
+  return llvm::AMDGPU::getIsaVersion(arch);
+}
+
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
@@ -97,10 +101,14 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
-  // be zero. Whoever calling into this should make sure the whole program does
-  // not try to utilize CTA clusters.
-  return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+  if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
+    return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+
+  // We dispatch only along x; return the workgroup id x
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                         "llvm.amdgcn.cluster.workgroup.id.x",
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -140,9 +148,8 @@ TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
     return std::nullopt;
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
   unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
-  unsigned needContigReg = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
-                            needContigReg};
+  unsigned tileSize = instBitWidth / bitWidth;
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -154,8 +161,9 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   }
   Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                             rewriter.getZeroAttr(elemTy));
-  bool addAliasGroup = localLoadOp && isSyncedViaAsyncWait(localLoadOp);
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+  bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
+                       isSyncedViaAsyncWait(localLoadOp);
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 
@@ -316,6 +324,29 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
   return true;
 }
 
+static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
+                             SmallVector<Value> &acc, triton::ReduceOp op,
+                             unsigned numLaneToReduce, unsigned interleave) {
+  Operation *reduxOp = op.getSingleCombiner();
+  if (!reduxOp)
+    return false;
+
+  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
+  if (!mfma16Case)
+    return false;
+
+  Value val = acc[0];
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  if (bits > 32)
+    return false;
+
+  StringRef intrinsic = "llvm.amdgcn.permlane16.swap";
+  for (auto i = 0; i < acc.size(); i++) {
+    acc[i] = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
+  }
+  return true;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -324,6 +355,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
       warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+    return true;
+  if ((getISAFamily() == ISAFamily::GFX1250) &&
+      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
@@ -610,12 +644,7 @@ bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return true;
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return false;
   default:
-    llvm::report_fatal_error(
-        "Unsupported architecture for direct to lds loads");
     return false;
   }
 }
@@ -646,6 +675,24 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
     break;
   }
 
+  return false;
+}
+
+bool TargetInfo::supportsMultiCTALaunch() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({32, 64, 128}, biwWidth);
+  }
+  return false;
+}
+
+bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+  if (getISAFamily() == ISAFamily::GFX1250) {
+    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
+  }
   return false;
 }
 

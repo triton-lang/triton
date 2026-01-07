@@ -64,7 +64,6 @@ void Session::activate() {
 void Session::deactivate() {
   profiler->flush();
   profiler->unregisterData(data.get());
-  data->clear();
 }
 
 void Session::finalize(const std::string &outputFormat) {
@@ -135,6 +134,7 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<InstrumentationInterface>(sessionId,
                                               instrumentationInterfaceCounts);
   registerInterface<ContextSource>(sessionId, contextSourceCounts);
+  registerInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {
@@ -149,12 +149,24 @@ void SessionManager::deActivateSessionImpl(size_t sessionId) {
   unregisterInterface<InstrumentationInterface>(sessionId,
                                                 instrumentationInterfaceCounts);
   unregisterInterface<ContextSource>(sessionId, contextSourceCounts);
+  unregisterInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
 void SessionManager::removeSession(size_t sessionId) {
   if (!hasSession(sessionId)) {
     return;
   }
+  // Context source can be safely cleared here but not deactivation.
+  // Context source of each session is still sort of active after deactivation,
+  // For example, if we have
+  // ```Python
+  //   proton.deactivate_session(session0)
+  //   with proton.scope("A"):
+  //     proton.activate_session(session0)
+  // ```
+  // session0 should be aware of scope "A"'s enter and exit, otherwise the
+  // context stack will be imbalanced.
+  sessions[sessionId]->contextSource->clear();
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
   sessionActive.erase(sessionId);
@@ -269,13 +281,21 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
 }
 
 void SessionManager::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
+    const std::map<std::string, TensorMetric> &tensorMetrics) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto [sessionId, active] : sessionActive) {
-    if (active) {
-      sessions[sessionId]->data->addMetrics(scopeId, metrics);
-    }
-  }
+  executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
+    metricInterface->addMetrics(scopeId, scalarMetrics, tensorMetrics);
+  });
+}
+
+void SessionManager::setMetricKernels(void *tensorMetricKernel,
+                                      void *scalarMetricKernel, void *stream) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
+    metricInterface->setMetricKernels(tensorMetricKernel, scalarMetricKernel,
+                                      stream);
+  });
 }
 
 void SessionManager::setState(std::optional<Context> context) {
@@ -292,6 +312,56 @@ size_t SessionManager::getContextDepth(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   return sessions[sessionId]->getContextDepth();
+}
+
+std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId) {
+  // TODO: avoid duplicate code with getData()
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot get data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
+  }
+  return treeData->toMsgPack();
+}
+
+std::string SessionManager::getData(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot get data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
+  }
+  return treeData->toJsonString();
+}
+
+void SessionManager::clearData(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot clear data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  sessions[sessionId]->data->clear();
 }
 
 } // namespace proton

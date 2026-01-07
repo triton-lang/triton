@@ -352,10 +352,9 @@ void CuptiPCSampling::start(CUcontext context) {
 }
 
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            uint64_t externId, bool isAPI) {
+                                            const DataToEntryMap &dataToEntry) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
-  auto dataSet = profiler.getDataSet();
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer
   bool firstRound = true;
@@ -381,15 +380,12 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw std::runtime_error("[PROTON] Invalid stall reason index");
-        for (auto *data : dataSet) {
-          auto scopeId = externId;
-          if (isAPI)
-            scopeId = data->addOp(externId, lineInfo.functionName);
+        for (auto [data, entry] : dataToEntry) {
           if (lineInfo.fileName.size())
-            scopeId = data->addOp(
-                scopeId, formatFileLineFunction(
-                             lineInfo.dirName + "/" + lineInfo.fileName,
-                             lineInfo.lineNumber, lineInfo.functionName));
+            entry = data->addOp(
+                entry.id, {formatFileLineFunction(
+                              lineInfo.dirName + "/" + lineInfo.fileName,
+                              lineInfo.lineNumber, lineInfo.functionName)});
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);
@@ -399,9 +395,8 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                   stallReason->pcSamplingStallReasonIndex)
                   ? 0
                   : samples;
-          auto metric = std::make_shared<PCSamplingMetric>(metricKind, samples,
-                                                           stalledSamples);
-          data->addMetric(scopeId, metric);
+          entry.upsertMetric(std::make_unique<PCSamplingMetric>(
+              metricKind, samples, stalledSamples));
         }
       }
     }
@@ -413,7 +408,8 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   }
 }
 
-void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
+void CuptiPCSampling::stop(CUcontext context,
+                           const DataToEntryMap &dataToEntry) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
   doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
@@ -422,7 +418,7 @@ void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
                       auto *configureData = getConfigureData(contextId);
                       stopPCSampling(context);
                       pcSamplingStarted = false;
-                      processPCSamplingData(configureData, externId, isAPI);
+                      processPCSamplingData(configureData, dataToEntry);
                     });
 }
 

@@ -188,7 +188,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
     its current phase.
 
     This lowers a waitloop using PTX instruction
-    mbarrier.try_wait.parity.shared.b64.
+    mbarrier.try_wait.parity.shared::cta.b64.
 
     Accepts optional list of memory. If present, it is assumed that any of the
     dependencies may be accessed until the barrier completes.
@@ -291,6 +291,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
+    UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
@@ -324,6 +325,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
     $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
@@ -401,7 +403,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
   let hasVerifier = 1;
 }
 
-def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
+def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
   let summary = "wait until all the inputs are read.";
   let arguments = (ins I32Attr:$pendings);
   let description = [{

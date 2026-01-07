@@ -6,7 +6,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -302,7 +301,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::optional<int> getWarpGroupStartThreadId(Block *block) {
+std::optional<int> getWarpGroupStartWarpId(Block *block) {
   using namespace triton::gpu;
 
   // Look for an enclosing `ttg.warp_specialize` op.
@@ -318,9 +317,19 @@ std::optional<int> getWarpGroupStartThreadId(Block *block) {
   std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
   assert(startIds && "cannot get warp group ID before warp group allocation");
   int32_t warpStartId = (*startIds)[idx];
-  int threadsPerWarp =
-      TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
-  return warpStartId * threadsPerWarp;
+  return warpStartId;
+}
+
+std::optional<int> getWarpGroupStartThreadId(Block *block) {
+  using namespace triton::gpu;
+
+  std::optional<int> warpStartId = getWarpGroupStartWarpId(block);
+  if (!warpStartId)
+    return {};
+
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+      block->getParentOp()->getParentOfType<ModuleOp>());
+  return *warpStartId * threadsPerWarp;
 }
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {
@@ -364,7 +373,8 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = b.udiv(tid, warpSizeVal);
+    warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc,
+                                                 /*omitUniformHint=*/true);
   }
 
   return {laneId, warpId};
@@ -1225,8 +1235,6 @@ delinearize(RewriterBase &rewriter, Location loc,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ll = triton::gpu::toLinearLayout(shape, layout);
-  auto linearLayout =
-      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
   int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
   auto isRepresentative = b.true_val();
@@ -1238,6 +1246,8 @@ delinearize(RewriterBase &rewriter, Location loc,
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
   }
 
+  auto linearLayout = triton::gpu::LinearEncodingAttr::get(
+      rewriter.getContext(), std::move(ll));
   auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
   auto shapeDim = linearLayout.basesPerDim(dimName);
   auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
@@ -1553,6 +1563,96 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   Value resultStruct =
       packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
   rewriter.replaceOp(op, {resultStruct});
+}
+
+// Only retain those attributes that are not constructed by
+// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+// attributes.
+void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                          SmallVectorImpl<NamedAttribute> &result) {
+
+  for (const auto &attr : op->getAttrs()) {
+    if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+        attr.getName() == op.getFunctionTypeAttrName() ||
+        attr.getName() == "std.varargs" ||
+        attr.getName() == triton::gpu::AttrNumWarpsName ||
+        (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
+      continue;
+    result.push_back(attr);
+  }
+}
+
+triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
+                           ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo) {
+  // Push back two new arguments that indicate the current pointer to shared
+  // memory and global scratch memory.
+  auto loc = funcOp.getLoc();
+  auto ctx = funcOp->getContext();
+  auto sharedPtrTy =
+      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+  auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+  auto profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+
+  // 1. Modify the function type to add the new arguments.
+  auto funcTy = funcOp.getFunctionType();
+  auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
+  bool isKernel = triton::isKernel(funcOp);
+  if (isKernel && targetInfo.isCuda()) {
+    for (auto i : llvm::seq(amendedInputTy.size())) {
+      if (isa<TensorDescType>(amendedInputTy[i])) {
+        funcOp.setArgAttr(i, "tt.nv_tma_desc",
+                          mlir::IntegerAttr::get(i32_ty, 1));
+      }
+    }
+  }
+  if (!isKernel) {
+    amendedInputTy.push_back(sharedPtrTy);
+  }
+  amendedInputTy.push_back(globalPtrTy);
+  amendedInputTy.push_back(profilePtrTy);
+  auto amendedFuncTy =
+      FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
+  // 2. Modify the argument attributes to add the new argument.
+  SmallVector<NamedAttribute> amendedAttrs;
+  filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+  if (auto argAttrs = funcOp.getAllArgAttrs()) {
+    llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                       argAttrs.end());
+    while (amendedArgAttrs.size() < amendedInputTy.size()) {
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    }
+    amendedAttrs.push_back(rewriter.getNamedAttr(
+        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+  }
+
+  // 3. Add the new arguments to the region
+  auto amendedFuncOp = triton::FuncOp::create(
+      rewriter, funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+  auto &region = funcOp.getBody();
+  if (!isKernel) {
+    region.addArgument(sharedPtrTy, loc);
+  }
+  region.addArgument(globalPtrTy, loc);
+  region.addArgument(profilePtrTy, loc);
+  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                              amendedFuncOp.end());
+  return amendedFuncOp;
+}
+
+void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp) {
+  // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
+  // the pointee datatype information.
+  // This function add back the pointee datatype information to arg attribute.
+  FunctionType fty = funcOp.getFunctionType();
+  for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
+    auto argType = fty.getInput(i);
+    if (auto argPtrType = dyn_cast<triton::PointerType>(argType)) {
+      auto argDType = argPtrType.getPointeeType();
+      llvmFuncOp.setArgAttr(i, "tt.pointee_type",
+                            mlir::TypeAttr::get(argDType));
+    }
+  }
 }
 
 } // namespace mlir

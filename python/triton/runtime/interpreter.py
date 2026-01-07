@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict, Callable
+from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
 import numpy as np
@@ -13,11 +13,15 @@ import dataclasses
 from dataclasses import dataclass
 
 from triton.language.semantic import TritonSemantic
+from triton.runtime.jit import KernelInterface
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
-from .._C.libtriton import interpreter as _interpreter
-from .._C.libtriton import ir as _ir
+from .._C.libtriton import interpreter as _interpreter  # type: ignore
+from .._C.libtriton import ir as _ir  # type: ignore
+from .._utils import _tuple_create
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -28,7 +32,7 @@ class TensorHandle:
         we don't store block_type here because the shape information is already available in the data field
         attr: a dictionary of attributes
     '''
-    data: np.array
+    data: np.ndarray
     dtype: tl.dtype
     attr: Dict = dataclasses.field(default_factory=dict)
 
@@ -66,17 +70,17 @@ class BlockPointerHandle:
     def materialize_pointers(self, boundary_check):
         dtype_tt = self.base.get_element_ty()
         n_bytes = dtype_tt.primitive_bitwidth // 8
-        ptrs = np.broadcast_to(self.base.data, self.block_shape)
+        ptrs_data = np.broadcast_to(self.base.data, self.block_shape)
         masks = np.ones(self.block_shape, dtype=bool)
         for dim in range(len(self.block_shape)):
             bcast_dims = [1] * len(self.block_shape)
             bcast_dims[dim] = self.block_shape[dim]
             off = (self.offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
+            ptrs_data = ptrs_data + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
             if dim in boundary_check:
                 masks = masks & (off < self.shape[dim].data) & (off >= 0)
-        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
-        return ptrs, masks
+        ptrs_handle = TensorHandle(ptrs_data, self.base.dtype.scalar)
+        return ptrs_handle, masks
 
 
 class TensorDescHandle:
@@ -96,8 +100,11 @@ class TensorDescHandle:
         assert len(self.block_shape) == self.ndim
         assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
+        scalar_ty = self.base.dtype.element_ty
+        itemsize = scalar_ty.primitive_bitwidth // 8
         for stride in self.strides[:-1]:
-            assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
+            byte_stride = stride.data.item() * itemsize
+            assert byte_stride % 16 == 0, "stride must be 16-byte aligned"
         assert self.strides[-1].data.item() == 1, "last dim must be contiguous"
 
     def materialize_pointers(self, offsets: List[TensorHandle]):
@@ -106,29 +113,29 @@ class TensorDescHandle:
         itemsize = scalar_ty.primitive_bitwidth // 8
         assert (offsets[-1].data * itemsize) % 16 == 0, "block offset start must be 16-byte aligned"
 
-        ptrs = np.broadcast_to(self.base.data, self.block_shape)
+        ptrs_data = np.broadcast_to(self.base.data, self.block_shape)
         masks = np.ones(self.block_shape, dtype=bool)
         for dim in range(len(self.block_shape)):
             bcast_dims = [1] * len(self.block_shape)
             bcast_dims[dim] = self.block_shape[dim]
             off = (offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (itemsize * off * self.strides[dim].data).astype(np.uint64)
+            ptrs_data = ptrs_data + (itemsize * off * self.strides[dim].data).astype(np.uint64)
             masks = masks & (0 <= off) & (off < self.shape[dim].data)
-        assert ptrs.dtype == np.uint64
-        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
-        return ptrs, masks
+        assert ptrs_data.dtype == np.uint64
+        ptrs_handle = TensorHandle(ptrs_data, self.base.dtype.scalar)
+        return ptrs_handle, masks
 
 
 @dataclass(frozen=True)
 class InterpreterOptions:
-    extern_libs: dict = None
+    extern_libs: Optional[dict] = None
     debug: bool = False
     sanitize_overflow: bool = True
-    arch: str = None
-    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
-    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
+    arch: Optional[str] = None
+    supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
+    deprecated_fp8_dot_operand_dtypes: Tuple[str, ...] = ()
     default_dot_input_precision: str = "tf32"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
+    allowed_dot_input_precisions: Tuple[str, ...] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
 
@@ -825,22 +832,46 @@ class InterpreterBuilder:
             raise TypeError(f"unsupported type {type}")
 
 
-def _patch_attr(obj, name, member, builder):
-    semantic = TritonSemantic(builder)
+_MISSING = object()
+interpreter_builder = InterpreterBuilder()
+interpreter_semantic: TritonSemantic = TritonSemantic(interpreter_builder)
+
+
+class _LangPatchScope:
+    """Tracks patched attributes so they can be restored."""
+
+    def __init__(self) -> None:
+        self._changes: list[tuple[object, str, object]] = []
+
+    def set_attr(self, obj: object, name: str, value: object) -> None:
+        original = getattr(obj, name, _MISSING)
+        self._changes.append((obj, name, original))
+        setattr(obj, name, value)
+
+    def restore(self) -> None:
+        while self._changes:
+            obj, name, original = self._changes.pop()
+            if original is _MISSING:
+                delattr(obj, name)
+            else:
+                setattr(obj, name, original)
+
+
+def _patch_attr(obj, name, member, builder, scope: _LangPatchScope):
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
                                                                 {k: v
                                                                  for k, v in kwargs.items()
-                                                                 if k != "_semantic"}, _semantic=semantic))
-    setattr(obj, name, new_member)
+                                                                 if k != "_semantic"}, _semantic=interpreter_semantic))
+    scope.set_attr(obj, name, new_member)
 
 
-def _patch_builtin(pkg, builder):
+def _patch_builtin(pkg, builder, scope: _LangPatchScope):
     for name, member in inspect.getmembers(pkg):
         if tl.core.is_builtin(member):
-            _patch_attr(pkg, name, member, builder)
+            _patch_attr(pkg, name, member, builder, scope)
 
 
-def _patch_lang_tensor(tensor):
+def _patch_lang_tensor(tensor, scope: _LangPatchScope):
 
     def _get_bool(self):
         data = self.handle.data
@@ -856,11 +887,11 @@ def _patch_lang_tensor(tensor):
         res_ty = tl.core.block_type(self.dtype, block_shape)
         return tl.core.tensor(handle, res_ty)
 
-    tensor.__index__ = lambda self: int(self.handle.data)
-    tensor.__bool__ = lambda self: _get_bool(self)
-    tensor.__repr__ = lambda self: repr(self.handle.data)
-    tensor.__str__ = lambda self: str(self.handle.data)
-    tensor.T = property(_get_transpose)
+    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data))
+    scope.set_attr(tensor, "__bool__", lambda self: _get_bool(self))
+    scope.set_attr(tensor, "__repr__", lambda self: repr(self.handle.data))
+    scope.set_attr(tensor, "__str__", lambda self: str(self.handle.data))
+    scope.set_attr(tensor, "T", property(_get_transpose))
 
 
 class ReduceScanOpInterface:
@@ -888,6 +919,9 @@ class ReduceScanOpInterface:
             ret = np.array([ret], dtype=np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
+
+    def apply_impl(self, input):
+        raise NotImplementedError("apply_impl must be implemented by subclasses")
 
     def apply(self, input):
         if not isinstance(input, tuple):
@@ -1055,7 +1089,7 @@ class ScanOps(ReduceScanOpInterface):
         return ret
 
 
-def _patch_reduce_scan():
+def _patch_reduce_scan(scope: _LangPatchScope):
     # Because interpreter doesn't support region_builder_fn, we cannot patch the builder
     # to use the new reduce and scan functions.
     # Instead, we need to patch reduce and reduce functions in tl and tl.core
@@ -1065,13 +1099,13 @@ def _patch_reduce_scan():
     def _new_scan(input, axis, combine_fn, reverse=False, **kwargs):
         return ScanOps(axis, combine_fn, reverse).apply(input)
 
-    tl.reduce = _new_reduce
-    tl.associative_scan = _new_scan
-    tl.core.reduce = _new_reduce
-    tl.core.associative_scan = _new_scan
+    scope.set_attr(tl, "reduce", _new_reduce)
+    scope.set_attr(tl, "associative_scan", _new_scan)
+    scope.set_attr(tl.core, "reduce", _new_reduce)
+    scope.set_attr(tl.core, "associative_scan", _new_scan)
 
 
-def _patch_lang_core(lang):
+def _patch_lang_core(lang, scope: _LangPatchScope):
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -1137,38 +1171,31 @@ def _patch_lang_core(lang):
         input.handle.set_attr(name, values)
         return input
 
-    lang.range = _new_range
-    lang.static_range = _new_range
-    lang.static_assert = _new_static_assert
-    lang.static_print = print
-    lang.dtype.to_ir = _new_to_ir
-    lang.multiple_of = partial(_set_attr, name="tt.divisibility")
-    lang.max_contiguous = partial(_set_attr, name="tt.contiguity")
-    lang.max_constancy = partial(_set_attr, name="tt.constancy")
+    scope.set_attr(lang, "range", _new_range)
+    scope.set_attr(lang, "static_range", _new_range)
+    scope.set_attr(lang, "static_assert", _new_static_assert)
+    scope.set_attr(lang, "static_print", print)
+    scope.set_attr(lang.dtype, "to_ir", _new_to_ir)
+    scope.set_attr(lang, "multiple_of", partial(_set_attr, name="tt.divisibility"))
+    scope.set_attr(lang, "max_contiguous", partial(_set_attr, name="tt.contiguity"))
+    scope.set_attr(lang, "max_constancy", partial(_set_attr, name="tt.constancy"))
 
-    _patch_reduce_scan()
+    _patch_reduce_scan(scope)
 
 
 def _patch_lang(fn):
+    scope = _LangPatchScope()
     langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
     assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
     for lang in langs:
-        _patch_builtin(lang, interpreter_builder)
-        _patch_builtin(lang.tensor, interpreter_builder)
+        _patch_builtin(lang, interpreter_builder, scope)
+        _patch_builtin(lang.tensor, interpreter_builder, scope)
         if lang == tl:
-            _patch_builtin(lang.math, interpreter_builder)
-        _patch_lang_tensor(lang.tensor)
-        _patch_lang_core(lang)
-    _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder)
-
-
-def _tuple_create(arg, contents):
-    # NamedTuples and tuples have different construction semantics. NamedTuple
-    # has a constructor that takes individual arguments, while tuple takes an
-    # iterable. Both have type "tuple" making it difficult to distinguish
-    # between them, but only NamedTuple has "_fields" and apparently this is how
-    # everyone does the check.
-    return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)
+            _patch_builtin(lang.math, interpreter_builder, scope)
+        _patch_lang_tensor(lang.tensor, scope)
+        _patch_lang_core(lang, scope)
+    _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)
+    return scope
 
 
 # TODO: wrap everything in triton tensors
@@ -1198,16 +1225,11 @@ def _implicit_cvt(arg):
         strides = [_implicit_cvt(s) for s in arg.strides]
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
-        semantic = TritonSemantic(InterpreterBuilder())
-        return semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
-                                               shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
-                                               block_shape=[tl.constexpr(b)
-                                                            for b in arg.block_shape], padding_option=arg.padding)
+        return interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
+                                                           shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
+                                                           block_shape=[tl.constexpr(b) for b in arg.block_shape],
+                                                           padding_option=arg.padding)
     return arg
-
-
-interpreter_builder = InterpreterBuilder()
-interpreter_semantic = TritonSemantic(interpreter_builder)
 
 
 def _unwrap_tensor(t):
@@ -1296,8 +1318,6 @@ class GridExecutor:
             arg_dev.copy_(arg_hst)
 
     def __call__(self, *args_dev, **kwargs):
-        if kwargs.pop("warmup", False):
-            return
         # Removes not used reserved keywords from kwargs
         # Triton doesn't support keyword-only, variable positional or variable keyword arguments
         # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
@@ -1309,26 +1329,29 @@ class GridExecutor:
         for hook in self.pre_run_hooks:
             hook(*args_hst, **kwargs_hst)
         # remaps core language functions to interpreted ones
-        _patch_lang(self.fn)
-        # we need to copy arguments to the host for the interpreter
-        # implicitly convert tensor arguments to their base pointers
-        args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
-        args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
-        # iterate through grid
-        grid = self.grid(args) if callable(self.grid) else self.grid
-        assert len(grid) <= 3, "grid must have at most 3 dimensions"
-        grid = grid + (1, ) * (3 - len(grid))
-        interpreter_builder.set_grid_dim(*grid)
+        patch_scope = _patch_lang(self.fn)
         try:
-            for x in range(grid[0]):
-                for y in range(grid[1]):
-                    for z in range(grid[2]):
-                        interpreter_builder.set_grid_idx(x, y, z)
-                        self.fn(**args)
-        except Exception as e:
-            if triton.knobs.compilation.front_end_debugging:
-                raise
-            raise InterpreterError(repr(e)) from e
+            # we need to copy arguments to the host for the interpreter
+            # implicitly convert tensor arguments to their base pointers
+            args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
+            args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
+            # iterate through grid
+            grid = self.grid(args) if callable(self.grid) else self.grid
+            assert len(grid) <= 3, "grid must have at most 3 dimensions"
+            grid = grid + (1, ) * (3 - len(grid))
+            interpreter_builder.set_grid_dim(*grid)
+            try:
+                for x in range(grid[0]):
+                    for y in range(grid[1]):
+                        for z in range(grid[2]):
+                            interpreter_builder.set_grid_idx(x, y, z)
+                            self.fn(**args)
+            except Exception as e:
+                if triton.knobs.compilation.front_end_debugging:
+                    raise
+                raise InterpreterError(repr(e)) from e
+        finally:
+            patch_scope.restore()
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
@@ -1418,7 +1441,7 @@ class FunctionRewriter:
         return local_namespace[self.fn.__name__]
 
 
-class InterpretedFunction:
+class InterpretedFunction(KernelInterface[T]):
     # Cache all rewritten functions
     rewritten_fn: Dict[Callable, Callable] = {}
 
@@ -1428,13 +1451,14 @@ class InterpretedFunction:
         self.kwargs = kwargs
         self.pre_run_hooks = []
 
-        def run(*args, **kwargs):
-            fn = self.rewrite()
-            return GridExecutor(fn, self.arg_names, kwargs["grid"], self.pre_run_hooks)(*args, **kwargs)
-
-        self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def run(self, *args, grid, warmup, **kwargs):
+        if warmup:
+            return
+        fn = self.rewrite()
+        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)
@@ -1448,9 +1472,6 @@ class InterpretedFunction:
     @property
     def __name__(self):
         return self.fn.__name__
-
-    def __getitem__(self, grid):
-        return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call

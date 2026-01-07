@@ -577,9 +577,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  auto *ctx = srcEnc.getContext();
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
-    auto *ctx = srcEnc.getContext();
     if (getNumCTAs(mmaEncoding) == 1) {
       int innerDimDst =
           mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
@@ -589,15 +589,11 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CTALayout = CTALayoutAttr::get(
-            ctx,
-            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+        auto CGALayout = CGAEncodingAttr::get1CTALayout(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CTALayout);
+            mmaEncoding.getFp4Padded(), CGALayout);
         auto srcLL = toLinearLayout(srcShape, srcEnc);
         auto dstLL = toLinearLayout(dstShape, candidateEncoding);
         if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
@@ -606,14 +602,25 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         }
       }
     }
+  } else if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    LinearLayout ll = padded.getLinearComponent();
+    LinearLayout dst = reshapeLayout(ctx, ll, dstShape);
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+    auto intervals = padded.getIntervals();
+    auto paddings = padded.getPaddings();
+    for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
+      intervalPads.emplace_back(interval, padding);
+    }
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, std::move(dst));
+    return success();
   }
 
   // Generic LL case
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
-  auto *ctx = srcEnc.getContext();
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
-  dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
+  dstEnc = SharedLinearEncodingAttr::get(ctx, std::move(dstLL),
+                                         sharedEnc.getAlignment());
   return success();
 }
 
@@ -823,6 +830,28 @@ LogicalResult MemDescIndexOp::verify() {
   return success();
 }
 
+OpFoldResult MemDescSubsliceOp::fold(FoldAdaptor adaptor) {
+  // Fold subslice(subslice(x, off1), off2) -> subslice(x, off1 + off2)
+  if (auto srcSubslice = getSrc().getDefiningOp<MemDescSubsliceOp>()) {
+    auto srcOffsets = srcSubslice.getOffsets();
+    auto currOffsets = getOffsets();
+
+    // Compute combined offsets
+    SmallVector<int32_t> combinedOffsets;
+    for (size_t i = 0; i < currOffsets.size(); ++i) {
+      combinedOffsets.push_back(srcOffsets[i] + currOffsets[i]);
+    }
+
+    // Update this operation to point directly to the original source with
+    // combined offsets
+    setOperand(srcSubslice.getSrc());
+    setOffsetsAttr(DenseI32ArrayAttr::get(getContext(), combinedOffsets));
+    return getResult();
+  }
+
+  return {};
+}
+
 LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
@@ -917,14 +946,31 @@ RegionRange WarpSpecializeOp::getPartitionRegions() {
 
 void WarpSpecializeOp::getSuccessorRegions(
     RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
-  // The parent branches transparently into the default region.
+  // The parent branches into the default region and the partition regions.
   if (src.isParent()) {
     successors.emplace_back(&getDefaultRegion());
+    successors.emplace_back(&getPartitionOpHolder());
     return;
   }
   // And the default region branches transparently back to the parent.
-  assert(src.getRegionOrNull() == &getDefaultRegion());
-  successors.push_back(RegionSuccessor(getResults()));
+  if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
+      &getDefaultRegion())
+    successors.push_back(RegionSuccessor(getOperation(), getResults()));
+}
+
+void WarpSpecializePartitionsOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  // The parent branches to each of the partition regions, but nothing flows out
+  // of the partition regions.
+  if (src.isParent())
+    for (Region &region : getPartitionRegions())
+      successors.emplace_back(&region, region.getArguments());
+}
+
+OperandRange
+WarpSpecializePartitionsOp::getEntrySuccessorOperands(RegionSuccessor) {
+  // Pass through the explicit captures from the enclosing WarpSpecializeOp.
+  return getParentOp().getExplicitCaptures();
 }
 
 LogicalResult WarpSpecializeOp::verify() {

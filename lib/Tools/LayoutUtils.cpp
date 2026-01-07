@@ -562,4 +562,21 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
                       /*requireSurjective=*/false);
 }
 
+LinearLayout removeStandardDim(const LinearLayout &layout, int dim) {
+  auto rank = layout.getNumOutDims();
+  assert(rank > 0);
+  assert(dim < rank);
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto dims = to_vector(layout.getOutDimNames());
+  assert(dims == standardOutDimNames(ctx, rank));
+  dims.erase(dims.begin() + dim);
+  auto newLayout = layout.sublayout(to_vector(layout.getInDimNames()), dims);
+  auto dimSizes = newLayout.getOutDims();
+  auto newDims = standardOutDimNames(ctx, rank - 1);
+  for (auto [i, newDim] : llvm::enumerate(newDims)) {
+    dimSizes[i].first = newDim;
+  }
+  return LinearLayout(newLayout.getBases(), dimSizes, /*isSurjective*/ false);
+}
+
 } // namespace mlir::triton

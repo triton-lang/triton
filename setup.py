@@ -517,6 +517,11 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
             ]
 
+        if check_env_flag("LLVM_BUILD_SHARED_LIBS"):
+            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=1"]
+        else:
+            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=0"]
+
         # Note that asan doesn't work with binaries that use the GPU, so this is
         # only useful for tools like triton-opt that don't run code on the GPU.
         #
@@ -828,7 +833,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.5.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.6.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)

@@ -8,7 +8,13 @@ def GluonResolveAutoEncodingsPass : Pass<"gluon-resolve-auto-encodings", "mlir::
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
   ];
+}
 
+def GluonInferCoalescedEncodingsPass : Pass<"gluon-infer-coalesced-encodings", "mlir::ModuleOp"> {
+  let summary = "Infer coalesced encodings based on axis analysis";
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+  ];
 }
 
 def GluonCanonicalize: Pass<"gluon-canonicalize"> {
@@ -39,8 +45,8 @@ def GluonSimplifyControlFlow: Pass<"gluon-slimplify-control-flow"> {
   let summary = "simplications for control flow ops";
 
   let description = [{
-    The `gluon-inline` pass applies a reduced set of simplification
-    and canonicalization patterns to the module.
+    The `gluon-simplify-control-flow` pass applies a reduced set of
+    simplification and canonicalization patterns for control flow ops.
   }];
   let dependentDialects = [];
 }

@@ -214,7 +214,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   std::optional<TMemLdStEncodingInfo> msgInfo;
   for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
                     TMemAccessAtom::I16x64b, TMemAccessAtom::I16x128b}) {
-    auto tile = getTileLayout(ctx, atom, unpacked);
+    auto tile = getTileLayout(ctx, atom, unpacked, /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -227,7 +227,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked);
+    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked,
+                              /*withWarp=*/true);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
@@ -251,7 +252,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
-      reps = LinearLayout(basis, reps.getOutDims(), /*isSurjective=*/false);
+      reps = LinearLayout(std::move(basis), reps.getOutDims(),
+                          /*isSurjective=*/false);
       msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
     }
   }
@@ -296,7 +298,7 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   auto bases = cvt.getBases();
   bases[kWarp][0] = {32, 0};
   bases[kWarp][1] = {64, 0};
-  cvt = LinearLayout(bases, cvt.getOutDims(),
+  cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());

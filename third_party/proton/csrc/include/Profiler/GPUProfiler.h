@@ -2,17 +2,21 @@
 #define PROTON_PROFILER_GPU_PROFILER_H_
 
 #include "Context/Context.h"
+#include "Data/Metric.h"
 #include "Profiler.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/Set.h"
+#include "Utility/Table.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <deque>
+#include <map>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
+#include <vector>
 
 namespace proton {
 
@@ -27,57 +31,116 @@ public:
   virtual ~GPUProfiler() = default;
 
   using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t,
-                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
-                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
-  using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
+      ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
+                    std::unordered_map<uint64_t, size_t>>;
+
+  struct ExternIdState {
+    // ----non-graph launch fields----
+    DataToEntryMap dataToEntry;
+    // Sometimes the kernel name cannot be retrieved in application threads
+    // for reasons like uninitialize CUDA context.
+    bool isMissingName{true};
+    // ----graph launch fields----
+    // For graph launches, the launch correlation id fans out into multiple
+    // kernel activity records. We track the expected fanout here and keep
+    // updating it when we have processed each kernel activity record.
+    size_t numNodes{1};
+
+    struct GraphNodeState {
+      // If the node is launched as a metric kernel, ignore it's timing data.
+      bool isMetricNode{false};
+      bool isMissingName{true};
+
+      void setEntry(Data *data, const DataEntry &entry) {
+        dataToEntry.insert_or_assign(data, entry);
+      }
+
+      const DataEntry *findEntry(Data *data) const {
+        auto it = dataToEntry.find(data);
+        if (it == dataToEntry.end())
+          return nullptr;
+        return &it->second;
+      }
+
+      template <typename FnT> void forEachEntry(FnT &&fn) {
+        for (auto &[data, entry] : dataToEntry)
+          fn(data, entry);
+      }
+
+      DataToEntryMap dataToEntry;
+    };
+
+    using GraphNodeStateTable = RangeTable<GraphNodeState>;
+
+    // graphNodeId -> (per-Data entry)
+    GraphNodeStateTable graphNodeIdToState;
+  };
+
+  // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
+  // issue.
+  using ExternIdToStateMap =
+      ThreadSafeMap<size_t, ExternIdState,
+                    std::unordered_map<size_t, ExternIdState>>;
 
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
-    this->correlation.pushExternId(scope.scopeId);
-    for (auto data : getDataSet())
-      data->addOp(scope.scopeId, scope.name);
+    this->threadState.scopeStack.push_back(scope);
+    for (auto *data : dataSet) {
+      auto entry = data->addOp(scope.name);
+      threadState.dataToEntry.insert_or_assign(data, entry);
+    }
   }
-  void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
+
+  void stopOp(const Scope &scope) override {
+    this->threadState.scopeStack.pop_back();
+    threadState.dataToEntry.clear();
+  }
 
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
+  virtual void doAddMetrics(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &scalarMetrics,
+      const std::map<std::string, TensorMetric> &tensorMetrics) override {
+    pImpl->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
+  }
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope> scopeStack;
-    size_t opId{Scope::DummyScopeId};
+    std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
+    DataToEntryMap dataToEntry;
+    bool isApiExternOp{false};
+    bool isStreamCapturing{false};
+    bool isMetricKernelLaunching{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp() {
-      if (profiler.isOpInProgress())
+    void enterOp(const Scope &scope) {
+      if (profiler.isOpInProgress()) // Already in a triton op
         return;
-      opId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(opId));
-      profiler.correlation.apiExternIds.insert(opId);
+      // Enter a new GPU API op
+      isApiExternOp = true;
+      profiler.enterOp(scope);
     }
 
     void exitOp() {
-      if (!profiler.isOpInProgress())
+      if (!profiler.isOpInProgress() || !isApiExternOp)
         return;
-      profiler.exitOp(Scope(opId));
+      profiler.exitOp(scopeStack.back());
+      isApiExternOp = false;
     }
 
     void enterScope(const std::string &name) {
-      auto scope = Scope(name);
+      Scope scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
 
     void exitScope() {
-      if (scopeStack.empty()) {
-        return;
-      }
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
@@ -88,41 +151,38 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // A set of kernels triggered by GPU runtime APIs (e.g., torch
-    // kernels) other than Triton.
-    // It stores a subset of external ids in corrIdToExternId.
-    ApiExternIdSet apiExternIds;
-    static thread_local std::deque<size_t> externIdQueue;
+    // Mapping from an external id to graph-node states
+    ExternIdToStateMap externIdToState;
 
     Correlation() = default;
 
-    void submit(const uint64_t correlationId) {
+    void submit(uint64_t correlationId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
     }
 
-    void complete(const uint64_t correlationId) {
+    void complete(uint64_t correlationId) {
       atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
-    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
-
-    void popExternId() { externIdQueue.pop_front(); }
-
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t numInstances = 1) {
-      if (externIdQueue.empty())
-        return;
-      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
+    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
+                   bool isMissingName, const DataToEntryMap &dataToEntry) {
+      corrIdToExternId.insert(correlationId, externId);
+      externIdToState.upsert(externId, [&](ExternIdState &state) {
+        state.numNodes = numNodes;
+        state.dataToEntry = dataToEntry;
+        state.isMissingName = isMissingName;
+      });
     }
 
     template <typename FlushFnT>
-    void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
+    void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
       auto submittedId = maxSubmittedCorrelationId.load();
       auto completedId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
       while ((completedId < submittedId) && retries > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
+        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         flushFn();
         completedId = maxCompletedCorrelationId.load();
         --retries;
@@ -147,9 +207,44 @@ protected:
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
+    void
+    doAddMetrics(size_t scopeId,
+                 const std::map<std::string, MetricValueType> &scalarMetrics,
+                 const std::map<std::string, TensorMetric> &tensorMetrics) {
+      if (threadState.isStreamCapturing) { // Graph capture mode
+        threadState.isMetricKernelLaunching = true;
+        // Launch metric kernels
+        metricBuffer->receive(
+            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
+            profiler.scalarMetricKernel, profiler.metricKernelStream);
+        threadState.isMetricKernelLaunching = false;
+      } else { // Eager mode, directly copy
+        // Populate tensor metrics
+        auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
+            tensorMetrics, profiler.metricKernelStream);
+        auto &dataToEntry = threadState.dataToEntry;
+        if (dataToEntry.empty()) {
+          // Add metrics to a specific scope
+          for (auto *data : profiler.dataSet) {
+            data->addScopeMetrics(scopeId, scalarMetrics);
+            data->addScopeMetrics(scopeId, tensorMetricsHost);
+          }
+        } else {
+          // Add metrics to the current op
+          for (auto [data, entry] : dataToEntry) {
+            data->addEntryMetrics(entry.id, scalarMetrics);
+            data->addEntryMetrics(entry.id, tensorMetricsHost);
+          }
+        }
+      }
+    }
+
   protected:
     ConcreteProfilerT &profiler;
+    std::unique_ptr<MetricBuffer> metricBuffer;
+    Runtime *runtime{nullptr};
   };
+
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
