@@ -306,9 +306,15 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
 }
 
 std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
-  // Splits a wgmma(tensor, shmem) MxK, KxN -> MxN into
-  // along K into multiple wgmma(tensor, shmem) Mx16, 16xN -> MxN
-  // where 16 is the instruction size
+  // Splits wgmma(tensor, shmem, acc) into
+  //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
+  //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
+  // which allows for in-register pipelining of the wgmmas.
+  //
+  // Theoretically, it may be beneficial to split even further which allows more
+  // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
+  // best performance. In future this may be something we want to allow the user
+  // to tune.
   if (!isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
