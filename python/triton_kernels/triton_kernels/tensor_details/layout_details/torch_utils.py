@@ -46,9 +46,6 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
     new_dim %= data.ndim
     if (not is_fp4) or (old_dim == new_dim):
         return data
-    if data.shape[new_dim] % 2 != 0:
-        raise ValueError(f"repack_fp4_generic requires data.shape[new_dim] even; "
-                         f"got shape[{new_dim}]={data.shape[new_dim]}")
     if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
     ret_shape = list(data.shape)
