@@ -219,19 +219,12 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
-    import sys
-    print("convert layout", tensor.storage.layout, layout)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
-    print("before unswizzle", torch.cuda.mem_get_info(device=0))
-    print("tensor.storage.data refcount", sys.getrefcount(tensor.storage.data))
     canonical_data = transformation.unswizzle_data(tensor.storage.data)
-    print("after unswizzle", torch.cuda.mem_get_info(device=0))
     # convert canonical form to `layout`
     transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    print("before swizzle", torch.cuda.mem_get_info(device=0))
     new_data = transformation.swizzle_data(canonical_data)
-    print("after swizzle", torch.cuda.mem_get_info(device=0))
     # return new tensor
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, layout), **attrs)
@@ -294,5 +287,4 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None)
         strides[d] = running
         running *= storage_shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
-    ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
-    return ret
+    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)

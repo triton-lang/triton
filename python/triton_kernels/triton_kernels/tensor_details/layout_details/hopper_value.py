@@ -199,14 +199,13 @@ def _pack_bits(x: torch.Tensor, mx_axis: int):
     x = x.contiguous()
     assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
     x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
-    first = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
-    second = _compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16)
-    third = _compress_fp4(x[..., 2]) | (_compress_fp4(x[..., 2] >> 4) << 16)
-    fourth = _compress_fourth(x[..., 3]) | (_compress_fourth(x[..., 3] >> 4) << 16)
-    x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
-    assert x.is_contiguous()
-    x = x.view(torch.uint8)
-    return x
+    ret = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
+    ret |= right_shift_unsigned(_compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16), 3)
+    ret |= right_shift_unsigned(_compress_fp4(x[..., 2]) | (_compress_fp4(x[..., 2] >> 4) << 16), 6)
+    ret |= _compress_fourth(x[..., 3]) | (_compress_fourth(x[..., 3] >> 4) << 16)
+    assert ret.is_contiguous()
+    ret = ret.view(torch.uint8)
+    return ret
 
 
 # -----------------------------------------------------------------------
