@@ -25,7 +25,7 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
         x = x.mT
     if x.shape[1 - mx_axis] < 32:
         pytest.skip("Not enough elements along non-mx axis")
-    layout = HopperMXValueLayout(mx_axis, mma_version)
+    layout = HopperMXValueLayout(mx_axis - 2, mma_version)
     shape = list(x.shape)
     shape[-1] *= 2
     transformation = layout.make_transformation(shape, is_fp4=False)
@@ -38,7 +38,7 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
 @pytest.mark.parametrize("shape", [(256, 64), (256, 128), (256, 256)])
 def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
-    layout = HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
+    layout = HopperMXScaleLayout(mx_axis=mx_axis - 2, num_warps=num_warps)
     transformation = layout.make_transformation(x.shape, is_fp4=False)
     res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res[:shape[0], :shape[1]] == x).all()
@@ -78,7 +78,7 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mx_axis", [0, 1])
 def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
