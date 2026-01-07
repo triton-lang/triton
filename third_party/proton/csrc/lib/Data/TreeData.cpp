@@ -753,7 +753,8 @@ void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
            static_cast<std::streamsize>(msgPack.size()));
 }
 
-std::vector<uint8_t> TreeData::doToMsgPack(size_t phase) const {
+std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
   if (treePhases.find(phase) == treePhases.end()) {
     throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
                              " has no data.");
@@ -761,7 +762,8 @@ std::vector<uint8_t> TreeData::doToMsgPack(size_t phase) const {
   return buildHatchetMsgPack(treePhases.at(phase).get());
 }
 
-std::string TreeData::doToJsonString(size_t phase) const {
+std::string TreeData::toJsonString(size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
   if (treePhases.find(phase) == treePhases.end()) {
     throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
                              " has no data.");

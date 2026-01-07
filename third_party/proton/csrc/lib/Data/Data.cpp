@@ -25,16 +25,6 @@ void Data::clear(size_t phase) {
     activePhases.insert(phase);
 }
 
-std::string Data::toJsonString(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return doToJsonString(phase);
-}
-
-std::vector<uint8_t> Data::toMsgPack(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return doToMsgPack(phase);
-}
-
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 

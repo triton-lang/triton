@@ -3,11 +3,15 @@
 
 #include "Context/Context.h"
 #include "Metric.h"
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <ostream>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace proton {
 
@@ -75,10 +79,10 @@ public:
   void clear(size_t phase);
 
   /// To Json
-  std::string toJsonString(size_t phase) const;
+  virtual std::string toJsonString(size_t phase) const = 0;
 
   /// To MsgPack
-  std::vector<uint8_t> toMsgPack(size_t phase) const;
+  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
@@ -114,8 +118,6 @@ public:
 protected:
   /// The actual implementations
   virtual void doAdvancePhase() = 0;
-  virtual std::string doToJsonString(size_t phase) const = 0;
-  virtual std::vector<uint8_t> doToMsgPack(size_t phase) const = 0;
   virtual void doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const = 0;
   virtual void doClear(size_t phase) = 0;

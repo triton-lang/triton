@@ -204,7 +204,8 @@ void TraceData::addScopeMetrics(
   }
 }
 
-std::string TraceData::doToJsonString(size_t phase) const {
+std::string TraceData::toJsonString(size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
   if (tracePhases.find(phase) == tracePhases.end()) {
     throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
                              " has no data.");
@@ -214,7 +215,8 @@ std::string TraceData::doToJsonString(size_t phase) const {
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) const {
+std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
   if (tracePhases.find(phase) == tracePhases.end()) {
     throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
                              " has no data.");

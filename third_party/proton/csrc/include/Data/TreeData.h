@@ -33,6 +33,10 @@ public:
       size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
+  std::string toJsonString(size_t phase) const override;
+
+  std::vector<uint8_t> toMsgPack(size_t phase) const override;
+
 protected:
   // ScopeInterface
   void enterScope(const Scope &scope) override;
@@ -50,8 +54,6 @@ private:
 
   // Data
   void doAdvancePhase() override;
-  std::string doToJsonString(size_t phase) const override;
-  std::vector<uint8_t> doToMsgPack(size_t phase) const override;
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
   void doClear(size_t phase) override;
