@@ -137,9 +137,10 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 //                                 r6[0+], r6[8+],
 //                                                 r7[0+], r7[8+],
 // r8[0+], r8[8+],
+// when composing padded layout, we first assemble the rows that are continuous.
 ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
-    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy) {
+    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
   auto *ctx = srcTy.getContext();
 
   // NYI: padded layouts for tt.load/local_write which is more flexible
@@ -193,14 +194,22 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned nonContigDim = isKContig ? nonKDim : kDim;
 
   // padding to avoid bank conflict
+  // For ds_read_b128. Lanes access LDS
+  // (bank conflicts) in 4 pairs of 16 lanes since we have 64 banks and each
+  // lane loads 4 banks. These lane groups are:
+  //  1: 0-3, 12-15, 20-23, 24-27
+  //  2: 4-7, 8-11, 16-19, 28-31
+  // The upper half of the lanes follow the same pattern.
+  // For ds_read_b64, it splits conseuctive
+  // lanes into 2 groups which access LDS one after another
   unsigned padding = 0;
   if (isKContig) {
     padding = mfmaNonKDim == 16 ? (kWidth * 2) : kWidth;
   } else {
     padding = mfmaNonKDim == 16 ? 16 : 32;
   }
-  unsigned contigLanes = contigDim / kWidth;
-  constexpr unsigned warpSize = 64;
+  constexpr unsigned vecSize = 8; // in favor of dwordX4
+  unsigned contigLanes = contigDim / vecSize;
   unsigned wrap = std::min(contigDim, 128u) / padding;
   unsigned requiredDim = warpSize / contigLanes * wrap;
   if (nonContigDim < requiredDim) {
@@ -223,7 +232,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     bases.push_back({1 << elemLog2, 0});
 
   // Add rows strided which has the same start offset
-  unsigned paddingInterval = warpSize * kWidth;
+  unsigned paddingInterval = warpSize * vecSize;
   unsigned requiredNumBases = llvm::Log2_32(paddingInterval);
   int rowBase = 0;
   for (rowBase = llvm::Log2_32(wrap); bases.size() < requiredNumBases;
@@ -249,11 +258,12 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
         row4 = i;
     }
     assert(row4 != 0 && row8 != 0);
-    // Exchange row4 and row8 to avoid bank conflict
+    // lane groups wrap at row8, so we have to exchange
+    // row4 and row8 to avoid bank conflict
     std::swap(bases[row4], bases[row8]);
   }
 
-  // Fixup for KContig and mfma32
+  // Fixup for KContig and mfma32 when reordered rows can not fit in 64banks
   if (isKContig && mfmaNonKDim == 32 && useBestWrap && kDim < 128) {
     bool useWideLayout = kWidth == 8;
 
@@ -297,8 +307,9 @@ composePaddedLayout(const tt::AMD::TargetInfo &targetInfo,
                     bool useAsyncCopy) {
   if (useAsyncCopy &&
       targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+    unsigned warpSize = targetInfo.getWarpSize();
     return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,
-                                                useAsyncCopy);
+                                                useAsyncCopy, warpSize);
   }
   return {};
 }
