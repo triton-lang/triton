@@ -11,8 +11,7 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
-    "testing"
+    "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch"
 ]
 
 
@@ -196,21 +195,17 @@ def prefetch(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor]
     _semantic.builder.create_tdm_prefetch(src.handle, offset_handles, pred_handle, speculative, False)
 
 
-class testing:
-    """Testing-only helpers."""
-
-    @staticmethod
-    @builtin
-    def prefetch_with_offsets(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], pred: bool = True,
-                              speculative: bool = False, _semantic=None):
-        """Test-only prefetch variant that returns offsets for validation."""
-        offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
-        pred = _semantic.to_tensor(pred)
-        pred_handle = pred.handle
-        speculative = _unwrap_if_constexpr(speculative)
-        handle = _semantic.builder.create_tdm_prefetch(src.handle, offset_handles, pred_handle, speculative, True)
-        shape = _semantic.builder.get_shape_from_tensor(handle)
-        layout = _semantic.builder.get_gluon_layout_from_tensor(handle)
-        ret_ty = ttgl.distributed_type(ttgl.int64, shape, layout)
-        tensor = ttgl.tensor(handle, ret_ty)
-        return tensor
+@builtin
+def _test_prefetch_with_offsets(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], pred: bool = True,
+                                speculative: bool = False, _semantic=None) -> ttgl.tensor:
+    """Test-only prefetch variant that returns offsets for validation."""
+    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+    pred = _semantic.to_tensor(pred)
+    pred_handle = pred.handle
+    speculative = _unwrap_if_constexpr(speculative)
+    handle = _semantic.builder.create_tdm_prefetch(src.handle, offset_handles, pred_handle, speculative, True)
+    shape = _semantic.builder.get_shape_from_tensor(handle)
+    layout = _semantic.builder.get_gluon_layout_from_tensor(handle)
+    ret_ty = ttgl.distributed_type(ttgl.int64, shape, layout)
+    tensor = ttgl.tensor(handle, ret_ty)
+    return tensor

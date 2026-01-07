@@ -1597,7 +1597,7 @@ def tdm_prefetch_store_back_offsets_kernel(inp_ptr, out_ptr, shape, inp_strides,
 
     desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(inp_ptr, shape=shape, strides=inp_strides,
                                                        block_shape=block_shape, layout=layout)
-    prefetch_offsets = ttgl.amd.gfx1250.tdm.testing.prefetch_with_offsets(desc, indices, pred=True, speculative=False)
+    prefetch_offsets = ttgl.amd.gfx1250.tdm._test_prefetch_with_offsets(desc, indices, pred=True, speculative=False)
 
     out_layout: ttgl.constexpr = prefetch_offsets.type.layout
 
