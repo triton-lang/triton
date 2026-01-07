@@ -66,6 +66,8 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
     r_odd = _idx(ret.ndim, old_dim, slice(1, None, 2))
     a = data[d_even]
     b = data[d_odd]
-    ret[r_even] = (a & 0x0F) | ((b & 0x0F) << 4)
-    ret[r_odd] = ((a & 0xF0) >> 4) | (b & 0xF0)
+    ret[r_even] = ((b & 0x0F) << 4)
+    ret[r_even] |= (a & 0x0F)
+    ret[r_odd] = ((a & 0xF0) >> 4)
+    ret[r_odd] |= (b & 0xF0)
     return ret
