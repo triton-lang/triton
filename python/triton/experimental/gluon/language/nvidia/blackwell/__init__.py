@@ -12,6 +12,7 @@ from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
+import triton._C.libtriton.gluon_ir as gluon_ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ..._semantic import GluonSemantic
@@ -235,42 +236,50 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, red_op=None, abs=False, NaN=False, _semantic: GluonSemantic = None):
+    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
         """
-        Load a tensor from tensor memory with optional row-wise reduction.
+        Load a tensor from tensor memory.
 
         Args:
             layout (DistributedLayout): Destination layout of the tensor.
-            red_op (str, optional): Reduction operation - None, "min", or "max".
-            abs (bool): If True, reduce absolute values. Default: False.
-            NaN (bool): If True, propagate NaN in max. Default: False.
 
         Returns:
-            tensor: When red_op is None, a distributed tensor containing the loaded data.
-            Tuple[tensor, tensor]: When red_op is set, (full_tensor [M,N], reduced [M]).
+            tensor: A distributed tensor containing the loaded data.
         """
         layout = _unwrap_if_constexpr(layout)
-        red_op = _semantic.str_to_tmem_load_reduce_modifier(red_op)
+        ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
+        builder = _semantic.builder
+        handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
+        return ttgl.tensor(handle, ret_ty)
+
+    def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic):
+        #   red_op: MIN/MAX reduction operation
+        #   abs (bool): If True, reduce absolute values.
+        #   propagate_nan (NONE): If ALL, propagate NaN in specified reduction operation.
+        layout = _unwrap_if_constexpr(layout)
         abs_flag = _unwrap_if_constexpr(abs)
-        nan_flag = _unwrap_if_constexpr(NaN)
+        propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
 
-        if red_op is None:
-            # No reduction - original behavior
-            handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, None, None, False, False)
-            return ttgl.tensor(handle, ret_ty)
-        else:
-            # With reduction - SliceLayout derives 1D layout from 2D parent
-            red_shape = [self.shape[0]]  # [M] for [M,N] input
-            red_layout = SliceLayout(dim=1, parent=layout)
-            red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
+        # With reduction - SliceLayout derives 1D layout from 2D parent
+        red_shape = [self.shape[0]]  # [M] for [M,N] input
+        red_layout = SliceLayout(dim=1, parent=layout)
+        red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
 
-            result, reduced = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_ty.to_ir(builder),
-                                                       red_op, abs_flag, nan_flag)
+        result, reduced = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_ty.to_ir(builder), red_op,
+                                                   abs_flag, propagate_nan)
 
-            return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
+        return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
+
+    @builtin
+    def load_min(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic)
+
+    @builtin
+    def load_max(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic)
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:

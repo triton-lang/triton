@@ -607,7 +607,7 @@ def _subtiled_qk_load(config, s_tmem, has_tmem_red: gl.constexpr):
     if has_tmem_red:
         red_total = None
         for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
-            vals, reds = s_tmem.slice(i * SIZE, SIZE).load(layout, red_op="max", abs=False, NaN=False)
+            vals, reds = s_tmem.slice(i * SIZE, SIZE).load_max(layout)
             red_total = reds if red_total is None else gl.maximum(red_total, reds)
             qks = qks + (vals, )
         return _join_n(qks), red_total

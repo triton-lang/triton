@@ -3,7 +3,6 @@ import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
-import triton._C.libtriton.gluon_ir as gluon_ir
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -606,13 +605,3 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             assert isinstance(generator.caller_context, GluonCallerContext)
             return ttgl.constexpr(generator.caller_context.num_warps)
         return ttgl.constexpr(self.builder.options.num_warps)
-
-    def str_to_tmem_load_reduce_modifier(self, modifier):
-        if modifier:
-            if modifier == "min":
-                modifier = gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN
-            elif modifier == "max":
-                modifier = gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX
-            else:
-                raise ValueError(f"Tmem reduce modifier {modifier} is not supported")
-        return modifier

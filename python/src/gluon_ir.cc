@@ -762,7 +762,7 @@ void init_gluon_ir(py::module &&m) {
           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
              std::optional<Type> redTy,
              std::optional<ttng::TMEMLoadReduceModifier> redOp, bool useAbs,
-             bool useNaN) -> py::object {
+             tt::PropagateNan propagateNan) -> py::object {
             ttng::TMEMLoadReduceModifierAttr redOpAttr = nullptr;
             BoolAttr absAttr = nullptr;
             BoolAttr nanAttr = nullptr;
@@ -773,7 +773,7 @@ void init_gluon_ir(py::module &&m) {
                   self.getContext(), redOp.value());
               if (useAbs)
                 absAttr = self.getBuilder().getBoolAttr(true);
-              if (useNaN)
+              if (propagateNan != tt::PropagateNan::NONE)
                 nanAttr = self.getBuilder().getBoolAttr(true);
             }
 
@@ -791,7 +791,8 @@ void init_gluon_ir(py::module &&m) {
           },
           py::arg("resultTy"), py::arg("memDesc"),
           py::arg("redTy") = py::none(), py::arg("redOp") = py::none(),
-          py::arg("useAbs") = false, py::arg("useNaN") = false)
+          py::arg("useAbs") = false,
+          py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
            [](GluonOpBuilder &self, Value src, Value dst) {
              self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());

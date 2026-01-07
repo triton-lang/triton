@@ -3209,7 +3209,7 @@ def tmem_reduction_kernel(
     N: ttgl.constexpr,
     RED_OP: ttgl.constexpr,
     USE_ABS: ttgl.constexpr,
-    USE_NAN: ttgl.constexpr,
+    PROPAGATE_NAN: ttgl.constexpr,
     num_warps: ttgl.constexpr,
 ):
     """Kernel to test TMEM load with hardware reduction."""
@@ -3248,7 +3248,10 @@ def tmem_reduction_kernel(
     tmem.store(input_data)
 
     # Load from TMEM with reduction
-    output, reduced = tmem.load(tmem_reg_layout, red_op=RED_OP, abs=USE_ABS, NaN=USE_NAN)
+    if RED_OP == "min":
+        output, reduced = tmem.load_min(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+    elif RED_OP == "max":
+        output, reduced = tmem.load_max(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
 
     # Store full output
     output = ttgl.convert_layout(output, global_memory_layout)
@@ -3263,12 +3266,12 @@ def tmem_reduction_kernel(
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
 @pytest.mark.parametrize("red_op", ["min", "max"])
 @pytest.mark.parametrize("use_abs", [False, True])
-@pytest.mark.parametrize("use_nan", [False, True])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
 @pytest.mark.parametrize(
     "M, N, num_warps",
     [(128, 32, 4), (128, 64, 4), (128, 128, 4), (128, 256, 4), (256, 128, 8)],
 )
-def test_tmem_reduction(red_op, use_abs, use_nan, M, N, num_warps):
+def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
     """Test TMEM load with hardware reduction on MxN tile
 
     Note: With M=128, only 4 warps can be used (warpsPerCTA=[4,1]) since all
@@ -3281,6 +3284,7 @@ def test_tmem_reduction(red_op, use_abs, use_nan, M, N, num_warps):
     input_tensor = torch.randn(M, N, dtype=torch.float32, device="cuda")
 
     # Inject NaN for testing if needed
+    use_nan = False if propagate_nan == tl.PropagateNan.NONE else True
     if use_nan:
         input_tensor[10, 5] = float("nan")
         input_tensor[50, 15] = float("nan")
@@ -3298,7 +3302,7 @@ def test_tmem_reduction(red_op, use_abs, use_nan, M, N, num_warps):
         N,
         red_op,
         use_abs,
-        use_nan,
+        propagate_nan,
         num_warps=num_warps,
     )
 
