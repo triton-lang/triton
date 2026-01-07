@@ -373,7 +373,8 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = b.udiv(tid, warpSizeVal);
+    warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc,
+                                                 /*omitUniformHint=*/true);
   }
 
   return {laneId, warpId};
@@ -1403,13 +1404,14 @@ Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
 static void
 makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
   SetVector<Value> captures;
-  getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+  auto partOp = wsOp.getPartitionOp();
+  getUsedValuesDefinedAbove(partOp.getPartitionRegions(), captures);
   for (Value capture : captures) {
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
-    for (Region *region : wsOp.getPartitionRegions()) {
+    partOp->insertOperands(partOp.getNumOperands(), capture);
+    for (Region &region : partOp.getPartitionRegions()) {
       BlockArgument arg =
-          region->addArgument(capture.getType(), capture.getLoc());
-      replaceAllUsesInRegionWith(capture, arg, *region);
+          region.addArgument(capture.getType(), capture.getLoc());
+      replaceAllUsesInRegionWith(capture, arg, region);
     }
   }
 }
@@ -1638,6 +1640,21 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
   rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                               amendedFuncOp.end());
   return amendedFuncOp;
+}
+
+void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp) {
+  // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
+  // the pointee datatype information.
+  // This function add back the pointee datatype information to arg attribute.
+  FunctionType fty = funcOp.getFunctionType();
+  for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
+    auto argType = fty.getInput(i);
+    if (auto argPtrType = dyn_cast<triton::PointerType>(argType)) {
+      auto argDType = argPtrType.getPointeeType();
+      llvmFuncOp.setArgAttr(i, "tt.pointee_type",
+                            mlir::TypeAttr::get(argDType));
+    }
+  }
 }
 
 } // namespace mlir

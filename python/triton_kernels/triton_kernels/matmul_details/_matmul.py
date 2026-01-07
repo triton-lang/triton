@@ -186,7 +186,6 @@ def _matmul(
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K
 
     (
         expt_id, start_z, start_z_out,
@@ -264,7 +263,7 @@ def _matmul(
             # TODO: support non W_TRANSPOSE with Hopper swizzling
             tl.static_assert(W_TRANSPOSE)
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
-            tl.static_assert(n_warps == 8)
+            tl.static_assert(n_warps == 8 or n_warps == 4)
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
@@ -356,7 +355,7 @@ def _matmul(
             elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
-                tl.static_assert(num_warps == 8)
+                tl.static_assert(num_warps == 8 or num_warps == 4)
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
             elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                 w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)

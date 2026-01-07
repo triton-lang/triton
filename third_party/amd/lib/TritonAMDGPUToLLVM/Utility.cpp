@@ -629,15 +629,21 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
-  if (paddedEnc)
-    vectorSize = std::min(vectorSize, paddedEnc.getMinInterval());
+  if (paddedEnc) {
+    unsigned maxAllowedVecSize = paddedEnc.getMinInterval();
+    // Without scattering support, padding can only be inserted at warp
+    // boundaries. This means minInterval must be a multiple of (vectorSize *
+    // warpSize) which becomes vectorSize <= minInterval / warpSize.
+    if (!targetInfo.supportsDirectToLDSScattering())
+      maxAllowedVecSize = paddedEnc.getMinInterval() / targetInfo.getWarpSize();
+
+    vectorSize = std::min(vectorSize, maxAllowedVecSize);
+  }
 
   // Check that vectorSize is not smaller than the minimal supported vector size
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
-  auto vectorBits = vectorSize * elemBitWidth;
   if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
-    LDBG("vectorBits (" << vectorBits
-                        << ") is too small for loads directly to LDS");
+    LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
     return false;
   }
 
@@ -646,7 +652,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     return true;
 
   // Must support the full vector width; splitting would cause strided writes.
-  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorBits))
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth))
     return false;
 
   // Compute the blocked -> shared linear layout to check preconditions

@@ -19,7 +19,7 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
+#shared = #ttg.padded_shared<[256:+4] {order = [0], shape = [1024]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // Padded encoding with an identity mapping does produce coalesced writes so we should not change the blocked encoding
@@ -190,7 +190,7 @@ tt.func @async_copy_2d_swizzled(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
-#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [256]}>
+#shared = #ttg.padded_shared<[64:+4] {order = [0], shape = [256]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // Padded encoding with an identity mapping has vec=1 whereas the blocked has vec=4 so we need to rewrite it
@@ -226,7 +226,7 @@ tt.func @async_copy_padded_layout_with_simple_rearanging(%input: tensor<256x!tt.
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
+#shared = #ttg.padded_shared<[256:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
@@ -255,6 +255,23 @@ tt.func @async_copy_padded_layout_requiring_broadcasting(%input: tensor<128x!tt.
     %view: !ttg.memdesc<128xf32, #shared, #smem, mutable>) {
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<128x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
   %token = ttg.async_copy_global_to_local %input, %view: tensor<128x!tt.ptr<f32>, #blocked> -> <128xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.padded_shared<[16:+4] {order = [0], shape = [256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// Padded encoding with a small padding interval cannot write warp coalesced so we should not change the encoding
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+// CHECK-LABEL: async_copy_with_padding_different_vec
+tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<256x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
   tt.return
 }
 }

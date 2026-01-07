@@ -173,45 +173,6 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
-// Disable pipelining for loops that contain barrier.
-//   Barriers are problematic since they are not chained to any other operation.
-// COMMON-LABEL: tt.func public @add_barrier_kernel
-// COMMON:  scf.for
-// COMMON:    tt.load
-// COMMON:    gpu.barrier
-// COMMON:    tt.store
-// COMMON-NOT:  gpu.barrier
-// COMMON:  tt.return
-
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @add_barrier_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
-    %c1024_i32 = arith.constant 1024 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %cval_f32 = arith.constant dense<0.3> : tensor<1024xf32, #blocked>
-    %c1016800_i32 = arith.constant 1016800 : i32
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c1024_i32 : i32
-    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-    %6 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-    scf.for %arg4 = %c0_i32 to %arg3 step %c1024_i32  : i32 {
-      %7 = arith.addi %1, %arg4 : i32
-      %8 = tt.splat %7 : i32 -> tensor<1024xi32, #blocked>
-      %9 = arith.addi %8, %2 : tensor<1024xi32, #blocked>
-      %11 = tt.addptr %4, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-      %12 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
-      gpu.barrier
-      %16 = tt.addptr %6, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-      %15 = arith.addf %12, %cval_f32 : tensor<1024xf32, #blocked>
-      tt.store %16, %15 : tensor<1024x!tt.ptr<f32>, #blocked>
-    } {tt.num_stages = 2 : i32}
-    tt.return
-  }
-} // end module
-
-// -----
-
 // COMMON-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]
 // COMMON: #ttg.swizzled_shared<{{.*}} order = [2, 1, 0]
 // COMMON-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]

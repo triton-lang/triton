@@ -61,7 +61,8 @@ void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
     auto loc = wsOp.getLoc();
     if (hasOperator<Operation, proton::RecordOp>(wsOp.getOperation())) {
-      wsOp->insertOperands(wsOp->getNumOperands(), {buffer, profileMem});
+      auto partOp = wsOp.getPartitionOp();
+      partOp->insertOperands(partOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
         region->addArgument(buffer.getType(), loc);
         region->addArgument(profileMem.getType(), loc);
