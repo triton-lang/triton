@@ -94,8 +94,9 @@ if __name__ == "__main__" and not is_blackwell():
     raise RuntimeError("This tutorial requires a Blackwell NVIDIA GPU")
 
 # Re-use utilities from the previous tutorials.
-t7 = importlib.import_module("07-persistence")
-t8 = importlib.import_module("08-warp-specialization")
+if __name__ == "__main__" or "11-tcgen05-mma-scaled" in __name__:
+    t7 = importlib.import_module("07-persistence")
+    t8 = importlib.import_module("08-warp-specialization")
 
 # %%
 # Let's write a simple blocked-scaled matmul kernel. First, we will assume that
@@ -244,7 +245,7 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     tma.store_wait(0)
 
 
-def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool):
+def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool, cga_layout=None):
     # If the operand dtype is fp4, they will be packed into uint8.
     IS_FP4 = value.dtype == torch.uint8
     ELEM_PER_BYTE = 2 if IS_FP4 else 1
@@ -256,14 +257,15 @@ def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MI
         [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE],
         gl.uint8 if IS_FP4 else gl.float8e4nv,
         fp4_padded=IS_MIXED_PREC_FP4,
+        cga_layout=cga_layout,
     )
     return TensorDescriptor.from_tensor(value, [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE], layout)
 
 
-def make_output_descriptor(M: int, N: int, dtype: torch.dtype, BLOCK_M: int, BLOCK_N: int):
+def make_output_descriptor(M: int, N: int, dtype: torch.dtype, BLOCK_M: int, BLOCK_N: int, cga_layout=None):
     C = torch.empty(M, N, device="cuda", dtype=dtype)
     C_dtype = getattr(gl, str(dtype).split('.')[1])
-    C_desc_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype)
+    C_desc_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype, cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], C_desc_layout)
 
 
@@ -653,7 +655,7 @@ def swizzle_scales_packed_block(scales: torch.Tensor, VEC_SIZE: int):
     return scales.contiguous()
 
 
-def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VEC_SIZE: int):
+def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VEC_SIZE: int, cga_layout=None):
     # Note that this 5D swizzling scheme has minimum block size requirements
     # of BLOCK_N >= 128 and BLOCK_K >= VEC_SIZE * 4 (64 for nvfp4 and 128 for MX).
     REP_MN = BLOCK_MN // 128
@@ -665,7 +667,8 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
     IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
-    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8)
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8,
+                                                  cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 

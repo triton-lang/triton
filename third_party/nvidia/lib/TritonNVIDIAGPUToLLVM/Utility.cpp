@@ -155,6 +155,14 @@ Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
   return b.shl(b.i32_val(pattern), base);
 }
 
+Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter, Value pred) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  leftClusterId = b.and_(leftClusterId, b.i32_val(1));
+  Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
+  return b.and_(pred, cluster0);
+}
+
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix

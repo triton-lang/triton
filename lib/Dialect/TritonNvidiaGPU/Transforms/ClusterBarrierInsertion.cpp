@@ -40,10 +40,7 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
     return mma.getTwoCtas();
   } else if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    // TODO: Change when we support scaled MMA with 2CTAs
-    assert(!ttng::getModuleTwoCTAs(op->getParentOfType<ModuleOp>()) &&
-           "Scaled MMA with 2CTAs not supported");
-    return false;
+    return mmaScaled.getTwoCtas();
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return tma.getMulticast();
   }

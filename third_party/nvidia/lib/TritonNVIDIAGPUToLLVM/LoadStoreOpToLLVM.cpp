@@ -1372,13 +1372,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
     }
 
+    // For 2-CTA (barrierMask != 0) we must: (a) modify the barrier pointer so
+    // that leader and non-leader CTAs arrive on the lead CTA barrier; (b)
+    // later, emit the TMA with .dst shared::cluster instead of shared::cta,
+    // which is empirically required to avoid hangs at the barrier, even if TMA
+    // copies into local SMEM. Both are done unconditionally for 2-CTA mode
+    // regardless of CGA broadcast.
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    // We emit a cluster-level barrier if we change the barrier and we don't
-    // multicast over that dimension (in which case that CTA would be predicated
-    // out)
-    bool clusterBarrier = barrierMask & ~maskCGABroadcast;
-    if (clusterBarrier) {
+    if (barrierMask) {
       // This part is to support TMA into tcgen05.mma 2CTA mostly, i.e.,
       // barrierMask == 1
       // Mask with ones on the bits where the CTA broadcasts.
@@ -1421,7 +1423,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
-          "shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
+          "shared::" + ((barrierMask || multicast) ? "cluster" : "cta") +
           ".global" + (isIm2Col ? ".im2col" : "") +
           ".mbarrier::complete_tx::bytes";
       if (multicast)
