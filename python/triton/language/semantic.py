@@ -1654,6 +1654,66 @@ class TritonSemantic(Generic[TensorTy]):
             if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
                 raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
+        if self.builder.options.fpsan:
+            # fpsan mode: bitcast operands/accumulator to integers and call create_dot.
+            #
+            # The lowering pipeline already knows how to deal with unsupported integer dot
+            # variants by decomposing them to mul+add, so we prefer reusing that instead of
+            # manually constructing a slow Python-level dot.
+
+            bw = ret_scalar_ty.primitive_bitwidth
+            out_int_ty = {8: tl.int8, 16: tl.int16, 32: tl.int32, 64: tl.int64}.get(bw)
+            if out_int_ty is None:
+                raise ValueError(f"fpsan dot: unsupported output bitwidth: {bw}")
+
+            def _payload_int_ty(fp_ty: tl.dtype) -> tl.dtype:
+                fp_bw = fp_ty.primitive_bitwidth
+                return {8: tl.int8, 16: tl.int16, 32: tl.int32, 64: tl.int64}[fp_bw]
+
+            # Important: keep the original tensor container (shape + layout/encoding) and only
+            # change the element type. Passing a scalar dtype to bitcast/cast would lose layout
+            # information under Gluon and can lead to type mismatches at uses like tt.store.
+            lhs_bits = lhs
+            rhs_bits = rhs
+            if lhs.dtype.is_floating():
+                lhs_bits = self.bitcast(lhs, lhs.type.with_element_ty(_payload_int_ty(lhs.dtype)))
+            if rhs.dtype.is_floating():
+                rhs_bits = self.bitcast(rhs, rhs.type.with_element_ty(_payload_int_ty(rhs.dtype)))
+
+            # Prefer keeping int8 operands when possible (it is an explicitly supported
+            # dot variant), otherwise cast up to the accumulator integer type.
+            if not (lhs_bits.dtype == tl.int8 and rhs_bits.dtype == tl.int8 and out_int_ty == tl.int32):
+                if lhs_bits.dtype != out_int_ty:
+                    lhs_bits = self.cast(lhs_bits, lhs_bits.type.with_element_ty(out_int_ty))
+                if rhs_bits.dtype != out_int_ty:
+                    rhs_bits = self.cast(rhs_bits, rhs_bits.type.with_element_ty(out_int_ty))
+
+            if acc is None:
+                _0i = {
+                    8: self.builder.get_int8(0), 16: self.builder.get_int16(0), 32: self.builder.get_int32(0), 64:
+                    self.builder.get_int64(0)
+                }[bw]
+                acc_i_handle = self.builder.create_splat(ret_ty.with_element_ty(out_int_ty).to_ir(self.builder), _0i)
+            else:
+                # Keep accumulator bits; only reinterpret the payload.
+                acc_bits = acc
+                if acc.dtype.is_floating():
+                    acc_bits = self.bitcast(acc, acc.type.with_element_ty(out_int_ty))
+                else:
+                    acc_bits = self.cast(acc, acc.type.with_element_ty(out_int_ty))
+                acc_i_handle = acc_bits.handle
+
+            dot_i_ty = (acc.type.with_element_ty(out_int_ty) if acc is not None else ret_ty.with_element_ty(out_int_ty))
+            dot_i = self.tensor(
+                self.builder.create_dot(lhs_bits.handle, rhs_bits.handle, acc_i_handle, input_precision,
+                                        max_num_imprecise_acc),
+                dot_i_ty,
+            )
+
+            # Reinterpret the resulting integer payload back as the requested floating output type.
+            return self.bitcast(dot_i,
+                                dot_i.type.with_element_ty(ret_scalar_ty)) if ret_scalar_ty.is_floating() else dot_i
+
         return self.tensor(
             self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc), ret_ty)
 

@@ -198,3 +198,72 @@ def test_fpsan_unary_math_identity(device, op):
     )
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), x_bits)
+
+
+def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray) -> np.ndarray:
+    # Computes: c + a @ b in Z/(2^32) on raw payload bits.
+    a_u = a_i32.view(np.uint32).astype(np.uint64)
+    b_u = b_i32.view(np.uint32).astype(np.uint64)
+    c_u = c_i32.view(np.uint32).astype(np.uint64)
+    m, k = a_u.shape
+    k2, n = b_u.shape
+    assert k == k2
+    out = np.empty((m, n), dtype=np.uint64)
+    mask = np.uint64(0xFFFFFFFF)
+    for i in range(m):
+        for j in range(n):
+            s = c_u[i, j]
+            for kk in range(k):
+                s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
+            out[i, j] = s
+    return out.astype(np.uint32).view(np.int32)
+
+
+def test_fpsan_dot_fma_payload_semantics(device):
+    _require_cuda_backend(device)
+
+    B = 16
+    BLOCK = ttgl.constexpr(B)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
+        lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+
+        offs_m = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_n = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        # Important: build separate offsets for A and B.
+        # dot_fma expects operands to represent A[M,K] and B[K,N]. Using the same
+        # linearized (m,n) offsets for both makes B effectively transposed.
+        offs_k = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        a_offs = offs_m * BLOCK + offs_k
+        b_offs = offs_n * BLOCK + offs_m  # load B^T so dot_fma produces A @ B
+        out_offs = offs_m * BLOCK + offs_n
+
+        a = ttgl.convert_layout(ttgl.load(a_ptr + a_offs), lhs_layout)
+        b = ttgl.convert_layout(ttgl.load(b_ptr + b_offs), rhs_layout)
+        c = ttgl.load(c_ptr + out_offs)
+        out = ttgl.dot_fma(a, b, c)
+        ttgl.store(out_ptr + out_offs, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
+    # Wrap int storage as fp32 so fpsan operates on payload bits.
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, fpsan=True, num_warps=4)
+
+    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
