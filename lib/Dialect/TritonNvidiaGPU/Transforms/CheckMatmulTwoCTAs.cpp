@@ -28,7 +28,8 @@ public:
     Operation *firstMatmul = nullptr;
     bool firstTwoCTA = false;
 
-    WalkResult result = mod.walk([&](ttng::TCGen5MMAOp op) {
+    // Walk all MMAv5 ops using the interface
+    WalkResult result = mod.walk([&](ttng::MMAv5OpInterface op) -> WalkResult {
       bool currentTwoCTA = op.getTwoCtas();
       if (!firstMatmul) {
         firstMatmul = op;

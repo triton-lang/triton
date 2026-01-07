@@ -76,6 +76,9 @@ getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
 Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
                        Value barrierPtr,
                        mlir::triton::gpu::MemDescType barrierTy);
+
+/// Create a predicate where only the lead CTA is active for two CTA mode.
+Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter);
 } // namespace NVIDIA
 } // namespace LLVM
 
