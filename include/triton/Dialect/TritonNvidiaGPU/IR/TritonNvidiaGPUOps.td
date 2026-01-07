@@ -639,6 +639,19 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
     This operation takes and produces an optional token to indicate TMEM read
     on its source operand. When the tokens are present, they can
     be used to check aliasing and modref on the TMEM buffer.
+
+    Optional reduction modifier (based on PTX tcgen05.ld.red instruction):
+    Implementatation is restricted to f32 type only.
+    - redOp: Specifies the reduction operation to perform on the loaded data.
+             Supported operations are MIN and MAX. When specified, the operation
+             performs element-wise row-reduction and produces an additional reduced result.
+    - abs:   When true, takes the absolute value of each element before performing
+             the reduction. Only valid when redOp is specified.
+    - NaN:   When true, propagates NaN handling during reduction operations:
+               - if any of the inputs is NaN, the result is NaN
+             Only valid when redOp is specified.
+
+    See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-ld
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
