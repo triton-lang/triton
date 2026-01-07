@@ -886,7 +886,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool isAsync) {
+                              ValueRange barrierPreds, bool twoCTAs,
+                              bool isAsync) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
@@ -894,7 +895,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
@@ -1056,11 +1058,6 @@ LogicalResult TMEMCopyOp::verify() {
     return emitOpError("Source must have at least 16-byte alignment to be "
                        "representable in a matrix descriptor.");
   }
-
-  auto mod = getOperation()->getParentOfType<ModuleOp>();
-  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-  if (numCTAs != 1)
-    return emitOpError("NYI: Only one CTA is supported for now.");
 
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
