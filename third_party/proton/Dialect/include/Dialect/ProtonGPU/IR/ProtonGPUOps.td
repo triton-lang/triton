@@ -119,32 +119,6 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   }];
 }
 
-def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [
-    MemoryEffects<[MemAlloc<GlobalMemory>]>
-]> {
-  let summary = "Allocate a global memory profile buffer";
-
-  let description = [{
-    This operation allocates a profile buffer in global memory.
-    Each Triton program being profiled will hold a pointer to the buffer until profiling is finalized.
-  }];
-
-  let arguments = (ins
-    I32Attr:$nbytes,
-    I32Attr:$alignment
-  );
-
-  let results = (outs TT_Ptr:$result);
-
-  let builders = [
-    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
-              [{ build($_builder, $_state, result,
-                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
-  ];
-
-  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
-}
-
 def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   let summary = "Get the base offset of the segment of the internal buffer";
 
