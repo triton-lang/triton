@@ -217,8 +217,7 @@ static SmallVector<Operation *> getAlloc(Value value) {
 
       // Handle region entry arguments.
       if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
-        worklist.push_back(
-            wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+        worklist.push_back(wsOp.getExplicitCaptures()[arg.getArgNumber()]);
       } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
         unsigned idx = arg.getArgNumber() - 1;
         worklist.push_back(forOp.getYieldedValues()[idx]);

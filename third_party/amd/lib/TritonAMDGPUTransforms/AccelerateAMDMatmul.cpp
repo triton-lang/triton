@@ -1496,9 +1496,13 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
   if (failed(maybeWmmaIntrinsic))
-    return emitError(loc, "no matching matrix core intrinsic due to "
-                          "unsupported element type: A=")
-           << aElemType << " B=" << bElemType << " C=" << cElemType;
+    return emitError(loc, "no matching matrix core intrinsic ")
+           << "for wmma version " << wmmaVersion << " with instruction shape ["
+           << mDim << ", " << nDim << ", " << inputKSize
+           << "] and element types A=" << aElemType << ", B=" << bElemType
+           << ", C=" << cElemType << ". Check whether the mfma version,"
+           << " instruction shape, and data types "
+           << "are supported on the current AMD GPU architecture.";
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);
