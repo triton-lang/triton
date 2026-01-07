@@ -93,7 +93,11 @@ public:
 
   size_t getContextDepth(size_t sessionId);
 
+  std::vector<uint8_t> getDataMsgPack(size_t sessionId);
+
   std::string getData(size_t sessionId);
+
+  void clearData(size_t sessionId);
 
   void enterScope(const Scope &scope);
 
@@ -220,9 +224,9 @@ private:
   // {instrumentation, active count}
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
-  // {context source, active count}
-  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
   // {metric, active count}
+  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
+  // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };
 

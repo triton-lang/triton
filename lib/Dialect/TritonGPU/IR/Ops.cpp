@@ -589,7 +589,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CGALayout = CGAEncodingAttr::getDefault(ctx, dstShape.size());
+        auto CGALayout = CGAEncodingAttr::get1CTALayout(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
@@ -830,6 +830,28 @@ LogicalResult MemDescIndexOp::verify() {
   return success();
 }
 
+OpFoldResult MemDescSubsliceOp::fold(FoldAdaptor adaptor) {
+  // Fold subslice(subslice(x, off1), off2) -> subslice(x, off1 + off2)
+  if (auto srcSubslice = getSrc().getDefiningOp<MemDescSubsliceOp>()) {
+    auto srcOffsets = srcSubslice.getOffsets();
+    auto currOffsets = getOffsets();
+
+    // Compute combined offsets
+    SmallVector<int32_t> combinedOffsets;
+    for (size_t i = 0; i < currOffsets.size(); ++i) {
+      combinedOffsets.push_back(srcOffsets[i] + currOffsets[i]);
+    }
+
+    // Update this operation to point directly to the original source with
+    // combined offsets
+    setOperand(srcSubslice.getSrc());
+    setOffsetsAttr(DenseI32ArrayAttr::get(getContext(), combinedOffsets));
+    return getResult();
+  }
+
+  return {};
+}
+
 LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
@@ -942,7 +964,13 @@ void WarpSpecializePartitionsOp::getSuccessorRegions(
   // of the partition regions.
   if (src.isParent())
     for (Region &region : getPartitionRegions())
-      successors.emplace_back(&region);
+      successors.emplace_back(&region, region.getArguments());
+}
+
+OperandRange
+WarpSpecializePartitionsOp::getEntrySuccessorOperands(RegionSuccessor) {
+  // Pass through the explicit captures from the enclosing WarpSpecializeOp.
+  return getParentOp().getExplicitCaptures();
 }
 
 LogicalResult WarpSpecializeOp::verify() {

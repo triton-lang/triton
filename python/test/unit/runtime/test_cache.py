@@ -825,3 +825,62 @@ def test_higher_order_kernel(device, fresh_triton_cache, capsys):
 Compiling with fn_a
 Compiling with fn_a after modification
 """)
+
+
+def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def fn_a():
+        return 17
+
+    @triton.jit
+    def fn_b():
+        return 31
+
+    @triton.jit
+    def kernel(out_ptr, FUNC: tl.constexpr) -> None:
+        val = FUNC()
+        tl.store(out_ptr, val)
+
+    device = getattr(torch, device).current_device()
+
+    # get the serialized specialization data
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled_kernel = kernel[(1, )](output, fn_a)
+    assert output.item() == 17
+    hash = compiled_kernel.hash
+    assert specialization_data is not None
+
+    # clear the cache
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches[device][0].clear()
+
+    # preload the kernel
+    kernel_preload = kernel.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(kernel.device_caches[device][0]) == 1
+
+    # we should hit the cache and not compile anything
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    triton.knobs.runtime.jit_cache_hook = inc_counter
+    final_kernel = kernel[(1, )](output, fn_a)
+    assert counter == 0
+    assert len(kernel.device_caches[device][0]) == 1
+    assert final_kernel.hash == hash
+
+    # different function should compile and not hit the cache
+    kernel[(1, )](output, fn_b)
+    assert counter == 1
+    assert output.item() == 31

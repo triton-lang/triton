@@ -177,9 +177,6 @@ class SymmetricMemoryPool:
         self._initialize(n_ranks=n_ranks, group=group, device=device)
 
 
-symm_mem_pool = SymmetricMemoryPool()
-
-
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
     """
     create expert assignment dictionary where shard i owns:
@@ -270,10 +267,10 @@ def _convert_launch_metadata(grid, kernel, args):
     local_expt_indx = expt_indx[src_row_start:src_row_start + n_tokens_local]
     src_rank_filter = expt_filter[src_rank]
     local_filter = ((src_rank_filter[local_expt_indx // 32] >> (local_expt_indx % 32)) & 1).to(torch.int32)
-    dst_local_tokens = torch.sum(local_filter).item()
+    dst_local_tokens = torch.sum(local_filter)
     dst_output_tokens = local_filter.numel() - dst_local_tokens
     global_filter = ((src_rank_filter[expt_indx // 32] >> (expt_indx % 32)) & 1).to(torch.int32)
-    dst_input_tokens = torch.sum(global_filter).item() - dst_local_tokens
+    dst_input_tokens = torch.sum(global_filter) - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
     dram_bytes = src_bytes + dst_local_tokens * d_model * elem_bytes
     if "dp_to_ep" in kernel.name:
@@ -331,7 +328,7 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
+def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     rank = dist.get_rank()
@@ -413,7 +410,7 @@ def _convert_ep_to_dp(
         dst_ptrs += BLOCK
 
 
-def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
+def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx, symm_mem_pool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     rank = dist.get_rank()

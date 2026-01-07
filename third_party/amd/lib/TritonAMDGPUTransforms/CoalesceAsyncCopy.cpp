@@ -101,10 +101,15 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            rewriter, regToSharedLayout, threadsPerWarp, loadContig)) {
+    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
+                                      dstTy.getAllocShape(), loadContig)) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
+    // Check if we support load contig because canLoadDirectToLds can change it
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(loadContig * elemBitWidth))
+      return rewriter.notifyMatchFailure(copyOp,
+                                         "unable to find supported vector size "
+                                         "based on src and dst encodings");
 
     if (isa<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
       // For swizzled layouts we apply the swizzling during lowering so we only
