@@ -7,7 +7,8 @@ def unpack(data: torch.Tensor, dim: int, is_fp4: bool):
     if data.shape[dim] == 1:
         return data
     data_lo = data & 0x0F
-    data_hi = (data >> 4) & 0x0F
+    data_hi = data & 0xF0
+    data_hi >>= 4
     return torch.cat([data_lo, data_hi], dim=dim)
 
 
