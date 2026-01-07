@@ -29,12 +29,15 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool):
     if not is_fp4:
         return data
     if data.ndim == 3:
-        ret = torch.empty_like(data)
+        shape = list(data.shape)
+        shape[old_dim] = shape[old_dim] * 2
+        shape[new_dim] = shape[new_dim] // 2
+        ret = torch.empty(shape, dtype=data.dtype, device=data.device)
         assert old_dim % data.ndim != 0
         assert new_dim % data.ndim != 0
         for i in range(data.shape[0]):
-            tmp = unpack(data[i], old_dim, is_fp4)
-            ret[i] = pack(tmp, new_dim, is_fp4)
+            tmp = unpack(data[i], (old_dim % data.ndim) - 1, is_fp4)
+            ret[i] = pack(tmp, (new_dim % data.ndim) - 1, is_fp4)
     else:
         tmp = unpack(data, old_dim, is_fp4)
         ret = pack(tmp, new_dim, is_fp4)
