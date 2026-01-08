@@ -70,7 +70,7 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
     // then find the count from init_barrier
     arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
   } else {
-    assert(false);
+    llvm::report_fatal_error("unsupported load type for producer commit");
   }
 
   assert(op.getOperation()->hasAttr("async_task_id"));

@@ -618,7 +618,8 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
                                                          ("mxfp8e4", "bf16", False), ("bf16", "mxfp4", True)])
 @pytest.mark.parametrize("mfma_nonkdim", [16, 32])
 @pytest.mark.parametrize("preshuffle", [True, False])
-@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 10, reason="Compilation bug for GB200.")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11],
+                    reason="Compilation bug for GB200.")
 @pytest.mark.skipif(is_hip() and not (is_hip_cdna4() or is_hip_gfx1250()),
                     reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, FAST_MATH, mfma_nonkdim,

@@ -392,6 +392,72 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   }];
 }
 
+def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
+  let summary = "Gather elements from shared memory along a specified axis";
+
+  let description = [{
+    Gather elements from a shared memory descriptor using an indices tensor along a
+    single specified axis. The output tensor has the same shape as the indices tensor.
+
+    For each output position I, the operation reads from src where the coordinate at
+    the gather axis is replaced by indices[I]:
+      result[I] = src[I[0], ..., indices[I], ..., I[n]]
+    where the axis dimension is replaced by the index value.
+
+    This matches the behavior of tt.gather but operates on shared memory descriptors.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
+    Optional<TTG_AsyncToken>:$token
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src, "Value":$indices, "IntegerAttr":$axis),
+      [{
+      build($_builder, $_state, retType, src, indices, axis, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{$src `[` $indices `]` (`token` $token^)? attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)}];
+  let hasVerifier = 1;
+}
+
+def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
+  let summary = "Scatter elements to shared memory along a specified axis";
+
+  let description = [{
+    Scatter elements to a shared memory descriptor using an indices tensor along a
+    single specified axis. The values tensor has the same shape as the indices tensor.
+
+    For each input position I, the operation writes to dst where the coordinate at
+    the scatter axis is replaced by indices[I]:
+      dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+    where the axis dimension is replaced by the index value.
+
+    This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    TT_Tensor:$values,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
+    Optional<TTG_AsyncToken>:$token
+  );
+
+  let builders = [
+      OpBuilder<(ins "Value":$dst, "Value":$values, "Value":$indices, "IntegerAttr":$axis),
+      [{
+      build($_builder, $_state, dst, values, indices, axis, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{$dst `[` $indices `]` `,` $values (`token` $token^)? attr-dict `:` qualified(type($dst)) `,` type($indices) `,` type($values)}];
+  let hasVerifier = 1;
+}
+
 def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                                 [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
   let summary = "pipeliner stage predicate";
@@ -458,11 +524,15 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   let summary = "allocate a global memory buffer";
   let description = [{
     This operation allocates a buffer in global memory that is private to the current program.
+    The `backend` attribute specifies the backend to use for allocation.
+    The `default` backend is used by TritonGPU passes.
+    Downstream Triton tools and compilers can register a different backend and use a different allocation policy.
   }];
   let arguments = (
     ins
     I32Attr:$nbytes,
-    I32Attr:$alignment
+    I32Attr:$alignment,
+    DefaultValuedAttr<StrAttr, "\"default\"">:$backend
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
 

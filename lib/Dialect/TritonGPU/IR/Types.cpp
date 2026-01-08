@@ -103,6 +103,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
            << shape;
+  if (shape.front() == 0)
+    return emitError() << "shape has 0 dimension";
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
