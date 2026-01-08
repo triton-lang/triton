@@ -1,4 +1,4 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
 import torch
 from triton.tools.ragged_tma import create_ragged_descriptor
@@ -200,6 +200,9 @@ class SparseMatrix:
 # layout utilities
 # ---------------------------------------------------------------------------- #
 
+memory_summaries = []
+counter = 0
+
 
 def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
     if dtype is None:
@@ -210,12 +213,16 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
         if dtype == FP4:
             shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
     if shape_max is None:
-        shape_max = shape
+        shape_max = list(shape)
     if layout is None:
         # For a strided (dense) tensor we only track which dimension has unit stride.
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
         layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
+    global counter
+    global memory_summaries
+    counter += 1
+    memory_summaries.append(f"wrap torch tensor {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
@@ -223,23 +230,25 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     shape = list(tensor.shape)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
+    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
+    memory_summaries.append(f"unswizzle {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     canonical_data = transformation.unswizzle_data(tensor.storage.data)
     # convert canonical form to `layout`
     transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    previous_memory = torch.cuda.memory_summary(0, abbreviated=True)
-    print("convert layout ", torch.cuda.current_device(), tensor.storage.data.device, tensor.storage.layout, "to",
-          layout)
+    # convert canonical form to `layout`
+    memory_summaries.append(f"swizzle {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
+    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
     try:
         new_data = transformation.swizzle_data(canonical_data)
     except Exception as e:
         print("error", e)
         print("convert_layout", tensor.storage.layout, "to", layout, "available memory",
               torch.cuda.memory_summary(0, abbreviated=True))
-        print("previous memory", previous_memory)
+        print(memory_summaries)
         raise e
     # return new tensor
-    attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
-    return Tensor(Storage(new_data, layout), **attrs)
+    out_dtype = torch_dtype_to_dtype(tensor.storage.data.dtype)
+    return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=out_dtype)
 
 
 def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:

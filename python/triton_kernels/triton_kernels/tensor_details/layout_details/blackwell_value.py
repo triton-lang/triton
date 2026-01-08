@@ -38,13 +38,14 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # re-pack as column-major
-        data = repack(data, -1, -2, self.is_fp4)
         out_shape = list(data.shape)
-        out_shape[-2] += (-out_shape[-2]) % 128
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        ret = torch.empty_strided(out_shape, strides_major_dim_m2(out_shape), device=data.device, dtype=data.dtype)
-        ret[..., :data.shape[-2], :] = data
+        out_shape[-1] *= 2
+        out_shape[-2] //= 2
+        padded_shape = list(out_shape)
+        padded_shape[-2] += (-out_shape[-2]) % 128
+        ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
+                                  dtype=data.dtype)
+        ret[..., :out_shape[-2], :] = repack(data, -1, -2, self.is_fp4)
         return ret
 
     def unswizzle_data(self, data: torch.Tensor):
