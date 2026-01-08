@@ -220,12 +220,23 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    shape = list(tensor.shape)
     # convert `tensor` into canonical form
-    transformation = tensor.storage.layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+    transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
     canonical_data = transformation.unswizzle_data(tensor.storage.data)
     # convert canonical form to `layout`
-    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    new_data = transformation.swizzle_data(canonical_data)
+    transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    previous_memory = torch.cuda.memory_summary(0, abbreviated=True)
+    print("convert layout ", torch.cuda.current_device(), tensor.storage.data.device, tensor.storage.layout, "to",
+          layout)
+    try:
+        new_data = transformation.swizzle_data(canonical_data)
+    except Exception as e:
+        print("error", e)
+        print("convert_layout", tensor.storage.layout, "to", layout, "available memory",
+              torch.cuda.memory_summary(0, abbreviated=True))
+        print("previous memory", previous_memory)
+        raise e
     # return new tensor
     attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
     return Tensor(Storage(new_data, layout), **attrs)

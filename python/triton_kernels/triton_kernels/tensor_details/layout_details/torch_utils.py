@@ -40,8 +40,6 @@ import torch
 #     ret = pack(tmp, new_dim, is_fp4)
 #     return ret
 
-import gc
-
 
 def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torch.Tensor:
     old_dim %= data.ndim
@@ -50,8 +48,6 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
         return data
     if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
-    gc.collect()
-    torch.cuda.empty_cache()
     ret_shape = list(data.shape)
     ret_shape[old_dim] *= 2
     ret_shape[new_dim] //= 2
