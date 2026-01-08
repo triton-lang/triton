@@ -967,27 +967,18 @@ LogicalResult TMEMLoadOp::verify() {
       return emitOpError("failed to compute TMEM encoding info");
 
     auto atom = encodingInfoOr->atom;
-    if (atom != TMemAccessAtom::I32x32b && atom != TMemAccessAtom::I16x32bx2)
-      return emitOpError(
-          "reduction only supports shapes .32x32b and .16x32bx2");
+    // Verify that N is not shared across threads in a warp
+    if (atom != TMemAccessAtom::I32x32b)
+      return emitOpError("tmem_load reduction only supports shapes .32x32b");
 
-    // Check for split N dimension across warps - not supported with
-    // redOp because it would require cross-warp reduction via shared memory
+    // Verify that N is not shared across warps
     auto regLayout = triton::gpu::toLinearLayout(regTy);
     auto *ctx = regTy.getContext();
     auto kWarp = StringAttr::get(ctx, "warp");
-
-    if (regLayout.hasInDim(kWarp)) {
-      auto const &bases = regLayout.getBases().lookup(kWarp);
-      auto dimN = StringAttr::get(ctx, "dim1");
-      int32_t dimNIdx = regLayout.getOutDimIndex(dimN);
-      for (const auto &basis : bases) {
-        if (basis[dimNIdx] != 0) {
-          return emitOpError("reduction with warps split across N dimension "
-                             "is not supported; "
-                             "use fewer warps or larger M dimension");
-        }
-      }
+    auto dimN = llvm::to_vector(regLayout.getOutDimNames())[1];
+    if (!regLayout.sublayoutIsZero({kWarp}, {dimN})) {
+      return emitOpError(
+          "tmem_load reduction with N shared across warps is not supported");
     }
   }
 

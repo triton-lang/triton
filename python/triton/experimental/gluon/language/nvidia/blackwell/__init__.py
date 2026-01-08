@@ -275,10 +275,34 @@ class tensor_memory_descriptor(base_value):
 
     @builtin
     def load_min(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        """
+        Load a tensor from tensor memory with MIN reduction along the N-dimension.
+
+        Args:
+            layout (DistributedLayout): Destination layout of the tensor.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MIN reduction along the N-dimension of loaded data
+        """
         return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic)
 
     @builtin
     def load_max(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        """
+        Load a tensor from tensor memory with MAX reduction along the N-dimension.
+
+        Args:
+            layout (DistributedLayout): Destination layout of the tensor.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MAX reduction along the N-dimension of loaded data.
+        """
         return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic)
 
     @builtin

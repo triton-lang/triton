@@ -1011,10 +1011,10 @@ HEAD_DIM = [64, 128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
-has_tmem_reds = [False, True] if is_blackwell_ultra() else [False]
+use_tmem_reds = [False, True] if is_blackwell_ultra() else [False]
 
 bench_configs = []
-for Z, H, D, is_causal, has_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, has_tmem_reds):
+for Z, H, D, is_causal, has_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, use_tmem_reds):
     config = triton.testing.Benchmark(
         x_names=["N_CTX"],
         x_vals=N_CTX,
