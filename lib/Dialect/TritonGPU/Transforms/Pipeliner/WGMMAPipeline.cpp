@@ -168,8 +168,9 @@ void mlir::triton::updateWaits(ModuleOp module) {
 // Specifically, this function finds all warp_group_dot ops that elements of
 // `values` depend on.  Then it adds the MemDesc operands of those dots to the
 // wait.
-static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
-                                    MutableArrayRef<Value> values) {
+static ttng::WarpGroupDotWaitOp
+threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
+                        MutableArrayRef<Value> values) {
   IRRewriter builder(wait.getContext());
   builder.setInsertionPoint(wait);
 
@@ -229,6 +230,7 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
       operand.replaceUsesWithIf(newWait.getResult(i), dominatedByNewWait);
   }
   wait->erase();
+  return newWait;
 }
 
 // Split the LHS of a RSWGMMADot operation into multiple
@@ -424,7 +426,6 @@ splitRSDots(const llvm::MapVector<Operation *, int> &dots) {
 //
 // If the op can be properly async, this function returns the index of the dot
 // in the loop's iter_args.  (Rule (2) above ensures this is well-defined.)
-//
 static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
                                                 scf::ForOp forOp) {
   LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
@@ -435,7 +436,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return true;
     }
     // If it's a shmem operand, it must either be defined outside the loop, or
-    // come from an MemDescIndex op.  Only ConvertLayout and view ops are
+    // come from a MemDescIndex op.  Only ConvertLayout and view ops are
     // allowed in between.
     Value transitiveOperand = operand;
     while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
@@ -681,6 +682,54 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   threadValuesThroughWait(wait, addlWaitOperands);
 }
 
+static llvm::FailureOr<ttg::LocalAllocOp> tryFindAllocation(Value v) {
+  auto defOp = v.getDefiningOp();
+  if (isa_and_nonnull<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
+                      ttg::MemDescSubsliceOp>(defOp)) {
+    return tryFindAllocation(defOp->getOperand(0));
+  }
+  if (auto indexOp = dyn_cast<ttg::MemDescIndexOp>(defOp)) {
+    return tryFindAllocation(indexOp.getSrc());
+  }
+  if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(defOp)) {
+    return allocOp;
+  }
+  return failure();
+}
+
+static llvm::FailureOr<SmallVector<ttg::LocalDeallocOp>> findOperandDeallocs(
+    const llvm::MapVector<Operation *, int> &properlyAsyncDots) {
+  SetVector<Value> operandAllocs;
+  for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
+    auto wgmma = cast<ttng::WarpGroupDotOp>(asyncDot);
+    if (isa<ttg::MemDescType>(wgmma.getA().getType())) {
+      auto allocA = tryFindAllocation(wgmma.getA());
+      if (failed(allocA))
+        return failure();
+      operandAllocs.insert(allocA->getResult());
+    }
+    auto allocB = tryFindAllocation(wgmma.getB());
+    if (failed(allocB))
+      return failure();
+    operandAllocs.insert(allocB->getResult());
+  }
+
+  SmallVector<ttg::LocalDeallocOp> operandDeallocs;
+  for (auto alloc : operandAllocs) {
+    bool success = false;
+    for (auto user : alloc.getUsers()) {
+      if (auto dealloc = dyn_cast<ttg::LocalDeallocOp>(user)) {
+        operandDeallocs.push_back(dealloc);
+        success = true;
+        break;
+      }
+    }
+    if (!success)
+      return failure();
+  }
+  return operandDeallocs;
+}
+
 // Convert MMAv3 ttng::WarpGroupDotOps {isAsync = False} (i.e. Hopper wgmma)
 // into ttng::WarpGroupDotOps {isAsync = True} and insert
 // ttng::WarpGroupDotWaitOps as necessary.
@@ -760,12 +809,38 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
     }
   }
 
-  if (firstUse) {
+  auto operandDeallocs = findOperandDeallocs(properlyAsyncDots);
+  bool missingOperands = failed(operandDeallocs);
+  if (!missingOperands) {
+    for (auto dealloc : *operandDeallocs) {
+      if (dealloc->getBlock() != curBlock) {
+        missingOperands = true;
+        break;
+      }
+    }
+  }
+
+  if (missingOperands) {
+    // Operands must be deallocated after the wait, or the wgmma may read from
+    // the deallocated buffer. If we didn't find all deallocations we must
+    // pessimistically wait early to ensure the wgmma doesn't read from a
+    // deallocated buffer.
+    builder.setInsertionPointAfter(forOp);
+  } else if (firstUse) {
     builder.setInsertionPoint(firstUse);
   } else {
     builder.setInsertionPoint(curBlock->getTerminator());
   }
-  auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
-      builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
-  threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);
+  auto waitAfterLoop = ttng::WarpGroupDotWaitOp::create(builder, forOp.getLoc(),
+                                                        ArrayRef<Value>{}, 0);
+  waitAfterLoop = threadValuesThroughWait(waitAfterLoop, waitOperands);
+
+  // Update deallocations to after the wait
+  if (!missingOperands) {
+    for (auto dealloc : *operandDeallocs) {
+      if (dealloc->isBeforeInBlock(waitAfterLoop)) {
+        dealloc->moveAfter(waitAfterLoop);
+      }
+    }
+  }
 }
