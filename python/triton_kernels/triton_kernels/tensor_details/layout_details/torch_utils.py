@@ -45,6 +45,9 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=Non
     old_dim %= data.ndim
     new_dim %= data.ndim
     if (not is_fp4) or (old_dim == new_dim):
+        if out is not None:
+            out.copy_(data)
+            return out
         return data
     if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
@@ -65,13 +68,16 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=Non
     # out slices along old_dim (interleave into even/odd positions)
     r_even = _idx(out.ndim, old_dim, slice(0, None, 2))
     r_odd = _idx(out.ndim, old_dim, slice(1, None, 2))
-    # a = data[d_even]
-    # b = data[d_odd]
-    out[r_even] = (data[d_odd] & 0x0F)
-    out[r_even] <<= 4
-    out[r_even] |= (data[d_even] & 0x0F)
-    out[r_odd] = (data[d_even] & 0xF0)
-    out[r_odd] >>= 4
-    out[r_odd] |= (data[d_odd] & 0xF0)
-
+    a = data[d_even]
+    b = data[d_odd]
+    # out[r_even] = ((b & 0x0F) << 4) | (a & 0x0F)
+    out[r_even].copy_(b)
+    out[r_even].bitwise_and_(0x0F)
+    out[r_even].bitwise_left_shift_(4)
+    out[r_even].bitwise_or_(a & 0x0F)
+    # out[r_odd] = ((a & 0xF0) >> 4) | (b & 0xF0)
+    out[r_odd].copy_(a)
+    out[r_odd].bitwise_and_(0xF0)
+    out[r_odd].bitwise_right_shift_(4)
+    out[r_odd].bitwise_or_(b & 0xF0)
     return out

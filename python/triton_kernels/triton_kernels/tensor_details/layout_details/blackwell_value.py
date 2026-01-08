@@ -53,6 +53,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         sizes = [self.shape[i] for i in range(data.ndim)]
         sizes[-2] //= 2
         data = data[tuple(slice(0, s) for s in sizes)]
-        data = repack(data, -2, -1, self.is_fp4)
-        data = data.contiguous()
-        return data
+        out = torch.empty(data.shape, device=data.device, dtype=data.dtype)
+        repack(data, -2, -1, self.is_fp4, out=out)
+        assert out.stride(-1) == 1
+        return out
