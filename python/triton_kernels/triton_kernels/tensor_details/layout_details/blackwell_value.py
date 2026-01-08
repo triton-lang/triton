@@ -45,7 +45,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         padded_shape[-2] += (-out_shape[-2]) % 128
         ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
                                   dtype=data.dtype)
-        ret[..., :out_shape[-2], :] = repack(data, -1, -2, self.is_fp4)
+        repack(data, -1, -2, self.is_fp4, out=ret[..., :out_shape[-2], :])
         return ret
 
     def unswizzle_data(self, data: torch.Tensor):

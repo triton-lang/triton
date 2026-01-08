@@ -41,17 +41,18 @@ import torch
 #     return ret
 
 
-def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torch.Tensor:
+def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=None) -> torch.Tensor:
     old_dim %= data.ndim
     new_dim %= data.ndim
     if (not is_fp4) or (old_dim == new_dim):
         return data
     if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
-    ret_shape = list(data.shape)
-    ret_shape[old_dim] *= 2
-    ret_shape[new_dim] //= 2
-    ret = torch.empty(ret_shape, dtype=data.dtype, device=data.device)
+    out_shape = list(data.shape)
+    out_shape[old_dim] *= 2
+    out_shape[new_dim] //= 2
+    if out is None:
+        out = torch.empty(out_shape, dtype=data.dtype, device=data.device)
 
     def _idx(ndim: int, dim: int, sl: slice):
         idx = [slice(None)] * ndim
@@ -61,16 +62,16 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
     # data slices along new_dim (pairwise)
     d_even = _idx(data.ndim, new_dim, slice(0, None, 2))
     d_odd = _idx(data.ndim, new_dim, slice(1, None, 2))
-    # ret slices along old_dim (interleave into even/odd positions)
-    r_even = _idx(ret.ndim, old_dim, slice(0, None, 2))
-    r_odd = _idx(ret.ndim, old_dim, slice(1, None, 2))
-    a = data[d_even]
-    b = data[d_odd]
-    ret[r_even] = (b & 0x0F)
-    ret[r_even] <<= 4
-    ret[r_even] |= (a & 0x0F)
-    ret[r_odd] = (a & 0xF0)
-    ret[r_odd] >>= 4
-    ret[r_odd] |= (b & 0xF0)
+    # out slices along old_dim (interleave into even/odd positions)
+    r_even = _idx(out.ndim, old_dim, slice(0, None, 2))
+    r_odd = _idx(out.ndim, old_dim, slice(1, None, 2))
+    # a = data[d_even]
+    # b = data[d_odd]
+    out[r_even] = (data[d_odd] & 0x0F)
+    out[r_even] <<= 4
+    out[r_even] |= (data[d_even] & 0x0F)
+    out[r_odd] = (data[d_even] & 0xF0)
+    out[r_odd] >>= 4
+    out[r_odd] |= (data[d_odd] & 0xF0)
 
-    return ret
+    return out

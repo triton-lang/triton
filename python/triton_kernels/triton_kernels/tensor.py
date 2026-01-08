@@ -238,14 +238,7 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     # convert canonical form to `layout`
     memory_summaries.append(f"swizzle {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
-    try:
-        new_data = transformation.swizzle_data(canonical_data)
-    except Exception as e:
-        print("error", e)
-        print("convert_layout", tensor.storage.layout, "to", layout, "available memory",
-              torch.cuda.memory_summary(0, abbreviated=True))
-        print(memory_summaries)
-        raise e
+    new_data = transformation.swizzle_data(canonical_data)
     # return new tensor
     out_dtype = torch_dtype_to_dtype(tensor.storage.data.dtype)
     return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=out_dtype)
