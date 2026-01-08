@@ -57,6 +57,7 @@ test-distributed: all
 test-gluon: all
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
+	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 
 .PHONY: test-regression
 test-regression: all

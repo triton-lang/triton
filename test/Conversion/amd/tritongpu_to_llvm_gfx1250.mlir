@@ -1,6 +1,6 @@
 // RUN:  triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx1250" | FileCheck %s --check-prefix=GFX1250
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]], warp = [[16, 0]], block = []}>
-#mma = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 1], isTranspose = true, instrShape = [16, 16, 32]}>
+#mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: wmma_permlane16_swap
   tt.func @wmma_permlane16_swap(%arg0: tensor<32x32xf16, #mma>) {
@@ -15,7 +15,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // -----
 
-#mma = #ttg.amd_wmma<{version = 3, warpsPerCTA = [4, 1], isTranspose = true, instrShape = [16, 16, 32]}>
+#mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0], [2, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: reduce_16x16
   tt.func @reduce_16x16(%input: tensor<128x128xf32, #mma>) {

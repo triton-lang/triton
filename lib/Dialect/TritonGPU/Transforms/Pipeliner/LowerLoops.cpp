@@ -1,6 +1,5 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,7 +14,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -243,18 +241,14 @@ void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
                         Value alloc, Value insertIdx, Value extractIdx,
                         Value barrier, Operation *waitOp,
                         CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(
-      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
-      waitOp, schedule,
-      [&](OpBuilderForStage &builder, Value tmaPtr, Value barrier, Value view,
-          Value pred) {
-        auto indices = ttng::translateTMAIndices(
-            builder, loadOp.getLoc(),
-            loadOp.getDesc().getType().getBlockType().getEncoding(),
-            loadOp.getIndices());
-        ttng::AsyncTMACopyGlobalToLocalOp::create(
-            builder, loadOp.getLoc(), tmaPtr, indices, barrier, view, pred);
-      });
+  return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
+                            extractIdx, barrier, waitOp, schedule,
+                            [&](OpBuilderForStage &builder, Value desc,
+                                Value barrier, Value view, Value pred) {
+                              ttng::AsyncTMACopyGlobalToLocalOp::create(
+                                  builder, loadOp.getLoc(), desc,
+                                  loadOp.getIndices(), barrier, view, pred);
+                            });
 }
 
 void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
@@ -263,10 +257,10 @@ void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           CoarseSchedule &schedule) {
   return createTMAAsyncCopy(forOp, gatherOp, gatherOp.getDesc(), alloc,
                             insertIdx, extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value tmaPtr,
+                            [&](OpBuilderForStage &builder, Value desc,
                                 Value barrier, Value view, Value pred) {
                               ttng::AsyncTMAGatherOp::create(
-                                  builder, gatherOp.getLoc(), tmaPtr,
+                                  builder, gatherOp.getLoc(), desc,
                                   gatherOp.getXOffsets(), gatherOp.getYOffset(),
                                   barrier, view, pred);
                             });
@@ -649,10 +643,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 /////////////////////////////
 
 std::pair<Operation *, Operation *>
-getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
+getTmemUseStageBoundOps(Value alloc, scf::ForOp forOp,
                         CoarseSchedule &schedule) {
   std::pair<Operation *, Operation *> bounds = {nullptr, nullptr};
-  for (auto user : alloc->getUsers()) {
+  for (auto user : alloc.getUsers()) {
     if (!forOp->isAncestor(user->getParentOp())) {
       continue;
     }
@@ -710,47 +704,46 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
-                             ttng::TMEMAllocOp alloc, int phaseArgIdx,
+                             Value alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
 
-  std::optional<Operation *> latestSyncPoint;
-  for (auto user : alloc->getUsers()) {
+  llvm::SmallDenseSet<Operation *> syncCandidates;
+
+  for (auto user : alloc.getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (load->getBlock() != mma->getBlock()) {
         continue;
       }
-      if (!latestSyncPoint || schedule.isOpBefore(load, *latestSyncPoint)) {
-        latestSyncPoint = load;
-      }
+      syncCandidates.insert(load);
     }
   }
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
                                                       isLoadToBePipelined);
 
-  SmallVector<Operation *> updatedDefs;
   for (auto def : mmaPipeHelper.unpipelineableOperandDefs) {
     auto newStore = hoistBufferOutOfLoop(forOp, def, schedule);
-    if (newStore) {
-      updatedDefs.push_back(newStore);
-    } else {
-      updatedDefs.push_back(def);
-    }
-  }
-
-  if (!mmaPipeHelper.isPipelineable &&
-      mmaPipeHelper.isOperandsStateDetermined) {
-    // If the operands are not pipelineable, we need to insert a sync point
-    // before the earliest operand load
-    for (auto def : updatedDefs) {
-      if (!latestSyncPoint || schedule.isOpBefore(def, *latestSyncPoint)) {
-        latestSyncPoint = def;
+    // If the operands are not pipelineable, we need to consider the stores as
+    // well.
+    if (!mmaPipeHelper.isPipelineable &&
+        mmaPipeHelper.isOperandsStateDetermined) {
+      if (newStore) {
+        syncCandidates.insert(newStore);
+      } else {
+        syncCandidates.insert(def);
       }
     }
   }
+
+  // Find the first sync candidate that appears after the MMA
+  // in the linearized schedule. This is either the first op to appear
+  // after the MMA or the first op
+  auto linearizedSchedule = schedule.linearized(forOp, mma);
+  std::optional<Operation *> latestSyncPoint = linearizedSchedule.findNext(
+      [&](Operation *op) { return syncCandidates.contains(op); });
 
   int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
@@ -804,7 +797,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
 
   // Add waits before loads in conditional blocks
-  for (auto user : alloc->getUsers()) {
+  for (auto user : alloc.getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (load->getBlock() == mma->getBlock()) {
         continue;
@@ -971,10 +964,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
-  auto alloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!alloc) {
-    return forOp;
-  }
+  Value alloc = mma.getAccumulator();
 
   int mmaSelfLatency = getSelfLatencyFromAttr(mma.getOperation());
   if (mmaSelfLatency == 0) {
@@ -996,6 +986,11 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
            tmemUseStageBoundOps.second))) {
     tmemUseNumStages += 1;
   }
+
+  // If the accumulator needs to be double-buffered but we can't find the alloc
+  // op, then bail out.
+  if (tmemUseNumStages > 1 && !alloc.getDefiningOp<ttng::TMEMAllocOp>())
+    return forOp;
 
   OpBuilder builder(forOp);
   Value minusOne =
@@ -1035,8 +1030,9 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                           phaseArgIdx, barrierIdxArgIdx);
 
   if (tmemUseNumStages > 1) {
-    multibufferTensorMemory(forOp, schedule, alloc, bufIdxArgIdx,
-                            tmemUseNumStages);
+    multibufferTensorMemory(forOp, schedule,
+                            alloc.getDefiningOp<ttng::TMEMAllocOp>(),
+                            bufIdxArgIdx, tmemUseNumStages);
   }
 
   return forOp;

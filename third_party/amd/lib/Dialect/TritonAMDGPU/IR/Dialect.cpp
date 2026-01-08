@@ -28,6 +28,7 @@
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -39,6 +40,7 @@
 // clang-format on
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
@@ -796,6 +798,73 @@ LogicalResult ArriveBarrierOp::verify() {
 LogicalResult AsyncCopyMbarrierArriveOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
     return failure();
+  return success();
+}
+
+// -- TDMPrefetchOp --
+// This op optionally returns the prefetch offsets (testing-only). When
+// `returnOffsets` is absent, it produces no results. When present, it yields an
+// int64 tensor of the prefetch addresses relative to the tensor base. The
+// tensor shape is:
+//   [num_programs, block_shape[:-1], block_shape[-1] / elements_per_prefetch]
+// i.e., the last dimension is scaled by how many elements fit in one 256-byte
+// prefetch. Values are the byte offsets added to the base pointer for each
+// prefetch instruction.
+LogicalResult TDMPrefetchOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  TDMPrefetchOp::Adaptor ad(operands, attributes, properties, regions);
+
+  // If returnOffsets is not set the op will not return any results
+  if (!ad.getReturnOffsets().has_value()) {
+    return success();
+  }
+
+  auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
+  auto blockType = descType.getBlockType();
+  auto blockShape = blockType.getShape();
+  auto elementType = blockType.getElementType();
+
+  // Lookup the module to get the number of threads per warp, number of warps
+  // and number of CTAs
+  ModuleOp mod;
+  for (auto operand : operands) {
+    if (auto op = operand.getDefiningOp()) {
+      mod = op->getParentOfType<ModuleOp>();
+      break;
+    } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+      auto parentOp = blockArg.getOwner()->getParentOp();
+      if (parentOp) {
+        mod = parentOp->getParentOfType<ModuleOp>();
+        break;
+      }
+    }
+  }
+  assert(mod);
+
+  auto threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numWarps = triton::gpu::lookupNumWarps(mod);
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto enc = triton::gpu::getDefaultBlockedEncoding(
+      context, scaledBlockShape, numWarps, threadsPerWarp, numCTAs);
+  IntegerType i64Type = IntegerType::get(context, 64);
+  auto tensorTy = RankedTensorType::get(scaledBlockShape, i64Type, enc);
+
+  inferredReturnTypes.push_back(tensorTy);
+
   return success();
 }
 

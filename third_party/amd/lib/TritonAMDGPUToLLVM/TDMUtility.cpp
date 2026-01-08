@@ -1,5 +1,6 @@
 #include "TDMUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include <optional>
 
@@ -593,6 +594,149 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
                                     {group0, group1, b.i32_val(0)});
   }
+}
+
+SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
+                                   ArrayRef<Value> desc,
+                                   ArrayRef<int64_t> blockShape, int numLanes,
+                                   int numWarps, int numCTAs,
+                                   ArrayRef<Value> offset, Value pred,
+                                   Type elementType, Value laneId, Value warpId,
+                                   Value ctaId, bool isSpeculative) {
+  // TDM prefetch uses the same syntax as a regular load. Each lane can prefetch
+  // a different address; hardware aligns to a 256-byte boundary and makes that
+  // 256-byte region available in L2. We distribute the nD tile (blockShape)
+  // across CTAs, warps, and lanes so the whole tile is covered by prefetches.
+  // Speculative prefetches may go out-of-bounds; non-speculative prefetches
+  // need bounds checks. We currently only guard based on the whole tensor
+  // extent, so some prefetched chunks might never be used if masking trims
+  // inner dimensions. To add inner-dimension bounds checks we would need to
+  // expose the CTA offsets from the tensor descriptor, which is currenlty
+  // directly applied to the base pointer.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  int numDims = blockShape.size();
+  Type globalPtrTy = ptr_ty(loc.getContext(), 1);
+
+  // Decode TDM descriptor to get the base pointer, shape, and strides
+  auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+  auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.begin() + 12);
+  std::optional<SmallVector<Value>> group2Vec;
+  std::optional<SmallVector<Value>> group3Vec;
+  if (numDims > 2) {
+    group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
+    group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
+  }
+  auto [basePtr, tensorShape, tensorStride, decodedBlockShape] =
+      mlir::LLVM::AMD::decodeTDMDescriptorFull(
+          rewriter, loc, group0Vec, group1Vec,
+          group2Vec.has_value()
+              ? std::optional<ArrayRef<Value>>(group2Vec.value())
+              : std::nullopt,
+          group3Vec.has_value()
+              ? std::optional<ArrayRef<Value>>(group3Vec.value())
+              : std::nullopt,
+          numDims);
+
+  auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
+    Value ret = b.i64_val(0);
+    for (auto [index, stride] : llvm::zip(indices, strides)) {
+      ret = b.add(ret, b.mul(b.zext(i64_ty, index), b.zext(i64_ty, stride)));
+    }
+    return ret;
+  };
+
+  // Apply the passed offsets to the base pointer.
+  Value tileOffset = dot64(offset, tensorStride);
+  auto tilePtr = b.gep(globalPtrTy, elementType, basePtr, tileOffset);
+
+  // Calculate the total tensor size for bounds checking.
+  Value linearTensorSize =
+      b.mul(b.zext(i64_ty, tensorShape[0]), b.zext(i64_ty, tensorStride[0]));
+
+  // Calculate maximum allowed offset from tilePtr before going out of bounds
+  Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
+
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto blockedEnc = triton::gpu::getDefaultBlockedEncoding(
+      loc.getContext(), scaledBlockShape, numWarps, numLanes, numCTAs);
+  auto ll = triton::gpu::toLinearLayout(scaledBlockShape, blockedEnc);
+
+  auto kRegister = rewriter.getStringAttr("register");
+  auto kLane = rewriter.getStringAttr("lane");
+  auto kWarp = rewriter.getStringAttr("warp");
+  auto kBlock = rewriter.getStringAttr("block");
+
+  // Adjust the inner stride (always 1) to the number of elements per prefetch
+  auto scaledStride = tensorStride;
+  scaledStride.back() = b.i32_val(elemPerPrefetch);
+
+  auto baseIndices = applyLinearLayout(loc, rewriter, ll,
+                                       {{kRegister, b.i32_val(0)},
+                                        {kLane, laneId},
+                                        {kWarp, warpId},
+                                        {kBlock, ctaId}});
+  // Iterate over each register and emit a prefetch intrinsic
+  SmallVector<Value> offsets(ll.getInDimSize(kRegister));
+  for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
+    auto regIndices =
+        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+    // XOR the base indices with the register specific indices
+    SmallVector<std::pair<StringAttr, Value>> indices;
+    for (auto [base, regIdx] : llvm::zip(baseIndices, regIndices)) {
+      assert(base.first == regIdx.first);
+      Value combined = b.xor_(base.second, b.i32_val(regIdx.second));
+      indices.emplace_back(base.first, combined);
+    }
+
+    // Compute the local offset from tile ptr for this prefetch based on the
+    // computed indices
+    Value localOffset =
+        dot64(to_vector(make_second_range(indices)), scaledStride);
+    auto prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
+
+    // Mask the prefetch if the offset is out of bounds
+    Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
+    // Only predicate based in inBounds for non-speculative prefetches.
+    Value combinedPred = isSpeculative ? pred : b.and_(pred, inBounds);
+
+    // Predicate and emit prefetch
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterPrefetch =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,
+                           afterPrefetch);
+
+    rewriter.setInsertionPointToStart(prefetchBlock);
+    int cache_scope = 8; // (8) = L2 scope
+    int speculative = isSpeculative;
+    int llvmTemporalHint = cache_scope | speculative;
+    Value scope = LLVM::ConstantOp::create(
+        rewriter, loc, i32_ty, rewriter.getI32IntegerAttr(llvmTemporalHint));
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, scope});
+
+    rewriter.setInsertionPointToEnd(prefetchBlock);
+    LLVM::BrOp::create(rewriter, loc, afterPrefetch);
+    rewriter.setInsertionPointToStart(afterPrefetch);
+
+    // We return the offsets for unit testing
+    offsets[reg] =
+        b.select(combinedPred, b.add(localOffset, tileOffset), b.i64_val(0));
+  }
+  return offsets;
 }
 
 } // namespace mlir::LLVM::AMD

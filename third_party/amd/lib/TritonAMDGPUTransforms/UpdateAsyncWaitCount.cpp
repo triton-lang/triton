@@ -228,6 +228,24 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
           continueWalkFrom(whileOp.getAfterBody()->getTerminator());
       }
       return bestPath;
+    } else if (auto executeRegionOp = dyn_cast<scf::ExecuteRegionOp>(cursor)) {
+      auto &blocks = executeRegionOp.getRegion().getBlocks();
+      // Warp pipelining only requires a single block per execute region
+      if (blocks.size() > 1) {
+        cursor->emitRemark(
+            "ExecuteRegion with multiple blocks is not supported; falling back "
+            "to conservative wait count");
+        return 0;
+      }
+      // Traverse upwards if we came from the first block; else walk the body.
+      // This assumes a single block per execute region.
+      auto body = &blocks.front();
+      if (cameFrom->getBlock() == body) {
+        continueWalkFrom(getPredecessor(executeRegionOp));
+      } else {
+        continueWalkFrom(body->getTerminator());
+      }
+      return bestPath;
     } else if (isa<triton::FuncOp>(cursor)) {
       // Reached function boundary; return current sum (conservative)
       return std::min(bestPath, pathSum);

@@ -173,6 +173,7 @@ def compile_kernel(args: CompileArgs):
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
     ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
+    backend_name = target.backend
 
     params = {
         "kernel_name": func_name,
@@ -192,9 +193,9 @@ def compile_kernel(args: CompileArgs):
         "gridZ": grid[2],
         "_placeholder": "",
         "warp_size": target.warp_size,
+        "backend_name": backend_name,
     }
     output_files = []
-    backend_name = target.backend
     template_dir = Path(__file__).parent / "extra" / backend_name
     for template_path in template_dir.glob('compile.*'):
         ext = template_path.suffix
