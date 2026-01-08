@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
+import torch
 
 
 # ------------------- Layout Definition -------------------
@@ -70,7 +71,7 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1
-        data = repack(data, self.order[0], -1, self.is_fp4)
-        ret = data.contiguous()
+        ret = torch.empty_like(data)
+        repack(data, self.order[0], -1, self.is_fp4, out=ret)
         assert ret.stride(-1) == 1
         return ret
