@@ -228,6 +228,10 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
+      if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
+        node->setDataValue(0);
+        values.push_back({node, 0});
+      }
       // if it is manually tagged with data attribute,
       // all outputs are treated as data values
       if (op->hasAttr("data")) {
