@@ -2,8 +2,7 @@ from dataclasses import dataclass
 import torch
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
-import itertools
-import operator
+import gc
 
 
 # ------------------- Blackwell MX Value Layout -------------------
@@ -20,11 +19,12 @@ class BlackwellMXValueLayout(Layout):
     def swizzle_block_shape(self, block_shape):
         return block_shape
 
+
 def strides_major_dim_m2(shape):
     n = len(shape)
     if n <= 1:
         return [1] * n
-    order = [n-2, n-1] + list(range(n-3, -1, -1))  # fastest -> slowest
+    order = [n - 2, n - 1] + list(range(n - 3, -1, -1))  # fastest -> slowest
     st = [0] * n
     st[order[0]] = 1
     for prev, d in zip(order, order[1:]):
@@ -42,6 +42,8 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         data = repack(data, -1, -2, self.is_fp4)
         out_shape = list(data.shape)
         out_shape[-2] += (-out_shape[-2]) % 128
+        gc.collect()
+        torch.cuda.empty_cache()
         ret = torch.empty_strided(out_shape, strides_major_dim_m2(out_shape), device=data.device, dtype=data.dtype)
         ret[..., :data.shape[-2], :] = data
         return ret

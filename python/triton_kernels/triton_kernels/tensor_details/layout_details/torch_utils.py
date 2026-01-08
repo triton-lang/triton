@@ -40,6 +40,8 @@ import torch
 #     ret = pack(tmp, new_dim, is_fp4)
 #     return ret
 
+import gc
+
 
 def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torch.Tensor:
     old_dim %= data.ndim
@@ -48,6 +50,8 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
         return data
     if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
+    gc.collect()
+    torch.cuda.empty_cache()
     ret_shape = list(data.shape)
     ret_shape[old_dim] *= 2
     ret_shape[new_dim] //= 2
@@ -66,8 +70,11 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool) -> torc
     r_odd = _idx(ret.ndim, old_dim, slice(1, None, 2))
     a = data[d_even]
     b = data[d_odd]
-    ret[r_even] = ((b & 0x0F) << 4)
+    ret[r_even] = (b & 0x0F)
+    ret[r_even] <<= 4
     ret[r_even] |= (a & 0x0F)
-    ret[r_odd] = ((a & 0xF0) >> 4)
+    ret[r_odd] = (a & 0xF0)
+    ret[r_odd] >>= 4
     ret[r_odd] |= (b & 0xF0)
+
     return ret
