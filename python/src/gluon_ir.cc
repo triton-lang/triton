@@ -547,6 +547,11 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
                  ctx, ctaSplitNum[0], ctaSplitNum[1]);
            })
+      .def("get_shape_from_tensor",
+           [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
+             auto ty = dyn_cast<RankedTensorType>(tensor.getType());
+             return ty.getShape();
+           })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
@@ -920,6 +925,14 @@ void init_gluon_ir(py::module &&m) {
               Value src, Value barrier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src, barrier);
+           })
+      .def("create_tdm_prefetch",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value pred, bool speculative, bool returnOffsets) -> Value {
+             auto op = self.create<ttag::TDMPrefetchOp>(
+                 descPtr, indices, pred, speculative,
+                 returnOffsets ? UnitAttr::get(self.getContext()) : nullptr);
+             return returnOffsets ? op->getResult(0) : nullptr;
            })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {
