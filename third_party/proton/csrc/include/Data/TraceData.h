@@ -12,6 +12,10 @@ public:
   TraceData(const std::string &path, ContextSource *contextSource = nullptr);
   virtual ~TraceData();
 
+  std::string toJsonString(size_t phase) const override;
+
+  std::vector<uint8_t> toMsgPack(size_t phase) const override;
+
   DataEntry addOp(const std::string &name) override;
 
   DataEntry addOp(size_t eventId,
@@ -34,10 +38,6 @@ protected:
   void exitScope(const Scope &scope) override final;
 
 private:
-  // Data
-  std::string doToJsonString(size_t phase) const override;
-  std::vector<uint8_t> doToMsgPack(size_t phase) const override;
-
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;

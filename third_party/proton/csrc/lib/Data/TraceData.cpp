@@ -204,16 +204,15 @@ void TraceData::addScopeMetrics(
   }
 }
 
-std::string TraceData::doToJsonString(size_t phase) const {
+std::string TraceData::toJsonString(size_t phase) const {
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) const {
+std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
   std::ostringstream os;
   dumpChromeTrace(os, phase);
-  // TODO: optimize this by writing directly to MsgPackWriter
   MsgPackWriter writer;
   writer.packStr(os.str());
   return std::move(writer).take();

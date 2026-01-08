@@ -24,40 +24,7 @@ size_t Data::advancePhase() {
   return currentPhase;
 }
 
-void Data::validateNonCurrentPhase(const char *operation, const char *action,
-                                   size_t phase) const {
-  size_t current = 0;
-  {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    current = currentPhase;
-  }
-
-  if (phase == current) {
-    throw std::runtime_error(std::string("[PROTON] ") + operation + " cannot " +
-                             action +
-                             " the current (active) phase. Call "
-                             "advancePhase() first.");
-  }
-  if (phase > current) {
-    throw std::runtime_error(std::string("[PROTON] ") + operation + ": phase " +
-                             std::to_string(phase) +
-                             " is out of range (current phase is " +
-                             std::to_string(current) + ").");
-  }
-}
-
-std::string Data::toJsonString(size_t phase) const {
-  validateNonCurrentPhase("Data::toJsonString", "serialize", phase);
-  return doToJsonString(phase);
-}
-
-std::vector<uint8_t> Data::toMsgPack(size_t phase) const {
-  validateNonCurrentPhase("Data::toMsgPack", "serialize", phase);
-  return doToMsgPack(phase);
-}
-
 void Data::clear(size_t phase) {
-  validateNonCurrentPhase("Data::clear", "clear", phase);
   phaseStore->clearUpToInclusive(phase);
   std::unique_lock<std::shared_mutex> lock(mutex);
   currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);

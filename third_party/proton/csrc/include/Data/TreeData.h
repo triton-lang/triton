@@ -20,6 +20,10 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
+  std::string toJsonString(size_t phase) const override;
+
+  std::vector<uint8_t> toMsgPack(size_t phase) const override;
+
   DataEntry addOp(const std::string &name) override;
 
   DataEntry addOp(size_t contextId,
@@ -40,10 +44,6 @@ protected:
   void exitScope(const Scope &scope) override;
 
 private:
-  // Data
-  std::string doToJsonString(size_t phase) const override;
-  std::vector<uint8_t> doToMsgPack(size_t phase) const override;
-
   // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
   // the background threads concurrently, so methods that access them should be
   // protected by a (shared) mutex.

@@ -410,7 +410,7 @@ session_id = proton.start(name="profile_name")
 ...
 
 # get_data_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
-proton.deactivate(session_id)
+proton.deactivate(session_id, flushing=True) # with flushing=False, it's not guaranteed that all kernels are finished but it's faster
 # Get a json dictionary
 data = proton.data.get_json(session_id)
 # Get a msgpack bytes

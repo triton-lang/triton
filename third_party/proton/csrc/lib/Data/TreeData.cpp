@@ -745,14 +745,14 @@ void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
   });
 }
 
-std::vector<uint8_t> TreeData::doToMsgPack(size_t phase) const {
-  return treePhases.withPtr(
-      phase, [&](Tree *tree) { return buildHatchetMsgPack(tree); });
-}
-
-std::string TreeData::doToJsonString(size_t phase) const {
+std::string TreeData::toJsonString(size_t phase) const {
   return treePhases.withPtr(
       phase, [&](Tree *tree) { return buildHatchetJson(tree).dump(); });
+}
+
+std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
+  return treePhases.withPtr(
+      phase, [&](Tree *tree) { return buildHatchetMsgPack(tree); });
 }
 
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,

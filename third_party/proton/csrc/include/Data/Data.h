@@ -76,10 +76,10 @@ public:
   void clear(size_t phase);
 
   /// To Json
-  std::string toJsonString(size_t phase) const;
+  virtual std::string toJsonString(size_t phase) const = 0;
 
   /// To MsgPack
-  std::vector<uint8_t> toMsgPack(size_t phase) const;
+  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
@@ -113,9 +113,6 @@ public:
                   const std::map<std::string, MetricValueType> &metrics) = 0;
 
 protected:
-  virtual std::string doToJsonString(size_t phase) const = 0;
-  virtual std::vector<uint8_t> doToMsgPack(size_t phase) const = 0;
-
   /// The actual implementations
   virtual void doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const = 0;
