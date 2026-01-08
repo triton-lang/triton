@@ -271,7 +271,7 @@ def test_clear_data(tmp_path: pathlib.Path):
     proton.data.advance_phase(session)
     proton.data.clear(session)
     try:
-        database = proton.data.get(session)
+        database = proton.data.get(session, phase=0)
     except RuntimeError as e:
         assert "has no data" in str(e)
 
