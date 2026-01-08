@@ -917,7 +917,7 @@ def test_cudagraph_deactivate(tmp_path):
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
-    fresh_knobs.proton.cupti_buffer_size = buffer_size
+    fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 

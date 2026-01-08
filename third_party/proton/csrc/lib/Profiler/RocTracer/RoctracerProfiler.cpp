@@ -230,8 +230,6 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
 
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
-
   ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
       corrIdToIsHipGraph;
 
@@ -417,7 +415,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
                                         nullptr);
   // Activity Records
   roctracer_properties_t properties{0};
-  properties.buffer_size = BufferSize;
+  const auto defaultBufferSize = 64 * 1024 * 1024;
+  auto bufferSize =
+      getIntEnv("TRITON_PROFILE_BUFFER_SIZE",
+                getIntEnv("TRITON_ROCTRACER_BUFFER_SIZE", defaultBufferSize));
+  properties.buffer_size = bufferSize;
   properties.buffer_callback_fun = activityCallback;
   roctracer::openPool<true>(&properties);
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
