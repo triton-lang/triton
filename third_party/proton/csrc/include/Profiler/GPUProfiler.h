@@ -23,7 +23,7 @@ namespace proton {
 
 namespace detail {
 void periodicFlushImpl(
-    bool periodicFlushingEnabled, const std::string &periodicFlushingFormat,
+    const std::string &periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -110,8 +110,9 @@ protected:
       const std::map<Data *,
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
           &dataPhases) {
-    detail::periodicFlushImpl(periodicFlushingEnabled, periodicFlushingFormat,
-                              dataFlushedPhases, dataPhases);
+    if (periodicFlushingEnabled)
+      detail::periodicFlushImpl(periodicFlushingFormat, dataFlushedPhases,
+                                dataPhases);
   }
 
   // Profiler

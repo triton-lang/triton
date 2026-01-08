@@ -8,14 +8,11 @@ namespace proton {
 namespace detail {
 
 void periodicFlushImpl(
-    bool periodicFlushingEnabled, const std::string &periodicFlushingFormat,
+    const std::string &periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases) {
-  if (!periodicFlushingEnabled)
-    return;
-
   static const bool timingEnabled =
       getBoolEnv("PROTON_PERIODIC_FLUSH_TIMING", false);
   using Clock = std::chrono::steady_clock;

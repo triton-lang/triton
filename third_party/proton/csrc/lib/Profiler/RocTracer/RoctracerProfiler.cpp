@@ -473,7 +473,7 @@ void RoctracerProfiler::doSetMode(
       periodicFlushingFormat = "hatchet";
     }
   } else if (!mode.empty()) {
-    throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
+    throw std::invalid_argument("[PROTON] RoctracerProfiler: unsupported mode: " +
                                 mode);
   }
 }
