@@ -47,6 +47,14 @@ bool Data::isPhaseFlushed(size_t phase) const {
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 
+  // Allow callers to finalize a session without writing any output.
+  // This is useful when periodic flushing is configured to emit summaries
+  // (e.g. to metrics/logs) instead of dumping full traces to disk.
+  const auto fmt = toLower(outputFormat);
+  if (fmt == "none" || fmt == "metrics") {
+    return;
+  }
+
   OutputFormat outputFormatEnum = outputFormat.empty()
                                       ? getDefaultOutputFormat()
                                       : parseOutputFormat(outputFormat);

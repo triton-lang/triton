@@ -85,3 +85,18 @@ def clear(session: Optional[int] = 0, phase: int = 0) -> None:
     if flags.command_line and session != 0:
         raise ValueError("Only one session can be cleared when running from the command line.")
     libproton.clear_data(session, phase)
+
+
+def drain_flushed_phase_metrics(session: Optional[int] = 0):
+    """
+    Drain periodic flush summaries produced by backend profilers (FIFO).
+
+    Returns:
+        list[tuple[int, dict[str, float]]]: (phase, metrics) pairs. Phase is the same
+        id used in `.part_<phase>.*` outputs (i.e. "step id" if you advance phase per step).
+    """
+    if session is None:
+        return None
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can drain flushed metrics when running from the command line.")
+    return libproton.drain_flushed_phase_metrics(session)

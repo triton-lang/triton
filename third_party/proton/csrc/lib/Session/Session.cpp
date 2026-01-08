@@ -171,6 +171,7 @@ void SessionManager::removeSession(size_t sessionId) {
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
   sessionActive.erase(sessionId);
+  flushedPhaseMetrics_.erase(sessionId);
   sessions.erase(sessionId);
 }
 
@@ -376,6 +377,42 @@ bool SessionManager::isDataPhaseFlushed(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   return sessions[sessionId]->data->isPhaseFlushed(phase);
+}
+
+void SessionManager::enqueueFlushedPhaseMetrics(
+    size_t sessionId, size_t phase, std::map<std::string, double> metrics) {
+  std::lock_guard<std::mutex> lock(mutex);
+  if (!hasSession(sessionId)) {
+    return;
+  }
+  flushedPhaseMetrics_[sessionId].push_back(
+      FlushedPhaseMetrics{phase, std::move(metrics)});
+}
+
+std::vector<SessionManager::FlushedPhaseMetrics>
+SessionManager::drainFlushedPhaseMetrics(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  std::vector<FlushedPhaseMetrics> out;
+  auto it = flushedPhaseMetrics_.find(sessionId);
+  if (it == flushedPhaseMetrics_.end()) {
+    return out;
+  }
+  auto &q = it->second;
+  out.reserve(q.size());
+  while (!q.empty()) {
+    out.push_back(std::move(q.front()));
+    q.pop_front();
+  }
+  return out;
+}
+
+std::optional<size_t> SessionManager::tryGetSessionIdForPath(
+    const std::string &path) {
+  std::lock_guard<std::mutex> lock(mutex);
+  if (!hasSession(path)) {
+    return std::nullopt;
+  }
+  return getSessionId(path);
 }
 
 } // namespace proton

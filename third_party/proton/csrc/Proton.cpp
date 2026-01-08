@@ -200,6 +200,19 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().isDataPhaseFlushed(sessionId, phase);
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
+
+  m.def(
+      "drain_flushed_phase_metrics",
+      [](size_t sessionId) {
+        auto drained =
+            SessionManager::instance().drainFlushedPhaseMetrics(sessionId);
+        pybind11::list out;
+        for (auto &entry : drained) {
+          out.append(pybind11::make_tuple(entry.phase, entry.metrics));
+        }
+        return out;
+      },
+      pybind11::arg("sessionId"));
 }
 
 PYBIND11_MODULE(libproton, m) {

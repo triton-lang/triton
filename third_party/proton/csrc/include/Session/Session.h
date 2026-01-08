@@ -5,10 +5,12 @@
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
 #include <algorithm>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -72,6 +74,12 @@ private:
 /// There's a single and unique session manager in the system.
 class SessionManager : public Singleton<SessionManager> {
 public:
+  struct FlushedPhaseMetrics {
+    size_t phase;
+    // Summary metrics for this phase (kept intentionally small).
+    std::map<std::string, double> metrics;
+  };
+
   SessionManager() = default;
   ~SessionManager() = default;
 
@@ -102,6 +110,15 @@ public:
   size_t advanceDataPhase(size_t sessionId);
 
   bool isDataPhaseFlushed(size_t sessionId, size_t phase);
+
+  // Thread-safe queue used by backend profilers to publish periodic flush summaries.
+  void enqueueFlushedPhaseMetrics(size_t sessionId, size_t phase,
+                                  std::map<std::string, double> metrics);
+  std::vector<FlushedPhaseMetrics> drainFlushedPhaseMetrics(size_t sessionId);
+
+  // Resolve a session id from its session path (same string passed to start()).
+  // Returns nullopt if the session does not exist.
+  std::optional<size_t> tryGetSessionIdForPath(const std::string &path);
 
   void enterScope(const Scope &scope);
 
@@ -221,6 +238,8 @@ private:
   std::map<size_t, bool> sessionActive;
   // session id -> session
   std::map<size_t, std::unique_ptr<Session>> sessions;
+  // session id -> flushed phase summaries (FIFO)
+  std::map<size_t, std::deque<FlushedPhaseMetrics>> flushedPhaseMetrics_;
   // {scope, active count}
   std::vector<std::pair<ScopeInterface *, size_t>> scopeInterfaceCounts;
   // {op, active count}

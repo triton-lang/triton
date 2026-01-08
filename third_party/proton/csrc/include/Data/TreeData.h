@@ -6,6 +6,7 @@
 #include "nlohmann/json.hpp"
 #include <stdexcept>
 #include <string>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -15,6 +16,16 @@ namespace proton {
 
 class TreeData : public Data {
 public:
+  struct PhaseSummary {
+    // Kernel activity timing (nanoseconds, from CUPTI start/end timestamps).
+    uint64_t kernel_span_ns{0}; // max(end) - min(start)
+    uint64_t kernel_sum_ns{0};  // sum(duration) across nodes (may overcount overlaps)
+    uint64_t kernel_invocations{0};
+    // Optional raw bounds for debugging; 0 if no kernel activities were observed.
+    uint64_t kernel_min_start_ns{0};
+    uint64_t kernel_max_end_ns{0};
+  };
+
   TreeData(const std::string &path, ContextSource *contextSource);
   virtual ~TreeData();
 
@@ -23,6 +34,17 @@ public:
   std::string toJsonString(size_t phase) const override;
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
+  // Compute a small summary for a given phase without serializing the full tree.
+  PhaseSummary summarizePhase(size_t phase) const;
+  // Compute per-node-path average durations (ms) for kernels whose *node name*
+  // starts with `prefix`.
+  //
+  // The key is the full tree path (ROOT excluded), e.g. "moduleA/opB/_p_matmul_X".
+  // This disambiguates kernels that share a leaf name but occur under different
+  // module/op paths.
+  std::map<std::string, double>
+  summarizeKernelPathsAvgDurationMsByPrefix(size_t phase,
+                                            const std::string &prefix) const;
 
   DataEntry addOp(const std::string &name) override;
 

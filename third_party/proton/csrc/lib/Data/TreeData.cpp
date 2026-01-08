@@ -733,6 +733,121 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
   }
 }
 
+TreeData::PhaseSummary TreeData::summarizePhase(size_t phase) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    PhaseSummary summary{};
+    uint64_t min_start = std::numeric_limits<uint64_t>::max();
+    uint64_t max_end = 0;
+    uint64_t sum_ns = 0;
+    uint64_t invocations = 0;
+
+    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          for (auto &[metricKind, metric] : treeNode.metrics) {
+            if (metricKind != MetricKind::Kernel || metric == nullptr) {
+              continue;
+            }
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
+            const uint64_t start_ns = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StartTime));
+            const uint64_t end_ns = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::EndTime));
+            const uint64_t dur_ns = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
+            const uint64_t n_invocations = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Invocations));
+
+            if (end_ns < start_ns) {
+              // Ignore invalid records.
+              continue;
+            }
+
+            min_start = std::min(min_start, start_ns);
+            max_end = std::max(max_end, end_ns);
+            sum_ns += dur_ns;
+            invocations += n_invocations;
+          }
+        });
+
+    if (min_start == std::numeric_limits<uint64_t>::max()) {
+      // No kernel metrics observed.
+      return summary;
+    }
+
+    summary.kernel_min_start_ns = min_start;
+    summary.kernel_max_end_ns = max_end;
+    summary.kernel_span_ns = (max_end >= min_start) ? (max_end - min_start) : 0;
+    summary.kernel_sum_ns = sum_ns;
+    summary.kernel_invocations = invocations;
+    return summary;
+  });
+}
+
+std::map<std::string, double> TreeData::summarizeKernelPathsAvgDurationMsByPrefix(
+    size_t phase, const std::string &prefix) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    // sums[path] = (sum_duration_ns, sum_invocations)
+    std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> sums;
+
+    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
+      // Walk parents to build a full path. ROOT is excluded.
+      std::vector<std::string_view> parts;
+      const TreeData::Tree::TreeNode *cur = &node;
+      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
+        parts.push_back(cur->name);
+        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
+          break;
+        }
+        cur = &tree->getNode(cur->parentId);
+      }
+      std::string out;
+      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (!out.empty()) {
+          out.push_back('/');
+        }
+        out.append(it->data(), it->size());
+      }
+      return out;
+    };
+
+    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          if (!prefix.empty() && treeNode.name.rfind(prefix, 0) != 0) {
+            return;
+          }
+          auto it = treeNode.metrics.find(MetricKind::Kernel);
+          if (it == treeNode.metrics.end() || it->second == nullptr) {
+            return;
+          }
+          auto *kernelMetric = static_cast<KernelMetric *>(it->second.get());
+          const uint64_t dur_ns = std::get<uint64_t>(
+              kernelMetric->getValue(KernelMetric::Duration));
+          const uint64_t n_invocations = std::get<uint64_t>(
+              kernelMetric->getValue(KernelMetric::Invocations));
+          if (n_invocations == 0) {
+            return;
+          }
+          const std::string path = buildPath(treeNode);
+          auto &entry = sums[path];
+          entry.first += dur_ns;
+          entry.second += n_invocations;
+        });
+
+    std::map<std::string, double> out;
+    for (auto &kv : sums) {
+      const auto &name = kv.first;
+      const uint64_t sum_ns = kv.second.first;
+      const uint64_t inv = kv.second.second;
+      if (inv == 0) {
+        continue;
+      }
+      out[name] =
+          (static_cast<double>(sum_ns) / static_cast<double>(inv)) / 1e6;
+    }
+    return out;
+  });
+}
+
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
   initPhaseStore(treePhases);

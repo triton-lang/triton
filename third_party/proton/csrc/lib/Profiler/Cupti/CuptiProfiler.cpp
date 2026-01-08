@@ -942,9 +942,24 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   if (proton::toLower(mode) == "pcsampling") {
     pcSamplingEnabled = true;
   } else if (proton::toLower(mode) == "periodic_flushing") {
-    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
-                                    periodicFlushingFormat, modeAndOptions,
-                                    "CuptiProfiler");
+    auto delimiterPos = modeAndOptions[1].find('=');
+    periodicFlushingEnabled = true;
+    if (delimiterPos != std::string::npos) {
+      const std::string key = modeAndOptions[1].substr(0, delimiterPos);
+      const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
+      if (key != "format") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported option key: " + key);
+      }
+      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
+          value != "hatchet" && value != "metrics") {
+        throw std::invalid_argument(
+            "[PROTON] CuptiProfiler: unsupported format: " + value);
+      }
+      periodicFlushingFormat = value;
+    } else {
+      periodicFlushingFormat = "hatchet";
+    }
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
                                 mode);
