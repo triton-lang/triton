@@ -204,13 +204,13 @@ void TraceData::addScopeMetrics(
   }
 }
 
-std::string TraceData::toJsonString(size_t phase) const {
+std::string TraceData::doToJsonString(size_t phase) const {
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
+std::vector<uint8_t> TraceData::doToMsgPack(size_t phase) const {
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   // TODO: optimize this by writing directly to MsgPackWriter
@@ -450,50 +450,50 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
-  auto slot = tracePhases.getSlot(phase);
-  auto &events = slot->value->getEvents();
-  // stream id -> trace event
-  std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
-  uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
-  bool hasKernelMetrics = false, hasCycleMetrics = false;
-  // Data structure for efficient cycle metrics conversion
-  std::map<uint64_t, int> kernelBlockNum;
-  std::vector<CycleMetricWithContext> cycleEvents;
-  cycleEvents.reserve(events.size());
-  for (auto &entry : events) {
-    auto &event = entry.second;
-    if (event.metrics.count(MetricKind::Kernel)) {
-      auto *kernelMetric = static_cast<KernelMetric *>(
-          event.metrics.at(MetricKind::Kernel).get());
-      auto streamId =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
-      streamTraceEvents[streamId].push_back(&event);
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    auto &events = trace->getEvents();
+    // stream id -> trace event
+    std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
+    uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
+    bool hasKernelMetrics = false, hasCycleMetrics = false;
+    // Data structure for efficient cycle metrics conversion
+    std::map<uint64_t, int> kernelBlockNum;
+    std::vector<CycleMetricWithContext> cycleEvents;
+    cycleEvents.reserve(events.size());
+    for (auto &entry : events) {
+      auto &event = entry.second;
+      if (event.metrics.count(MetricKind::Kernel)) {
+        auto *kernelMetric = static_cast<KernelMetric *>(
+            event.metrics.at(MetricKind::Kernel).get());
+        auto streamId =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
+        streamTraceEvents[streamId].push_back(&event);
 
-      uint64_t startTime =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      minTimeStamp = std::min(minTimeStamp, startTime);
-      hasKernelMetrics = true;
+        uint64_t startTime =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+        minTimeStamp = std::min(minTimeStamp, startTime);
+        hasKernelMetrics = true;
+      }
+      if (event.metrics.count(MetricKind::Cycle)) {
+        auto *cycleMetric = static_cast<CycleMetric *>(
+            event.metrics.at(MetricKind::Cycle).get());
+        cycleEvents.emplace_back(cycleMetric, event.contextId);
+        hasCycleMetrics = true;
+      }
+
+      if (hasKernelMetrics && hasCycleMetrics) {
+        throw std::runtime_error("only one active metric type is supported");
+      }
     }
-    if (event.metrics.count(MetricKind::Cycle)) {
-      auto *cycleMetric =
-          static_cast<CycleMetric *>(event.metrics.at(MetricKind::Cycle).get());
-      cycleEvents.emplace_back(cycleMetric, event.contextId);
-      hasCycleMetrics = true;
+
+    if (hasCycleMetrics) {
+      dumpCycleMetricTrace(trace, cycleEvents, os);
     }
 
-    if (hasKernelMetrics && hasCycleMetrics) {
-      throw std::runtime_error("only one active metric type is supported");
+    if (hasKernelMetrics) {
+      dumpKernelMetricTrace(trace, minTimeStamp, streamTraceEvents, os);
     }
-  }
-
-  if (hasCycleMetrics) {
-    dumpCycleMetricTrace(slot->value.get(), cycleEvents, os);
-  }
-
-  if (hasKernelMetrics) {
-    dumpKernelMetricTrace(slot->value.get(), minTimeStamp, streamTraceEvents,
-                          os);
-  }
+  });
 }
 
 void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,

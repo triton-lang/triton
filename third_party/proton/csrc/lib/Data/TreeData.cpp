@@ -731,26 +731,28 @@ void TreeData::addEntryMetrics(
 }
 
 void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
-  auto slot = treePhases.getSlot(phase);
-  auto output = buildHatchetJson(slot->value.get());
-  os << std::endl << output.dump(4) << std::endl;
+  treePhases.withPtr(phase, [&](Tree *tree) {
+    auto output = buildHatchetJson(tree);
+    os << std::endl << output.dump(4) << std::endl;
+  });
 }
 
 void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
-  auto slot = treePhases.getSlot(phase);
-  auto msgPack = buildHatchetMsgPack(slot->value.get());
-  os.write(reinterpret_cast<const char *>(msgPack.data()),
-           static_cast<std::streamsize>(msgPack.size()));
+  treePhases.withPtr(phase, [&](Tree *tree) {
+    auto msgPack = buildHatchetMsgPack(tree);
+    os.write(reinterpret_cast<const char *>(msgPack.data()),
+             static_cast<std::streamsize>(msgPack.size()));
+  });
 }
 
-std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
-  auto slot = treePhases.getSlot(phase);
-  return buildHatchetMsgPack(slot->value.get());
+std::vector<uint8_t> TreeData::doToMsgPack(size_t phase) const {
+  return treePhases.withPtr(phase,
+                            [&](Tree *tree) { return buildHatchetMsgPack(tree); });
 }
 
-std::string TreeData::toJsonString(size_t phase) const {
-  auto slot = treePhases.getSlot(phase);
-  return buildHatchetJson(slot->value.get()).dump();
+std::string TreeData::doToJsonString(size_t phase) const {
+  return treePhases.withPtr(
+      phase, [&](Tree *tree) { return buildHatchetJson(tree).dump(); });
 }
 
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,

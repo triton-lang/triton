@@ -72,13 +72,14 @@ public:
   void dump(const std::string &outputFormat);
 
   /// Clear all non-persistent fields in the data.
+  /// The current (active) phase cannot be cleared.
   void clear(size_t phase);
 
   /// To Json
-  virtual std::string toJsonString(size_t phase) const = 0;
+  std::string toJsonString(size_t phase) const;
 
   /// To MsgPack
-  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
+  std::vector<uint8_t> toMsgPack(size_t phase) const;
 
   /// Add an op to the data.
   /// Otherwise obtain the current context and append `opName` to it if `opName`
@@ -112,6 +113,9 @@ public:
                   const std::map<std::string, MetricValueType> &metrics) = 0;
 
 protected:
+  virtual std::string doToJsonString(size_t phase) const = 0;
+  virtual std::vector<uint8_t> doToMsgPack(size_t phase) const = 0;
+
   /// The actual implementations
   virtual void doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const = 0;
@@ -135,6 +139,9 @@ protected:
   ContextSource *contextSource{};
 
 private:
+  void validateNonCurrentPhase(const char *operation, const char *action,
+                               size_t phase) const;
+
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
 };

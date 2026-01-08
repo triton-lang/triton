@@ -7,6 +7,8 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace proton {
 
@@ -14,10 +16,7 @@ class PhaseStoreBase {
 public:
   virtual ~PhaseStoreBase() = default;
 
-  virtual void ensure(size_t phase) = 0;
   virtual void *getOrCreatePtr(size_t phase) = 0;
-  virtual void *getPtr(size_t phase) = 0;
-  virtual const void *getPtr(size_t phase) const = 0;
   virtual void clearUpToInclusive(size_t phase) = 0;
 };
 
@@ -31,35 +30,11 @@ public:
     std::unique_ptr<T> value;
   };
 
-  void ensure(size_t phase) override {
+  void *getOrCreatePtr(size_t phase) override {
     auto slot = getOrCreateSlot(phase);
     std::unique_lock<std::shared_mutex> slotLock(slot->mutex);
     if (!slot->value) {
       slot->value = std::make_unique<T>();
-    }
-  }
-
-  void *getOrCreatePtr(size_t phase) override {
-    ensure(phase);
-    return getPtr(phase);
-  }
-
-  void *getPtr(size_t phase) override {
-    auto slot = getSlot(phase);
-    std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
-    if (!slot->value) {
-      throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                               " has no data.");
-    }
-    return slot->value.get();
-  }
-
-  const void *getPtr(size_t phase) const override {
-    auto slot = getSlot(phase);
-    std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
-    if (!slot->value) {
-      throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                               " has no data.");
     }
     return slot->value.get();
   }
@@ -90,6 +65,18 @@ public:
     }
   }
 
+  template <typename FnT>
+  decltype(auto) withPtr(size_t phase, FnT &&fn) const {
+    auto slot = getSlot(phase);
+    std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
+    if (!slot->value) {
+      throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
+                               " has no data.");
+    }
+    return std::forward<FnT>(fn)(slot->value.get());
+  }
+
+private:
   std::shared_ptr<Slot> getOrCreateSlot(size_t phase) {
     {
       std::shared_lock<std::shared_mutex> lock(phasesMutex);
@@ -116,7 +103,6 @@ public:
     return it->second;
   }
 
-private:
   mutable std::shared_mutex phasesMutex;
   std::map<size_t, std::shared_ptr<Slot>> phases;
 };
