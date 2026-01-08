@@ -40,21 +40,20 @@ protected:
   void exitScope(const Scope &scope) override;
 
 private:
+  // Data
+  std::string doToJsonString(size_t phase) const override;
+  std::vector<uint8_t> doToMsgPack(size_t phase) const override;
+
   // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
   // the background threads concurrently, so methods that access them should be
   // protected by a (shared) mutex.
   class Tree;
   json buildHatchetJson(TreeData::Tree *tree) const;
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
-  void pruneTree(TreeData::Tree *tree);
 
   // Data
-  void doAdvancePhase() override;
-  std::string doToJsonString(size_t phase) const override;
-  std::vector<uint8_t> doToMsgPack(size_t phase) const override;
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
-  void doClear(size_t phase) override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::Hatchet;
@@ -63,8 +62,7 @@ private:
   void dumpHatchet(std::ostream &os, size_t phase) const;
   void dumpHatchetMsgPack(std::ostream &os, size_t phase) const;
 
-  // phase -> Tree
-  std::map<size_t, std::unique_ptr<Tree>> treePhases;
+  PhaseStore<Tree> treePhases;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
 };

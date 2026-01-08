@@ -9,30 +9,61 @@
 
 namespace proton {
 
-size_t Data::advancePhase() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  doAdvancePhase();
-  auto nextPhase = currentPhase + 1;
-  activePhases.insert(nextPhase);
-  return ++currentPhase;
+void Data::initPhaseStore(PhaseStoreBase &store) {
+  phaseStore = &store;
+  currentPhasePtr = phaseStore->getOrCreatePtr(0);
+  activePhases.insert(0);
 }
 
-void Data::clear(size_t phase) {
+size_t Data::advancePhase() {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  doClear(phase);
-  activePhases.clear();
-  for (phase += 1; phase <= currentPhase; phase++)
-    activePhases.insert(phase);
+  const auto nextPhase = currentPhase + 1;
+  currentPhasePtr = phaseStore->getOrCreatePtr(nextPhase);
+  activePhases.insert(nextPhase);
+  currentPhase = nextPhase;
+  return currentPhase;
+}
+
+void Data::validateNonCurrentPhase(const char *operation, const char *action,
+                                   size_t phase) const {
+  size_t current = 0;
+  {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    current = currentPhase;
+  }
+
+  if (phase == current) {
+    throw std::runtime_error(std::string("[PROTON] ") + operation + " cannot " +
+                             action +
+                             " the current (active) phase. Call "
+                             "advancePhase() first.");
+  }
+  if (phase > current) {
+    throw std::runtime_error(std::string("[PROTON] ") + operation + ": phase " +
+                             std::to_string(phase) +
+                             " is out of range (current phase is " +
+                             std::to_string(current) + ").");
+  }
 }
 
 std::string Data::toJsonString(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  validateNonCurrentPhase("Data::toJsonString", "serialize", phase);
   return doToJsonString(phase);
 }
 
 std::vector<uint8_t> Data::toMsgPack(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  validateNonCurrentPhase("Data::toMsgPack", "serialize", phase);
   return doToMsgPack(phase);
+}
+
+void Data::clear(size_t phase) {
+  validateNonCurrentPhase("Data::clear", "clear", phase);
+  phaseStore->clearUpToInclusive(phase);
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
+  activePhases.clear();
+  for (phase += 1; phase <= currentPhase; phase++)
+    activePhases.insert(phase);
 }
 
 void Data::dump(const std::string &outputFormat) {
@@ -47,8 +78,7 @@ void Data::dump(const std::string &outputFormat) {
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
-      auto suffix =
-          getCurrentPhase() == 0 ? "" : ".part_" + std::to_string(phase);
+      auto suffix = currentPhase == 0 ? "" : ".part_" + std::to_string(phase);
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
@@ -58,7 +88,6 @@ void Data::dump(const std::string &outputFormat) {
       out.reset(
           new std::ofstream(filePath, fileMode)); // Opening a file for output
     }
-
     doDump(*out, outputFormatEnum, phase);
   }
 }
