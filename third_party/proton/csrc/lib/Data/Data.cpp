@@ -9,17 +9,25 @@
 
 namespace proton {
 
+void Data::initPhaseStore(PhaseStoreBase &store) {
+  phaseStore = &store;
+  currentPhasePtr = phaseStore->getOrCreatePtr(0);
+  activePhases.insert(0);
+}
+
 size_t Data::advancePhase() {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  doAdvancePhase();
-  auto nextPhase = currentPhase + 1;
+  const auto nextPhase = currentPhase + 1;
+  currentPhasePtr = phaseStore->getOrCreatePtr(nextPhase);
   activePhases.insert(nextPhase);
-  return ++currentPhase;
+  currentPhase = nextPhase;
+  return currentPhase;
 }
 
 void Data::clear(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  doClear(phase);
+  phaseStore->clearUpToInclusive(phase);
+  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
   activePhases.clear();
   for (phase += 1; phase <= currentPhase; phase++)
     activePhases.insert(phase);
@@ -37,8 +45,7 @@ void Data::dump(const std::string &outputFormat) {
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
-      auto suffix =
-          getCurrentPhase() == 0 ? "" : ".part_" + std::to_string(phase);
+      auto suffix = currentPhase == 0 ? "" : ".part_" + std::to_string(phase);
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
@@ -48,7 +55,6 @@ void Data::dump(const std::string &outputFormat) {
       out.reset(
           new std::ofstream(filePath, fileMode)); // Opening a file for output
     }
-
     doDump(*out, outputFormatEnum, phase);
   }
 }

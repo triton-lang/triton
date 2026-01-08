@@ -3,12 +3,14 @@
 
 #include "Context/Context.h"
 #include "Metric.h"
+#include "PhaseStore.h"
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <ostream>
 #include <set>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,12 +59,6 @@ public:
 
   /// Get the path associated with the data.
   const std::string &getPath() const { return path; }
-
-  /// Get the current phase.
-  size_t getCurrentPhase() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return currentPhase;
-  }
 
   /// Get the contexts associated with the data.
   std::vector<Context> getContexts() const {
@@ -117,11 +113,19 @@ public:
 
 protected:
   /// The actual implementations
-  virtual void doAdvancePhase() = 0;
   virtual void doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const = 0;
-  virtual void doClear(size_t phase) = 0;
   virtual OutputFormat getDefaultOutputFormat() const = 0;
+
+  void initPhaseStore(PhaseStoreBase &store);
+
+  template <typename T> T *currentPhasePtrAs() {
+    return static_cast<T *>(currentPhasePtr);
+  }
+
+  template <typename T> const T *currentPhasePtrAs() const {
+    return static_cast<const T *>(currentPhasePtr);
+  }
 
   std::size_t currentPhase{0};
   std::set<size_t> activePhases{};
@@ -129,6 +133,10 @@ protected:
   mutable std::shared_mutex mutex;
   const std::string path{};
   ContextSource *contextSource{};
+
+private:
+  PhaseStoreBase *phaseStore{};
+  void *currentPhasePtr{};
 };
 
 typedef std::map<Data *, DataEntry> DataToEntryMap;

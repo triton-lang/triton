@@ -39,18 +39,16 @@ protected:
 
 private:
   // Data
-  void doAdvancePhase() override;
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
-  void doClear(size_t phase) override;
-
-  void dumpChromeTrace(std::ostream &os, size_t phase) const;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;
   }
 
-  std::map<size_t, std::unique_ptr<Trace>> tracePhases;
+  void dumpChromeTrace(std::ostream &os, size_t phase) const;
+
+  PhaseStore<Trace> tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
 };

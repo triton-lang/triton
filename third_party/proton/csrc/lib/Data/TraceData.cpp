@@ -134,13 +134,13 @@ private:
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto *trace = tracePhases[currentPhase].get();
-  auto eventId = trace->addEvent(trace->addContexts(contexts));
+  auto eventId = currentTrace->addEvent(currentTrace->addContexts(contexts));
   scopeIdToEventId[scope.scopeId] = eventId;
 }
 
@@ -150,34 +150,34 @@ void TraceData::exitScope(const Scope &scope) {
 
 DataEntry TraceData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
   std::vector<Context> contexts;
   contexts = contextSource->getContexts();
   if (!name.empty()) // not a placeholder event
     contexts.emplace_back(name);
-  auto *trace = tracePhases[currentPhase].get();
-  auto contextId = trace->addContexts(contexts);
-  auto eventId = trace->addEvent(contextId);
-  auto &event = trace->getEvent(eventId);
+  auto contextId = currentTrace->addContexts(contexts);
+  auto eventId = currentTrace->addEvent(contextId);
+  auto &event = currentTrace->getEvent(eventId);
   return DataEntry(eventId, currentPhase, event.metrics);
 }
 
 DataEntry TraceData::addOp(size_t eventId,
                            const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
   // Add a new context under it and update the context
-  auto *trace = tracePhases[currentPhase].get();
-  auto &event = trace->getEvent(eventId);
-  auto contextId = trace->addContexts(contexts, event.contextId);
-  auto newEventId = trace->addEvent(contextId);
-  auto &newEvent = trace->getEvent(newEventId);
+  auto &event = currentTrace->getEvent(eventId);
+  auto contextId = currentTrace->addContexts(contexts, event.contextId);
+  auto newEventId = currentTrace->addEvent(contextId);
+  auto &newEvent = currentTrace->getEvent(newEventId);
   return DataEntry(newEventId, currentPhase, newEvent.metrics);
 }
 
 void TraceData::addEntryMetrics(
     size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *trace = tracePhases[currentPhase].get();
-  auto &event = trace->getEvent(eventId);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
+  auto &event = currentTrace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
       event.flexibleMetrics.emplace(metricName,
@@ -191,9 +191,9 @@ void TraceData::addEntryMetrics(
 void TraceData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
   auto eventId = scopeIdToEventId.at(scopeId);
-  auto *trace = tracePhases[currentPhase].get();
-  auto &event = trace->getEvent(eventId);
+  auto &event = currentTrace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
       event.flexibleMetrics.emplace(metricName,
@@ -205,46 +205,18 @@ void TraceData::addScopeMetrics(
 }
 
 std::string TraceData::toJsonString(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  if (tracePhases.find(phase) == tracePhases.end()) {
-    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                             " has no data.");
-  }
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   return os.str();
 }
 
 std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  if (tracePhases.find(phase) == tracePhases.end()) {
-    throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                             " has no data.");
-  }
   std::ostringstream os;
   dumpChromeTrace(os, phase);
   // TODO: optimize this by writing directly to MsgPackWriter
   MsgPackWriter writer;
   writer.packStr(os.str());
   return std::move(writer).take();
-}
-
-void TraceData::doAdvancePhase() {
-  tracePhases[currentPhase + 1] = std::make_unique<Trace>();
-}
-
-void TraceData::doClear(size_t phase) {
-  // Clear all data collected before or at the given phase
-  for (auto it = tracePhases.begin(); it != tracePhases.end();) {
-    if (it->first <= phase) {
-      it = tracePhases.erase(it);
-    } else {
-      ++it;
-    }
-  }
-  // Reinsert an empty trace for the current phase if it was cleared
-  if (tracePhases.find(currentPhase) == tracePhases.end())
-    tracePhases[currentPhase] = std::make_unique<Trace>();
 }
 
 namespace {
@@ -478,8 +450,8 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
-  auto *trace = tracePhases.at(phase).get();
-  auto &events = trace->getEvents();
+  auto slot = tracePhases.getSlot(phase);
+  auto &events = slot->value->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
@@ -515,11 +487,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   }
 
   if (hasCycleMetrics) {
-    dumpCycleMetricTrace(trace, cycleEvents, os);
+    dumpCycleMetricTrace(slot->value.get(), cycleEvents, os);
   }
 
   if (hasKernelMetrics) {
-    dumpKernelMetricTrace(trace, minTimeStamp, streamTraceEvents, os);
+    dumpKernelMetricTrace(slot->value.get(), minTimeStamp, streamTraceEvents,
+                          os);
   }
 }
 
@@ -534,8 +507,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
 
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  tracePhases[0] = std::make_unique<Trace>();
-  activePhases.insert(0);
+  initPhaseStore(tracePhases);
 }
 
 TraceData::~TraceData() {}
