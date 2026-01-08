@@ -61,13 +61,20 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
-        ret = repack(data, -1, self.order[0], self.is_fp4)
-        inv = [0] * len(self.order)
-        for i, d in enumerate(reversed(self.order)):
-            inv[d] = i
-        ret = ret.permute(*reversed(self.order)).contiguous().permute(*inv)
-        assert ret.stride(self.order[0]) == 1
-        return ret
+        r = len(self.shape)
+        if r == 0:
+            return data
+        pd = self.order[0]  # packed/contiguous dim in output
+        out_shape = list(self.shape)
+        if self.is_fp4:
+            out_shape[pd] //= 2
+        # dense strides in minor->major `self.order`
+        stride, s = [0] * r, 1
+        for d in self.order:
+            stride[d], s = s, s * out_shape[d]
+        out = torch.empty_strided(out_shape, stride, dtype=data.dtype, device=data.device)
+        repack(data, -1, pd, self.is_fp4, out=out)
+        return out
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1
