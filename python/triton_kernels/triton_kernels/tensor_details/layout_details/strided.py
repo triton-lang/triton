@@ -71,9 +71,8 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1
-        out_shape = list(data.shape)
+        out_shape = list(self.shape)
         if self.is_fp4:
-            out_shape[self.order[0]] *= 2
             out_shape[-1] //= 2
         ret = torch.empty(out_shape, dtype=data.dtype, device=data.device)
         ret = repack(data, self.order[0], -1, self.is_fp4, out=ret)

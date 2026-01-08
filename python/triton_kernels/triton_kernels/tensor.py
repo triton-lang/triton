@@ -200,9 +200,6 @@ class SparseMatrix:
 # layout utilities
 # ---------------------------------------------------------------------------- #
 
-memory_summaries = []
-counter = 0
-
 
 def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
     if dtype is None:
@@ -219,10 +216,6 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
         layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
-    global counter
-    global memory_summaries
-    counter += 1
-    memory_summaries.append(f"wrap torch tensor {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
@@ -230,18 +223,12 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     shape = list(tensor.shape)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
-    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
-    memory_summaries.append(f"unswizzle {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     canonical_data = transformation.unswizzle_data(tensor.storage.data)
     # convert canonical form to `layout`
     transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    # convert canonical form to `layout`
-    memory_summaries.append(f"swizzle {counter}: {torch.cuda.memory_summary(0, abbreviated=True)}")
     # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
     new_data = transformation.swizzle_data(canonical_data)
-    # return new tensor
-    out_dtype = torch_dtype_to_dtype(tensor.storage.data.dtype)
-    return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=out_dtype)
+    return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
 
 
 def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
