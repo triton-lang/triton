@@ -263,7 +263,6 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
 
   let results = (outs TTG_MemDescType:$result);
 
-  let hasFolder = 1;
   let hasVerifier = 1;
 }
 

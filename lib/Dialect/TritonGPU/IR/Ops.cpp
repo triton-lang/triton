@@ -830,28 +830,6 @@ LogicalResult MemDescIndexOp::verify() {
   return success();
 }
 
-OpFoldResult MemDescSubsliceOp::fold(FoldAdaptor adaptor) {
-  // Fold subslice(subslice(x, off1), off2) -> subslice(x, off1 + off2)
-  if (auto srcSubslice = getSrc().getDefiningOp<MemDescSubsliceOp>()) {
-    auto srcOffsets = srcSubslice.getOffsets();
-    auto currOffsets = getOffsets();
-
-    // Compute combined offsets
-    SmallVector<int32_t> combinedOffsets;
-    for (size_t i = 0; i < currOffsets.size(); ++i) {
-      combinedOffsets.push_back(srcOffsets[i] + currOffsets[i]);
-    }
-
-    // Update this operation to point directly to the original source with
-    // combined offsets
-    setOperand(srcSubslice.getSrc());
-    setOffsetsAttr(DenseI32ArrayAttr::get(getContext(), combinedOffsets));
-    return getResult();
-  }
-
-  return {};
-}
-
 LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
