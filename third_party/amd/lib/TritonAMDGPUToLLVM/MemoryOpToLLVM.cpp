@@ -473,11 +473,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (!isCDNA(targetInfo.getISAFamily()))
       return failure();
-    // Check no other memory addrspaces are selected and that we only sync on
-    // cta
+    // Check no other memory addrspaces are selected.
+    // TensorRead/Write are allowed but noop.
     auto mask = triton::gpu::AddrSpace::Local |
                 triton::gpu::AddrSpace::GlobalRead |
-                triton::gpu::AddrSpace::GlobalWrite;
+                triton::gpu::AddrSpace::GlobalWrite |
+                triton::gpu::AddrSpace::TensorRead |
+                triton::gpu::AddrSpace::TensorWrite;
     if ((op.getAddrSpace() & ~mask) != triton::gpu::AddrSpace::None)
       return failure();
     // In CDNA we can lower barrier to s_waitcnt + s_barrier
