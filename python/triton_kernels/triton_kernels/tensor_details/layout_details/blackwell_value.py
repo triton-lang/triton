@@ -58,6 +58,6 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         out_shape = list(self.shape)
         out_shape[-1] //= 2
         out = torch.empty(out_shape, device=data.device, dtype=data.dtype)
-        out = repack(data, -2, -1, self.is_fp4, out=out)
+        repack(data, -2, -1, self.is_fp4, out=out)
         assert out.stride(-1) == 1
         return out

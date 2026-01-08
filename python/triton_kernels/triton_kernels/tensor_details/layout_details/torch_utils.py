@@ -68,16 +68,24 @@ def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=Non
     # out slices along old_dim (interleave into even/odd positions)
     r_even = _idx(out.ndim, old_dim, slice(0, None, 2))
     r_odd = _idx(out.ndim, old_dim, slice(1, None, 2))
+    #
+    out_even = out[r_even]
+    out_odd = out[r_odd]
     a = data[d_even]
     b = data[d_odd]
-    # out[r_even] = ((b & 0x0F) << 4) | (a & 0x0F)
-    out[r_even].copy_(b)
-    out[r_even].bitwise_and_(0x0F)
-    out[r_even].bitwise_left_shift_(4)
-    out[r_even].bitwise_or_(a & 0x0F)
-    # out[r_odd] = ((a & 0xF0) >> 4) | (b & 0xF0)
-    out[r_odd].copy_(a)
-    out[r_odd].bitwise_and_(0xF0)
-    out[r_odd].bitwise_right_shift_(4)
-    out[r_odd].bitwise_or_(b & 0xF0)
+
+    # ---- build out_odd first, using out_even as scratch ----
+    out_odd.copy_(b)
+    out_odd.bitwise_and_(0xF0)  # out_odd = b & 0xF0
+
+    out_even.copy_(a)
+    out_even.bitwise_right_shift_(4)  # out_even (scratch) = a >> 4
+
+    out_odd.bitwise_or_(out_even)  # out_odd = (a >> 4) | (b & 0xF0)
+
+    # ---- now build out_even, no tmp by using add_(alpha=16) ----
+    out_even.copy_(a)
+    out_even.bitwise_and_(0x0F)  # out_even = a & 0x0F
+    out_even.add_(b, alpha=16)  # out_even += 16*b  == (b << 4) | (a & 0x0F)
+
     return out
