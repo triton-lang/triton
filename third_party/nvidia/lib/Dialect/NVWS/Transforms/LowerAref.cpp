@@ -126,6 +126,8 @@ struct ArefValue {
   Value fullMbars;
   int depth;
   SmallVector<Value> buffers;
+  bool emptyMultiThreaded;
+  bool fullMultiThreaded;
 };
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
@@ -276,8 +278,12 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
       createBarriers(b1, b2, depth, count.producerPendingCount,
                      count.producerPartitionIds, count.producerMultiThreaded);
 
-  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
-                   op.getOperands()};
+  return ArefValue{emptyMbars,
+                   fullMbars,
+                   static_cast<int>(depth),
+                   op.getOperands(),
+                   count.consumerMultiThreaded,
+                   count.producerMultiThreaded};
 }
 
 SmallVector<Value>
@@ -482,7 +488,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
 }
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
-                         PatternRewriter &rewriter, Value mbar,
+                         PatternRewriter &rewriter, Value mbar, bool isWarp,
                          std::optional<PartitionWsTagIds> partitionWsTagIds,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
@@ -490,8 +496,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp =
-          nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1, nullptr);
+      arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1,
+                                                     /*isWarp=*/isWarp);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
@@ -552,8 +558,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionWsTagIds(op),
-                      getStageCluster(op));
+                      fullBarrier, arefVal.fullMultiThreaded,
+                      getPartitionWsTagIds(op), getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -591,7 +597,8 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      getPartitionWsTagIds(op), stageCluster);
+                      arefVal.emptyMultiThreaded, getPartitionWsTagIds(op),
+                      stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {

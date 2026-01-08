@@ -245,23 +245,28 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
-    mbarrier object in shared memory. The operation requires a `count` attribute
-    of at least 1, and decreasing the pending arrival count of the mbarrier by
-    the specific count.
+    mbarrier object in shared memory. The operation requires a `count` operand
+    of at least 1 and exactly one of `per_grid` or `per_warp` attributes. The
+    pending arrival count of the mbarrier is decreased by the specified count.
+
+    `per_grid`: the lead thread of the grid performs the operation.
+    `per_warp`: the lead thread of each warp performs the operation.
 
     The operation accepts an optional predicate.
 
     Example:
 
     ```mlir
-    ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 2 {per_grid} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred {per_warp} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ```
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
+    OptionalAttr<UnitAttr>:$per_grid,
+    OptionalAttr<UnitAttr>:$per_warp,
     Optional<I1>:$pred
   );
 
@@ -270,8 +275,19 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isWarp), [{
+      auto countAttr = $_builder.getI32IntegerAttr(count);
+      auto perGridAttr = isWarp ? nullptr : $_builder.getUnitAttr();
+      auto perWarpAttr = isWarp ? $_builder.getUnitAttr() : nullptr;
+      return build($_builder, $_state, alloc, countAttr, perGridAttr,
+                   perWarpAttr, /*pred=*/Value());
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isWarp, "Value":$pred), [{
+      auto countAttr = $_builder.getI32IntegerAttr(count);
+      auto perGridAttr = isWarp ? nullptr : $_builder.getUnitAttr();
+      auto perWarpAttr = isWarp ? $_builder.getUnitAttr() : nullptr;
+      return build($_builder, $_state, alloc, countAttr, perGridAttr,
+                   perWarpAttr, pred);
     }]>
   ];
 

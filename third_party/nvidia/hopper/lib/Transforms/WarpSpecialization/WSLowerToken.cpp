@@ -66,7 +66,8 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
   if (loadType == ttnvws::TokenLoadType::TMALoadOp) {
     // Get the count from the barriers: trace the local_alloc for the barrier
     // then find the count from init_barrier
-    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, 1);
+    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, 1,
+                                             /*isWarp=*/false);
   } else {
     assert(false);
   }
@@ -89,7 +90,8 @@ void processConsumerWaitOp(OpBuilder &builder, ttnvws::ConsumerWaitOp op,
 void processConsumerReleaseOp(OpBuilder &builder, ttnvws::ConsumerReleaseOp op,
                               Value bufferEmpty, int numCTAs) {
   auto loc = op.getLoc();
-  auto arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferEmpty, 1);
+  auto arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferEmpty, 1,
+                                                /*isWarp=*/false);
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(arriveOp, getAsyncTaskIds(op.getOperation()));
 }

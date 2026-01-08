@@ -36,57 +36,6 @@ using namespace mlir::triton;
 
 namespace {
 
-// Find the WarpSpecializeOp that uses the given allocation.
-// The allocation is passed as an operand to the warp_specialize op.
-static triton::gpu::WarpSpecializeOp
-findAssociatedWarpSpecializeOp(Value barrierAlloc) {
-  Value rootAlloc =
-      barrierAlloc.getDefiningOp<triton::gpu::MemDescIndexOp>().getSrc();
-
-  for (Operation *user : rootAlloc.getUsers()) {
-    if (auto wsOp = dyn_cast<triton::gpu::WarpSpecializeOp>(user)) {
-      return wsOp;
-    }
-  }
-  return nullptr;
-}
-
-// Calculate the barrier count from dependentPartitionIds by summing
-// the warp counts of the specified partitions and multiplying by 32.
-static std::optional<int>
-calculateBarrierCount(triton::nvidia_gpu::InitBarrierOp op) {
-  auto partitionAttr = op.getDependentPartitionIds();
-  if (!partitionAttr)
-    return std::nullopt;
-
-  auto wsOp = findAssociatedWarpSpecializeOp(op.getAlloc());
-  if (!wsOp) {
-    op.emitError(
-        "could not find associated warp_specialize op for mbarrier init");
-    return std::nullopt;
-  }
-
-  auto partitionNumWarps = wsOp.getPartitionNumWarps();
-  int numWarps = 0;
-  for (int32_t partitionId : *partitionAttr) {
-    if (partitionId < 0 ||
-        partitionId >= static_cast<int>(partitionNumWarps.size())) {
-      op.emitError("dependentPartitionId ")
-          << partitionId
-          << " is out of range (max: " << partitionNumWarps.size() - 1 << ")";
-      return std::nullopt;
-    }
-    if (partitionId == 0) {
-      auto mod = op->getParentOfType<ModuleOp>();
-      numWarps += mlir::triton::gpu::lookupNumWarps(mod);
-    } else {
-      numWarps += partitionNumWarps[partitionId - 1];
-    }
-  }
-
-  return numWarps * 32;
-}
-
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -119,28 +68,14 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    // Determine the barrier count. If dependentPartitionIds is specified,
-    // calculate the count from the associated WarpSpecializeOp's partition
-    // warp counts. Otherwise, use the count attribute directly.
-    int barrierCount;
-    if (op.getDependentPartitionIds()) {
-      auto calculatedCount = calculateBarrierCount(op);
-      if (!calculatedCount) {
-        return op.emitError(
-            "failed to calculate barrier count from dependentPartitionIds: "
-            "could not find associated warp_specialize op");
-      }
-      barrierCount = *calculatedCount;
-    } else {
-      // count must be set (verified by op verifier)
-      barrierCount = *op.getCount();
-    }
-
     auto id = getThreadId(rewriter, loc);
     auto pred = b.icmp_eq(id, b.i32_val(0));
     ::mlir::triton::PTXBuilder ptxBuilder;
+    if (!op.getCount().has_value()) {
+      return op.emitError("count attribute is required");
+    }
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(barrierCount) + ";";
+                            std::to_string(*op.getCount()) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -326,7 +261,7 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *> operands;
 
     std::optional<Value> pred;
-    if (!nvidia_gpu::isMultiThreadedArriveBarrier(op)) {
+    if (!op.getPerWarp().has_value()) {
       TritonLLVMOpBuilder b(op.getLoc(), rewriter);
       Value id = getThreadId(rewriter, op.getLoc());
       pred = b.icmp_eq(id, b.i32_val(0));

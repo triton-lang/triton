@@ -57,10 +57,10 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
     %19 = ttg.local_alloc {allocation.offset = 57344 : i32} : () -> !ttg.memdesc<1x64xf32, #shared1, #smem, mutable>
     %20 = ttg.local_alloc {allocation.offset = 58240 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %21 = ttg.memdesc_index %20[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %21 {dependentPartitionIds = array<i32: 3>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %21 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %22 = ttg.local_alloc {allocation.offset = 58256 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %23 = ttg.memdesc_index %22[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %23 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %23 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %24 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x64x64xf16, #shared, #smem, mutable>
     %25 = ttg.local_alloc {allocation.offset = 58112 : i32} : () -> !ttg.memdesc<2x1xi64, #shared1, #smem, mutable>
     %26 = ttg.memdesc_index %25[%c0_i32] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -97,15 +97,15 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
     %45 = ttg.local_alloc {allocation.offset = 57600 : i32} : () -> !ttg.memdesc<1x64xf32, #shared1, #smem, mutable>
     %46 = ttg.local_alloc {allocation.offset = 58272 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %47 = ttg.memdesc_index %46[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %47 {dependentPartitionIds = array<i32: 3>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %47 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %48 = ttg.local_alloc {allocation.offset = 58288 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %49 = ttg.memdesc_index %48[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %49 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %49 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %50 = ttg.local_alloc {allocation.offset = 58208 : i32} : () -> !ttg.memdesc<2x1xi64, #shared1, #smem, mutable>
     %51 = ttg.memdesc_index %50[%c0_i32] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %51 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %51 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %52 = ttg.memdesc_index %50[%c1_i32] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %52 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %52 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %53 = ttg.local_alloc {allocation.offset = 58224 : i32} : () -> !ttg.memdesc<2x1xi64, #shared1, #smem, mutable>
     %54 = ttg.memdesc_index %53[%c0_i32] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %54 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -116,13 +116,13 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
     ttng.init_barrier %57 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %58 = ttg.local_alloc {allocation.offset = 58320 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %59 = ttg.memdesc_index %58[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %59 {dependentPartitionIds = array<i32: 3>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %59 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %60 = ttg.local_alloc {allocation.offset = 58336 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %61 = ttg.memdesc_index %60[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %61 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %62 = ttg.local_alloc {allocation.offset = 58352 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %63 = ttg.memdesc_index %62[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %63 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %63 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %result = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %result_1 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 16 : i32} : () -> !ttg.memdesc<1x64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %result_2 = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 16 : i32} : () -> !ttg.memdesc<1x64x64xf16, #tmem, #ttng.tensor_memory, mutable>
@@ -150,7 +150,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       ttng.wait_barrier %21, %82 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %83 = ttg.memdesc_index %19[%c0_i32] : !ttg.memdesc<1x64xf32, #shared1, #smem, mutable> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
       ttg.local_store %74, %83 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
-      ttng.arrive_barrier %23, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %23, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %84 = arith.addi %78, %c1_i32 : i32
       %85 = arith.cmpi eq, %84, %c2_i32 : i32
       %86 = arith.select %85, %c0_i32, %84 : i32
@@ -161,7 +161,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       %90 = ttg.memdesc_index %result[%86] : !ttg.memdesc<2x64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
       %91 = ttg.memdesc_index %50[%86] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %result_3 = ttng.tmem_load %90 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #linear>
-      ttng.arrive_barrier %91, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %91, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %92 = "tt.reduce"(%result_3) <{axis = 1 : i32}> ({
       ^bb0(%arg7: f32, %arg8: f32):
         %128 = arith.maxnumf %arg7, %arg8 : f32
@@ -173,7 +173,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       ttng.wait_barrier %47, %95 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %96 = ttg.memdesc_index %45[%c0_i32] : !ttg.memdesc<1x64xf32, #shared1, #smem, mutable> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
       ttg.local_store %94, %96 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
-      ttng.arrive_barrier %49, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %49, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %97 = arith.mulf %result_3, %17 : tensor<64x64xf32, #linear>
       %98 = tt.expand_dims %94 {axis = 1 : i32} : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>> -> tensor<64x1xf32, #linear>
       %99 = tt.broadcast %98 : tensor<64x1xf32, #linear> -> tensor<64x64xf32, #linear>
@@ -191,7 +191,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       ttng.wait_barrier %61, %106 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %107 = ttg.memdesc_index %result_2[%c0_i32] : !ttg.memdesc<1x64x64xf16, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
       ttng.tmem_store %105, %107, %true : tensor<64x64xf16, #linear> -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
-      ttng.arrive_barrier %63, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %63, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %108 = arith.mulf %75, %103 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %109 = arith.addf %108, %104 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %110 = arith.addi %73, %c64_i32 : i32
@@ -205,7 +205,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       %116 = ttg.memdesc_index %53[%113] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       ttng.wait_barrier %116, %115 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %117 = ttg.memdesc_index %50[%113] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %117, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %117, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %118 = tt.addptr %arg4, %72 : !tt.ptr<f32>, i32
       %119 = tt.splat %118 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
       %120 = tt.addptr %119, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
@@ -349,14 +349,14 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1];"
 
       %172 = ttg.memdesc_index %arg13[%128] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %172, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %172, 1 {per_grid} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %173 = ttg.memdesc_index %arg24[%84] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       ttng.tc_gen5_commit %173 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %174 = arith.xori %130, %c1_i32_6 : i32
       %175 = ttg.memdesc_index %arg17[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       ttng.wait_barrier %175, %174 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %176 = ttg.memdesc_index %arg22[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %176, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %176, 1 {per_grid} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %177 = arith.addi %64, %c1_i32_6 : i32
       cf.br ^bb1(%177, %84, %86, %124, %125, %126, %127, %128, %129, %174, %131 : i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)
     ^bb6:  // pred: ^bb1
@@ -487,14 +487,14 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       %82 = ttg.memdesc_index %arg32[%c0_i32_7] : !ttg.memdesc<1x64xf32, #shared1, #smem, mutable> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
       %83 = ttg.local_load %82 : !ttg.memdesc<64xf32, #shared1, #smem, mutable> -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %84 = ttg.memdesc_index %arg33[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %84, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %84, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %85 = arith.xori %77, %c1_i32_6 : i32
       %86 = ttg.memdesc_index %arg34[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       ttng.wait_barrier %86, %85 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %87 = ttg.memdesc_index %arg35[%c0_i32_7] : !ttg.memdesc<1x64xf32, #shared1, #smem, mutable> -> !ttg.memdesc<64xf32, #shared1, #smem, mutable>
       %88 = ttg.local_load %87 : !ttg.memdesc<64xf32, #shared1, #smem, mutable> -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %89 = ttg.memdesc_index %arg36[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %89, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %89, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %90 = arith.subf %83, %88 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %91 = math.exp2 %90 : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %92 = tt.expand_dims %91 {axis = 1 : i32} : tensor<64xf32, #ttg.slice<{dim = 1, parent = #linear}>> -> tensor<64x1xf32, #linear>
@@ -503,7 +503,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
       %94 = arith.mulf %result_9, %93 : tensor<64x64xf32, #linear>
       ttng.tmem_store %94, %74, %true_3 : tensor<64x64xf32, #linear> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
       %95 = ttg.memdesc_index %arg17[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %95, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %95, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %96 = arith.xori %78, %c1_i32_6 : i32
       ttng.wait_barrier %73, %96 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %97 = arith.addi %75, %c64_i32_4 : i32
@@ -511,7 +511,7 @@ module attributes {ttg.global_scratch_memory_alignment = 128 : i32, ttg.global_s
     ^bb5:  // pred: ^bb3
       %98 = ttg.memdesc_index %arg17[%c0_i32_7] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %result_10 = ttng.tmem_load %74 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32, #linear>
-      ttng.arrive_barrier %98, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %98, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %99 = arith.truncf %result_10 : tensor<64x64xf32, #linear> to tensor<64x64xf16, #linear>
       ttng.async_tma_store_wait {pendings = 0 : i32}
       ttg.local_store %99, %64 : tensor<64x64xf16, #linear> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
@@ -582,7 +582,7 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
   // CHECK-LABEL: @auto_simple
   tt.func @auto_simple(%arg0: !tt.tensordesc<tensor<128x128xf16, #shared>>, %arg1: !tt.tensordesc<tensor<128x128xf16, #shared>>, %arg2: i32) attributes {allocation.offset = 32856 : i32, ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32} {
 
-    // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 128;"
+    // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
     // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
     // CHECK: "mbarrier.arrive.shared::cta.b64 _, [$0];"
 
@@ -597,7 +597,7 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
     %1 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x128x128xf16, #shared, #smem, mutable>
     %2 = ttg.local_alloc {allocation.offset = 32832 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %3 = ttg.memdesc_index %2[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.init_barrier %3 {dependentPartitionIds = array<i32: 0>} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %3 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %4 = ttg.local_alloc {allocation.offset = 32848 : i32} : () -> !ttg.memdesc<1x1xi64, #shared1, #smem, mutable>
     %5 = ttg.memdesc_index %4[%c0_i32] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %5 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -619,7 +619,7 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
       %21 = ttg.local_load %20 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
       ttng.fence_async_shared {bCluster = false}
       %22 = ttg.memdesc_index %2[%16] : !ttg.memdesc<1x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-      ttng.arrive_barrier %22, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttng.arrive_barrier %22, 1 {per_warp} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       %23 = arith.extf %21 : tensor<128x128xf16, #blocked> to tensor<128x128xf32, #blocked>
       %24 = arith.addf %23, %23 : tensor<128x128xf32, #blocked>
       "consumer"(%24) : (tensor<128x128xf32, #blocked>) -> ()
