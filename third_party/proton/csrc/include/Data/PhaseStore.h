@@ -65,8 +65,7 @@ public:
     }
   }
 
-  template <typename FnT>
-  decltype(auto) withPtr(size_t phase, FnT &&fn) const {
+  template <typename FnT> decltype(auto) withPtr(size_t phase, FnT &&fn) const {
     auto slot = getSlot(phase);
     std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
     if (!slot->value) {

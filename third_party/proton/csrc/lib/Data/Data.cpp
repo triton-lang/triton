@@ -25,7 +25,7 @@ size_t Data::advancePhase() {
 }
 
 void Data::validateNonCurrentPhase(const char *operation, const char *action,
-                                  size_t phase) const {
+                                   size_t phase) const {
   size_t current = 0;
   {
     std::shared_lock<std::shared_mutex> lock(mutex);
@@ -34,7 +34,8 @@ void Data::validateNonCurrentPhase(const char *operation, const char *action,
 
   if (phase == current) {
     throw std::runtime_error(std::string("[PROTON] ") + operation + " cannot " +
-                             action + " the current (active) phase. Call "
+                             action +
+                             " the current (active) phase. Call "
                              "advancePhase() first.");
   }
   if (phase > current) {
