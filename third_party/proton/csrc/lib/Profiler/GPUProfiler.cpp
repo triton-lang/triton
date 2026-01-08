@@ -52,9 +52,8 @@ void periodicFlushImpl(
 
     for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
          startPhase++) {
-      auto pathWithPhase =
-          path + ".part_" + std::to_string(startPhase) + "." +
-          periodicFlushingFormat;
+      auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
+                           periodicFlushingFormat;
 
       if (periodicFlushingFormat == "hatchet" ||
           periodicFlushingFormat == "chrome_trace") {
@@ -125,8 +124,8 @@ void periodicFlushImpl(
       const auto t0 = Clock::now();
       data->clear(maxPhaseToFlush);
       const auto t1 = Clock::now();
-      clearUs =
-          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+      clearUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                    .count();
       std::cerr << "[PROTON] periodicFlush timing: path=" << path
                 << " format=" << periodicFlushingFormat << " phases=["
                 << minPhaseToFlush << "," << maxPhaseToFlush
@@ -147,4 +146,3 @@ void periodicFlushImpl(
 
 } // namespace detail
 } // namespace proton
-
