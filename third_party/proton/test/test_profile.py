@@ -239,6 +239,7 @@ def test_get_data(tmp_path: pathlib.Path):
         assert "Cannot get data while the session is active" in str(e)
 
     proton.deactivate(session, flushing=True)
+    proton.data.advance_phase(session)
 
     database = proton.data.get(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
@@ -267,6 +268,7 @@ def test_clear_data(tmp_path: pathlib.Path):
         x + x  # type: ignore
 
     proton.deactivate(session, flushing=True)
+    proton.data.advance_phase(session)
     proton.data.clear(session)
     try:
         database = proton.data.get(session)
@@ -277,7 +279,8 @@ def test_clear_data(tmp_path: pathlib.Path):
     with proton.scope("test1"):
         x * x  # type: ignore
     proton.deactivate(session, flushing=True)
-    database = proton.data.get(session)
+    proton.data.advance_phase(session)
+    database = proton.data.get(session, phase=1)
 
     proton.finalize()
     assert len(database[0]["children"]) == 1
