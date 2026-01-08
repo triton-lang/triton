@@ -60,38 +60,6 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `scratchPtr` | ptr |
 
 
-### `proton_gpu.global_scratch_alloc` (triton::proton::gpu::GlobalScratchAllocOp)
-
-_Allocate a global memory profile buffer_
-
-Syntax:
-
-```
-operation ::= `proton_gpu.global_scratch_alloc` attr-dict `:` qualified(type($result))
-```
-
-This operation allocates a profile buffer in global memory.
-Each Triton program being profiled will hold a pointer to the buffer until profiling is finalized.
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::triton::GlobalMemory}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>nbytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-</table>
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | ptr |
-
-
 ### `proton_gpu.init_ctx` (triton::proton::gpu::InitCtxOp)
 
 _Initialize the intra kernel profiler warp-level contexts_

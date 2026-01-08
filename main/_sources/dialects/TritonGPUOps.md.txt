@@ -209,6 +209,9 @@ operation ::= `ttg.global_scratch_alloc` attr-dict `:` qualified(type($result))
 ```
 
 This operation allocates a buffer in global memory that is private to the current program.
+The `backend` attribute specifies the backend to use for allocation.
+The `default` backend is used by TritonGPU passes.
+Downstream Triton tools and compilers can register a different backend and use a different allocation policy.
 
 Traits: `VerifyTensorLayoutsTrait`
 
@@ -218,6 +221,7 @@ Traits: `VerifyTensorLayoutsTrait`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>nbytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>backend</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 </table>
 
 #### Results:
@@ -327,6 +331,50 @@ Traits: `VerifyTensorLayoutsTrait`
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+### `ttg.local_gather` (triton::gpu::LocalGatherOp)
+
+_Gather elements from shared memory along a specified axis_
+
+Syntax:
+
+```
+operation ::= `ttg.local_gather` $src `[` $indices `]` (`token` $token^)? attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+```
+
+Gather elements from a shared memory descriptor using an indices tensor along a
+single specified axis. The output tensor has the same shape as the indices tensor.
+
+For each output position I, the operation reads from src where the coordinate at
+the gather axis is replaced by indices[I]:
+  result[I] = src[I[0], ..., indices[I], ..., I[n]]
+where the axis dimension is replaced by the index value.
+
+This matches the behavior of tt.gather but operates on shared memory descriptors.
+
+Traits: `LocalLoadTrait`, `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `indices` | ranked tensor of integer values |
+| `token` | async token type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
 ### `ttg.local_load` (triton::gpu::LocalLoadOp)
 
 _Load a buffer from local memory into a distributed tensor_
@@ -353,6 +401,45 @@ Traits: `LocalLoadTrait`, `VerifyTensorLayoutsTrait`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
+
+
+### `ttg.local_scatter` (triton::gpu::LocalScatterOp)
+
+_Scatter elements to shared memory along a specified axis_
+
+Syntax:
+
+```
+operation ::= `ttg.local_scatter` $dst `[` $indices `]` `,` $values (`token` $token^)? attr-dict `:` qualified(type($dst)) `,` type($indices) `,` type($values)
+```
+
+Scatter elements to a shared memory descriptor using an indices tensor along a
+single specified axis. The values tensor has the same shape as the indices tensor.
+
+For each input position I, the operation writes to dst where the coordinate at
+the scatter axis is replaced by indices[I]:
+  dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+where the axis dimension is replaced by the index value.
+
+This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `values` | ranked tensor of floating-point or integer or ptr values |
+| `indices` | ranked tensor of integer values |
+| `token` | async token type |
 
 
 ### `ttg.local_store` (triton::gpu::LocalStoreOp)
@@ -762,12 +849,6 @@ Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 <tr><td><code>actualRegisters</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `explicitCaptures` | variadic of any type |
-
 #### Results:
 
 | Result | Description |
@@ -785,6 +866,12 @@ contains the actual isolated from above regions of `ttg.warp_specialize`.
 Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `explicitCaptures` | variadic of any type |
 
 
 ### `ttg.warp_yield` (triton::gpu::WarpYieldOp)
