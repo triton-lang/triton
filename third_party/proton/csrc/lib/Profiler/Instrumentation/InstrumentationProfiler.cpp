@@ -1,7 +1,6 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "TraceDataIO/CircularLayoutParser.h"
 
-#include "Driver/GPU/CudaApi.h"
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Numeric.h"
@@ -10,8 +9,6 @@
 #include <cstdint>
 #include <map>
 #include <numeric>
-#include <queue>
-#include <set>
 #include <stdexcept>
 
 namespace proton {

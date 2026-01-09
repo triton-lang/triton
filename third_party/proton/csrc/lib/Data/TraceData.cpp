@@ -1,6 +1,5 @@
 #include "Data/TraceData.h"
 #include "TraceDataIO/TraceWriter.h"
-#include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
 

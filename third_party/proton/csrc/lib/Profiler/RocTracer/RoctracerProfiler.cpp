@@ -13,8 +13,6 @@
 #include "roctracer/roctracer_roctx.h"
 
 #include <algorithm>
-#include <cstdlib>
-#include <deque>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -22,9 +20,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
-
-#include <cxxabi.h>
-#include <unistd.h>
 
 namespace proton {
 
