@@ -430,7 +430,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{ranked reduce load only allowed for unit dimension leading dim}}
+  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
   tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16xf32>
   tt.return
 }
@@ -439,7 +439,7 @@ tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{tensor descriptor block and tensor types must match}}
+  // expected-error @below {{descriptor block and tensor element types must match}}
   tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16x16xf16>
   tt.return
 }
@@ -448,7 +448,7 @@ tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
 
 tt.func @invalid_desc_store(%arg0: !tt.tensordesc<tensor<16x16xf32>>, %arg1: tensor<32x16xf32>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{tensor descriptor block and tensor types must match}}
+  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
   tt.descriptor_store %arg0[%c, %c], %arg1 : !tt.tensordesc<tensor<16x16xf32>>, tensor<32x16xf32>
   tt.return
 }

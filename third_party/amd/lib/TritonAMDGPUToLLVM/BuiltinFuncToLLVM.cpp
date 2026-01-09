@@ -86,6 +86,10 @@ private:
                                            operands[0]);
       replacementOp =
           LLVM::FPToSIOp::create(rewriter, loc, returnType, op->getResult(0));
+    } else if (calleeName == "__triton_hip_rint") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::RintOp::create(rewriter, loc, returnType, operands[0]);
     } else if (calleeName == "__triton_hip_fast_fdividef") {
       assert(operands.size() == 2);
       const char *intrinsic = "llvm.amdgcn.rcp.f32";

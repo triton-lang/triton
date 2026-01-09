@@ -306,9 +306,15 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
 }
 
 std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
-  // Splits a wgmma(tensor, shmem) MxK, KxN -> MxN into
-  // along K into multiple wgmma(tensor, shmem) Mx16, 16xN -> MxN
-  // where 16 is the instruction size
+  // Splits wgmma(tensor, shmem, acc) into
+  //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
+  //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
+  // which allows for in-register pipelining of the wgmmas.
+  //
+  // Theoretically, it may be beneficial to split even further which allows more
+  // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
+  // best performance. In future this may be something we want to allow the user
+  // to tune.
   if (!isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
@@ -316,13 +322,14 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   auto a = cast<TypedValue<RankedTensorType>>(dotOp.getA());
   auto b = cast<TypedValue<ttg::MemDescType>>(dotOp.getB());
   auto origK = a.getType().getShape().back();
-  auto newK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
-                  .getInstrShape()[2];
-  auto numSplits = origK / newK;
+  auto instrK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
+                    .getInstrShape()[2];
   // Nothing to split
-  if (numSplits <= 1) {
+  if (origK <= instrK) {
     return {dotOp};
   }
+  constexpr int numSplits = 2;
+  uint32_t newK = origK / numSplits;
 
   assert(origK % newK == 0 && "origK must be divisible by newK");
   auto builder = OpBuilder(dotOp);
@@ -334,7 +341,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 
   Value useC = dotOp.getUseC();
   Value C = dotOp.getC();
-  auto numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
+  uint32_t numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
   std::vector<ttng::WarpGroupDotOp> dots;
   for (int i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
@@ -739,25 +746,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     waitOperands.push_back(forOp.getResult(iterArgIdx));
   }
-
-  // Insert a wait(0) before the first use outside the loop
-  auto curBlock = forOp->getBlock();
-  Operation *firstUse = nullptr;
-  for (auto accVal : waitOperands) {
-    for (auto user : accVal.getUsers()) {
-      auto target = curBlock->findAncestorOpInBlock(*user);
-      if (!target)
-        continue;
-      if (!firstUse || target->isBeforeInBlock(firstUse))
-        firstUse = target;
-    }
-  }
-
-  if (firstUse) {
-    builder.setInsertionPoint(firstUse);
-  } else {
-    builder.setInsertionPoint(curBlock->getTerminator());
-  }
+  // Wait until there are 0 outstanding async dot ops.
+  builder.setInsertionPointAfter(forOp);
   auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
       builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);
