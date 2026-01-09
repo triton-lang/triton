@@ -71,6 +71,12 @@ public:
   /// Advance to the next phase.
   size_t advancePhase();
 
+  /// Get the current phase.
+  size_t getCurrentPhase() const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return currentPhase;
+  }
+
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);
 

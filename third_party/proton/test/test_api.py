@@ -418,4 +418,14 @@ def test_data_api(tmp_path: pathlib.Path):
     assert next_phase == 1
     is_flushed = proton.data.is_phase_flushed(session_id, 1)
     assert is_flushed is False
+
+    # Even if a phase has no GPU activity records, flushing should still mark it
+    # as flushed.
+    proton.activate(session_id)
+    next_phase = proton.data.advance_phase(session_id)
+    assert next_phase == 2
+    proton.deactivate(session_id, flushing=True)
+    assert proton.data.is_phase_flushed(session_id, 1) is True
+    assert proton.data.is_phase_flushed(session_id, 2) is False
+
     proton.finalize()
