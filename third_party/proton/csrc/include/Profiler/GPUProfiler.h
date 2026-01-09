@@ -260,8 +260,8 @@ protected:
         } else {
           // Add metrics to the current op
           for (auto [data, entry] : dataToEntry) {
-            data->addEntryMetrics(entry.id, scalarMetrics);
-            data->addEntryMetrics(entry.id, tensorMetricsHost);
+            data->addEntryMetrics(entry.phase, entry.id, scalarMetrics);
+            data->addEntryMetrics(entry.phase, entry.id, tensorMetricsHost);
           }
         }
       }

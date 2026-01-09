@@ -26,7 +26,7 @@ public:
 
   DataEntry addOp(const std::string &name) override;
 
-  DataEntry addOp(size_t contextId,
+  DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;
 
   void addScopeMetrics(
@@ -34,7 +34,7 @@ public:
       const std::map<std::string, MetricValueType> &metrics) override;
 
   void addEntryMetrics(
-      size_t entryId,
+      size_t phase, size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
 protected:

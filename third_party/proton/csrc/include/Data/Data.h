@@ -90,9 +90,10 @@ public:
   /// To MsgPack
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
-  /// Add an op to the data.
-  /// Otherwise obtain the current context and append `opName` to it if `opName`
-  /// is not empty. Return the entry id of the added op.
+  /// Add an op to the data of the current phase.
+  /// If `opName` is empty, just use the current context as is.
+  /// Otherwise obtain the current context and append `opName` to it. Return the
+  /// entry id of the added op.
   virtual DataEntry addOp(const std::string &opName = {}) = 0;
 
   /// Add an op with custom contexts to the data.
@@ -100,10 +101,14 @@ public:
   /// the profiler itself needs to supply the contexts, such as
   /// instruction samples in GPUs whose contexts are
   /// synthesized from the instruction address (no unwinder).
-  virtual DataEntry addOp(size_t entryId,
+  ///
+  /// `phase` is the phase the op should be added to. This is important for
+  /// asynchronous profilers, where the current phase may have advanced by the
+  /// time the profiler needs to attach a child op.
+  virtual DataEntry addOp(size_t phase, size_t entryId,
                           const std::vector<Context> &contexts) = 0;
 
-  /// Record a batch of named metrics for a scope.
+  /// Record a batch of named metrics for a scope to the data of the current phase.
   ///
   /// This is primarily intended for user-defined metrics defined in Python and
   /// directly associated with a scope.
@@ -117,8 +122,10 @@ public:
   /// This is primarily intended for user-defined metrics defined in Python and
   /// added lazily by the backend profiler.
   /// `metrics` is a map from metric name to value to be applied to `entryId`.
+  ///
+  /// The same as `addOp`, `phase` is important for asynchronous profilers.
   virtual void
-  addEntryMetrics(size_t entryId,
+  addEntryMetrics(size_t phase, size_t entryId,
                   const std::map<std::string, MetricValueType> &metrics) = 0;
 
 protected:

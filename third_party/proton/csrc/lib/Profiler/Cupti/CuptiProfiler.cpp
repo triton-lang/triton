@@ -83,7 +83,8 @@ uint32_t processActivityKernel(
     } else {
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
           childEntry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
@@ -131,7 +132,8 @@ uint32_t processActivityKernel(
         nodeState->forEachEntry([kernel, activity,
                                  &dataPhases](Data *data, DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
+            auto childEntry =
+                data->addOp(entry.phase, entry.id, {Context(kernel->name)});
             childEntry.upsertMetric(std::move(kernelMetric));
             detail::updateDataPhases(dataPhases, data, entry.phase);
           }
@@ -320,13 +322,18 @@ class PendingGraphQueue {
 public:
   explicit PendingGraphQueue(Runtime *runtime) : runtime(runtime) {}
 
+  struct EntryLocator {
+    size_t phase{};
+    size_t entryId{};
+  };
+
   struct PendingGraph {
-    std::map<Data *, std::vector<size_t>> dataToEntryIds;
+    std::map<Data *, std::vector<EntryLocator>> dataToEntryIds;
     size_t numMetricNodes;
   };
   using PopResult = std::pair<size_t, std::vector<PendingGraph>>;
 
-  void push(const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
+  void push(const std::map<Data *, std::vector<EntryLocator>> &dataToEntryIds,
             size_t numNodes) {
     std::lock_guard<std::mutex> lock(mutex);
     auto device = runtime->getDevice();
@@ -496,26 +503,26 @@ void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(
       auto metricName = metricDesc.name;
       auto metricTypeIndex = metricDesc.typeIndex;
       for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
-        auto entryId = entryIds[i];
+        const auto locator = entryIds[i];
         switch (metricTypeIndex) {
         case variant_index_v<uint64_t, MetricValueType>: {
           uint64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addEntryMetrics(entryId,
+          data->addEntryMetrics(locator.phase, locator.entryId,
                                 {{metricName, MetricValueType{typedValue}}});
           break;
         }
         case variant_index_v<int64_t, MetricValueType>: {
           int64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addEntryMetrics(entryId,
+          data->addEntryMetrics(locator.phase, locator.entryId,
                                 {{metricName, MetricValueType{typedValue}}});
           break;
         }
         case variant_index_v<double, MetricValueType>: {
           double typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
-          data->addEntryMetrics(entryId,
+          data->addEntryMetrics(locator.phase, locator.entryId,
                                 {{metricName, MetricValueType{typedValue}}});
           break;
         }
@@ -734,10 +741,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         auto entryIt = dataToEntry.find(dataPtr);
         if (entryIt == dataToEntry.end())
           continue;
-        auto baseEntry = dataPtr->addOp(entryIt->second.id,
-                                        {Context{GraphState::captureTag}});
+        auto baseEntry =
+            dataPtr->addOp(entryIt->second.phase, entryIt->second.id,
+                           {Context{GraphState::captureTag}});
         for (const auto &[callpath, nodeStates] : callpathToNodeStates) {
-          const auto nodeEntry = dataPtr->addOp(baseEntry.id, callpath);
+          const auto nodeEntry =
+              dataPtr->addOp(baseEntry.phase, baseEntry.id, callpath);
           for (const auto &nodeStateRef : nodeStates) {
             const auto &nodeState = nodeStateRef.get();
             auto &graphNodeState = graphNodeIdToState.emplace(nodeState.nodeId);
@@ -779,7 +788,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     auto graphRef = graphStates.find(graphExecId);
     if (graphRef.has_value() &&
         !graphRef.value().get().metricKernelNodeIds.empty()) {
-      std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
+      std::map<Data *, std::vector<PendingGraphQueue::EntryLocator>>
+          metricNodeEntryIds;
       auto &graphExecState = graphRef.value().get();
       auto &externIdState =
           profiler.correlation
@@ -789,7 +799,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
         if (!nodeState)
           continue;
         nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
-          metricNodeEntryIds[data].push_back(entry.id);
+          metricNodeEntryIds[data].push_back(
+              PendingGraphQueue::EntryLocator{entry.phase, entry.id});
         });
       }
       auto metricBufferCapacity = metricBuffer->getCapacity(); // bytes

@@ -161,23 +161,28 @@ DataEntry TraceData::addOp(const std::string &name) {
   return DataEntry(eventId, currentPhase, event.metrics);
 }
 
-DataEntry TraceData::addOp(size_t eventId,
+DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *currentTrace = currentPhasePtrAs<Trace>();
+  auto *trace = (phase == currentPhase)
+                    ? currentPhasePtrAs<Trace>()
+                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
   // Add a new context under it and update the context
-  auto &event = currentTrace->getEvent(eventId);
-  auto contextId = currentTrace->addContexts(contexts, event.contextId);
-  auto newEventId = currentTrace->addEvent(contextId);
-  auto &newEvent = currentTrace->getEvent(newEventId);
-  return DataEntry(newEventId, currentPhase, newEvent.metrics);
+  auto &event = trace->getEvent(eventId);
+  auto contextId = trace->addContexts(contexts, event.contextId);
+  auto newEventId = trace->addEvent(contextId);
+  auto &newEvent = trace->getEvent(newEventId);
+  return DataEntry(newEventId, phase, newEvent.metrics);
 }
 
 void TraceData::addEntryMetrics(
-    size_t eventId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t phase, size_t eventId,
+    const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *currentTrace = currentPhasePtrAs<Trace>();
-  auto &event = currentTrace->getEvent(eventId);
+  auto *trace = (phase == currentPhase)
+                    ? currentPhasePtrAs<Trace>()
+                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
+  auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
       event.flexibleMetrics.emplace(metricName,

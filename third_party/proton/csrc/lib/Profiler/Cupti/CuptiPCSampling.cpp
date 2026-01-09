@@ -383,9 +383,11 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         for (auto [data, entry] : dataToEntry) {
           if (lineInfo.fileName.size())
             entry = data->addOp(
-                entry.id, {formatFileLineFunction(
-                              lineInfo.dirName + "/" + lineInfo.fileName,
-                              lineInfo.lineNumber, lineInfo.functionName)});
+                entry.phase, entry.id,
+                {formatFileLineFunction(lineInfo.dirName + "/" +
+                                            lineInfo.fileName,
+                                        lineInfo.lineNumber,
+                                        lineInfo.functionName)});
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);
