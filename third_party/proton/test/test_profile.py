@@ -270,6 +270,42 @@ def test_clear_data(tmp_path: pathlib.Path):
     assert "elementwise" in kernel_frame["frame"]["name"]
 
 
+def test_data_is_phase_flushed(tmp_path: pathlib.Path):
+    temp_path = tmp_path / "test_data_is_phase_flushed.hatchet"
+    session = proton.start(str(temp_path.with_suffix("")), context="shadow")
+
+    def fn():
+        with proton.scope("test0"):
+            x = torch.ones((2, 2), device="cuda")
+            x + x  # type: ignore
+
+    fn()
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    assert not is_flushed
+
+    proton.deactivate(session)
+    # likely the GPU has not flushed the data yet
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    assert not is_flushed
+
+    proton.activate(session)
+    phase = proton.data.advance_phase(session)
+    fn()
+    proton.deactivate(session, flushing=True)
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    # session 0 is a previous phase but we have called deactivate with flushing
+    assert is_flushed
+    is_flushed = proton.data.is_phase_flushed(session, phase)
+    # session 1 is the current phase so cannot be a flushed phase
+    assert not is_flushed
+    proton.data.advance_phase(session)
+    is_flushed = proton.data.is_phase_flushed(session, phase - 1)
+    # now phase 1 should be considered flushed as we have advanced to phase 2
+    assert is_flushed
+
+    proton.finalize()
+
+
 def test_hook_launch(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
