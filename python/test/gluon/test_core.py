@@ -176,7 +176,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
 
     # Need to synchronise all the CTAs after the mbarrier initialisation
     # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
-    ttgl.barrier(cluster=True)
+    mbarrier.sync_cluster_init()
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -527,7 +527,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
     # Need to synchronise all the CTAs after the mbarrier initialisation before we do
     # cross-CTA ops
     if multicast or two_ctas:
-        ttgl.barrier(cluster=True)
+        mbarrier.sync_cluster_init()
 
     for k in range(NUM_K_TILES):
         mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
