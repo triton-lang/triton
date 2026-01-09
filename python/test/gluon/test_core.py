@@ -526,7 +526,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
 
     # Need to synchronise all the CTAs after the mbarrier initialisation before we do
     # cross-CTA ops
-    if multicast or two_ctas:
+    if (multicast and ttgl.num_ctas() > 1) or two_ctas:
         mbarrier.sync_cluster_init()
 
     for k in range(NUM_K_TILES):

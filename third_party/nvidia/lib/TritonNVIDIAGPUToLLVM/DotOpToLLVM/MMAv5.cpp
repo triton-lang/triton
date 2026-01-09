@@ -308,9 +308,9 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
       if (twoCTAs)
         broadcastBits |= 1;
       if (broadcastBits) {
-        Value mask =
+        Value descMask =
             LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
-        mask = mask ? b.or_(mask, mask) : mask;
+        mask = mask ? b.or_(descMask, mask) : descMask;
       }
     }
   } else if (twoCTAs) {
@@ -524,9 +524,9 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   SmallVector<Value> commitDescs;
   if (op.getMulticast()) {
     if (isa<SharedEncodingTrait>(aTensorTy.getEncoding())) {
-      commitDescs.push_back(adaptor.getA());
+      commitDescs.push_back(op.getA());
     }
-    commitDescs.push_back(adaptor.getB());
+    commitDescs.push_back(op.getB());
   }
 
   DotConversion dot;
