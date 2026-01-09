@@ -27,7 +27,8 @@ namespace mlir {
 
 // Create a scf.execute_region op representing a pipeline cluster.
 static void createClusterOp(OpBuilder &b, Location loc,
-                            SmallVector<Operation *> &ops, StringAttr marker) {
+                            SmallVector<Operation *> &ops,
+                            std::pair<StringAttr, int> marker) {
   assert(!ops.empty() && "empty stage");
 
   // Insert the execute_region before the first op in the cluster.
@@ -96,7 +97,11 @@ static void createClusterOp(OpBuilder &b, Location loc,
 
   // Keep the region structured for later conversion.
   exec.setNoInline(true);
-  exec->setAttr("triton.warp_pipeline.stage", marker);
+  exec->setAttr("triton.warp_pipeline.stage", marker.first);
+  if (marker.second > -1) {
+    exec->setAttr("triton.warp_pipeline.priority",
+                  b.getI32IntegerAttr(marker.second));
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "[warp-pipeline] created stage with " << ops.size()
                           << " ops and " << yieldedTypes.size() << " yields\n");
@@ -109,7 +114,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   // Collect ops in the loop body
   Block &blk = *forOp.getBody();
   SmallVector<Operation *> cluster;
-  SmallVector<StringAttr> clusterMarkers;
+  SmallVector<std::pair<StringAttr, int>> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
   auto ctx = forOp.getContext();
 
@@ -128,9 +133,14 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
     Operation *op = &opRef;
     if (isBorder(op)) { // Wrap-up one cluster at a border.
-      auto clusterStr =
+      StringAttr clusterStr =
           op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
-      clusterMarkers.push_back(clusterStr);
+      int priority = -1;
+      if (auto intAttr =
+              op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority")) {
+        priority = intAttr.getInt();
+      }
+      clusterMarkers.push_back({clusterStr, priority});
       if (cluster.empty()) {
         // This allows user to deliberately insert a pipeline bubble with a
         // cluster only contains a dummy operation.
@@ -160,7 +170,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   if (!cluster.empty()) { // create the last cluster if needed.
     clusters.push_back(std::move(cluster));
     auto clusterStr = StringAttr::get(ctx, "last_cluster");
-    clusterMarkers.push_back(clusterStr);
+    clusterMarkers.push_back({clusterStr, -1});
   }
 
   // no pipeline clusters detected if 1 or 0 chunk found

@@ -89,6 +89,15 @@ static void emitClusterBarrier(PatternRewriter &r, Location loc,
   ROCDL::SchedBarrier::create(r, loc, 0);
 }
 
+static void emitClusterPriorityIfPresent(PatternRewriter &r, Location loc,
+                                         Operation *clusterOp) {
+  if (auto intAttr = clusterOp->getAttrOfType<IntegerAttr>(
+          "triton.warp_pipeline.priority")) {
+    int priority = intAttr.getInt();
+    ROCDL::SetPrioOp::create(r, loc, priority);
+  }
+}
+
 class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
 public:
   ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc,
@@ -264,15 +273,21 @@ private:
           exBar != existingBarrierMap.end()) {
         auto exBarOp = exBar->second;
         b.setInsertionPoint(exBarOp);
+        emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
         ROCDL::SchedBarrier::create(b, loc, 0);
         b.setInsertionPointAfter(exBarOp);
         ROCDL::SchedBarrier::create(b, loc, 0);
       } else {
         b.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
-        if (i == 0 && topBar == existingBarrierMap.end())
+        if (i == 0 && topBar == existingBarrierMap.end()) {
+          // Extra setprio needed before the loop for the first cluster
+          b.setInsertionPoint(forOp);
+          emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
           // inserts just before yield (=End of the loop).
           b.setInsertionPoint(terminatorOp);
+        }
+        emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
         emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
       }
     }
