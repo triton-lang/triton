@@ -1,6 +1,8 @@
+#include "triton/Tools/PluginUtils.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Signals.h"
 #include <pybind11/pybind11.h>
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace py = pybind11;
 
@@ -46,6 +48,10 @@ void init_gluon_ir(pybind11::module &&m);
 void init_linear_layout(pybind11::module &&m);
 void init_native_specialize(pybind11::module &m);
 FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
+// generates:
+// void init_triton_nvidia(pybind11::module &&m);
+// void init_triton_amd(pybind11::module &&m);
+// void init_triton_proton(pybind11::module &&m);
 
 PYBIND11_MODULE(libtriton, m) {
   m.doc() = "Python bindings to the C++ Triton API";
@@ -58,5 +64,28 @@ PYBIND11_MODULE(libtriton, m) {
   init_triton_llvm(m.def_submodule("llvm"));
   init_linear_layout(m.def_submodule("linear_layout"));
   init_gluon_ir(m.def_submodule("gluon_ir"));
+
+  if (std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH"); !filename.empty()) {
+    TritonPlugin TP(filename);
+    std::vector<const char *> backendNames;
+    if (auto result = TP.getBackendHandles(backendNames); !result)
+      throw TP.err2exp(result.takeError());
+
+    for (unsigned i = 0; i < backendNames.size(); ++i) {
+      const char *backendName = backendNames.data()[i];
+      if (auto result = TP.initBackend(&m, backendName); !result)
+        throw TP.err2exp(result.takeError());
+    }
+
+    // This is just an experiment for now, but for now bail, but in the future
+    // use statically linked AND dynamically loaded backends
+    return;
+  }
+
   FOR_EACH_P(INIT_BACKEND, TRITON_BACKENDS_TUPLE)
+  // generates:
+  // init_triton_nvidia(m.def_submodule("nvidia"));
+  // init_triton_amd(m.def_submodule("amd"));
+  // init_triton_proton(m.def_submodule("proton"));
 }

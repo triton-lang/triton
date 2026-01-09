@@ -6,9 +6,6 @@
 #include "triton/Tools/PluginUtils.h"
 #include <unordered_map>
 
-#define TRITON_PLUGIN_API                                                      \
-  extern "C" __attribute__((visibility("default"))) TritonPluginResult
-
 namespace mlir {
 namespace triton {
 namespace plugin {
@@ -82,6 +79,44 @@ tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
   unsigned i = 0;
   for (auto passName : passNamesTable) {
     passNames[i] = passName;
+  }
+  return TP_SUCCESS;
+}
+
+
+using OpaqueInitBackendType = TritonPluginResult (*)(void *);
+std::unordered_map<std::string, OpaqueInitBackendType> backendMap;
+std::vector<std::string> backendHandles;
+
+TRITON_PLUGIN_API
+tritonRegisterPluginBackend(void *init, const char *backendName) {
+  OpaqueInitBackendType init_triton_backend_opaque = (OpaqueInitBackendType)init;
+  std::string backendNameStr(backendName);
+  backendMap[backendNameStr] = init_triton_backend_opaque;
+  backendHandles.push_back(backendNameStr);
+  return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API
+tritonInitPluginBackend(void *m, const char *backendName) {
+  std::string backendNameStr(backendName);
+  if (backendMap.count(backendNameStr)) {
+    backendMap[backendNameStr](m);
+    return TP_SUCCESS;
+  }
+  return TP_GENERIC_FAILURE;
+}
+
+TRITON_PLUGIN_API
+tritonEnumeratePluginBackends(uint32_t *backendCount, const char **backendNames) {
+  if (!backendCount)
+    return TP_GENERIC_FAILURE;
+  auto count = backendMap.size();
+  *backendCount = count;
+  if (!backendNames)
+    return TP_SUCCESS;
+  for (unsigned i = 0; i < backendHandles.size(); ++i) {
+    backendNames[i] = backendHandles[i].c_str();
   }
   return TP_SUCCESS;
 }
