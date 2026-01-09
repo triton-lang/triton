@@ -81,7 +81,6 @@ public:
   void dump(const std::string &outputFormat);
 
   /// Clear all non-persistent fields in the data.
-  /// The current (active) phase cannot be cleared.
   void clear(size_t phase);
 
   /// Update the flushed phase.
