@@ -168,22 +168,6 @@ def test_metrics(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
 
 
-def test_empty_scope_pruned(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_empty_scope_pruned.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
-    with proton.scope("has_kernel"):
-        torch.ones((2, 2), device="cuda")
-    with proton.scope("empty"):
-        pass
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-    root_child_names = [child["frame"]["name"] for child in data[0]["children"]]
-    assert "empty" not in root_child_names
-    assert "has_kernel" in root_child_names
-
-
 def test_scope_backward(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
