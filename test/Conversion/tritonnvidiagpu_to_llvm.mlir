@@ -225,9 +225,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// CHECK-LABEL: mbarrier_fence_cluster_init
+// CHECK-LABEL: mbarrier_sync_cluster_init
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @mbarrier_fence_cluster_init() {
+  tt.func public @mbarrier_sync_cluster_init() {
     // CHECK: fence.mbarrier_init.release.cluster
     // CHECK: nvvm.cluster.arrive.relaxed
     // CHECK: nvvm.cluster.wait

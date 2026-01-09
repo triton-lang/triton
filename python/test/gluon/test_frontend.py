@@ -588,20 +588,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def mbarrier_fence_cluster_init_kernel():
-    mbarrier.fence_cluster_init()
+def mbarrier_sync_cluster_init_kernel():
+    mbarrier.sync_cluster_init()
 
 
-def test_mbarrier_fence_cluster_init():
-    mod = run_parser(mbarrier_fence_cluster_init_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+def test_mbarrier_sync_cluster_init():
+    mod = run_parser(mbarrier_sync_cluster_init_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @mbarrier_fence_cluster_init_kernel() attributes {noinline = false} {
-    tt.call @triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_cluster_init__() : () -> ()
+  tt.func public @mbarrier_sync_cluster_init_kernel() attributes {noinline = false} {
+    tt.call @triton.experimental.gluon.language.nvidia.hopper.mbarrier.sync_cluster_init__() : () -> ()
     tt.return
   }
-  tt.func private @triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_cluster_init__() attributes {noinline = false} {
+  tt.func private @triton.experimental.gluon.language.nvidia.hopper.mbarrier.sync_cluster_init__() attributes {noinline = false} {
     ttng.fence_mbarrier_init_release_cluster
     ttng.cluster_arrive {relaxed = true}
     ttng.cluster_wait

@@ -7,7 +7,7 @@ __all__ = [
     "allocate_mbarrier",
     "arrive",
     "expect",
-    "fence_cluster_init",
+    "sync_cluster_init",
     "fence_init_release_cluster",
     "init",
     "invalidate",
@@ -57,7 +57,7 @@ def fence_init_release_cluster(_semantic=None):
 
 
 @jit
-def fence_cluster_init():
+def sync_cluster_init():
     """
     Ensure mbarrier initialization is visible across the CTA cluster.
     """
