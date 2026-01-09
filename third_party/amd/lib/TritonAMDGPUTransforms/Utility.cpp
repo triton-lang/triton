@@ -128,16 +128,21 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // take Mx64xbf16, k contiguous, kWidth=8, for example: (rX stands for row X)
 // padding here is set to 16 elements (32 bytes) to avoid bank conflicts
 // we can pack r0,r4,r8,r12,r16,r20,r24,r28 to compose a contiguous tile
-// r0[0+], r0[8+],
-//                 r1[0+], r1[8+],
-//                                 r2[0+], r2[8+],
-//                                                 r3[0+], r3[8+],
-// r4[0+], r4[8+],
-//                 r5[0+], r5[8+],
-//                                 r6[0+], r6[8+],
-//                                                 r7[0+], r7[8+],
-// r8[0+], r8[8+],
+// r0[0:8), r0[8:16),
+//                   r1[0:8), r1[8:16),
+//                                     r2[0:8), r2[8:16),
+//                                                       r3[0:8), r3[8:16),
+// r4[0:8), r4[8:16),
+//                   r5[0:8), r5[8:16),
+//                                     r6[0:8), r6[8:16),
+//                                                       r7[0:8), r7[8:16),
+// r8[0:8), r8[8:16),
 // when composing padded layout, we first assemble the rows that are continuous.
+// in LDS, the rows are arranged as below
+//  r0,  r4, r8, r12, r16, r20, r24, r28
+// pad,  r1, r5,  r9, r13, r17, r21, r25
+// r29, pad, r2,  r6, r10, r14, r18, r22
+// r26, r30, pad, r3 ....
 ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
