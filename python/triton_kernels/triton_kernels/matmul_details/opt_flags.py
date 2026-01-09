@@ -209,8 +209,8 @@ def make_default_opt_flags_nvidia(
         if slice_size <= 64 and routing_data is not None and routing_data.slice_sizes is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
             if (
-                lhs_dtype == torch.bfloat16
-                and rhs_dtype == FP4
+                lhs_dtype.bitwidth == 16
+                and rhs_dtype.bitwidth == 4
                 and slice_size >= 16
                 and torch.cuda.get_device_capability()[0] >= 10
             ):
