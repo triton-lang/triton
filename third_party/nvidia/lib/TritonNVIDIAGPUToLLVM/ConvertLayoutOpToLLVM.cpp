@@ -175,7 +175,8 @@ struct ConvertLayoutOpSwizzlingConversion
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local,
+                           isWarpSync);
 
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
@@ -193,7 +194,8 @@ struct ConvertLayoutOpSwizzlingConversion
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local,
+                         isWarpSync);
       // Load
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans

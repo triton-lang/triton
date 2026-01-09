@@ -205,7 +205,8 @@ struct ConvertLayoutOpConversion
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local,
+                           isWarpSync);
 
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
@@ -213,7 +214,8 @@ struct ConvertLayoutOpConversion
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                       noPaddingOffset, affineOffset, maskSpanAffineOffset,
                       rewriter, targetInfo);
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local,
+                         isWarpSync);
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,

@@ -18,6 +18,7 @@ public:
                Value cmp) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
+               triton::gpu::AddrSpace targets,
                bool isWarpSync = false) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,

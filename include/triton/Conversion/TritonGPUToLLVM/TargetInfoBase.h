@@ -20,6 +20,7 @@ public:
   // level barrier. Backends that do not support warp-level barriers should
   // conservatively emit a block-level barrier.
   virtual void barrier(Location loc, RewriterBase &rewriter,
+                       triton::gpu::AddrSpace targets,
                        bool isWarpSync = false) const = 0;
 
   // Store/load a value from shared memory, either in the same CTA or, if

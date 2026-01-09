@@ -241,7 +241,7 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  auto isLocalBarrier = [](Operation *op) {
+  auto containsLocalBarrier = [](Operation *op) {
     if (isa<gpu::BarrierOp>(op))
       return true;
     if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
@@ -251,14 +251,14 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return false;
   };
 
-  if (isLocalBarrier(op)) {
+  if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
   }
 
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !isLocalBarrier(op->getNextNode())) {
+      !containsLocalBarrier(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
