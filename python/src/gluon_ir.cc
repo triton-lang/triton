@@ -798,12 +798,13 @@ void init_gluon_ir(py::module &&m) {
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas) {
+              std::vector<Value> &mbarrier_preds, bool two_ctas,
+              bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
-                                            pred, two_ctas, mbarriers,
-                                            mbarrier_preds);
+                                            pred, two_ctas, multicast,
+                                            mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
@@ -818,8 +819,9 @@ void init_gluon_ir(py::module &&m) {
                  useAcc, pred, mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_commit",
-           [](GluonOpBuilder &self, Value &barrier, Value &pred, bool twoCTAs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, twoCTAs);
+           [](GluonOpBuilder &self, Value &barrier, Value &pred,
+              std::vector<Value> &descs) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
            })
 
       .def("create_async_tma_copy_global_to_local",
