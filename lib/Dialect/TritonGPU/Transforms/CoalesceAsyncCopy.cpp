@@ -136,10 +136,14 @@ struct ClipAsyncCopySizePerThread
 struct CoalesceCheapAsyncCopyGlobalToLocal
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
   ModuleAxisInfoAnalysis &axisInfoAnalysis;
+  DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap;
   using OpRewritePattern::OpRewritePattern;
-  CoalesceCheapAsyncCopyGlobalToLocal(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                      MLIRContext *context)
-      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis) {}
+  CoalesceCheapAsyncCopyGlobalToLocal(
+      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+      DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap,
+      MLIRContext *context)
+      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis),
+        coalescedAsyncCopyMap(coalescedAsyncCopyMap) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
@@ -158,15 +162,11 @@ struct CoalesceCheapAsyncCopyGlobalToLocal
     if (size >= numWarps * threadsPerWarp ||
         dstTy.getElementTypeBitWidth() < 32)
       return failure();
-    if (axisInfoAnalysis.getAxisInfo(src) == nullptr)
-      return failure();
     auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
     auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
 
-    auto newEnc =
-        buildCoalescedEncoding(axisInfoAnalysis, copyOp, numWarps,
-                               threadsPerWarp, cgaLayout, shapePerCTA);
-    if (newEnc == srcTy.getEncoding())
+    auto newEnc = coalescedAsyncCopyMap[copyOp];
+    if (newEnc == nullptr || newEnc == srcTy.getEncoding())
       return failure();
 
     retargetCopyOperandsToEncoding(copyOp, newEnc, axisInfoAnalysis, rewriter);
@@ -182,12 +182,27 @@ struct CoalesceAsyncCopyPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     triton::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
+    // Collect the coalesced encoding first as changing the IR invalidates the
+    // axis analysis.
+    DenseMap<AsyncCopyGlobalToLocalOp, Attribute> coalescedAsyncCopyMap;
+    m.walk([&](AsyncCopyGlobalToLocalOp copyOp) {
+      auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
+      int numWarps = triton::gpu::lookupNumWarps(copyOp);
+      int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
+      int numCTAs = triton::gpu::getNumCTAs(dstTy.getEncoding());
+      auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
+      auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
+      coalescedAsyncCopyMap[copyOp] =
+          buildCoalescedEncoding(axisInfoAnalysis, copyOp, numWarps,
+                                 threadsPerWarp, cgaLayout, shapePerCTA);
+    });
+
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
-    patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(axisInfoAnalysis,
-                                                      context);
+    patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
+        axisInfoAnalysis, coalescedAsyncCopyMap, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
