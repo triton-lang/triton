@@ -474,11 +474,12 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   if (driver_version <= 13010) {
     int max_byte_index = 0;
     for (int i = 0; i < rank; ++i) {
-      int bytes_stride = i == 0 ? elemSize : strdiesLL[i - 1];
+      int bytes_stride = i == 0 ? elemSize : stridesLL[i - 1];
       max_byte_index += (shapeInt[i] - 1) * bytes_stride;
     }
     if (max_byte_index + 1 < 128 * 1024) {
-        reinterpret_cast<uint64_t*>(&desc->tensorMap)[1] &= ~(1llu << 21);
+      uint64_t* desc_u64 = (uint64_t*)&desc->tensorMap;
+      desc_u64[1] &= ~(1llu << 21);
     }
   }
 
