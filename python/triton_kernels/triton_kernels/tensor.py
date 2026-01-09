@@ -73,6 +73,9 @@ class Storage:
         ragged_dim = len(self.data.shape) - 2
         return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
+    def clone(self, *, memory_format=torch.preserve_format):
+        return Storage(self.data.clone(memory_format=memory_format), layout=self.layout)
+
 
 # data types
 # ---------------------------------------------------------------------------- #
@@ -172,6 +175,12 @@ class Tensor:
         if i is None:
             return self.shape
         return self.shape[i]
+
+    def clone(self, *, memory_format=torch.preserve_format):
+        shape = None if self.shape is None else list(self.shape)
+        shape_max = None if self.shape_max is None else list(self.shape_max)
+        return Tensor(self.storage.clone(memory_format=memory_format), dtype=self.dtype, shape=shape,
+                      shape_max=shape_max)
 
 
 # ---------------------------------------------------------------------------- #
