@@ -53,6 +53,35 @@ struct FenceAsyncSharedOpConversion
   }
 };
 
+struct FenceMBarrierInitReleaseClusterOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp>::
+      ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Only one thread needs to issue the fence, just like mbarrier.init.
+    Value tid = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(tid, b.i32_val(0));
+
+    PTXBuilder ptxBuilder;
+    auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
+    fence().predicate(pred);
+    auto voidTy = void_ty(op->getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -173,13 +202,29 @@ struct WaitBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::WaitBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getAlloc(),
-        typeConverter->convertType(op.getAlloc().getType().getElementType()),
-        rewriter);
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+    auto ctx = op.getContext();
     auto loc = op.getLoc();
-    bool predicated =
-        adaptor.getPred() && !matchPattern(op.getPred(), m_NonZero());
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto pred = adaptor.getPred();
+
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto maskCGABroadcast =
+        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+    if (maskCGABroadcast) {
+      // If several CTAs cast to the same barrier, as when we do a TMA into a
+      // tcgen05.mma 2CTA, we send all the signals to the lead CTA, so even if
+      // this barrier is waiting for zero bytes, no one will arrive on it. As
+      // such, we predicate it out
+      auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
+    }
+
+    bool predicated = pred && !matchPattern(pred, m_NonZero());
     std::string ptx;
     if (targetInfo->getComputeCapability() < 90) {
       if (!predicated) {
@@ -234,11 +279,10 @@ struct WaitBarrierOpConversion
         ptxBuilder.newOperand(smemObj.getBase(), "r"),
         ptxBuilder.newOperand(adaptor.getPhase(), "r")};
     if (predicated)
-      operands.push_back(ptxBuilder.newOperand(adaptor.getPred(), "b"));
+      operands.push_back(ptxBuilder.newOperand(pred, "b"));
 
     waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+    ptxBuilder.launch(rewriter, loc, void_ty(ctx));
     rewriter.eraseOp(op);
     return success();
   }
@@ -285,6 +329,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
+                                                            benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
