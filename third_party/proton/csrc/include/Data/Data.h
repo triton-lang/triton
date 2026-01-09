@@ -81,12 +81,6 @@ public:
   /// Update the flushed phase.
   void updateFlushedPhase(size_t phase);
 
-  /// Get the current phase.
-  size_t getCurrentPhase() const;
-
-  /// Get the flushed phase.
-  size_t getFlushedPhase() const;
-
   /// Check if the given phase has been flushed.
   bool isPhaseFlushed(size_t phase) const;
 

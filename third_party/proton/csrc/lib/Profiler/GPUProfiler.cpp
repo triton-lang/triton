@@ -1,15 +1,55 @@
 #include "Profiler/GPUProfiler.h"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 namespace proton {
 namespace detail {
 
+void setPeriodicFlushingMode(
+    bool &periodicFlushingEnabled, std::string &periodicFlushingFormat,
+    const std::vector<std::string> &modeAndOptions, const char *profilerName) {
+  periodicFlushingEnabled = true;
+  if (modeAndOptions.size() < 2)
+    periodicFlushingFormat = "hatchet";
+
+  auto delimiterPos = modeAndOptions[1].find('=');
+  if (delimiterPos != std::string::npos) {
+    const std::string key = modeAndOptions[1].substr(0, delimiterPos);
+    const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
+    if (key != "format") {
+      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                  ": unsupported option key: " + key);
+    }
+    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
+        value != "hatchet") {
+      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                  ": unsupported format: " + value);
+    }
+    periodicFlushingFormat = value;
+  } else {
+    periodicFlushingFormat = "hatchet";
+  }
+}
+
+void updateDataPhases(
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, Data *data,
+    size_t phase) {
+  auto it = dataPhases.find(data);
+  if (it == dataPhases.end()) {
+    dataPhases.emplace(data, std::make_pair(phase, phase));
+  } else {
+    it->second.first = std::min(it->second.first, phase);   // start phase
+    it->second.second = std::max(it->second.second, phase); // end phase
+  }
+}
+
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const std::map<Data *, size_t> &dataFlushedPhases,
+    std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases) {
@@ -35,6 +75,9 @@ void flushDataPhasesImpl(
       minPhaseToFlush = flushedPhase + 1;
       maxPhaseToFlush = phase.second - 1;
     }
+    // dataFlushedPhases should be recorded also here to avoid profiler's data
+    // unregistered
+    dataFlushedPhases[data] = maxPhaseToFlush;
     data->updateFlushedPhase(maxPhaseToFlush);
     if (!periodicFlushEnabled)
       continue;

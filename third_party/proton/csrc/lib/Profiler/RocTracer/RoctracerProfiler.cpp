@@ -96,17 +96,6 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   return metric;
 }
 
-void updateDataSet(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-                   Data *data, size_t phaseId) {
-  auto it = dataPhases.find(data);
-  if (it == dataPhases.end()) {
-    dataPhases.emplace(data, std::make_pair(phaseId, phaseId));
-  } else {
-    it->second.first = std::min(it->second.first, phaseId);   // start phase
-    it->second.second = std::max(it->second.second, phaseId); // end phase
-  }
-}
-
 void processActivityKernel(
     RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
@@ -128,7 +117,7 @@ void processActivityKernel(
         } else {
           entry.upsertMetric(std::move(metric));
         }
-        updateDataSet(dataPhases, data, entry.phase);
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   } else {
@@ -145,7 +134,7 @@ void processActivityKernel(
         auto childEntry =
             data->addOp(entry.id, {Context(activity->kernel_name)});
         childEntry.upsertMetric(std::move(metric));
-        updateDataSet(dataPhases, data, entry.phase);
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   }
@@ -374,9 +363,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  std::map<Data *, size_t> dataFlushedPhases;
-  for (auto *data : profiler.dataSet)
-    dataFlushedPhases[data] = data->getFlushedPhase();
+  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
@@ -456,24 +443,9 @@ void RoctracerProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "periodic_flushing") {
-    auto delimiterPos = modeAndOptions[1].find('=');
-    periodicFlushingEnabled = true;
-    if (delimiterPos != std::string::npos) {
-      const std::string key = modeAndOptions[1].substr(0, delimiterPos);
-      const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
-      if (key != "format") {
-        throw std::invalid_argument(
-            "[PROTON] RoctracerProfiler: unsupported option key: " + key);
-      }
-      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-          value != "hatchet") {
-        throw std::invalid_argument(
-            "[PROTON] RoctracerProfiler: unsupported format: " + value);
-      }
-      periodicFlushingFormat = value;
-    } else {
-      periodicFlushingFormat = "hatchet";
-    }
+    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
+                                    periodicFlushingFormat, modeAndOptions,
+                                    "RoctracerProfiler");
   } else if (!mode.empty()) {
     throw std::invalid_argument(
         "[PROTON] RoctracerProfiler: unsupported mode: " + mode);

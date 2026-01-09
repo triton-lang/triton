@@ -48,17 +48,6 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
-void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataSet,
-                      Data *data, size_t phase) {
-  auto it = dataSet.find(data);
-  if (it == dataSet.end()) {
-    dataSet.emplace(data, std::make_pair(phase, phase));
-  } else {
-    it->second.first = std::min(it->second.first, phase); // update start phase
-    it->second.second = std::max(it->second.second, phase); // update end phase
-  }
-}
-
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
@@ -88,7 +77,7 @@ uint32_t processActivityKernel(
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
-          updateDataPhases(dataPhases, data, entry.phase);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
@@ -96,7 +85,7 @@ uint32_t processActivityKernel(
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
           childEntry.upsertMetric(std::move(kernelMetric));
-          updateDataPhases(dataPhases, data, entry.phase);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     }
@@ -135,7 +124,7 @@ uint32_t processActivityKernel(
             [activity, &dataPhases](Data *data, DataEntry &entry) {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 entry.upsertMetric(std::move(kernelMetric));
-                updateDataPhases(dataPhases, data, entry.phase);
+                detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             });
       } else {
@@ -144,7 +133,7 @@ uint32_t processActivityKernel(
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             auto childEntry = data->addOp(entry.id, {Context(kernel->name)});
             childEntry.upsertMetric(std::move(kernelMetric));
-            updateDataPhases(dataPhases, data, entry.phase);
+            detail::updateDataPhases(dataPhases, data, entry.phase);
           }
         });
       }
@@ -467,9 +456,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
   uint32_t maxCorrelationId = 0;
-  std::map<Data *, size_t> dataFlushedPhases;
-  for (auto *data : profiler.dataSet)
-    dataFlushedPhases[data] = data->getFlushedPhase();
+  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
@@ -944,24 +931,9 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   if (proton::toLower(mode) == "pcsampling") {
     pcSamplingEnabled = true;
   } else if (proton::toLower(mode) == "periodic_flushing") {
-    auto delimiterPos = modeAndOptions[1].find('=');
-    periodicFlushingEnabled = true;
-    if (delimiterPos != std::string::npos) {
-      const std::string key = modeAndOptions[1].substr(0, delimiterPos);
-      const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
-      if (key != "format") {
-        throw std::invalid_argument(
-            "[PROTON] CuptiProfiler: unsupported option key: " + key);
-      }
-      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-          value != "hatchet") {
-        throw std::invalid_argument(
-            "[PROTON] CuptiProfiler: unsupported format: " + value);
-      }
-      periodicFlushingFormat = value;
-    } else {
-      periodicFlushingFormat = "hatchet";
-    }
+    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
+                                    periodicFlushingFormat, modeAndOptions,
+                                    "CuptiProfiler");
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
                                 mode);

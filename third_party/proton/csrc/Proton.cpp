@@ -191,7 +191,7 @@ static void initProton(pybind11::module &&m) {
   m.def(
       "advance_data_phase",
       [](size_t sessionId) {
-        SessionManager::instance().advanceDataPhase(sessionId);
+        return SessionManager::instance().advanceDataPhase(sessionId);
       },
       pybind11::arg("sessionId"));
   m.def(

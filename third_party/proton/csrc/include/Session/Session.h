@@ -99,7 +99,7 @@ public:
 
   void clearData(size_t sessionId, size_t phase);
 
-  void advanceDataPhase(size_t sessionId);
+  size_t advanceDataPhase(size_t sessionId);
 
   bool isDataPhaseFlushed(size_t sessionId, size_t phase);
 

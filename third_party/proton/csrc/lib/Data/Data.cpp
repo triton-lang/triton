@@ -39,16 +39,6 @@ void Data::updateFlushedPhase(size_t phase) {
     flushedPhase = phase;
 }
 
-size_t Data::getCurrentPhase() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return currentPhase;
-}
-
-size_t Data::getFlushedPhase() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return flushedPhase;
-}
-
 bool Data::isPhaseFlushed(size_t phase) const {
   std::shared_lock<std::shared_mutex> lock(mutex);
   return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;

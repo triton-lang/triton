@@ -22,19 +22,22 @@
 namespace proton {
 
 namespace detail {
-void periodicFlushImpl(
-    const std::string &periodicFlushingFormat,
+
+void flushDataPhasesImpl(
+    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases);
 
-void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const std::map<Data *, size_t> &dataFlushedPhases,
-    const std::map<Data *,
-                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases);
+void updateDataPhases(
+    std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases,
+    Data *data, size_t phase);
+
+void setPeriodicFlushingMode(
+    bool &periodicFlushingEnabled, std::string &periodicFlushingFormat,
+    const std::vector<std::string> &modeAndOptions, const char *profilerName);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,

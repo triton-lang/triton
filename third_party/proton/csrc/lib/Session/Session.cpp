@@ -366,10 +366,10 @@ void SessionManager::clearData(size_t sessionId, size_t phase) {
   sessions[sessionId]->data->clear(phase);
 }
 
-void SessionManager::advanceDataPhase(size_t sessionId) {
+size_t SessionManager::advanceDataPhase(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
-  sessions[sessionId]->data->advancePhase();
+  return sessions[sessionId]->data->advancePhase();
 }
 
 bool SessionManager::isDataPhaseFlushed(size_t sessionId, size_t phase) {
