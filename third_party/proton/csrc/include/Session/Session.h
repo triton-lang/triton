@@ -101,6 +101,8 @@ public:
 
   void advanceDataPhase(size_t sessionId);
 
+  bool isDataPhaseFlushed(size_t sessionId, size_t phase);
+
   void enterScope(const Scope &scope);
 
   void exitScope(const Scope &scope);

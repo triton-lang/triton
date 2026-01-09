@@ -374,7 +374,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
+  std::map<Data *, size_t> dataFlushedPhases;
+  for (auto *data : profiler.dataSet)
+    dataFlushedPhases[data] = data->getFlushedPhase();
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
@@ -403,7 +405,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-  profiler.periodicFlush(dataFlushedPhases, dataPhases);
+  profiler.flushDataPhases(dataFlushedPhases, dataPhases);
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {

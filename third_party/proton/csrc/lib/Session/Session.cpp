@@ -372,4 +372,10 @@ void SessionManager::advanceDataPhase(size_t sessionId) {
   sessions[sessionId]->data->advancePhase();
 }
 
+bool SessionManager::isDataPhaseFlushed(size_t sessionId, size_t phase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId]->data->isPhaseFlushed(phase);
+}
+
 } // namespace proton

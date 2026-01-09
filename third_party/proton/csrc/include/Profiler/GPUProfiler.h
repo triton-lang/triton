@@ -28,6 +28,13 @@ void periodicFlushImpl(
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases);
+
+void flushDataPhasesImpl(
+    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    const std::map<Data *, size_t> &dataFlushedPhases,
+    const std::map<Data *,
+                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -105,14 +112,13 @@ protected:
     threadState.dataToEntry.clear();
   }
 
-  void periodicFlush(
+  void flushDataPhases(
       std::map<Data *, size_t> &dataFlushedPhases,
       const std::map<Data *,
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
           &dataPhases) {
-    if (periodicFlushingEnabled)
-      detail::periodicFlushImpl(periodicFlushingFormat, dataFlushedPhases,
-                                dataPhases);
+    detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
+                                dataFlushedPhases, dataPhases);
   }
 
   // Profiler

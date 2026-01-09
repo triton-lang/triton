@@ -467,7 +467,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
   uint32_t maxCorrelationId = 0;
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
+  std::map<Data *, size_t> dataFlushedPhases;
+  for (auto *data : profiler.dataSet)
+    dataFlushedPhases[data] = data->getFlushedPhase();
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
@@ -491,7 +493,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   std::free(buffer);
 
   profiler.correlation.complete(maxCorrelationId);
-  profiler.periodicFlush(dataFlushedPhases, dataPhases);
+  profiler.flushDataPhases(dataFlushedPhases, dataPhases);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::emitMetricRecords(

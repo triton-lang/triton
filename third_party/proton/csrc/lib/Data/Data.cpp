@@ -33,6 +33,27 @@ void Data::clear(size_t phase) {
     activePhases.insert(phase);
 }
 
+void Data::updateFlushedPhase(size_t phase) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (flushedPhase == kNoFlushedPhase || phase > flushedPhase)
+    flushedPhase = phase;
+}
+
+size_t Data::getCurrentPhase() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return currentPhase;
+}
+
+size_t Data::getFlushedPhase() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return flushedPhase;
+}
+
+bool Data::isPhaseFlushed(size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 

@@ -7,9 +7,9 @@
 namespace proton {
 namespace detail {
 
-void periodicFlushImpl(
-    const std::string &periodicFlushingFormat,
-    std::map<Data *, size_t> &dataFlushedPhases,
+void flushDataPhasesImpl(
+    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    const std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases) {
@@ -24,18 +24,20 @@ void periodicFlushImpl(
     size_t minPhaseToFlush = 0;
     size_t maxPhaseToFlush = 0;
     auto flushedPhaseIt = dataFlushedPhases.find(data);
-    if (flushedPhaseIt == dataFlushedPhases.end()) {
+    if (flushedPhaseIt == dataFlushedPhases.end() ||
+        flushedPhaseIt->second == Data::kNoFlushedPhase) {
       minPhaseToFlush = 0;
       maxPhaseToFlush = phase.second - 1;
-      dataFlushedPhases[data] = phase.second - 1;
     } else {
-      auto &flushedPhase = flushedPhaseIt->second;
+      auto flushedPhase = flushedPhaseIt->second;
       if (phase.second - 1 <= flushedPhase)
         continue;
       minPhaseToFlush = flushedPhase + 1;
       maxPhaseToFlush = phase.second - 1;
-      flushedPhase = phase.second - 1;
     }
+    data->updateFlushedPhase(maxPhaseToFlush);
+    if (!periodicFlushEnabled)
+      continue;
 
     auto &path = data->getPath();
     uint64_t totalToJsonUs = 0;

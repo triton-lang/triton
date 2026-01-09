@@ -54,6 +54,24 @@ def advance_phase(session: Optional[int] = 0) -> Optional[int]:
     return libproton.advance_data_phase(session)
 
 
+def is_phase_flushed(session: Optional[int] = 0, phase: int = 0) -> bool:
+    """
+    Checks if the profiling data for a given session and phase has been flushed.
+
+    Args:
+        session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
+        phase (int): The phase number to check. Defaults to 0.
+
+    Returns:
+        bool: True if the phase data has been flushed, False otherwise.
+    """
+    if session is None:
+        return False
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can check phase flush status when running from the command line.")
+    return libproton.is_data_phase_flushed(session, phase)
+
+
 def clear(session: Optional[int] = 0, phase: int = 0) -> None:
     """
     Clears profiling data for a given session.

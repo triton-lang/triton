@@ -5,6 +5,7 @@
 #include "Metric.h"
 #include "PhaseStore.h"
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <ostream>
@@ -53,6 +54,9 @@ struct DataEntry {
 
 class Data : public ScopeInterface {
 public:
+  static constexpr size_t kNoFlushedPhase =
+      std::numeric_limits<size_t>::max();
+
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
@@ -74,6 +78,18 @@ public:
   /// Clear all non-persistent fields in the data.
   /// The current (active) phase cannot be cleared.
   void clear(size_t phase);
+
+  /// Update the flushed phase.
+  void updateFlushedPhase(size_t phase);
+
+  /// Get the current phase.
+  size_t getCurrentPhase() const;
+
+  /// Get the flushed phase.
+  size_t getFlushedPhase() const;
+
+  /// Check if the given phase has been flushed.
+  bool isPhaseFlushed(size_t phase) const;
 
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
@@ -129,6 +145,7 @@ protected:
   }
 
   std::size_t currentPhase{0};
+  std::size_t flushedPhase{kNoFlushedPhase};
   std::set<size_t> activePhases{};
 
   mutable std::shared_mutex mutex;
