@@ -482,19 +482,19 @@ public:
                 triton::gpu::AddrSpace::TensorWrite;
     if ((op.getAddrSpace() & ~mask) != triton::gpu::AddrSpace::None)
       return failure();
-    // In CDNA we can lower barrier to s_waitcnt + s_barrier
-    // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
-    //   when the instruction completes.
-    //   In this case we require 0 outstanding LDS operations
-    //   amdgpu::MemoryCounterWaitOp will lower s_waitcnt
+    // We can lower barrier to MemoryCounterWaitOp + s_barrier
+    // - MemoryCounterWaitOp specifies how many operations to
+    //   VMEM(Read)/VMEM(Write)/LDS can be outstanding when
+    //   the instruction completes.
     // - s_barrier synchronizes the execution for the CTA
     IntegerAttr zero = rewriter.getI32IntegerAttr(0);
     bool localBarrier = op.hasLocal();
     bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
     if (localBarrier || globalBarrier) {
       amdgpu::MemoryCounterWaitOp::create(
-          rewriter, op->getLoc(), /* load= */ globalBarrier ? zero : nullptr,
-          /* store= */ globalBarrier ? zero : nullptr,
+          rewriter, op->getLoc(),
+          /* load= */ op.hasGlobalRead() ? zero : nullptr,
+          /* store= */ op.hasGlobalWrite() ? zero : nullptr,
           /* ds= */ localBarrier ? zero : nullptr);
     }
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
