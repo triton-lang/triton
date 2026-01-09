@@ -9,9 +9,10 @@
 namespace proton {
 namespace detail {
 
-void setPeriodicFlushingMode(
-    bool &periodicFlushingEnabled, std::string &periodicFlushingFormat,
-    const std::vector<std::string> &modeAndOptions, const char *profilerName) {
+void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
+                             std::string &periodicFlushingFormat,
+                             const std::vector<std::string> &modeAndOptions,
+                             const char *profilerName) {
   periodicFlushingEnabled = true;
   if (modeAndOptions.size() < 2)
     periodicFlushingFormat = "hatchet";
@@ -35,9 +36,8 @@ void setPeriodicFlushingMode(
   }
 }
 
-void updateDataPhases(
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, Data *data,
-    size_t phase) {
+void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
+                      Data *data, size_t phase) {
   auto it = dataPhases.find(data);
   if (it == dataPhases.end()) {
     dataPhases.emplace(data, std::make_pair(phase, phase));

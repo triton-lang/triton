@@ -35,9 +35,10 @@ void updateDataPhases(
         &dataPhases,
     Data *data, size_t phase);
 
-void setPeriodicFlushingMode(
-    bool &periodicFlushingEnabled, std::string &periodicFlushingFormat,
-    const std::vector<std::string> &modeAndOptions, const char *profilerName);
+void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
+                             std::string &periodicFlushingFormat,
+                             const std::vector<std::string> &modeAndOptions,
+                             const char *profilerName);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
