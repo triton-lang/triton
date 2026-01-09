@@ -400,3 +400,22 @@ def test_finalize_within_scope(tmp_path: pathlib.Path):
     depth = proton.context.depth(session_id1)
     assert depth == 0
     proton.finalize()
+
+
+def test_data_api(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_data_api.hatchet"
+    session_id = proton.start(str(temp_file.with_suffix("")))
+    proton.enter_scope("test0")
+    proton.exit_scope()
+    proton.deactivate(session_id)
+    json_data = proton.data.get(session_id)
+    assert json_data is not None
+    msgpack_data = proton.data.get_msgpack(session_id)
+    assert isinstance(msgpack_data, bytes)
+    is_flushed = proton.data.is_phase_flushed(session_id, 0)
+    assert is_flushed is False
+    next_phase = proton.data.advance_phase(session_id)
+    assert next_phase == 1
+    is_flushed = proton.data.is_phase_flushed(session_id, 1)
+    assert is_flushed is False
+    proton.finalize()
