@@ -373,8 +373,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  Value isWarp0 = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
   if (twoCTAs) {
     Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
@@ -392,8 +391,6 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   LLVM::CondBrOp::create(rewriter, loc, pred, mmaBlock, endBlock);
   // Emit the rest in mmaBlock
   rewriter.setInsertionPointToEnd(mmaBlock);
-
-  Value elect = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
 
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
@@ -476,18 +473,17 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
         MemDescOperand a =
             aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
         Value b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
-        op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
-                         desc, m, n, k);
-        useInitAcc = tb.i1_val(1);
+        op.createMMAInst(rewriter, loc, accAddress, a, b, tb.true_val(),
+                         useInitAcc, desc, m, n, k);
+        useInitAcc = tb.true_val();
       }
     }
   }
 
   for (auto [barrier, barrierPred] : llvm::zip(barriers, barrierPreds)) {
-    Value commitPred = tb.and_(barrierPred, elect);
     auto smemObj =
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
+    createMMACommit(rewriter, loc, smemObj.getBase(), barrierPred, twoCTAs);
   }
   LLVM::BrOp::create(rewriter, loc, endBlock);
   return success();
