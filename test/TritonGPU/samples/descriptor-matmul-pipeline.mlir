@@ -112,9 +112,9 @@
 // CHECK:           %[[VAL_86:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_7]]] : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.inval_barrier %[[VAL_86]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_45]] : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK:           %[[VAL_87:.*]] = ttng.warp_group_dot_wait %[[VAL_88:.*]]#0 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>
 // CHECK:           ttg.local_dealloc %[[VAL_44]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_43]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           %[[VAL_87:.*]] = ttng.warp_group_dot_wait %[[VAL_88:.*]]#0 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_89:.*]] = arith.truncf %[[VAL_87]] : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_90:.*]] = ttg.convert_layout %[[VAL_89]] : tensor<128x256xf16, #[[$ATTR_1]]> -> tensor<128x256xf16, #[[$ATTR_0]]>
 // CHECK:           tt.descriptor_store %[[VAL_38]]{{\[}}%[[VAL_39]], %[[VAL_40]]], %[[VAL_90]] : !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, tensor<128x256xf16, #[[$ATTR_0]]>
