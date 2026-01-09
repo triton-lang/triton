@@ -76,27 +76,6 @@ static Operation *getFirstUseInSameBlock(Operation *op) {
 // Reorder mechanisms
 //===----------------------------------------------------------------------===//
 
-// Sink dot layout conversions into loops to decrease register pressure when
-// possible.
-static void sinkDotConversion(triton::FuncOp funcOp) {
-  DenseMap<Operation *, Operation *> opToMove;
-  funcOp.walk([&](ttg::ConvertLayoutOp op) {
-    Attribute encoding = op.getType().getEncoding();
-    if (!isa_and_nonnull<ttg::DotOperandEncodingAttr>(encoding))
-      return;
-    if (!op->hasOneUse())
-      return;
-    Operation *user = *op->getUsers().begin();
-    if (user->getParentOfType<scf::ForOp>() ==
-        op->getParentOfType<scf::ForOp>())
-      return;
-    opToMove[op] = user;
-  });
-
-  for (auto &kv : opToMove)
-    kv.first->moveBefore(kv.second);
-}
-
 // Sink conversion after the last dealloc but before the first use in its block.
 // This helps to avoid unnecessary shared memory allocation.
 static void moveDownCoversion(triton::FuncOp funcOp) {
@@ -188,7 +167,6 @@ struct TritonAMDGPUReorderInstructionsPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<triton::FuncOp>()) {
-      sinkDotConversion(funcOp);
       moveDownCoversion(funcOp);
       moveUpTranspose(funcOp);
       moveUpGlobalLoadInPrologue(funcOp);
