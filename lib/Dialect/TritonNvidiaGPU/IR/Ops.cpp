@@ -645,6 +645,14 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  auto numDescs = getDescs().size();
+  if (numDescs > 2)
+    return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  return success();
+}
+
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
   Type atype = getA().getType().getElementType();

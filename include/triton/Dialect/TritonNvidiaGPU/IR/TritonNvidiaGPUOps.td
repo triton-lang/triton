@@ -554,7 +554,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let hasVerifier = 1;
 }
 
-def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
 
   let description = [{
@@ -563,9 +563,9 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
     operations. Upon completion of all asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
 
-    If `two_ctas` is set, then the mbarrier tracks all prior operations
-    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
-    operations initiated without `two_ctas`.
+    If `descs` are provided, the commit will be multicast across the CTA cluster
+    based on the shared layouts of those descriptors. This should be used when
+    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
 
     Note that the completion mechanisms are guaranteed to occur sequentially in
     the order the commit operations were issued. This means, for example:
@@ -586,18 +586,15 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Optional<I1>:$pred,
-    UnitAttr:$two_ctas
+    Variadic<TTG_MemDescType>:$descs
   );
 
   let assemblyFormat = [{
-    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+    $barrier (`,` $pred^)? (`descs` $descs^)? attr-dict `:`
+    qualified(type($barrier)) (`,` qualified(type($descs))^)?
   }];
 
-  let builders = [
-    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
-      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
-    }]>,
-  ];
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {

@@ -819,8 +819,9 @@ void init_gluon_ir(py::module &&m) {
                  useAcc, pred, mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_commit",
-           [](GluonOpBuilder &self, Value &barrier, Value &pred, bool twoCTAs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, twoCTAs);
+           [](GluonOpBuilder &self, Value &barrier, Value &pred,
+              std::vector<Value> &descs) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
            })
 
       .def("create_async_tma_copy_global_to_local",

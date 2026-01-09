@@ -295,9 +295,28 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
 
 static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
                             Value barrier, Value pred, bool twoCTAs,
-                            Value mask = Value()) {
+                            ValueRange descs) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value mask;
+  if (!descs.empty()) {
+    auto kBlock = StringAttr::get(rewriter.getContext(), "block");
+    for (Value desc : descs) {
+      auto descTy = cast<MemDescType>(desc.getType());
+      uint16_t broadcastBits =
+          toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
+      if (twoCTAs)
+        broadcastBits |= 1;
+      if (broadcastBits) {
+        Value mask =
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        mask = mask ? b.or_(mask, mask) : mask;
+      }
+    }
+  } else if (twoCTAs) {
+    mask = LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, 0x1);
+  }
+
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
@@ -366,7 +385,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
                              Value a, Value b, Value loadedA, Value loadedB,
                              MemDescType dTensorTy, Value useDFlag, Value pred,
                              ValueRange barriers, ValueRange barrierPreds,
-                             bool twoCTAs, Value multicastMask,
+                             bool twoCTAs, ValueRange commitDescs,
                              bool opKindIsMXFP4, const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -487,7 +506,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto smemObj =
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
     createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs,
-                    multicastMask);
+                    commitDescs);
   }
   LLVM::BrOp::create(rewriter, loc, endBlock);
   return success();
@@ -502,36 +521,12 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
-  Value multicastMask;
+  SmallVector<Value> commitDescs;
   if (op.getMulticast()) {
-    auto kBlock = StringAttr::get(op.getContext(), "block");
-    uint16_t broadcastBitsA =
-        toLinearLayout(aTensorTy).getFreeVariableMasks().lookup(kBlock);
-    uint16_t broadcastBitsB =
-        toLinearLayout(bTensorTy).getFreeVariableMasks().lookup(kBlock);
-    if (twoCTAs) {
-      // Toggle LSB if twoCTAs to broadcast the commit from CTA0 to CTA0 and
-      // CTA1
-      assert((broadcastBitsA & 1) == 0);
-      assert((broadcastBitsB & 1) == 0);
-      broadcastBitsA |= 1;
-      broadcastBitsB |= 1;
+    if (isa<SharedEncodingTrait>(aTensorTy.getEncoding())) {
+      commitDescs.push_back(adaptor.getA());
     }
-    if (broadcastBitsA || broadcastBitsB) {
-      TritonLLVMOpBuilder tb(loc, rewriter);
-      Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-      if (broadcastBitsA) {
-        multicastMask =
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBitsA);
-      }
-      if (broadcastBitsB) {
-        Value maskB =
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBitsB);
-        multicastMask = multicastMask ? tb.or_(multicastMask, maskB) : maskB;
-      }
-    }
-  } else if (twoCTAs) {
-    multicastMask = LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, 0x1);
+    commitDescs.push_back(adaptor.getB());
   }
 
   DotConversion dot;
@@ -572,7 +567,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   return convertDotImpl(
       typeConverter, rewriter, loc, op.getA(), op.getB(), adaptor.getA(),
       adaptor.getB(), dTensorTy, adaptor.getUseD(), adaptor.getPred(),
-      adaptor.getBarriers(), adaptor.getBarrierPreds(), twoCTAs, multicastMask,
+      adaptor.getBarriers(), adaptor.getBarrierPreds(), twoCTAs, commitDescs,
       /*opKindIsMXFP4=*/false, dot);
 }
 
@@ -688,7 +683,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                         adaptor.getA(), adaptor.getB(), dTensorTy,
                         adaptor.getUseD(), adaptor.getPred(),
                         adaptor.getBarriers(), adaptor.getBarrierPreds(),
-                        twoCTAs, Value(), opKindIsMXFP4, dot);
+                        twoCTAs, ValueRange{}, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -744,8 +739,16 @@ struct TCGen5CommitOpConversion
     if (adaptor.getPred())
       pred = b.and_(adaptor.getPred(), pred);
 
-    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
-                    ttng::getModuleTwoCTAs(op));
+    bool twoCTAs = ttng::getModuleTwoCTAs(op);
+    if (twoCTAs) {
+      Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+      leftClusterId = b.and_(leftClusterId, b.i32_val(1));
+      Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
+      pred = b.and_(pred, cluster0);
+    }
+
+    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred, twoCTAs,
+                    op.getDescs());
     rewriter.eraseOp(op);
     return success();
   }
