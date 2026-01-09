@@ -131,8 +131,8 @@ void processActivityKernel(
     // 3. corrId -> numNodes
     for (auto [data, entry] : state.dataToEntry) {
       if (auto metric = convertActivityToMetric(activity)) {
-        auto childEntry =
-            data->addOp(entry.phase, entry.id, {Context(activity->kernel_name)});
+        auto childEntry = data->addOp(entry.phase, entry.id,
+                                      {Context(activity->kernel_name)});
         childEntry.upsertMetric(std::move(metric));
         detail::updateDataPhases(dataPhases, data, entry.phase);
       }

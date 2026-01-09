@@ -129,15 +129,15 @@ uint32_t processActivityKernel(
               }
             });
       } else {
-        nodeState->forEachEntry([kernel, activity,
-                                 &dataPhases](Data *data, DataEntry &entry) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry =
-                data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-            childEntry.upsertMetric(std::move(kernelMetric));
-            detail::updateDataPhases(dataPhases, data, entry.phase);
-          }
-        });
+        nodeState->forEachEntry(
+            [kernel, activity, &dataPhases](Data *data, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                auto childEntry =
+                    data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+                childEntry.upsertMetric(std::move(kernelMetric));
+                detail::updateDataPhases(dataPhases, data, entry.phase);
+              }
+            });
       }
     }
     // Decrease the expected kernel count

@@ -108,7 +108,8 @@ public:
   virtual DataEntry addOp(size_t phase, size_t entryId,
                           const std::vector<Context> &contexts) = 0;
 
-  /// Record a batch of named metrics for a scope to the data of the current phase.
+  /// Record a batch of named metrics for a scope to the data of the current
+  /// phase.
   ///
   /// This is primarily intended for user-defined metrics defined in Python and
   /// directly associated with a scope.
