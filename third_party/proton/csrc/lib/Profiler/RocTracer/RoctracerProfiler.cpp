@@ -415,11 +415,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
                                         nullptr);
   // Activity Records
   roctracer_properties_t properties{0};
-  const auto defaultBufferSize = 64 * 1024 * 1024;
-  auto bufferSize =
-      getIntEnv("TRITON_PROFILE_BUFFER_SIZE",
-                getIntEnv("TRITON_ROCTRACER_BUFFER_SIZE", defaultBufferSize));
-  properties.buffer_size = bufferSize;
+  const auto envBufferSize =
+      getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
+  properties.buffer_size = envBufferSize;
   properties.buffer_callback_fun = activityCallback;
   roctracer::openPool<true>(&properties);
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
