@@ -81,8 +81,12 @@ specializations = SpecializationModule("matmul",
 def can_overflow_int32(tensor: torch.Tensor):
     max_int32 = (1 << 31) - 1
     offset = 0
-    for i in range(tensor.ndim):
-        offset += (tensor.shape[i] - 1) * tensor.stride(i)
+    # TODO: this should always be tensor
+    ndim = tensor.storage.data.ndim if isinstance(tensor, Tensor) else tensor.ndim
+    shape = tensor.storage.data.shape if isinstance(tensor, Tensor) else tensor.shape
+    strides = tensor.storage.data.stride() if isinstance(tensor, Tensor) else tensor.stride()
+    for i in range(ndim):
+        offset += (shape[i] - 1) * strides[i]
     return offset > max_int32
 
 
