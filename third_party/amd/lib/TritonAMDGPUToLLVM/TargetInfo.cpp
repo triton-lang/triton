@@ -117,15 +117,14 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
-                         triton::gpu::AddrSpace targets,
-                         bool isWarpSync) const {
-  if (isWarpSync) {
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier",
-                                    {}, {});
-  } else {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier(targets);
-  }
+                         triton::gpu::AddrSpace targets) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier(targets);
+}
+
+void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier", {},
+                                  {});
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
