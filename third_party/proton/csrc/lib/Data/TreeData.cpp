@@ -144,23 +144,6 @@ public:
 
   size_t size() const { return nextContextId; }
 
-  std::vector<bool> computeSubtreeHasMetrics() {
-    std::vector<bool> subtreeHasMetrics(size(), false);
-    walk<WalkPolicy::PostOrder>([&](TreeNode &node) {
-      const bool hasOwnMetrics =
-          !node.metrics.empty() || !node.flexibleMetrics.empty();
-      bool hasChildMetrics = false;
-      for (const auto &child : node.children) {
-        if (subtreeHasMetrics[child.id]) {
-          hasChildMetrics = true;
-          break;
-        }
-      }
-      subtreeHasMetrics[node.id] = hasOwnMetrics || hasChildMetrics;
-    });
-    return subtreeHasMetrics;
-  }
-
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // tree node id -> tree node
@@ -168,8 +151,6 @@ private:
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
-  const auto subtreeHasMetrics = tree->computeSubtreeHasMetrics();
-
   std::vector<json *> jsonNodes(tree->size(), nullptr);
   json output = json::array();
   output.push_back(json::object());
@@ -183,10 +164,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         const auto contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
-        if (jsonNode == nullptr)
-          // This node and its children are not initialized because of zero
-          // metrics
-          return;
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
@@ -289,9 +266,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size());
         for (const auto &child : treeNode.children) {
-          if (!subtreeHasMetrics[child.id]) {
-            continue;
-          }
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
         }
@@ -353,8 +327,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
 }
 
 std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
-  const auto subtreeHasMetrics = tree->computeSubtreeHasMetrics();
-
   MsgPackWriter writer;
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
@@ -596,17 +568,8 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
 
         writer.packStr("children");
-        uint32_t keptChildren = 0;
+        writer.packArray(static_cast<uint32_t>(treeNode.children.size()));
         for (const auto &child : treeNode.children) {
-          if (subtreeHasMetrics[child.id]) {
-            ++keptChildren;
-          }
-        }
-        writer.packArray(keptChildren);
-        for (const auto &child : treeNode.children) {
-          if (!subtreeHasMetrics[child.id]) {
-            continue;
-          }
           packNode(tree->getNode(child.id));
         }
       };
