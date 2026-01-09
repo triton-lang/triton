@@ -54,8 +54,7 @@ struct DataEntry {
 
 class Data : public ScopeInterface {
 public:
-  static constexpr size_t kNoFlushedPhase =
-      std::numeric_limits<size_t>::max();
+  static constexpr size_t kNoFlushedPhase = std::numeric_limits<size_t>::max();
 
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
