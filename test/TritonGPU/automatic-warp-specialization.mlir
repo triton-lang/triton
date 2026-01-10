@@ -134,8 +134,21 @@ tt.func @matmul_tma_and_regular_load(
   // CHECK-LABEL: partition0
   // OPT-LABEL: partition0
   // OPT-SAME: num_warps(4)
-  // PIPELINE-COUNT-3: async_copy_global_to_local
-  // PIPELINE-NOT: async_copy_global_to_local
+
+  // PIPELINE: [[BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x64x128xf16,
+  // PIPELINE: [[BUF0:%.*]] = ttg.memdesc_index [[BUFFERS]][%c0_i32
+  // PIPELINE: async_copy_global_to_local %{{[0-9]+}}, [[BUF0]]
+  // PIPELINE: async_commit_group
+  // PIPELINE: async_wait {{.*}} {num = 0 : i32}
+  // PIPELINE: [[BUF0:%.*]] = ttg.memdesc_index [[BUFFERS]][%c0_i32
+  // PIPELINE: tc_gen5_mma %{{[0-9]+}}, [[BUF0]]
+  // PIPELINE: [[BUF1:%.*]] = ttg.memdesc_index [[BUFFERS]][%c1_i32
+  // PIPELINE: async_copy_global_to_local %{{[0-9]+}}, [[BUF1]]
+  // PIPELINE: async_commit_group
+  // PIPELINE: scf.for
+  // PIPELINE:   tc_gen5_mma
+  // PIPELINE:   async_copy_global_to_local
+
   // CHECK-LABEL: partition1
   // OPT-LABEL: partition1
   // OPT-SAME: num_warps(4)

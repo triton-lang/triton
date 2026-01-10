@@ -199,6 +199,18 @@ public:
               opLatency.erase(&op); // can't pipeline the MMA
             else
               opLatency[&op] += 1;
+            // If all inputs to the MMA are warp specialized, set the self
+            // latency to 0 since the MMA won't need to wait on itself.
+            auto cantWarpSpec = [](Operation *op) { return isa<LoadOp>(op); };
+            auto warpSpecHelper = ttng::MMAv5PipelineableOperandsHelper(
+                mma, forOp, [&](Operation *op) {
+                  return isLoadToBePipelined(op) && !cantWarpSpec(op);
+                });
+            if (warpSpecHelper.isPipelineable ||
+                (warpSpecHelper.isOperandsStateDetermined &&
+                 llvm::none_of(warpSpecHelper.unpipelineableOperandDefs,
+                               cantWarpSpec)))
+              mmaSelfLatency[mma] = 0;
           }
         }
       }

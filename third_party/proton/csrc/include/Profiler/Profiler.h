@@ -39,6 +39,14 @@ public:
   /// It doesn't stop the profiler.
   Profiler *flush() {
     this->doFlush();
+    // Treat all phases up to currentPhase - 1 as flushed, even if a phase has
+    // no GPU activity records (i.e., nothing to flush from device to host).
+    for (auto *data : this->getDataSet()) {
+      const auto currentPhase = data->getCurrentPhase();
+      if (currentPhase == 0)
+        continue;
+      data->updateFlushedPhase(currentPhase - 1);
+    }
     return this;
   }
 

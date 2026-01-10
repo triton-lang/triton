@@ -382,10 +382,11 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
           throw std::runtime_error("[PROTON] Invalid stall reason index");
         for (auto [data, entry] : dataToEntry) {
           if (lineInfo.fileName.size())
-            entry = data->addOp(
-                entry.id, {formatFileLineFunction(
-                              lineInfo.dirName + "/" + lineInfo.fileName,
-                              lineInfo.lineNumber, lineInfo.functionName)});
+            entry =
+                data->addOp(entry.phase, entry.id,
+                            {formatFileLineFunction(
+                                lineInfo.dirName + "/" + lineInfo.fileName,
+                                lineInfo.lineNumber, lineInfo.functionName)});
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);

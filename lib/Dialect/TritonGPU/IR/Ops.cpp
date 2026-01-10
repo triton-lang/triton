@@ -772,6 +772,101 @@ LogicalResult LocalLoadOp::verify() {
   return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
+// LocalGatherOp
+LogicalResult LocalGatherOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto dstTy = cast<RankedTensorType>(getType());
+  unsigned axis = getAxis();
+
+  // Verify source has shared memory encoding
+  auto srcEnc = srcTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(srcEnc)) {
+    return emitError("source must have shared memory encoding");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  // Verify result has the same shape as indices
+  if (dstTy.getShape() != indicesTy.getShape()) {
+    return emitError("result shape must match indices shape");
+  }
+
+  // Verify src and indices have the same rank
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitError("source and indices must have the same rank");
+  }
+
+  // Verify axis is valid
+  if (axis >= srcTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for source rank " << srcTy.getRank();
+  }
+
+  // Verify element types match
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match source element type");
+  }
+
+  // Verify indices and result have the same layout
+  if (indicesTy.getEncoding() != dstTy.getEncoding()) {
+    return emitError("indices and result must have the same layout");
+  }
+
+  return success();
+}
+
+// LocalScatterOp
+LogicalResult LocalScatterOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  unsigned axis = getAxis();
+
+  // Verify destination has shared memory encoding
+  auto dstEnc = dstTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  // Verify values and indices have the same shape
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+
+  // Verify dst and indices have the same rank
+  if (dstTy.getRank() != indicesTy.getRank()) {
+    return emitError("destination and indices must have the same rank");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values and indices have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+
+  // Verify element types match
+  if (dstTy.getElementType() != valuesTy.getElementType()) {
+    return emitError("values element type must match destination element type");
+  }
+
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
@@ -939,9 +1034,12 @@ LogicalResult MemDescSubsliceOp::verify() {
 // -- WarpSpecializeOp --
 
 RegionRange WarpSpecializeOp::getPartitionRegions() {
+  return getPartitionOp().getPartitionRegions();
+}
+
+WarpSpecializePartitionsOp WarpSpecializeOp::getPartitionOp() {
   return cast<WarpSpecializePartitionsOp>(
-             getPartitionOpHolder().front().front())
-      .getPartitionRegions();
+      getPartitionOpHolder().front().front());
 }
 
 void WarpSpecializeOp::getSuccessorRegions(
@@ -970,7 +1068,7 @@ void WarpSpecializePartitionsOp::getSuccessorRegions(
 OperandRange
 WarpSpecializePartitionsOp::getEntrySuccessorOperands(RegionSuccessor) {
   // Pass through the explicit captures from the enclosing WarpSpecializeOp.
-  return getParentOp().getExplicitCaptures();
+  return getExplicitCaptures();
 }
 
 LogicalResult WarpSpecializeOp::verify() {
@@ -1004,22 +1102,6 @@ LogicalResult WarpSpecializeOp::verify() {
     }
   }
 
-  for (auto [i, region] : llvm::enumerate(getPartitionRegions())) {
-    if (region->getNumArguments() != getNumOperands()) {
-      return emitOpError("partition region #")
-             << i << " has " << region->getNumArguments()
-             << " arguments but expected " << getNumOperands();
-    }
-    for (auto [argIdx, argType, capType] : llvm::enumerate(
-             region->getArgumentTypes(), getExplicitCaptures().getTypes())) {
-      if (argType == capType)
-        continue;
-      return emitOpError("partition region #")
-             << i << " argument #" << argIdx << " has type " << argType
-             << " but corresponding capture has type " << capType;
-    }
-  }
-
   // This op cannot be nested inside itself.
   if ((*this)->getParentOfType<WarpSpecializeOp>()) {
     return emitOpError(
@@ -1038,71 +1120,38 @@ LogicalResult WarpSpecializeOp::verify() {
 LogicalResult WarpSpecializeOp::canonicalize(WarpSpecializeOp op,
                                              PatternRewriter &b) {
   // Propagate unused results and captures by removing them from the op.
-  llvm::BitVector unusedArgs(op.getNumOperands());
   llvm::BitVector unusedResults(op.getNumResults());
   for (auto [i, result] : llvm::enumerate(op.getResults())) {
     if (result.use_empty())
       unusedResults.set(i);
   }
-  // Remove duplicate captures.
-  DenseMap<Value, unsigned> uniqueCaptures;
-  for (auto [i, capture] : llvm::enumerate(op.getExplicitCaptures())) {
-    auto noUseInRegion = [i = i](Region *region) {
-      return region->getArgument(i).use_empty();
-    };
-    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion)) {
-      unusedArgs.set(i);
-      continue;
-    }
 
-    auto [it, inserted] = uniqueCaptures.try_emplace(capture, i);
-    if (!inserted) {
-      unsigned duplicateIdx = it->second;
-      b.modifyOpInPlace(op, [&, i = i] {
-        for (Region *region : op.getPartitionRegions()) {
-          b.replaceAllUsesWith(region->getArgument(i),
-                               region->getArgument(duplicateIdx));
-        }
-      });
-      unusedArgs.set(i);
-    }
-  }
-  if (unusedArgs.none() && unusedResults.none())
+  if (unusedResults.none())
     return failure();
 
-  if (unusedArgs.any()) {
-    b.modifyOpInPlace(op, [&] {
-      for (Region *region : op.getPartitionRegions())
-        region->front().eraseArguments(unusedArgs);
-      op->eraseOperands(unusedArgs);
-    });
+  for (Block &block : op.getDefaultRegion()) {
+    if (auto yield = dyn_cast<WarpYieldOp>(block.getTerminator())) {
+      b.modifyOpInPlace(yield, [&] { yield->eraseOperands(unusedResults); });
+    }
   }
 
-  if (unusedResults.any()) {
-    for (Block &block : op.getDefaultRegion()) {
-      if (auto yield = dyn_cast<WarpYieldOp>(block.getTerminator())) {
-        b.modifyOpInPlace(yield, [&] { yield->eraseOperands(unusedResults); });
-      }
-    }
-
-    SmallVector<Type> newTypes;
-    for (auto [i, type] : llvm::enumerate(op.getResultTypes())) {
-      if (!unusedResults.test(i))
-        newTypes.push_back(type);
-    }
-    OperationState state(op.getLoc(), op->getName(), op.getOperands(), newTypes,
-                         op->getAttrs());
-    state.addRegion()->takeBody(op.getDefaultRegion());
-    state.addRegion()->takeBody(op.getPartitionOpHolder());
-    auto newOp = cast<WarpSpecializeOp>(b.create(state));
-    unsigned newResultIdx = 0;
-    for (auto [i, result] : llvm::enumerate(op.getResults())) {
-      if (!unusedResults.test(i))
-        result.replaceAllUsesWith(newOp.getResult(newResultIdx++));
-    }
-    assert(newResultIdx == newOp.getNumResults());
-    b.eraseOp(op);
+  SmallVector<Type> newTypes;
+  for (auto [i, type] : llvm::enumerate(op.getResultTypes())) {
+    if (!unusedResults.test(i))
+      newTypes.push_back(type);
   }
+  OperationState state(op.getLoc(), op->getName(), {}, newTypes,
+                       op->getAttrs());
+  state.addRegion()->takeBody(op.getDefaultRegion());
+  state.addRegion()->takeBody(op.getPartitionOpHolder());
+  auto newOp = cast<WarpSpecializeOp>(b.create(state));
+  unsigned newResultIdx = 0;
+  for (auto [i, result] : llvm::enumerate(op.getResults())) {
+    if (!unusedResults.test(i))
+      result.replaceAllUsesWith(newOp.getResult(newResultIdx++));
+  }
+  assert(newResultIdx == newOp.getNumResults());
+  b.eraseOp(op);
 
   return success();
 }
@@ -1111,19 +1160,18 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              TypeRange resultTypes,
                              ArrayRef<int32_t> partitionNumWarps,
                              unsigned partitionNumRegions) {
-  build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
-        partitionNumWarps, {}, {}, {});
+  build(builder, state, resultTypes, partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
   WarpSpecializePartitionsOp::create(builder, state.location,
+                                     /*explicitCaptures=*/ValueRange(),
                                      partitionNumRegions);
 }
 
 void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
-                             TypeRange resultTypes, ValueRange explicitCaptures,
+                             TypeRange resultTypes,
                              ArrayRef<int32_t> partitionNumWarps) {
-  build(builder, state, resultTypes, explicitCaptures, partitionNumWarps, {},
-        {}, {});
+  build(builder, state, resultTypes, partitionNumWarps, {}, {}, {});
 }
 
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
@@ -1155,7 +1203,7 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   FunctionType types;
   if (p.parseColon() || p.parseType(types) ||
       p.resolveOperands(operands, types.getInputs(), operandLoc,
-                        result.operands))
+                        partitionOpState.operands))
     return failure();
 
   result.addTypes(types.getResults());
@@ -1171,7 +1219,7 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
 
 void WarpSpecializeOp::print(OpAsmPrinter &p) {
   p << '(';
-  p.printOperands(getOperands());
+  p.printOperands(getPartitionOp().getOperands());
   p << ')';
   p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
                                      {getPartitionNumWarpsAttrName()});
@@ -1191,7 +1239,69 @@ void WarpSpecializeOp::print(OpAsmPrinter &p) {
     p.printRegion(*region, /*printEntryBlockArgs=*/false);
   }
   p << " : ";
-  p.printFunctionalType(*this);
+  SmallVector<Type> captureTypes;
+  for (auto val : getPartitionOp().getExplicitCaptures())
+    captureTypes.push_back(val.getType());
+  p.printFunctionalType(captureTypes, getResultTypes());
+}
+
+LogicalResult WarpSpecializePartitionsOp::verify() {
+  for (auto [i, region] : llvm::enumerate(getPartitionRegions())) {
+    if (region.getNumArguments() != getNumOperands()) {
+      return emitOpError("partition region #")
+             << i << " has " << region.getNumArguments()
+             << " arguments but expected " << getNumOperands();
+    }
+    for (auto [argIdx, argType, capType] : llvm::enumerate(
+             region.getArgumentTypes(), getExplicitCaptures().getTypes())) {
+      if (argType == capType)
+        continue;
+      return emitOpError("partition region #")
+             << i << " argument #" << argIdx << " has type " << argType
+             << " but corresponding capture has type " << capType;
+    }
+  }
+  return success();
+}
+
+LogicalResult
+WarpSpecializePartitionsOp::canonicalize(WarpSpecializePartitionsOp op,
+                                         PatternRewriter &b) {
+  llvm::BitVector unusedArgs(op.getNumOperands());
+
+  // Remove duplicate captures.
+  DenseMap<Value, unsigned> uniqueCaptures;
+  for (auto [i, capture] : llvm::enumerate(op.getExplicitCaptures())) {
+    auto noUseInRegion = [i = i](Region &region) {
+      return region.getArgument(i).use_empty();
+    };
+    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion)) {
+      unusedArgs.set(i);
+      continue;
+    }
+
+    auto [it, inserted] = uniqueCaptures.try_emplace(capture, i);
+    if (!inserted) {
+      unsigned duplicateIdx = it->second;
+      b.modifyOpInPlace(op, [&, i = i] {
+        for (Region &region : op.getPartitionRegions()) {
+          b.replaceAllUsesWith(region.getArgument(i),
+                               region.getArgument(duplicateIdx));
+        }
+      });
+      unusedArgs.set(i);
+    }
+  }
+
+  if (unusedArgs.none())
+    return failure();
+
+  b.modifyOpInPlace(op, [&] {
+    for (Region &region : op.getPartitionRegions())
+      region.front().eraseArguments(unusedArgs);
+    op->eraseOperands(unusedArgs);
+  });
+  return success();
 }
 
 LogicalResult WarpYieldOp::verify() {
@@ -1230,7 +1340,7 @@ static size_t getSharedMemorySize(Type type) {
 std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
   uint64_t captureSize = 0;
   // Tightly pack the captures in memory.
-  for (Type type : getOperandTypes()) {
+  for (Type type : getPartitionOp().getOperandTypes()) {
     captureSize += getSharedMemorySize(type);
   }
   // Align the captures to 8 bytes.

@@ -5,8 +5,10 @@ hip.hip.hipInit(0)
 # Needed for internal dev flow for now; will remove later
 
 import re
+import math
 import pytest
 import torch
+from itertools import product
 
 import triton
 import triton.language as tl
@@ -1468,6 +1470,231 @@ def test_tensor_descriptor_load_store_invalid_blocksize():
         error_msg = str(e)
         assert "error encountered during parsing" in error_msg.lower(), \
             f"Expected parsing error for block size > 65536, but got: {error_msg}"
+
+
+@gluon.jit
+def tensor_descriptor_prefetch_nd_kernel_device_tdm(a_ptr, shape, strides, BLOCK_SHAPE, SHARED_LAYOUT: ttgl.constexpr,
+                                                    PREFETCH_SPECULATIVE: ttgl.constexpr):
+    ndim: ttgl.constexpr = len(BLOCK_SHAPE)
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
+                                                       block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+    offs = (0, ) * ndim
+    ttgl.amd.gfx1250.tdm.prefetch(desc, offs, speculative=PREFETCH_SPECULATIVE)
+
+
+@gluon.jit
+def tensor_descriptor_prefetch_nd_kernel_host_tdm(inp_desc, SPECULATIVE: ttgl.constexpr):
+    ndim: ttgl.constexpr = len(inp_desc.block_shape)
+    offs = (0, ) * ndim
+    ttgl.amd.gfx1250.tdm.prefetch(inp_desc, offs, speculative=SPECULATIVE)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [8, 256])
+@pytest.mark.parametrize("dtype", ["i8", "fp16", "fp32", "fp64"])
+@pytest.mark.parametrize("SPECULATIVE", [True, False])
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULATIVE, TDM_TYPE):
+    SHARED_LAYOUT = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    shape_str = ", ".join(str(s) for s in BLOCK_SHAPE)
+
+    if TDM_TYPE == "DEVICE_TDM":
+        fn = tensor_descriptor_prefetch_nd_kernel_device_tdm
+        signature = {
+            "a_ptr": f"*{dtype}",
+            "shape": tuple("i32" for _ in range(ndim)),
+            "strides": tuple("i32" for _ in range(ndim)),
+            "BLOCK_SHAPE": tuple("constexpr" for _ in range(ndim)),
+            "SHARED_LAYOUT": "constexpr",
+            "PREFETCH_SPECULATIVE": "constexpr",
+        }
+        constexprs = {
+            # For tuples we need to specifiy the parameter index (BLOCK_SHAPE is the 3rd argument)
+            **{(3, i): BLOCK_SHAPE[i]
+               for i in range(ndim)},
+            "SHARED_LAYOUT": SHARED_LAYOUT,
+            "PREFETCH_SPECULATIVE": SPECULATIVE,
+        }
+    else:
+        assert TDM_TYPE == "HOST_TDM"
+        fn = tensor_descriptor_prefetch_nd_kernel_host_tdm
+        signature = {
+            "inp_desc": f"tensordesc<{dtype}[{shape_str}],{SHARED_LAYOUT}>",
+            "SPECULATIVE": "constexpr",
+        }
+        constexprs = {"SPECULATIVE": SPECULATIVE}
+
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(fn, signature, constexprs),
+        target=GPUTarget("hip", 'gfx1250', 32),
+    )
+    amdgcn = k.asm["amdgcn"]
+
+    for pattern in ("global_prefetch_b8", "scope:SCOPE_SE"):
+        assert re.search(pattern, amdgcn)
+    if SPECULATIVE:
+        assert re.search("th:TH_LOAD_NT", amdgcn)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [8, 128, 256])
+@pytest.mark.parametrize("dtype_str", ["int8", "float16", "float32", "float64"])
+@pytest.mark.parametrize("SPECULATIVE", [True, False])
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_runtime_tensor_descriptor_prefetch_nd(dtype_str, ndim, INNER_BLOCK, SPECULATIVE, TDM_TYPE):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    # uint_dtypes require special handling because PyTorch only has full native support
+    # for uint8. While PyTorch 2.1+ added limited support for uint16, uint32, and uint64,
+    # they still lack complete functionality across all PyTorch ops. They are stored as
+    # signed tensors with the same bit width and wrapped in TensorWrapper for reinterpretation
+    # to unsigned. The .base attribute accesses the underlying signed tensor for CUDA transfer.
+    if dtype_str in uint_dtypes:
+        inp.base = inp.base.cuda()
+    else:
+        inp = inp.cuda()
+
+    if TDM_TYPE == "DEVICE_TDM":
+        constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+        tensor_descriptor_prefetch_nd_kernel_device_tdm[(1, )](inp, inp.shape, inp.stride(), constexpr_block_shape,
+                                                               SHARED_LAYOUT, SPECULATIVE)
+    else:
+        assert TDM_TYPE == "HOST_TDM"
+        inp_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        tensor_descriptor_prefetch_nd_kernel_host_tdm[(1, )](inp_desc, SPECULATIVE)
+
+
+@gluon.jit
+def tdm_prefetch_store_back_offsets_kernel(inp_ptr, out_ptr, shape, inp_strides, out_strides, block_shape,
+                                           prefetch_block_shape: ttgl.constexpr, rank: ttgl.constexpr):
+    pid = (ttgl.program_id(0), ttgl.program_id(1), ttgl.program_id(2))
+
+    if rank == 1:
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    elif rank == 2:
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    else:  # rank == 3
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [2, 1, 0])
+
+    # Compute linear index and starting indices for the tensor descriptor.
+    linear_idx = pid[0]
+    indices = [pid[0] * block_shape[0]]
+    if rank > 1:
+        linear_idx = linear_idx * ttgl.num_programs(1) + pid[1]
+        indices = [pid[0] * block_shape[0], pid[1] * block_shape[1]]
+    if rank > 2:
+        linear_idx = linear_idx * ttgl.num_programs(2) + pid[2]
+        indices = [pid[0] * block_shape[0], pid[1] * block_shape[1], pid[2] * block_shape[2]]
+
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(inp_ptr, shape=shape, strides=inp_strides,
+                                                       block_shape=block_shape, layout=layout)
+    prefetch_offsets = ttgl.amd.gfx1250.tdm._test_prefetch_with_offsets(desc, indices, pred=True, speculative=False)
+
+    out_layout: ttgl.constexpr = prefetch_offsets.type.layout
+
+    # Create pointer offsets based on rank
+    if rank == 1:
+        offs_0 = ttgl.arange(0, prefetch_block_shape[0], layout=out_layout)
+        out_ptrs = out_ptr + linear_idx * out_strides[0] + offs_0 * out_strides[1]
+    elif rank == 2:
+        offs_0 = ttgl.arange(0, prefetch_block_shape[0], layout=ttgl.SliceLayout(1, out_layout))
+        offs_1 = ttgl.arange(0, prefetch_block_shape[1], layout=ttgl.SliceLayout(0, out_layout))
+        out_ptrs = ((out_ptr + (linear_idx * out_strides[0])) + (offs_0[:, None]) * out_strides[1] +
+                    (offs_1[None, :]) * out_strides[2])
+    else:  # rank == 3
+        offs_0 = ttgl.arange(0, prefetch_block_shape[0], layout=ttgl.SliceLayout(1, ttgl.SliceLayout(2, out_layout)))
+        offs_1 = ttgl.arange(0, prefetch_block_shape[1], layout=ttgl.SliceLayout(0, ttgl.SliceLayout(2, out_layout)))
+        offs_2 = ttgl.arange(0, prefetch_block_shape[2], layout=ttgl.SliceLayout(0, ttgl.SliceLayout(1, out_layout)))
+        out_ptrs = ((out_ptr + (linear_idx * out_strides[0])) + (offs_0[:, None, None]) * out_strides[1] +
+                    (offs_1[None, :, None]) * out_strides[2] + (offs_2[None, None, :]) * out_strides[3])
+
+    ttgl.store(out_ptrs, prefetch_offsets)
+
+
+@pytest.mark.parametrize("shape,block_shape", [
+    # 1D
+    ((512, ), (512, )),
+    ((512, ), (64, )),
+    ((512, ), (8, )),
+    ((512, ), (1024, )),
+    ((522, ), (1024, )),
+    ((16, ), (8, )),
+    # 2D
+    ((16, 16), (16, 16)),
+    ((32, 512), (32, 512)),
+    ((32, 512), (32, 32)),
+    ((32, 512), (32, 1024)),
+    ((32, 516), (64, 1024)),
+    # 3D
+    ((2, 4, 64), (2, 4, 64)),
+    ((2, 4, 64), (1, 1, 32)),
+    ((2, 4, 64), (4, 8, 128)),
+])
+def test_tdm_prefetch_offsets(shape, block_shape):
+    rank = len(shape)
+    grid = tuple(triton.cdiv(shape[i], block_shape[i]) for i in range(rank))
+
+    inp = torch.empty(shape, dtype=torch.int32)
+    inp_handle = inp.cuda()
+
+    # Each prefetch loads 256B along the fastest dim; scale that axis accordingly.
+    prefetch_byte_width = 256
+    elems_per_prefetch = prefetch_byte_width // inp.element_size()
+    prefetches_in_fast_dim = max(1, block_shape[-1] // elems_per_prefetch)
+    prefetch_block_shape = block_shape[:-1] + (prefetches_in_fast_dim, )
+
+    num_programs = math.prod(grid)
+    out_shape = (num_programs, ) + tuple(prefetch_block_shape)
+    out = torch.zeros(out_shape, dtype=torch.int64)
+    out_handle = out.cuda()
+
+    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in block_shape)
+    constexpr_prefetch_block_shape = tuple(ttgl.constexpr(v) for v in prefetch_block_shape)
+
+    tdm_prefetch_store_back_offsets_kernel[grid](inp_handle, out_handle, inp.shape, inp.stride(), out_handle.stride(),
+                                                 constexpr_block_shape, constexpr_prefetch_block_shape,
+                                                 ttgl.constexpr(rank), num_warps=1, num_ctas=1)
+
+    # Compute reference values for prefetch offsets
+    out_ref = torch.zeros(out_shape, dtype=torch.int64)
+
+    # Last dimension steps by prefetch chunk size
+    prefetch_strides = inp.stride()[:-1] + (elems_per_prefetch, )
+
+    cta_idx = 0
+    # Pad grid and block size to 3D to generalize the loop for 1D - 3D
+    grid_3d = (grid + (1, 1))[:3]
+    prefetch_block_shape_3d = (tuple(prefetch_block_shape) + (1, 1))[:3]
+
+    # Compute for each CTA it's expected prefetch offsets, see TDMPrefetchOp for more details.
+    for pid_x, pid_y, pid_z in product(range(grid_3d[0]), range(grid_3d[1]), range(grid_3d[2])):
+        pid = [pid_x, pid_y, pid_z]
+        # Compute base offset for the CTA
+        base = sum(pid[d] * block_shape[d] * inp.stride()[d] for d in range(rank))
+
+        # Create a flattened view into the nD reference to unify the indexing logic over all dimensions
+        cta_ref = out_ref[cta_idx].reshape(-1)
+        flat_offset_idx = 0
+
+        for x, y, z in product(range(prefetch_block_shape_3d[0]), range(prefetch_block_shape_3d[1]),
+                               range(prefetch_block_shape_3d[2])):
+            indices = [x, y, z]
+            offset = base + sum(indices[d] * prefetch_strides[d] for d in range(rank))
+            # We only mask at the end of the tensor. Rows are allowed to wrap into the next one
+            cta_ref[flat_offset_idx] = 0 if offset >= inp.numel() else offset
+            flat_offset_idx += 1
+        cta_idx += 1
+
+    torch.testing.assert_close(out_handle.cpu(), out_ref)
 
 
 @gluon.jit

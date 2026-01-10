@@ -6,6 +6,7 @@
 #include "Profiler.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
+#include "Utility/Env.h"
 #include "Utility/Map.h"
 #include "Utility/Table.h"
 
@@ -19,6 +20,26 @@
 #include <vector>
 
 namespace proton {
+
+namespace detail {
+
+void flushDataPhasesImpl(
+    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    std::map<Data *, size_t> &dataFlushedPhases,
+    const std::map<Data *,
+                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases);
+
+void updateDataPhases(
+    std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases,
+    Data *data, size_t phase);
+
+void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
+                             std::string &periodicFlushingFormat,
+                             const std::vector<std::string> &modeAndOptions,
+                             const char *profilerName);
+} // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
@@ -76,8 +97,6 @@ public:
     GraphNodeStateTable graphNodeIdToState;
   };
 
-  // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
-  // issue.
   using ExternIdToStateMap =
       ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
@@ -95,6 +114,15 @@ protected:
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
     threadState.dataToEntry.clear();
+  }
+
+  void flushDataPhases(
+      std::map<Data *, size_t> &dataFlushedPhases,
+      const std::map<Data *,
+                     std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+          &dataPhases) {
+    detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
+                                dataFlushedPhases, dataPhases);
   }
 
   // Profiler
@@ -232,8 +260,8 @@ protected:
         } else {
           // Add metrics to the current op
           for (auto [data, entry] : dataToEntry) {
-            data->addEntryMetrics(entry.id, scalarMetrics);
-            data->addEntryMetrics(entry.id, tensorMetricsHost);
+            data->addEntryMetrics(entry.phase, entry.id, scalarMetrics);
+            data->addEntryMetrics(entry.phase, entry.id, tensorMetricsHost);
           }
         }
       }
@@ -248,6 +276,8 @@ protected:
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
+  bool periodicFlushingEnabled{false};
+  std::string periodicFlushingFormat{};
 };
 
 } // namespace proton
