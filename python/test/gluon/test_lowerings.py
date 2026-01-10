@@ -111,6 +111,24 @@ def test_scan_blocked_broadcast_layout(device):
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
+def test_scan_blocked_broadcast_layout_multiblock(device):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    if THREADS_PER_WARP != 32:
+        pytest.skip("requires 32-thread warps")
+
+    M = 64
+    # Broadcasting in lane for dim1 and multiple scan blocks along axis 0.
+    src_layout = ttgl.BlockedLayout([2, 4], [16, 2], [1, 2], [1, 0])
+
+    torch.manual_seed(0)
+    x = torch.randn((M, 1), dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
+
+    torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
 def _reduce_linear_layouts():
     if THREADS_PER_WARP == 32:
         return [
