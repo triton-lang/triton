@@ -66,7 +66,7 @@ def remove_frames(database: json):
 
 def get_raw_metrics(database) -> tuple[ht.GraphFrame, list[str], list[str], dict]:
     database = remove_frames(database)
-    device_info = database.pop(1)
+    device_info = {} if len(database) < 2 else database.pop(1)
     gf = ht.GraphFrame.from_literal(database)
     inclusive_metrics = gf.show_metric_columns()
     exclusive_metrics = [metric for metric in gf.dataframe.columns if metric not in inclusive_metrics]
