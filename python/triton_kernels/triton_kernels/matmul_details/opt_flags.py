@@ -5,11 +5,10 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
-from triton_kernels.tensor import FP4
+from triton_kernels.tensor import FP4, FP32, Tensor
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
-from triton_kernels.tensor import bitwidth, get_layout
 
 @dataclass
 class OptFlags:
@@ -126,11 +125,11 @@ def make_default_opt_flags_amd(
         epilogue_subtile = 1
 
     # prevents OutOfSharedMemoryError for mxfp8 on CDNA3
-    if get_cdna_version() == 3 and bitwidth(rhs_dtype) == 8 and precision_config.b_mx_scale is not None:
+    if get_cdna_version() == 3 and rhs_dtype.bitwidth == 8 and precision_config.b_mx_scale is not None:
         num_stages = 1
 
     # specific configs for F16 x MXFP4 on CDNA4
-    if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.b_mx_scale is not None:
+    if is_cdna4 and lhs_dtype.bitwidth == 16 and rhs_dtype.bitwidth == 4 and precision_config.b_mx_scale is not None:
         split_k = 1
         if m <= 1024:
             target_kernel_kwargs["waves_per_eu"] = 3
@@ -210,8 +209,8 @@ def make_default_opt_flags_nvidia(
         if slice_size <= 64 and routing_data is not None and routing_data.slice_sizes is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
             if (
-                lhs_dtype == torch.bfloat16
-                and rhs_dtype == FP4
+                lhs_dtype.bitwidth == 16
+                and rhs_dtype.bitwidth == 4
                 and slice_size >= 16
                 and torch.cuda.get_device_capability()[0] >= 10
             ):
@@ -231,8 +230,8 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
-    a_mx_scale_layout = get_layout(precision_config.a_mx_scale)
-    b_mx_scale_layout = get_layout(precision_config.b_mx_scale)
+    a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
         # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
         supports_persistent = False
@@ -248,7 +247,7 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
-        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
+        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and out_dtype.bitwidth < 32
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
@@ -285,7 +284,7 @@ def make_default_opt_flags_nvidia(
         block_m,
         block_n,
         block_k,
-        torch.float32 if split_k > 1 else out_dtype,
+        FP32 if split_k > 1 else out_dtype,
         lhs_dtype,
         rhs_dtype,
         x_transpose,
