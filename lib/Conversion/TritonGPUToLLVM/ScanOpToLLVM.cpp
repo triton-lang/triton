@@ -537,9 +537,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
         std::get<0>(getMultiDimLaneId(rewriter, helper, laneId));
     multiDimLaneId[helper.getAxis()] = b.i32_val(scanDim - 1);
     auto linearEncoding = helper.getEncoding();
-    auto threadsPerWarp = linearEncoding.getThreadsPerWarp();
-    auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
-                                helper.getOrder());
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    Value laneIdLast =
+        linearize(rewriter, loc, multiDimLaneId, linearEncoding, kLane);
     AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
                             laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
