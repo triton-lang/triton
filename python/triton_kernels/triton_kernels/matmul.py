@@ -489,9 +489,6 @@ def matmul(a, b, bias,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
-    print(opt_flags)
-    print('swizzle value', b.storage.layout.name, b.storage.data.shape, b.storage.data.stride())
-    print('swizzle scale', None if b_scale is None else (b_scale.storage.layout.name, b_scale.storage.data.shape, b_scale.storage.data.stride()))
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
