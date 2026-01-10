@@ -129,7 +129,8 @@ public:
   // Helper to compute the smem bases in both reductions and scans
   SmallVector<Value> getSmemBases(SourceOp op, unsigned elems,
                                   ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo) const {
+                                  const TargetInfoBase &targetInfo,
+                                  bool upcastI1ToI8 = false) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // indices will store the index of the op operands in descending order
@@ -147,9 +148,13 @@ public:
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     indexToBase[indices[0]] = basePtr;
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+      Type elemTy = getElementType(op, indices[i - 1]);
+      if (upcastI1ToI8 && elemTy.isIntOrFloat() &&
+          elemTy.getIntOrFloatBitWidth() < 8)
+        elemTy = IntegerType::get(elemTy.getContext(), 8);
       indexToBase[indices[i]] =
-          b.gep(basePtr.getType(), getElementType(op, indices[i - 1]),
-                indexToBase[indices[i - 1]], b.i32_val(elems));
+          b.gep(basePtr.getType(), elemTy, indexToBase[indices[i - 1]],
+                b.i32_val(elems));
     }
     // smemBases[k] is the base pointer for the k-th operand
     SmallVector<Value> smemBases(op.getNumOperands());
