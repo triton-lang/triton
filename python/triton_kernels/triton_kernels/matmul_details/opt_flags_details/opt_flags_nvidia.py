@@ -4,7 +4,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, Tensor
+from triton_kernels.tensor import FP4, Tensor, FP16, BF16
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 
@@ -102,7 +102,7 @@ def compute_num_stages(
     if precision_config.max_num_imprecise_acc is not None:
         return 3
     weight_size = rhs_dtype.bitwidth / 8
-    if precision_config.b_mx_scale is not None and lhs_dtype in [torch.float16, torch.bfloat16]:
+    if precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
         # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
         # smem_capacity accordingly.
         # w/o this, gets the following error:
