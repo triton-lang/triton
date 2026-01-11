@@ -294,14 +294,13 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 //   step 4: apply reduction to get the final results
 static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
                                  SmallVector<Value> &acc, triton::ReduceOp op,
-                                 unsigned numLaneToReduce,
-                                 unsigned interleave) {
+                                 unsigned activeLanes) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
-  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
+  bool mfma32Case = activeLanes == 32;
+  bool mfma16Case = activeLanes == (16 | 32);
   if (!(mfma32Case || mfma16Case))
     return false;
 
@@ -326,12 +325,12 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
                              SmallVector<Value> &acc, triton::ReduceOp op,
-                             unsigned numLaneToReduce, unsigned interleave) {
+                             unsigned activeLanes) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
+  bool mfma16Case = activeLanes == 16;
   if (!mfma16Case)
     return false;
 
@@ -349,17 +348,16 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
+                            unsigned activeLanes) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceSwap16or32(rewriter, loc, acc, op, activeLanes))
     return true;
   if ((getISAFamily() == ISAFamily::GFX1250) &&
-      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceSwap16(rewriter, loc, acc, op, activeLanes))
     return true;
-  if (numLaneToReduce != getWarpSize())
+  if (activeLanes != (getWarpSize() - 1))
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;

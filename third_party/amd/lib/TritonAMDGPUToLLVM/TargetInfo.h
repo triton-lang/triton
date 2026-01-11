@@ -68,8 +68,7 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op, unsigned numLaneToReduce,
-                  unsigned interleave) const override;
+                  triton::ReduceOp op, unsigned activeLanes) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
