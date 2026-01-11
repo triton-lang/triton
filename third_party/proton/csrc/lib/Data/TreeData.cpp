@@ -848,6 +848,78 @@ std::map<std::string, double> TreeData::summarizeKernelPathsAvgDurationMsByPrefi
   });
 }
 
+std::map<std::string, double>
+TreeData::summarizeKernelPathsSumFlexibleMetricByPrefix(
+    size_t phase, const std::string &prefix,
+    const std::string &metricName) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    std::unordered_map<std::string, double> sums;
+
+    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
+      std::vector<std::string_view> parts;
+      const TreeData::Tree::TreeNode *cur = &node;
+      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
+        parts.push_back(cur->name);
+        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
+          break;
+        }
+        cur = &tree->getNode(cur->parentId);
+      }
+      std::string out;
+      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (!out.empty()) {
+          out.push_back('/');
+        }
+        out.append(it->data(), it->size());
+      }
+      return out;
+    };
+
+    auto toDouble = [&](const MetricValueType &v,
+                        double &out) -> bool {
+      bool ok = false;
+      std::visit(
+          [&](auto &&value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, uint64_t> ||
+                          std::is_same_v<T, int64_t> ||
+                          std::is_same_v<T, double>) {
+              out = static_cast<double>(value);
+              ok = true;
+            } else {
+              ok = false;
+            }
+          },
+          v);
+      return ok;
+    };
+
+    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          if (!prefix.empty() && treeNode.name.rfind(prefix, 0) != 0) {
+            return;
+          }
+          auto it = treeNode.flexibleMetrics.find(metricName);
+          if (it == treeNode.flexibleMetrics.end()) {
+            return;
+          }
+          const auto &v = it->second.getValues()[0];
+          double dv = 0.0;
+          if (!toDouble(v, dv)) {
+            return;
+          }
+          const std::string path = buildPath(treeNode);
+          sums[path] += dv;
+        });
+
+    std::map<std::string, double> out;
+    for (auto &kv : sums) {
+      out[kv.first] = kv.second;
+    }
+    return out;
+  });
+}
+
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
   initPhaseStore(treePhases);

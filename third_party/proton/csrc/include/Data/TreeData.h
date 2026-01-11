@@ -45,6 +45,14 @@ public:
   std::map<std::string, double>
   summarizeKernelPathsAvgDurationMsByPrefix(size_t phase,
                                             const std::string &prefix) const;
+  // Sum a named flexible metric (e.g. "flops8", "bytes") for nodes whose *node name*
+  // starts with `prefix`, grouped by full tree path (ROOT excluded).
+  //
+  // The returned value is the summed metric value for that path in the phase.
+  std::map<std::string, double>
+  summarizeKernelPathsSumFlexibleMetricByPrefix(size_t phase,
+                                                const std::string &prefix,
+                                                const std::string &metricName) const;
 
   DataEntry addOp(const std::string &name) override;
 

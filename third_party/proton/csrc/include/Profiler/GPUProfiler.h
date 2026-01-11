@@ -173,9 +173,15 @@ protected:
             auto perPathAvgMs =
                 treeData->summarizeKernelPathsAvgDurationMsByPrefix(
                     startPhase, "_p_matmul_");
+            auto perPathFlops8 =
+                treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
+                    startPhase, "_p_matmul_", "flops8");
             for (auto &kv : perPathAvgMs) {
               // Encode full tree path in the key; Python side splits on `::`.
               metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
+            }
+            for (auto &kv : perPathFlops8) {
+              metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
             }
             if (!metrics.empty()) {
               SessionManager::instance().enqueueFlushedPhaseMetrics(
