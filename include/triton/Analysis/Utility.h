@@ -42,9 +42,7 @@ public:
     }
   }
 
-  ArrayRef<int64_t> getSrcShape() { return srcShape; }
-
-  Attribute getSrcLayout() { return srcEncoding; }
+  RankedTensorType getSrcTy() { return srcTy; }
 
   triton::ReduceOp getOperation() { return op; }
 
