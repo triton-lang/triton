@@ -227,12 +227,31 @@ void flushDataPhasesImpl(
         &dataPhases,
     PendingGraphPool *pendingGraphPool) {
   static const bool timingEnabled =
-      getBoolEnv("PROTON_PERIODIC_FLUSH_TIMING", false);
+      getBoolEnv("PROTON_DATA_FLUSH_TIMING", false);
   auto [flushRanges, phasesToPeek] = computeFlushRangesAndPeekPhases(
       dataFlushedPhases, dataPhases, pendingGraphPool != nullptr);
   if (pendingGraphPool) {
-    for (const auto phase : phasesToPeek)
-      pendingGraphPool->peek(phase);
+    using Clock = std::chrono::steady_clock;
+    uint64_t totalPeekUs = 0;
+    size_t peekCalls = 0;
+    for (const auto phase : phasesToPeek) {
+      if (timingEnabled) {
+        const auto t0 = Clock::now();
+        pendingGraphPool->peek(phase);
+        const auto t1 = Clock::now();
+        totalPeekUs +=
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        ++peekCalls;
+      } else {
+        pendingGraphPool->peek(phase);
+      }
+    }
+    if (timingEnabled && peekCalls > 0) {
+      std::cerr << "[PROTON] pendingGraphPool peek timing: phases="
+                << phasesToPeek.size() << " peek_us=" << totalPeekUs
+                << " peek_calls=" << peekCalls << std::endl;
+    }
   }
 
   for (const auto &range : flushRanges) {
