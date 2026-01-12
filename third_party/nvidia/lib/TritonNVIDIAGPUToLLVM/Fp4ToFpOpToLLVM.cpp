@@ -87,13 +87,13 @@ static constexpr const char *FP4ToFP32Ptx =
     "prmt.b32 a8, a5, a11, 29538;\n\t"
     "prmt.b32 a9, a6, a12, 20800;\n\t"
     "prmt.b32 a10, a6, a12, 29538;\n\t"
-    "shr.u32 	$0, a7, 16;\n\t"
+    "shl.u32 	$0, a7, 16;\n\t"
     "and.b32  $1, a7, 0xFFFF0000;\n\t"
-    "shr.u32 	$2, a8, 16;\n\t"
+    "shl.u32 	$2, a8, 16;\n\t"
     "and.b32  $3, a8, 0xFFFF0000;\n\t"
-    "shr.u32 	$4, a9, 16;\n\t"
+    "shl.u32 	$4, a9, 16;\n\t"
     "and.b32  $5, a9, 0xFFFF0000;\n\t"
-    "shr.u32 	$6, a10, 16;\n\t"
+    "shl.u32 	$6, a10, 16;\n\t"
     "and.b32  $7, a10, 0xFFFF0000;\n\t"
     "}";
 

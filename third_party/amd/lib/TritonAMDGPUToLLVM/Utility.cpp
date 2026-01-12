@@ -966,7 +966,7 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   if (elemType == f32_ty) {
     for (int j = 0; j < 4; j++) {
       // Extract 16-bit(bf16) elements and cast to f32
-      Value result = b.lshr(pkVals[j], b.i32_val(16));
+      Value result = b.shl(pkVals[j], b.i32_val(16));
       results.push_back(b.bitcast(result, f32_ty));
       result = b.and_(pkVals[j], b.i32_val(0xFFFF0000));
       results.push_back(b.bitcast(result, f32_ty));
