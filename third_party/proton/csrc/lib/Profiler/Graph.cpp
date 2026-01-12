@@ -96,7 +96,11 @@ void PendingGraphPool::push(
 
 void PendingGraphPool::peek(size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
-  auto &queue = pool.at(phase);
+  auto queueIt = pool.find(phase);
+  if (queueIt == pool.end()) {
+    return;
+  }
+  auto &queue = queueIt->second;
   auto *device = queue.device;
   metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr,
                                                         uint64_t *hostOffset) {
@@ -104,7 +108,7 @@ void PendingGraphPool::peek(size_t phase) {
     emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                       queue);
   });
-  pool.erase(phase);
+  pool.erase(queueIt);
   deviceRemainingCapacity[device] += bytesForNodes(queue.numNodes);
 }
 
