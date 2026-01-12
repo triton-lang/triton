@@ -150,6 +150,11 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
 
 void MetricBuffer::synchronize(DeviceBuffer &buffer) {
   runtime->synchronizeDevice();
+  if (mappedHostBuffer) {
+    // Buffer lives in mapped host memory; avoid treating mapped pointers as
+    // device allocations (e.g. cuMemcpyDtoH / cuMemset) which can error.
+    return;
+  }
   runtime->copyDeviceToHostAsync(buffer.hostPtr, buffer.devicePtr, capacity,
                                  buffer.priorityStream);
   runtime->copyDeviceToHostAsync(buffer.hostOffset, buffer.deviceOffsetPtr,
