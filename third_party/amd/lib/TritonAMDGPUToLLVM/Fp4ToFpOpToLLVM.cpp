@@ -32,7 +32,6 @@ public:
     auto loc = op.getLoc();
     auto elemType = op.getType().getElementType();
     assert(elemType == f16_ty || elemType == bf16_ty || elemType == f32_ty);
-    // bool toFp16 = elemType == f16_ty;
 
     auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
