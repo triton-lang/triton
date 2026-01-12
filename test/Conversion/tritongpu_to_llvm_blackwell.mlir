@@ -727,9 +727,7 @@ tt.func @load_store_x1_unpacked(%arg0: !ttg.memdesc<128x2xf16, #tmem_x1_unpacked
 //       CHECK:   nvvm.barrier0
 //       CHECK:   nvvm.shfl.sync bfly
 //       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.barrier0
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @max_reduction(%arg0: tensor<1x1024xf32, #blocked>) {
     %11 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
@@ -749,9 +747,7 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 //       CHECK:   nvvm.barrier0
 //       CHECK:   nvvm.shfl.sync bfly
 //       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.barrier0
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @maxnum_reduction(%arg0: tensor<1x1024xf32, #blocked>) {
     %11 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
