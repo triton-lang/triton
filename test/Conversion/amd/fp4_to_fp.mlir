@@ -56,7 +56,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250: [[c_0xFFFF0000:%.*]] = llvm.mlir.constant(-65536 : i32) : i32
     // GFX1250: [[i32_7:%.*]] = llvm.and %{{.*}}, [[c_0xFFFF0000]] : i32
     // GFX1250: [[f32_7:%.*]] = llvm.bitcast [[i32_7]] : i32 to f32
-    
+
     %0 = arith.constant dense<0> : tensor<128x32xi8, #layout0>
     %fp32 = ttg.fp4_to_fp %0 {axis = 1 : i32} : tensor<128x32xi8, #layout0> -> tensor<128x64xf32, #layout1>
     tt.return %fp32: tensor<128x64xf32, #layout1>
