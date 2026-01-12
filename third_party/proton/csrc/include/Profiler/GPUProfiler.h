@@ -243,10 +243,6 @@ protected:
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
-    virtual PendingGraphPool *getPendingGraphPool() {
-      return profiler.pendingGraphPool.get();
-    }
-
     void
     doAddMetrics(size_t scopeId,
                  const std::map<std::string, MetricValueType> &scalarMetrics,

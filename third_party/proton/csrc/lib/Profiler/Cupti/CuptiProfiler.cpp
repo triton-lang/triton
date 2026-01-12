@@ -380,7 +380,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 
   profiler.correlation.complete(maxCorrelationId);
   profiler.flushDataPhases(dataFlushedPhases, dataPhases,
-                           profiler.pImpl->getPendingGraphPool());
+                           profiler.pendingGraphPool.get());
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
