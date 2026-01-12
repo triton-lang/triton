@@ -113,20 +113,34 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     Operation *incrementOp;
   };
 
-  static bool isStrictlyNegative(Value advanceStep, DataFlowSolver *solver) {
-    auto stepType = cast<RankedTensorType>(advanceStep.getType());
+  static std::optional<ConstantIntRanges>
+  getValueRange(Value value, DataFlowSolver *solver) {
+    auto stepType = cast<RankedTensorType>(value.getType());
     assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
 
     const auto *stepRange =
-        solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
+        solver->lookupState<dataflow::IntegerValueRangeLattice>(value);
     if (stepRange->getValue().isUninitialized()) {
-      LDBG("Rejected: step range is unintialized");
-      return true;
+      LDBG("Rejected: value range is unintialized");
+      return {};
     }
+    return stepRange->getValue().getValue();
+  }
 
-    auto stepRangeValue = stepRange->getValue().getValue();
+  static bool isStrictlyNegative(Value advanceStep, DataFlowSolver *solver) {
+    auto stepRangeValue = getValueRange(advanceStep, solver);
+    if (!stepRangeValue.has_value())
+      return false;
 
-    return (int64_t)stepRangeValue.smax().isNegative();
+    return (int64_t)stepRangeValue.value().smax().isNegative();
+  }
+
+  static bool isNonNegative(Value advanceStep, DataFlowSolver *solver) {
+    auto stepRangeValue = getValueRange(advanceStep, solver);
+    if (!stepRangeValue.has_value())
+      return false;
+
+    return (int64_t)stepRangeValue.value().smax().isNonNegative();
   }
 
   static std::optional<std::pair<int64_t, int64_t>>
@@ -182,7 +196,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
     int64_t minOffsetValue = 0;
 
-    return (opRange.first >= minOffsetValue ||
+    return (opRange.first >= minOffsetValue &&
             opRange.second <= maxOffsetValue);
   }
 
@@ -207,7 +221,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   static bool isTransformationEquivalent(amdttg::BufferOpInterface bufferOp,
                                          Value blockArg, Value advanceStep,
                                          DataFlowSolver *solver) {
-    if (!isStrictlyNegative(advanceStep, solver) &&
+    if (isNonNegative(advanceStep, solver) &&
         unsignedOverflowImpossible(bufferOp, blockArg, advanceStep, solver))
       return true;
     if (isStrictlyNegative(advanceStep, solver) &&
