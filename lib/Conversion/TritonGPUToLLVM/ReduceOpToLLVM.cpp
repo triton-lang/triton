@@ -4,62 +4,17 @@
 #include <utility>
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-
-LinearLayout zeroBasesAlongDimAndReorder(const LinearLayout &layout,
-                                         unsigned axis, StringAttr dim) {
-  LinearLayout::BasesT newBases;
-  for (auto [inDim, bases] : layout.getBases()) {
-    std::vector<std::vector<int32_t>> newInBases = bases;
-    if (inDim == dim) {
-      for (auto &basis : newInBases)
-        basis[axis] = 0;
-    }
-    newBases[inDim] = std::move(newInBases);
-  }
-
-  // We zero bases for one in-dim along the reduction axis, then compact the
-  // remaining axis bases to 1, 2, 4, ...
-  // We assume the reduction is commutative (and obviously associative), so we
-  // can reorder axis contributions and shrink the axis size to keep the layout
-  // surjective.
-  int32_t nextAxisBase = 1;
-  for (auto &[inDim, inDimBases] : newBases) {
-    for (auto &basis : inDimBases) {
-      if (basis[axis] == 0)
-        continue;
-      basis[axis] = nextAxisBase;
-      nextAxisBase *= 2;
-    }
-  }
-
-  return LinearLayout(std::move(newBases), to_vector(layout.getOutDimNames()));
-}
-
-ColumnAction makeAxisContiguous(const LinearLayout &layout, int axis) {
-  auto *ctx = layout.getOutDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  const auto &bases = layout.getBases().lookup(kReg);
-  SmallVector<size_t> perm;
-  SmallVector<size_t> back;
-  for (size_t i = 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      perm.push_back(i);
-    else
-      back.push_back(i);
-  }
-  perm.append(back.begin(), back.end());
-  return ColumnAction(perm, kReg, bases.size());
-}
-
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
@@ -112,30 +67,15 @@ public:
       return success();
     }
 
-    // Create temporary layout for reduction within warps
-    auto regBases = regLl.getBases();
-    unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
-    int laneBits = regLl.getInDimSizeLog2(kLane);
-    int neededLaneBits = llvm::Log2_32(sizeInterWarps);
-    // TODO Will fix when we implement block-level reductions
-    assert(neededLaneBits <= laneBits && "NYI: more inter-warps than lanes");
-    // Move the warp axis bases we need to reduce into lane bases, while
-    // keeping non-axis components in their original in-dim.
-    auto &laneBases = regBases[kLane];
-    auto &warpBases = regBases[kWarp];
-    int moved = 0;
-    for (auto &warpBasis : warpBases) {
-      if (warpBasis[axis] == 0)
-        continue;
-      std::swap(laneBases[moved], warpBasis);
-      moved++;
-    }
+    // reducedRegLaneLayout is used in the AllocationAnalysis to get the size
+    // of the scratch space.
+    assert(regLl ==
+           ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
-    LinearLayout tmpLl(std::move(regBases), to_vector(regLl.getOutDimNames()));
+    // Create temporary layout for reduction within warps.
+    LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
 
-    // Compute shared memory offsets per operand.
-    auto nelemsSmem = product<unsigned>(helper.getScratchRepShape());
-    auto smemBaseOffsets = getSmemBaseOffsets(op, nelemsSmem);
+    auto smemBaseOffsets = getSmemBaseOffsets(op, regLl, tmpLl);
     accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs,
                                smemBaseOffsets);
 
@@ -157,6 +97,7 @@ public:
         // Reuse the shmem
         auto b = TritonLLVMOpBuilder(loc, rewriter);
         b.barrier();
+        smemBaseOffsets = getSmemBaseOffsets(op, tmpLl, outputLayout);
         accs = convertLayoutValues(loc, rewriter, op, tmpLl, outputLayout, accs,
                                    smemBaseOffsets);
       }
@@ -207,7 +148,7 @@ private:
     }
 
     // Bring the registers that move the axis to the front
-    auto perm = makeAxisContiguous(layout, op.getAxis());
+    auto perm = ReduceOpHelper::makeAxisContiguous(layout, op.getAxis());
     if (!perm.isIdentity()) {
       layout = perm.apply(layout);
       for (auto &vals : accs) {
@@ -235,7 +176,8 @@ private:
     accs = std::move(reduced);
 
     // Update layout killing the axis bases along registers
-    layout = zeroBasesAlongDimAndReorder(layout, op.getAxis(), kReg);
+    layout =
+        ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(), kReg);
     layout = actionRemoveBroadcastedRegs(layout).apply(layout);
     return {std::move(layout), std::move(accs)};
   }
@@ -276,7 +218,8 @@ private:
       }
     }
 
-    layout = zeroBasesAlongDimAndReorder(layout, op.getAxis(), kLane);
+    layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
+                                                         kLane);
     return {std::move(layout), std::move(accs)};
   }
 
@@ -337,22 +280,34 @@ private:
     return outVals;
   }
 
+  Type getReduceMemElemTy(Type elemTy, MLIRContext *ctx) const {
+    if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
+      return IntegerType::get(ctx, 8);
+    return elemTy;
+  }
+
   SmallVector<int64_t> getSmemBaseOffsets(triton::ReduceOp op,
-                                          unsigned nelems) const {
+                                          const LinearLayout &srcLayout,
+                                          const LinearLayout &dstLayout) const {
+    constexpr int64_t kReduceScratchAlign = 16;
+    auto bytesPerOperand =
+        ReduceOpHelper(op).getScratchBytesForCvt(srcLayout, dstLayout);
     std::vector<unsigned> indices(op.getNumOperands());
     std::iota(indices.begin(), indices.end(), 0);
+    auto *ctx = op.getContext();
     std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
-             op.getElementTypes()[j].getIntOrFloatBitWidth();
+      auto lhsTy = getReduceMemElemTy(op.getElementTypes()[i], ctx);
+      auto rhsTy = getReduceMemElemTy(op.getElementTypes()[j], ctx);
+      return getIntOrFloatOrPtrBitWidth(lhsTy) >
+             getIntOrFloatOrPtrBitWidth(rhsTy);
     });
     SmallVector<int64_t> offsets(op.getNumOperands());
     int64_t offset = 0;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
+      offset = llvm::alignTo(offset, kReduceScratchAlign);
       offsets[idx] = offset;
-      unsigned bitwidth = op.getElementTypes()[idx].getIntOrFloatBitWidth();
-      bitwidth = std::max(bitwidth, 8u);
-      offset += nelems * ceil(bitwidth, 8u);
+      offset += bytesPerOperand[idx];
     }
     return offsets;
   }

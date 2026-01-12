@@ -129,24 +129,29 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
-def test_reduce_funky_layout(device):
+def _funky_reduce_layouts():
+    # Broadcasting here and there and bases in a weird order
+    for axis in [0, 1]:
+        yield (ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 8], [1, 0], [0, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]],
+            warp_bases=[[32, 0], [0, 16]],
+            block_bases=[],
+            shape=[128, 32],
+        ), axis)
+
+
+@pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
+def test_reduce_funky_layout(src_layout, axis, device):
     if not is_cuda():
         pytest.skip("requires CUDA")
     if THREADS_PER_WARP != 32:
         pytest.skip("requires 32-thread warps")
 
-    src_layout = ttgl.DistributedLinearLayout(
-        reg_bases=[[0, 8], [1, 0], [0, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
-        lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]],
-        warp_bases=[[32, 0], [0, 16]],
-        block_bases=[],
-        shape=[128, 32],
-    )
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
 
     torch.manual_seed(0)
-    axis = 0
     x = torch.randn(shape, dtype=torch.float32, device=device)
     y = torch.empty(shape[1 - axis], dtype=torch.float32, device=device)
 
