@@ -206,13 +206,7 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      for (unsigned mask : laneMasks) {
-        SmallVector<Value> shfl(op.getNumOperands());
-        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          shfl[i] = targetInfo.shuffleXor(rewriter, op.getLoc(), acc[i], mask);
-        }
-        accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
-      }
+      warpReduce(op, laneMasks, acc, rewriter);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         accs[i][reg] = acc[i];
       }
@@ -221,6 +215,25 @@ private:
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
     return {std::move(layout), std::move(accs)};
+  }
+
+  void warpReduce(triton::ReduceOp op, ArrayRef<unsigned> laneMasks,
+                  SmallVector<Value> &acc,
+                  ConversionPatternRewriter &rewriter) const {
+    // No reduction to do
+    if (laneMasks.empty())
+      return;
+    // Try to use the redux op if it is supported by the target
+    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, laneMasks)) {
+      return;
+    }
+    for (unsigned mask : laneMasks) {
+      SmallVector<Value> shfl(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        shfl[i] = targetInfo.shuffleXor(rewriter, op.getLoc(), acc[i], mask);
+      }
+      accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
+    }
   }
 
   // Pack the accumulator values and replace the reduce op with the result.
