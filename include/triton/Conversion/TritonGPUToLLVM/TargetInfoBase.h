@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
 #include "triton/Conversion/MLIRTypes.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -63,8 +64,7 @@ public:
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          unsigned numLaneToReduce,
-                          unsigned interleave) const = 0;
+                          unsigned activeLanes) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
