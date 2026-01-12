@@ -1,8 +1,11 @@
 #include "ReduceScanCommon.h"
 
+#include <memory>
 #include <tuple>
 #include <utility>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -110,6 +113,140 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  static bool useTernaryTreeReduction(triton::ReduceOp op) {
+    if (op.getNumOperands() != 1)
+      return false;
+    auto elemTy = op.getElementTypes()[0];
+    if (!isa<IntegerType>(elemTy))
+      return false;
+    Operation *combiner = op.getSingleCombiner();
+    if (!combiner)
+      return false;
+    return isa<arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::AddIOp>(
+        combiner);
+  }
+
+  std::unique_ptr<Region>
+  maybePackValuesf32x2(Location loc, ConversionPatternRewriter &rewriter,
+                       Region &combineOp,
+                       SmallVector<SmallVector<Value>> &values) const {
+    if (values.size() < 2 || (values.size() % 2) != 0)
+      return nullptr;
+    if (values.front().size() != 1)
+      return nullptr;
+    auto elemTy = values.front().front().getType();
+    if ((!elemTy.isF16() && !elemTy.isF32()) || isa<VectorType>(elemTy))
+      return nullptr;
+    Operation *combiner = nullptr;
+    if (!combineOp.empty()) {
+      auto &block = combineOp.front();
+      if (block.getOperations().size() == 2)
+        combiner = &block.front();
+    }
+    if (!combiner)
+      return nullptr;
+    if (!isa<arith::AddFOp, arith::MulFOp>(combiner))
+      return nullptr;
+    bool isMul = isa<arith::MulFOp>(combiner);
+    // Pack the values into 2-element vectors
+    SmallVector<SmallVector<Value>> packed;
+    for (size_t i = 0; i < values.size(); i += 2) {
+      SmallVector<Value> vecTuple(values.front().size());
+      for (unsigned opIdx = 0; opIdx < values.front().size(); ++opIdx) {
+        vecTuple[opIdx] = packLLVector(
+            loc, {values[i][opIdx], values[i + 1][opIdx]}, rewriter);
+      }
+      packed.push_back(std::move(vecTuple));
+    }
+    values = std::move(packed);
+    // Create a new region that takes 2-element vectors as inputs and returns a
+    // 2-element vector
+    auto region = std::make_unique<Region>();
+    auto *block = new Block();
+    region->push_back(block);
+    auto vecTy = vec_ty(elemTy, 2);
+    block->addArgument(vecTy, loc);
+    block->addArgument(vecTy, loc);
+    auto *ctx = rewriter.getContext();
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(block);
+    Value lhs = block->getArgument(0);
+    Value rhs = block->getArgument(1);
+    Value result =
+        isMul ? LLVM::FMulOp::create(builder, loc, lhs, rhs).getResult()
+              : LLVM::FAddOp::create(builder, loc, lhs, rhs).getResult();
+    triton::ReduceReturnOp::create(builder, loc, ValueRange{result});
+    return region;
+  }
+
+  void maybeUnpackValuesf32x2(Location loc, ConversionPatternRewriter &rewriter,
+                              Region &combineOp,
+                              SmallVector<Value> &values) const {
+    // If it has more than one output, it's not vectorized
+    // There is a world where we just check whether the region has all arith ops
+    // and we vectorize them all with a pass... but that's for another day.
+    if (values.size() != 1)
+      return;
+    auto vecTy = dyn_cast<VectorType>(values.front().getType());
+    if (!vecTy || vecTy.getNumElements() != 2 ||
+        (!vecTy.getElementType().isF16() && !vecTy.getElementType().isF32()))
+      return;
+    // Perform the last (non-vectorized) combine operation.
+    auto elems = unpackLLVector(loc, values.front(), rewriter);
+    SmallVector<Value> acc = {elems[0]};
+    accumulate(loc, rewriter, combineOp, acc, {elems[1]});
+    values = std::move(acc);
+  }
+
+  SmallVector<Value>
+  treeReduceTernary(Location loc, ConversionPatternRewriter &rewriter,
+                    Region &combineOp,
+                    SmallVector<SmallVector<Value>> values) const {
+    while (values.size() > 1) {
+      SmallVector<SmallVector<Value>> next;
+      size_t i = 0;
+      for (; i + 2 < values.size(); i += 3) {
+        SmallVector<Value> acc = values[i];
+        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
+        accumulate(loc, rewriter, combineOp, acc, values[i + 2]);
+        next.push_back(std::move(acc));
+      }
+      // Process tail
+      if (values.size() - i == 1) {
+        next.push_back(std::move(values[i]));
+      } else if (values.size() - i == 2) {
+        SmallVector<Value> acc = values[i];
+        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
+        next.push_back(std::move(acc));
+      }
+      values = std::move(next);
+    }
+    return std::move(values.front());
+  }
+
+  SmallVector<Value>
+  treeReduceBinary(Location loc, ConversionPatternRewriter &rewriter,
+                   Region &combineOp,
+                   SmallVector<SmallVector<Value>> values) const {
+    // The number of elements is always a power of two
+    assert(llvm::isPowerOf2_64(values.size()) && !values.empty());
+    auto vectorCombine = maybePackValuesf32x2(loc, rewriter, combineOp, values);
+    Region &accumulateRegion = vectorCombine ? *vectorCombine : combineOp;
+    while (values.size() > 1) {
+      SmallVector<SmallVector<Value>> next;
+      for (size_t i = 0; i + 1 < values.size(); i += 2) {
+        SmallVector<Value> acc = values[i];
+        accumulate(loc, rewriter, accumulateRegion, acc, values[i + 1]);
+        next.push_back(std::move(acc));
+      }
+      values = std::move(next);
+    }
+    SmallVector<Value> val = std::move(values.front());
+    maybeUnpackValuesf32x2(loc, rewriter, combineOp, val);
+    return val;
+  }
+
   void accumulate(Location loc, ConversionPatternRewriter &rewriter,
                   Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
                   Value pred = {}) const {
@@ -148,6 +285,7 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
+    bool useTernary = useTernaryTreeReduction(op);
     // Bring the registers that move the axis to the front
     auto perm = ReduceOpHelper::makeAxisContiguous(layout, op.getAxis());
     if (!perm.isIdentity()) {
@@ -157,19 +295,24 @@ private:
       }
     }
 
-    // Reduce linearly
-    // TODO Perform a tree reduction
+    // Reduce with a tree. Use a ternary tree when it can map to 3-input SASS
+    // ops (IADD3/LOP3); otherwise use a binary tree.
     SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
     for (unsigned regBase = 0; regBase < layout.getInDimSize(kReg);
          regBase += axisPack) {
-      SmallVector<Value> acc;
+      SmallVector<SmallVector<Value>> vals;
       for (unsigned i = 0; i < axisPack; ++i) {
         SmallVector<Value> cur(op.getNumOperands());
         for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, cur);
+        vals.push_back(std::move(cur));
       }
+      auto acc = useTernary
+                     ? treeReduceTernary(op.getLoc(), rewriter,
+                                         op.getCombineOp(), std::move(vals))
+                     : treeReduceBinary(op.getLoc(), rewriter,
+                                        op.getCombineOp(), std::move(vals));
       for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
