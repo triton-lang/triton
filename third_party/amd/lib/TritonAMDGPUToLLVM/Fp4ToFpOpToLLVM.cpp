@@ -31,8 +31,8 @@ public:
 
     auto loc = op.getLoc();
     auto elemType = op.getType().getElementType();
-    assert(elemType == f16_ty || elemType == bf16_ty);
-    bool toFp16 = elemType == f16_ty;
+    assert(elemType == f16_ty || elemType == bf16_ty || elemType == f32_ty);
+    // bool toFp16 = elemType == f16_ty;
 
     auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
@@ -48,7 +48,7 @@ public:
       }
       auto isa = targetInfo.getISAFamily();
       SmallVector<Value> upcast =
-          upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec, isa);
+          upcast8xMxfp4_SW(rewriter, op, elemType, packedVec, isa);
       results.append(upcast.begin(), upcast.end());
     }
 
