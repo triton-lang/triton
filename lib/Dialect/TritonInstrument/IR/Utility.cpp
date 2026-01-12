@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -20,8 +21,9 @@ namespace {
 
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int size,
-                                                  unsigned int warps) {
-  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/1);
+                                                  unsigned int warps,
+                                                  unsigned int numCTAs) {
+  auto cgaLayout = CGAEncodingAttr::get1DLayout(ctx, numCTAs);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{size},
                                   /*threadsPerWarp=*/{32},
@@ -32,28 +34,34 @@ BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int buffers,
                                                   unsigned int barriers,
-                                                  unsigned int warps) {
-  auto cgaLayout = CGAEncodingAttr::getDefault(ctx, /*rank=*/2);
+                                                  unsigned int warps,
+                                                  unsigned int numCTAs) {
+  auto kBlocks = StringAttr::get(ctx, "block");
+  auto dims = standardOutDimNames(ctx, 2);
+  auto ll = LinearLayout::identity1D(1, kBlocks, dims[0]) *
+            LinearLayout::identity1D(numCTAs, kBlocks, dims[1]);
+  auto cgaLayout = CGAEncodingAttr::get(ctx, std::move(ll));
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{buffers, barriers},
                                   /*threadsPerWarp=*/{1, 32},
                                   /*warpsPerCTA=*/{1, warps},
-                                  /*order=*/{0, 1}, cgaLayout);
+                                  /*order=*/{0, 1}, std::move(cgaLayout));
 }
 
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth) {
   MLIRContext *ctx = region->getContext();
   unsigned int warps = lookupNumWarps(region);
+  unsigned int numCTAs = lookupNumCTAs(region->getParentOp());
   BlockedEncodingAttr encoding;
   if (shape.size() == 1) {
     encoding = getThreadLocalBlockedEncoding(
-        ctx, static_cast<unsigned>(shape[0]), warps);
+        ctx, static_cast<unsigned>(shape[0]), warps, numCTAs);
   } else {
     assert(shape.size() == 2 && "Only 1D and 2D shapes are supported");
-    encoding =
-        getThreadLocalBlockedEncoding(ctx, static_cast<unsigned>(shape[0]),
-                                      static_cast<unsigned>(shape[1]), warps);
+    encoding = getThreadLocalBlockedEncoding(
+        ctx, static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1]),
+        warps, numCTAs);
   }
   Type elType = IntegerType::get(ctx, bitWidth);
   return RankedTensorType::get(shape, elType, encoding);
@@ -513,23 +521,23 @@ void AuxDataMap::getBuffersAndBarriers(
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
                                       RegionToValueMap &map) {
-  func.walk([&](WarpSpecializeOp op) {
+  func.walk([&](WarpSpecializePartitionsOp op) {
     op->insertOperands(op.getNumOperands(), {valueType.value});
-    for (Region *region : op.getPartitionRegions()) {
+    for (Region &region : op.getPartitionRegions()) {
       // Pass the value as a pointer type (instead of the type of underlying
       // memory)
-      region->addArgument(valueType.value.getType(), op.getLoc());
+      region.addArgument(valueType.value.getType(), op.getLoc());
       Type newType = valueType.type;
       if (auto tensorType = dyn_cast<RankedTensorType>(newType)) {
         // If this is a tensor, make sure the layout matches the region's warp
         // count
         newType = getIntTensorType(
-            region, tensorType.getShape(),
+            &region, tensorType.getShape(),
             tensorType.getElementType().getIntOrFloatBitWidth());
       }
-      map.insert(region,
-                 ValueType{region->getArgument(region->getNumArguments() - 1),
-                           newType});
+      map.insert(
+          &region,
+          ValueType{region.getArgument(region.getNumArguments() - 1), newType});
     }
   });
 }

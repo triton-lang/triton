@@ -52,7 +52,7 @@ tt.func @async_tma_gather(%desc: !tt.tensordesc<tensor<1x128xbf16, #shared>>, %x
                           %bar: !ttg.memdesc<2xi32, #shared1, #ttg.shared_memory, mutable>,
                           %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
                           %pred: i1) {
-  // expected-error @below {{barrier allocation must be a descriptor of 1xi64 type}}
+  // expected-error @below {{barrier allocation must be a descriptor of Nxi64 type with N <= number of CTAs}}
   ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.tensordesc<tensor<1x128xbf16, #shared>>, tensor<32xi32, #blocked>, i32, !ttg.memdesc<2xi32, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
   tt.return
 }
@@ -163,6 +163,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
        !ttg.memdesc<128x256xbf16, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @fence_mbarrier_init_release_cluster_invalid() {
+    // expected-error @below {{requires ttg.num-ctas > 1}}
+    ttng.fence_mbarrier_init_release_cluster
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_arrive_invalid() {
+    // expected-error @below {{requires ttg.num-ctas > 1}}
+    ttng.cluster_arrive {relaxed = false}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_wait_invalid() {
+    // expected-error @below {{requires ttg.num-ctas > 1}}
+    ttng.cluster_wait
     tt.return
   }
 }

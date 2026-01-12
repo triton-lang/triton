@@ -39,6 +39,14 @@ public:
   /// It doesn't stop the profiler.
   Profiler *flush() {
     this->doFlush();
+    // Treat all phases up to currentPhase - 1 as flushed, even if a phase has
+    // no GPU activity records (i.e., nothing to flush from device to host).
+    for (auto *data : this->getDataSet()) {
+      const auto currentPhase = data->getCurrentPhase();
+      if (currentPhase == 0)
+        continue;
+      data->updateFlushedPhase(currentPhase - 1);
+    }
     return this;
   }
 
@@ -48,7 +56,7 @@ public:
     if (!this->started) {
       return this;
     }
-    if (this->getDataSet().empty()) {
+    if (this->dataSet.empty()) {
       this->started = false;
       this->doStop();
     }
@@ -58,21 +66,21 @@ public:
   /// Register a data object to the profiler.
   /// A profiler can yield metrics to multiple data objects.
   Profiler *registerData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
+    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.insert(data);
     return this;
   }
 
   /// Unregister a data object from the profiler.
   Profiler *unregisterData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(dataSetMutex);
+    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.erase(data);
     return this;
   }
 
   /// Get the set of data objects registered to the profiler.
   std::set<Data *> getDataSet() const {
-    std::shared_lock<std::shared_mutex> lock(dataSetMutex);
+    std::shared_lock<std::shared_mutex> lock(mutex);
     return dataSet;
   }
 
@@ -118,9 +126,6 @@ protected:
                const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
   mutable std::shared_mutex mutex;
-  // `dataSet` can be accessed by both the user thread and the background
-  // threads
-  mutable std::shared_mutex dataSetMutex;
   std::set<Data *> dataSet;
   static thread_local void *tensorMetricKernel;
   static thread_local void *scalarMetricKernel;

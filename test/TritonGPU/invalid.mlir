@@ -2,11 +2,13 @@
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 #smem = #ttg.shared_memory
-tt.func public @non_trivial_block(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %zero = arith.constant 0 : i32
-    // expected-error @+1 {{non-trivial block}}
-    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
-    tt.return
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @non_trivial_block(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      %zero = arith.constant 0 : i32
+      // expected-error @+1 {{non-trivial block}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+      tt.return
+  }
 }
 
 // -----
@@ -221,11 +223,11 @@ tt.func @not_power_of_2() {
 // -----
 
 tt.func @bad_argument_count() {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 has 1 arguments but expected 0}}
   ttg.warp_specialize()
   default {
     ttg.warp_yield
   }
+  // expected-error @below {{'ttg.warp_specialize.partitions' op partition region #0 has 1 arguments but expected 0}}
   partition0(%arg0: i32) num_warps(4) {
     ttg.warp_return
   } : () -> ()
@@ -235,11 +237,11 @@ tt.func @bad_argument_count() {
 // -----
 
 tt.func @bad_argument_type(%arg0: i32) {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 argument #0 has type 'i64' but corresponding capture has type 'i32'}}
   ttg.warp_specialize(%arg0)
   default {
     ttg.warp_yield
   }
+  // expected-error @below {{'ttg.warp_specialize.partitions' op partition region #0 argument #0 has type 'i64' but corresponding capture has type 'i32'}}
   partition0(%arg1: i64) num_warps(4) {
     ttg.warp_return
   } : (i32) -> ()

@@ -36,12 +36,13 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
       sharedMemorySpace, /*mutableMemory=*/true);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
+  auto numCTAs = gpu::lookupNumCTAs(op);
   auto barrierCGALayout =
-      gpu::CGAEncodingAttr::getDefault(tensorType.getContext(), 1);
+      gpu::CGAEncodingAttr::get1DLayout(tensorType.getContext(), numCTAs);
   auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, {0}, barrierCGALayout);
   gpu::MemDescType barrierMemDescType =
-      gpu::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+      gpu::MemDescType::get({numCTAs}, rewriter.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc =
       gpu::LocalAllocOp::create(rewriter, loc, barrierMemDescType);
@@ -67,13 +68,11 @@ public:
   LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
+    auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred) {
-      auto indices = translateTMAIndices(
-          rewriter, op.getLoc(),
-          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
-          rewriter, op.getLoc(), tmaPtr, indices, barrierAlloc, alloc, pred);
+          rewriter, op.getLoc(), desc, op.getIndices(), barrierAlloc, alloc,
+          pred);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
@@ -85,10 +84,10 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
 
   LogicalResult matchAndRewrite(DescriptorGatherOp op,
                                 PatternRewriter &rewriter) const override {
-    auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
+    auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred) {
       triton::nvidia_gpu::AsyncTMAGatherOp::create(
-          rewriter, op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(),
+          rewriter, op.getLoc(), desc, op.getXOffsets(), op.getYOffset(),
           barrierAlloc, alloc, pred);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
@@ -121,12 +120,9 @@ struct TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
 
   LogicalResult matchAndRewrite(DescriptorStoreOp op,
                                 PatternRewriter &rewriter) const override {
-    auto createStore = [&](Value tmaPtr, Value alloc) {
-      auto indices = translateTMAIndices(
-          rewriter, op.getLoc(),
-          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+    auto createStore = [&](Value desc, Value alloc) {
       triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp::create(
-          rewriter, op.getLoc(), tmaPtr, indices, alloc);
+          rewriter, op.getLoc(), desc, op.getIndices(), alloc);
     };
     lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
     return success();
@@ -138,12 +134,9 @@ struct TMAReduceLowering : public OpRewritePattern<DescriptorReduceOp> {
 
   LogicalResult matchAndRewrite(DescriptorReduceOp op,
                                 PatternRewriter &rewriter) const override {
-    auto createStore = [&](Value tmaPtr, Value alloc) {
-      auto indices = translateTMAIndices(
-          rewriter, op.getLoc(),
-          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+    auto createStore = [&](Value desc, Value alloc) {
       triton::nvidia_gpu::AsyncTMAReduceOp::create(
-          rewriter, op.getLoc(), op.getKind(), tmaPtr, indices, alloc);
+          rewriter, op.getLoc(), op.getKind(), desc, op.getIndices(), alloc);
     };
     lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
     return success();
@@ -155,9 +148,9 @@ struct TMAScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
 
   LogicalResult matchAndRewrite(DescriptorScatterOp op,
                                 PatternRewriter &rewriter) const override {
-    auto createStore = [&](Value tmaPtr, Value alloc) {
-      triton::nvidia_gpu::AsyncTMAScatterOp::create(rewriter, op.getLoc(),
-                                                    tmaPtr, op.getXOffsets(),
+    auto createStore = [&](Value desc, Value alloc) {
+      triton::nvidia_gpu::AsyncTMAScatterOp::create(rewriter, op.getLoc(), desc,
+                                                    op.getXOffsets(),
                                                     op.getYOffset(), alloc);
     };
     lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);

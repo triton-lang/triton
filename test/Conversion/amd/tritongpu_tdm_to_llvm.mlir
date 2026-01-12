@@ -146,3 +146,29 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_prefetch_regular
+  tt.func public @tdm_prefetch_regular(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant true
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <tensor<64x64xf16, #shared>>
+
+    // CHECK-DAG: %[[NON_SPECULATIVE_BITS:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK-DAG: %[[SPECULATIVE_BITS:.*]] = llvm.mlir.constant(9 : i32) : i32
+
+    // CHECK: llvm.amdgcn.global.prefetch{{.*}}%[[NON_SPECULATIVE_BITS]]
+    amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = false : !tt.tensordesc<tensor<64x64xf16, #shared>>
+
+    // CHECK: llvm.amdgcn.global.prefetch{{.*}}%[[SPECULATIVE_BITS]]
+    amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = true : !tt.tensordesc<tensor<64x64xf16, #shared>>
+    tt.return
+  }
+}

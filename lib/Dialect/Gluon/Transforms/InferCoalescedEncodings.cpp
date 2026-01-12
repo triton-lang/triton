@@ -29,8 +29,8 @@ ttg::CGAEncodingAttr getDefaultCGALayout(RankedTensorType refTensorType,
                                          int numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CGAEncodingAttr::getDefault(refTensorType.getContext(),
-                                          refTensorType.getShape().size());
+  return ttg::CGAEncodingAttr::get1CTALayout(refTensorType.getContext(),
+                                             refTensorType.getShape().size());
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {
@@ -73,9 +73,9 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       auto cgaLayout = getDefaultCGALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(cgaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      auto layout = ttg::buildCoalescedEncoding(
-          mod.getContext(), axisInfoAnalysis, curr, numWarps, threadsPerWarp,
-          cgaLayout, shapePerCTA);
+      auto layout =
+          ttg::buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
+                                      threadsPerWarp, cgaLayout, shapePerCTA);
       // set seed value
       for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});

@@ -1080,8 +1080,9 @@ It is characterized by the following parameters:
   - 1: RDNA3; e.g., gfx1100, gfx1101
   - 2: RDNA4; e.g., gfx1200, gfx1201
   - 3: gfx1250
-- `warpsPerCTA` indicates the warp layout in the block.
-- `tilesPerWarp`  The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `ctaLayout` indicates the warp layout in the block. This is a generalization
+   compared to previous warp layout representation using warpsPerCTA and tilesPerWarp
+   parameters.
 - `instrShape` indicates the shape in the form of (M, N, K) of the matrix
    operation performed by a single WMMA instruction. Defaults to (16, 16, 16).
 - `isTransposed` indicates the layout of the result tensor is transposed.
@@ -1162,39 +1163,77 @@ Row |
 31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
 
 Example 2:
-This example demonstrates the tilesPerWarp parameter, which shares the same sematics with
-AMDMfmaEncodingAttr.
+This example illustrates the purpose of the ctaLayout parameter.
+ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
+Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
+For instance, a configuration with 4 warps, represented as:
 
-By default, WMMA layout assumes that each warp within a CTA tile computes a single WMMA tile.
-When the tensor is larger than a single CTA tile, these tiles are repeated across the tensor.
-In this setup, the output tiles computed by each warp are strided by the number of warps per CTA
-tile in both row and column dimensions.
+warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
 
-For instance, with 16 WMMA tiles and warpsPerCTA = [2, 2], the default(tilesPerWarp = [1, 1])
-distribution of warps across the WMMA tiles looked like:
+would translate to:
+
+ctaLayout = {reg = [], warp = [[0, 1], [1, 0]]}
+
+By default, WMMA assumes that each warp in a CTA computes exactly one WMMA tile.
+In the grid below, each w* label indicates which warp computes that tile:
 
 w0 w1 w0 w1
 w2 w3 w2 w3
 w0 w1 w0 w1
 w2 w3 w2 w3
 
-* Each unit reprsents a WMMA tile. w* shows which warp occupies that WMMA tile.
+To express more complex layouts, we must also account for repetitions within the mapping.
+For example, the configuration formerly described as:
 
-tilesPerWarp parameter allows each warp to compute contiguous WMMA tiles in the row and/or column dimensions.
-Using the same example with tilesPerWarp = [2, 2], the layout becomes:
+warpsPerCTA = [2, 2], tilesPerWarp  = [2, 2]
+
+would translate to:
+
+ctaLayout = {reg = [[0, 1], [1, 0]], warps = [[0, 2], [2, 0]] }
 
 w0 w0 w1 w1
 w0 w0 w1 w1
 w2 w2 w3 w3
 w2 w2 w3 w3
+
+This parameter provides a more general way to define warp mappings than what
+warpsPerCTA and tilesPerWarp alone could express.
+For instance:
+
+ctaLayout = {reg = [[1, 0], [0, 1]], warps = [[0, 2], [2, 0]]}
+
+still represents a layout similar to:
+
+warpsPerCTA  = [2, 2], tilesPerWarp = [2, 2]
+
+but with a different ordering of repetitions.
+
+The motivation for this broader formulation comes from the need to describe swizzled warp
+layouts, which help avoid LDS partition conflicts on architectures such as gfx1250.
+A valid example of such swizzled configuration is:
+
+ctaLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
+
+With corresponding mapping:
+
+w0 w1 <- second tile computed by w1
+w2 w3
+w0 w1 <- first tile computed by w1
+w2 w3
+
+Note that ctaLayout naturally composes with layout definied on a single WMMA tile
+to form final WMMA layout.
+
+wmmaLayout = tileLayout * ctaLayout
+
+This simplifies both WMMA and dotOperand layouts lowering to linear layout.
   }];
 
   let parameters = (
     ins
     "unsigned": $version,
+    LinearLayoutParam:$ctaLayout,
     "bool":$isTransposed,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
@@ -1202,27 +1241,12 @@ w2 w2 w3 w3
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
-  let builders = [
-    AttrBuilder<(ins "unsigned":$version,
-                     "bool":$isTransposed,
-                     "ArrayRef<unsigned>":$warpsPerCTA,
-                     "CGAEncodingAttr":$CGALayout,
-                     "ArrayRef<unsigned>":$instrShape), [{
-      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CGALayout, instrShape);
-    }]>
-  ];
-
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-
+    LinearLayout getTileLayout(unsigned rank) const;
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
-
-    // Check if tilesPerWarp is 1 in every dimension.
-    bool hasUnitTilesPerWarp() const;
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

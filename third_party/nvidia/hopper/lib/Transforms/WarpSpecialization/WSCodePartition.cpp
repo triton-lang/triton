@@ -540,14 +540,16 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
       triton::gpu::SharedMemorySpaceAttr::get(funcOp.getContext());
   Location loc = funcOp.getLoc();
   auto context = funcOp.getContext();
-  auto barrierCGALayout = ttg::CGAEncodingAttr::getDefault(context, 1);
+  auto numCTAs = triton::gpu::lookupNumCTAs(funcOp);
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
   auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
       context, 1, 1, 1, {0}, barrierCGALayout);
-  Type barrierMemDescType = ttg::MemDescType::get(
-      {distance, 1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
-      /*mutableMemory=*/true);
+  Type barrierMemDescType =
+      ttg::MemDescType::get({distance, numCTAs}, builder.getI64Type(),
+                            barrierEncoding, sharedMemorySpace,
+                            /*mutableMemory=*/true);
   Type singleBarrierMemDescType =
-      ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+      ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = mlir::triton::gpu::LocalAllocOp::create(
       builder, loc, barrierMemDescType, Value());

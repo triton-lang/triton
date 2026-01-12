@@ -27,7 +27,7 @@ public:
 
   void activate();
 
-  void deactivate();
+  void deactivate(bool flushing);
 
   void finalize(const std::string &outputFormat);
 
@@ -87,17 +87,21 @@ public:
 
   void activateAllSessions();
 
-  void deactivateSession(size_t sessionId);
+  void deactivateSession(size_t sessionId, bool flushing);
 
-  void deactivateAllSessions();
+  void deactivateAllSessions(bool flushing);
 
   size_t getContextDepth(size_t sessionId);
 
-  std::vector<uint8_t> getDataMsgPack(size_t sessionId);
+  std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
 
-  std::string getData(size_t sessionId);
+  std::string getData(size_t sessionId, size_t phase);
 
-  void clearData(size_t sessionId);
+  void clearData(size_t sessionId, size_t phase);
+
+  size_t advanceDataPhase(size_t sessionId);
+
+  bool isDataPhaseFlushed(size_t sessionId, size_t phase);
 
   void enterScope(const Scope &scope);
 
@@ -140,7 +144,7 @@ private:
 
   void activateSessionImpl(size_t sessionId);
 
-  void deActivateSessionImpl(size_t sessionId);
+  void deActivateSessionImpl(size_t sessionId, bool flushing);
 
   size_t getSessionId(const std::string &path) { return sessionPaths[path]; }
 
@@ -224,9 +228,9 @@ private:
   // {instrumentation, active count}
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
-  // {context source, active count}
-  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
   // {metric, active count}
+  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
+  // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };
 
