@@ -14,7 +14,7 @@ from triton.experimental.gluon.language.amd import (
 )
 
 import os
-os.environ["TRITON_CACHE_DIR"] = "/home/sijieli2/gluon_cache"
+os.environ["TRITON_CACHE_DIR"] = "/model/Qwen/huizzhan/triton/.gluon_cache"
 # os.environ["MLIR_ENABLE_DUMP"] = "1"
 # os.environ["LLVM_IR_ENABLE_DUMP"] = "1"
 # os.environ["AMDGCN_ENABLE_DUMP"] = "1"
@@ -106,7 +106,7 @@ def matmul_kernel0(
         a_ptr += BLOCK_SIZE_K * stride_ak
         b_ptr += BLOCK_SIZE_K * stride_bk
 
-    gc = accumulator.to(gl.float16)
+    gc = accumulator.to(c_ptr.dtype.element_ty)
 
     cdna3.buffer_store(gc, c_ptr, offs_c)
 
@@ -199,13 +199,13 @@ def matmul_kernel1(
         smem_a.index(0).store(ga)
         smem_b.index(0).store(gb)
 
-    gc = accumulator.to(gl.float16)
+    gc = accumulator.to(c_ptr.dtype.element_ty)
 
     cdna3.buffer_store(gc, c_ptr, offs_c)
 
 
 @triton.autotune(
-    configs=[triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=2, num_warps=8)
+    configs=[triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1}, num_stages=2, num_warps=8)
     ],
     key=['M', 'N', 'K'],
 )
@@ -259,14 +259,14 @@ def matmul_ori_kernel(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    gl.assume(pid_m >= 0)
-    gl.assume(pid_n >= 0)
-    gl.assume(stride_am > 0)
-    gl.assume(stride_ak > 0)
-    gl.assume(stride_bn > 0)
-    gl.assume(stride_bk > 0)
-    gl.assume(stride_cm > 0)
-    gl.assume(stride_cn > 0)
+    # gl.assume(pid_m >= 0)
+    # gl.assume(pid_n >= 0)
+    # gl.assume(stride_am > 0)
+    # gl.assume(stride_ak > 0)
+    # gl.assume(stride_bn > 0)
+    # gl.assume(stride_bk > 0)
+    # gl.assume(stride_cm > 0)
+    # gl.assume(stride_cn > 0)
 
     offs_am = (pid_m * BLOCK_SIZE_M + gl.arange(0, BLOCK_SIZE_M, layout=SliceLayout(1, blocked_a_layout))) % M
     offs_ak = gl.arange(0, BLOCK_SIZE_K, layout=SliceLayout(0, blocked_a_layout))
@@ -279,7 +279,7 @@ def matmul_ori_kernel(
     gb0 = cdna3.buffer_load(b_ptr, offs_b, mask=offs_bk[:, None] < K)
 
     smem_a = allocate_shared_memory(a_ptr.dtype.element_ty, [1, BLOCK_SIZE_M, BLOCK_SIZE_K], shared_a_layout)
-    smem_b = allocate_shared_memory(b_ptr.dtype.element_ty, [1, BLOCK_SIZE_K, BLOCK_SIZE_M], shared_b_layout)
+    smem_b = allocate_shared_memory(b_ptr.dtype.element_ty, [1, BLOCK_SIZE_K, BLOCK_SIZE_N], shared_b_layout)
 
     smem_a0 = smem_a.index(0)
     smem_a0.store(ga0)
@@ -312,7 +312,7 @@ def matmul_ori_kernel(
 
         new_index = index + 1
         cond = new_index < 1
-        index = gl.where(cond, new_index, gl.value_int32(0))
+        index = gl.where(cond, new_index, 0)
 
         smem_a0 = smem_a.index(index)
         smem_a0.store(ga)
@@ -331,7 +331,7 @@ def matmul_ori_kernel(
 
     accumulator = gl.where(cond1, accumulator1, accumulator)
 
-    gc = accumulator.to(gl.float16)
+    gc = accumulator.to(c_ptr.dtype.element_ty)
     
     offs_cm = pid_m * BLOCK_SIZE_M + gl.arange(0, BLOCK_SIZE_M, layout=SliceLayout(1, mfma_layout))
     offs_cn = pid_n * BLOCK_SIZE_N + gl.arange(0, BLOCK_SIZE_N, layout=SliceLayout(0, mfma_layout))
@@ -426,20 +426,149 @@ def benchmark(M, N, K, provider):
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
-def test_matmul(M, N, K):
-    dtype=torch.float16
+def test_matmul(M, N, K, num_warmup=5, num_iters=100):
+    dtype=torch.bfloat16
     device="cuda"
+
+    print(f"\n{'='*60}")
+    print(f"Testing GEMM: M={M}, N={N}, K={K}, dtype={dtype}")
+    print(f"{'='*60}")
 
     a = torch.randn((M,K), dtype=dtype, device=device)
     b = torch.randn((K,N), dtype=dtype, device=device)
 
-    new_out = gluon_matmul(a, b)
-    ori_out = triton_matmul(a, b)
-    # torch_out = torch.matmul(a, b)
+    print(f"Input shapes: a={a.shape}, b={b.shape}")
+    print(f"a: min={a.min().item():.4f}, max={a.max().item():.4f}, mean={a.mean().item():.4f}")
+    print(f"b: min={b.min().item():.4f}, max={b.max().item():.4f}, mean={b.mean().item():.4f}")
 
-    torch.testing.assert_close(new_out, ori_out, rtol=1e-3, atol=1e-3)
+    print(f"\n{'='*60}")
+    print("Running Gluon matmul...")
+    print(f"{'='*60}")
+    new_out = gluon_matmul(a, b)
+    print(f"Gluon output shape: {new_out.shape}")
+    print(f"Gluon output: min={new_out.min().item():.4f}, max={new_out.max().item():.4f}, mean={new_out.mean().item():.4f}")
+
+    # ori_out = triton_matmul(a, b)
+    print(f"\n{'='*60}")
+    print("Running PyTorch matmul...")
+    print(f"{'='*60}")
+    torch_out = torch.matmul(a, b)
+    print(f"PyTorch output shape: {torch_out.shape}")
+    print(f"PyTorch output: min={torch_out.min().item():.4f}, max={torch_out.max().item():.4f}, mean={torch_out.mean().item():.4f}")
+
+    print(f"\n{'='*60}")
+    print("Comparing results...")
+    print(f"{'='*60}")
+    diff = (new_out - torch_out).abs()
+    print(f"Absolute difference: min={diff.min().item():.6f}, max={diff.max().item():.6f}, mean={diff.mean().item():.6f}")
+    
+    rel_diff = diff / (torch_out.abs() + 1e-8)
+    print(f"Relative difference: min={rel_diff.min().item():.6f}, max={rel_diff.max().item():.6f}, mean={rel_diff.mean().item():.6f}")
+    
+    # 根据数据类型调整容差：BF16 精度较低，需要更宽松的容差
+    if dtype == torch.bfloat16:
+        rtol, atol = 1e-2, 1e-2  # BF16: 1% 相对误差
+        print(f"\nRunning torch.testing.assert_close with rtol={rtol}, atol={atol} (BF16 mode)...")
+    else:
+        rtol, atol = 1e-3, 1e-3  # FP16/FP32: 0.1% 相对误差
+        print(f"\nRunning torch.testing.assert_close with rtol={rtol}, atol={atol}...")
+    
+    try:
+        torch.testing.assert_close(new_out, torch_out, rtol=rtol, atol=atol)
+        print(f"✅ Test PASSED!")
+    except AssertionError as e:
+        print(f"❌ Test FAILED!")
+        print(f"Error: {e}")
+        raise
+    print(f"{'='*60}\n")
+
+    # Performance comparison
+    print(f"\n{'='*60}")
+    print(f"Performance Comparison (warmup={num_warmup}, iterations={num_iters})")
+    print(f"{'='*60}")
+    
+    # Warmup and benchmark Gluon
+    print(f"Warming up Gluon kernel...")
+    for _ in range(num_warmup):
+        _ = gluon_matmul(a, b)
+    torch.cuda.synchronize()
+    
+    print(f"Benchmarking Gluon kernel...")
+    gluon_times = []
+    for _ in range(num_iters):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        _ = gluon_matmul(a, b)
+        end.record()
+        torch.cuda.synchronize()
+        gluon_times.append(start.elapsed_time(end))  # milliseconds
+    
+    # Warmup and benchmark PyTorch
+    print(f"Warming up PyTorch matmul...")
+    for _ in range(num_warmup):
+        _ = torch.matmul(a, b)
+    torch.cuda.synchronize()
+    
+    print(f"Benchmarking PyTorch matmul...")
+    torch_times = []
+    for _ in range(num_iters):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        _ = torch.matmul(a, b)
+        end.record()
+        torch.cuda.synchronize()
+        torch_times.append(start.elapsed_time(end))  # milliseconds
+    
+    # Calculate statistics
+    import numpy as np
+    gluon_times = np.array(gluon_times)
+    torch_times = np.array(torch_times)
+    
+    gluon_mean = gluon_times.mean()
+    gluon_std = gluon_times.std()
+    gluon_min = gluon_times.min()
+    gluon_max = gluon_times.max()
+    gluon_median = np.median(gluon_times)
+    
+    torch_mean = torch_times.mean()
+    torch_std = torch_times.std()
+    torch_min = torch_times.min()
+    torch_max = torch_times.max()
+    torch_median = np.median(torch_times)
+    
+    # Calculate TFLOPS
+    flops = 2 * M * N * K  # multiply-add counts as 2 ops
+    gluon_tflops = flops / (gluon_mean * 1e-3) / 1e12
+    torch_tflops = flops / (torch_mean * 1e-3) / 1e12
+    
+    print(f"\n{'='*60}")
+    print(f"Gluon Kernel Performance:")
+    print(f"  Mean:   {gluon_mean:.3f} ms (± {gluon_std:.3f} ms)")
+    print(f"  Median: {gluon_median:.3f} ms")
+    print(f"  Min:    {gluon_min:.3f} ms")
+    print(f"  Max:    {gluon_max:.3f} ms")
+    print(f"  TFLOPS: {gluon_tflops:.2f}")
+    
+    print(f"\nPyTorch Matmul Performance:")
+    print(f"  Mean:   {torch_mean:.3f} ms (± {torch_std:.3f} ms)")
+    print(f"  Median: {torch_median:.3f} ms")
+    print(f"  Min:    {torch_min:.3f} ms")
+    print(f"  Max:    {torch_max:.3f} ms")
+    print(f"  TFLOPS: {torch_tflops:.2f}")
+    
+    speedup = torch_mean / gluon_mean
+    print(f"\n{'='*60}")
+    if speedup > 1.0:
+        print(f"🚀 Gluon is {speedup:.2f}x FASTER than PyTorch!")
+    elif speedup < 1.0:
+        print(f"⚠️  Gluon is {1/speedup:.2f}x SLOWER than PyTorch")
+    else:
+        print(f"⚖️  Gluon and PyTorch have similar performance")
+    print(f"{'='*60}\n")
 
 if __name__ == "__main__":
-    test_matmul(4096, 4096, 4096)
-    benchmark.run(show_plots=False, print_data=True)
+    test_matmul(64, 3072, 2048)
+    # benchmark.run(show_plots=False, print_data=True)
 
