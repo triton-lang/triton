@@ -102,6 +102,8 @@ public:
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
   virtual bool supportLdStMatrixB8() const { return false; }
+  virtual bool supportBitwidth16Elementwise() const { return false; }
+  virtual bool supportBitwidth32Elementwise() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Annotate target specific information to local load operations during

@@ -1,8 +1,11 @@
 #include "ReduceScanCommon.h"
 
+#include <memory>
 #include <tuple>
 #include <utility>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -110,6 +113,25 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  SmallVector<Value>
+  treeReduceBinary(Location loc, ConversionPatternRewriter &rewriter,
+                   Region &combineOp,
+                   SmallVector<SmallVector<Value>> values) const {
+    // The number of elements is always a power of two
+    assert(llvm::isPowerOf2_64(values.size()) && !values.empty());
+    while (values.size() > 1) {
+      SmallVector<SmallVector<Value>> next;
+      for (size_t i = 0; i + 1 < values.size(); i += 2) {
+        SmallVector<Value> acc = values[i];
+        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
+        next.push_back(std::move(acc));
+      }
+      values = std::move(next);
+    }
+    return values.front();
+  }
+
   void accumulate(Location loc, ConversionPatternRewriter &rewriter,
                   Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
                   Value pred = {}) const {
@@ -139,6 +161,64 @@ private:
     b.barrier(triton::gpu::AddrSpace::Local);
   }
 
+  void packVectorized(SmallVector<SmallVector<Value>> &accs,
+                      ConversionPatternRewriter &rewriter) const {
+    auto loc = accs.front().front().getLoc();
+    for (auto &acc : accs) {
+      SmallVector<Value> packedAcc;
+      for (unsigned reg = 0; reg < acc.size(); reg += 2) {
+        auto vector = packLLVector(loc, {acc[reg], acc[reg + 1]}, rewriter);
+        packedAcc.emplace_back(std::move(vector));
+      }
+      acc = std::move(packedAcc);
+    }
+  }
+
+  std::unique_ptr<Region> createVectorCombineRegion(
+      Location loc, Type elemTy,
+      ReduceOpHelper::InThreadVectorizeOpKind vectorizeKind,
+      ConversionPatternRewriter &rewriter) const {
+    if (vectorizeKind == ReduceOpHelper::InThreadVectorizeOpKind::None)
+      return nullptr;
+    MLIRContext *ctx = rewriter.getContext();
+    auto vecTy = vec_ty(elemTy, 2);
+
+    auto storage = std::make_unique<Region>();
+    auto *block = new Block();
+    storage->push_back(block);
+    block->addArgument(vecTy, loc);
+    block->addArgument(vecTy, loc);
+
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(block);
+    Value result = ReduceOpHelper::createInThreadVectorizedCombineOp(
+        builder, loc, vectorizeKind, block->getArgument(0),
+        block->getArgument(1));
+    triton::ReduceReturnOp::create(builder, loc, ValueRange{result});
+    return storage;
+  }
+
+  void unpackVectorized(Location loc, SmallVector<SmallVector<Value>> &accs,
+                        ConversionPatternRewriter &rewriter,
+                        Region *reduction) const {
+    for (auto &acc : accs) {
+      SmallVector<Value> unpacked;
+      for (Value val : acc) {
+        auto elems = unpackLLVector(loc, val, rewriter);
+        assert(elems.size() == 2 && "expected a 2-lane packed vector");
+        if (reduction) {
+          SmallVector<Value> cur = {elems[0]};
+          accumulate(loc, rewriter, *reduction, cur, {elems[1]});
+          unpacked.emplace_back(cur[0]);
+        } else {
+          unpacked.emplace_back(elems[0]);
+          unpacked.emplace_back(elems[1]);
+        }
+      }
+      acc = std::move(unpacked);
+    }
+  }
+
   // Reduce along op axis for elements that are in the same thread. The
   // accumulated value is stored in accs.
   std::pair<LinearLayout, SmallVector<SmallVector<Value>>>
@@ -146,16 +226,25 @@ private:
                       SmallVector<SmallVector<Value>> accs,
                       ConversionPatternRewriter &rewriter) const {
     auto *ctx = op.getContext();
+    auto loc = op.getLoc();
+    unsigned axis = op.getAxis();
     auto kReg = str_attr("register");
     auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, layout);
     auto basesPerDim = linearAttr.basesPerDim(kReg, /*skipBroadcast=*/true);
-    unsigned axisPack = basesPerDim[op.getAxis()];
+    unsigned axisPack = basesPerDim[axis];
     if (axisPack == 1) {
       return {std::move(layout), std::move(accs)};
     }
 
+    ReduceOpHelper helper(op);
+    auto vectorizeKind = helper.getInThreadVectorizeOpKind(
+        axisPack, targetInfo.supportBitwidth16Elementwise(),
+        targetInfo.supportBitwidth32Elementwise());
+    bool vectorize =
+        vectorizeKind != ReduceOpHelper::InThreadVectorizeOpKind::None;
+
     // Bring the registers that move the axis to the front
-    auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, op.getAxis());
+    auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, axis, vectorize);
     if (!perm.isIdentity()) {
       layout = perm.apply(layout);
       for (auto &vals : accs) {
@@ -163,28 +252,57 @@ private:
       }
     }
 
-    // Reduce linearly
-    // TODO Perform a tree reduction
-    SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
-    for (unsigned regBase = 0; regBase < layout.getInDimSize(kReg);
-         regBase += axisPack) {
-      SmallVector<Value> acc;
+    // Pack the inputs into vector values
+    if (vectorize)
+      packVectorized(accs, rewriter);
+
+    // If we pack along the reduction axis we need to process half the registers
+    const auto &regBases = layout.getBases().lookup(kReg);
+    bool packAlongAxis = vectorize && regBases.front()[axis] != 0;
+    if (packAlongAxis)
+      axisPack /= 2;
+
+    // Create the vectorized region if needed
+    auto elemTy =
+        cast<RankedTensorType>(op.getOperandTypes().front()).getElementType();
+    std::unique_ptr<Region> vectorCombineRegion =
+        createVectorCombineRegion(loc, elemTy, vectorizeKind, rewriter);
+    Region &combineRegion =
+        vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
+
+    // Perform a tree reduction
+    unsigned numOperands = accs.size();
+    SmallVector<SmallVector<Value>> reduced(numOperands);
+    unsigned regs = accs.front().size();
+    for (unsigned regBase = 0; regBase < regs; regBase += axisPack) {
+      // Transpose from [opIdx][reg] into [reg][opIdx]
+      SmallVector<SmallVector<Value>> vals;
       for (unsigned i = 0; i < axisPack; ++i) {
-        SmallVector<Value> cur(op.getNumOperands());
-        for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
+        SmallVector<Value> cur(numOperands);
+        for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, cur);
+        vals.push_back(std::move(cur));
       }
-      for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
+      auto acc =
+          treeReduceBinary(loc, rewriter, combineRegion, std::move(vals));
+      for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
     }
     accs = std::move(reduced);
 
+    // Unpack the vector values into the accumulator values
+    // Reduce one last time via the scalar combine op if we packed along the
+    // axis
+    if (vectorize) {
+      Region *reduceAfterUnpacking =
+          packAlongAxis ? &op.getCombineOp() : nullptr;
+      unpackVectorized(loc, accs, rewriter, reduceAfterUnpacking);
+    }
+
     // Update layout killing the axis bases along registers
-    layout =
-        ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(), kReg);
+    layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
     layout = actionRemoveBroadcastedRegs(layout).apply(layout);
     return {std::move(layout), std::move(accs)};
   }
