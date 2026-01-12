@@ -64,7 +64,7 @@ public:
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          ArrayRef<unsigned> laneMasks) const = 0;
+                          unsigned activeLanes) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given

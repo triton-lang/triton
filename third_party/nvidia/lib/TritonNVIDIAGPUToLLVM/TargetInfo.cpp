@@ -463,12 +463,14 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 }
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            ArrayRef<unsigned> laneMasks) const {
+                            unsigned activeLanes) const {
 
   // Based on benchmarking on A100 redux op gives a speed up only when doing
   // a single reduction (not partitioned) and when the mask is static.
   // Therefore we currently only enable it to reduce across all the lanes.
-  if (laneMasks.size() != 5)
+  constexpr unsigned kWarpSize = 32;
+  unsigned fullMask = kWarpSize - 1;
+  if (activeLanes != fullMask)
     return false;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool useNanQualifier = false;
@@ -477,15 +479,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     Value mask = b.i32_val(0xFFFFFFFF);
     // Even though we currently don't use redux for partitioned reduction
     // the code below supports it in case we want to tweak the heuristic.
-    if (laneMasks.size() < 5) {
+    if (activeLanes != fullMask) {
       // For partitioned reduction we need to calculate the mask so that
       // each group of threads has the correct mask.
-      unsigned bitmask = 0;
-      for (unsigned mask : laneMasks) {
-        bitmask |= mask;
-      }
       Value laneId = getLaneId(rewriter, loc);
-      mask = b.shl(b.i32_val(bitmask), b.and_(laneId, b.i32_val(~bitmask)));
+      mask = b.shl(b.i32_val(activeLanes),
+                   b.and_(laneId, b.i32_val(~activeLanes)));
     }
     for (unsigned i = 0; i < acc.size(); ++i) {
       unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();

@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -190,13 +191,13 @@ private:
     auto *ctx = op.getContext();
     auto kLane = str_attr("lane");
     const auto &laneBases = layout.getBases().lookup(kLane);
-    SmallVector<unsigned> laneMasks;
+    unsigned activeLanes = 0;
     for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
       if (laneBases[bit][op.getAxis()] != 0) {
-        laneMasks.push_back(1u << bit);
+        activeLanes |= 1u << bit;
       }
     }
-    if (laneMasks.empty()) {
+    if (activeLanes == 0) {
       return {std::move(layout), std::move(accs)};
     }
 
@@ -206,7 +207,7 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      warpReduce(op, laneMasks, acc, rewriter);
+      warpReduce(op, activeLanes, acc, rewriter);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         accs[i][reg] = acc[i];
       }
@@ -217,17 +218,25 @@ private:
     return {std::move(layout), std::move(accs)};
   }
 
-  void warpReduce(triton::ReduceOp op, ArrayRef<unsigned> laneMasks,
+  void warpReduce(triton::ReduceOp op, unsigned activeLanes,
                   SmallVector<Value> &acc,
                   ConversionPatternRewriter &rewriter) const {
     // No reduction to do
-    if (laneMasks.empty())
+    if (activeLanes == 0)
       return;
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    unsigned warpSize =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+    assert(activeLanes < warpSize &&
+           "expected active lanes mask to be strictly less than warp size");
     // Try to use the redux op if it is supported by the target
-    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, laneMasks)) {
+    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, activeLanes)) {
       return;
     }
-    for (unsigned mask : laneMasks) {
+    for (unsigned bit = 0; bit < llvm::Log2_32(warpSize); ++bit) {
+      unsigned mask = 1u << bit;
+      if ((activeLanes & mask) == 0)
+        continue;
       SmallVector<Value> shfl(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         shfl[i] = targetInfo.shuffleXor(rewriter, op.getLoc(), acc[i], mask);
