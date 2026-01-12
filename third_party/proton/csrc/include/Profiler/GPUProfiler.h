@@ -3,8 +3,8 @@
 
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Profiler/Graph.h"
 #include "Profiler.h"
+#include "Profiler/Graph.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Env.h"
@@ -233,40 +233,40 @@ protected:
   // including the cupti header from this header. The cupti header and the
   // equivalent header from AMD define conflicting macros, so we want to use
   // those headers only within cpp files.
-	  class GPUProfilerPimplInterface {
-	  public:
-	    GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
-	        : profiler(profiler) {}
-	    virtual ~GPUProfilerPimplInterface() = default;
+  class GPUProfilerPimplInterface {
+  public:
+    GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
+        : profiler(profiler) {}
+    virtual ~GPUProfilerPimplInterface() = default;
 
-	    virtual void doStart() = 0;
-	    virtual void doFlush() = 0;
-	    virtual void doStop() = 0;
+    virtual void doStart() = 0;
+    virtual void doFlush() = 0;
+    virtual void doStop() = 0;
 
-	    virtual PendingGraphPool *getPendingGraphPool() {
-	      return profiler.pendingGraphPool.get();
-	    }
+    virtual PendingGraphPool *getPendingGraphPool() {
+      return profiler.pendingGraphPool.get();
+    }
 
-	    void
-	    doAddMetrics(size_t scopeId,
-	                 const std::map<std::string, MetricValueType> &scalarMetrics,
-	                 const std::map<std::string, TensorMetric> &tensorMetrics) {
-	      if (threadState.isStreamCapturing) { // Graph capture mode
-	        threadState.isMetricKernelLaunching = true;
-	        // Launch metric kernels
-	        profiler.metricBuffer->receive(
-	            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
-	            profiler.scalarMetricKernel, profiler.metricKernelStream);
-	        threadState.isMetricKernelLaunching = false;
-	      } else { // Eager mode, directly copy
-	        // Populate tensor metrics
-	        auto tensorMetricsHost = collectTensorMetrics(
-	            profiler.metricBuffer->getRuntime(), tensorMetrics,
-	            profiler.metricKernelStream);
-	        auto &dataToEntry = threadState.dataToEntry;
-	        if (dataToEntry.empty()) {
-	          // Add metrics to a specific scope
-	          for (auto *data : profiler.dataSet) {
+    void
+    doAddMetrics(size_t scopeId,
+                 const std::map<std::string, MetricValueType> &scalarMetrics,
+                 const std::map<std::string, TensorMetric> &tensorMetrics) {
+      if (threadState.isStreamCapturing) { // Graph capture mode
+        threadState.isMetricKernelLaunching = true;
+        // Launch metric kernels
+        profiler.metricBuffer->receive(
+            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
+            profiler.scalarMetricKernel, profiler.metricKernelStream);
+        threadState.isMetricKernelLaunching = false;
+      } else { // Eager mode, directly copy
+        // Populate tensor metrics
+        auto tensorMetricsHost =
+            collectTensorMetrics(profiler.metricBuffer->getRuntime(),
+                                 tensorMetrics, profiler.metricKernelStream);
+        auto &dataToEntry = threadState.dataToEntry;
+        if (dataToEntry.empty()) {
+          // Add metrics to a specific scope
+          for (auto *data : profiler.dataSet) {
             data->addScopeMetrics(scopeId, scalarMetrics);
             data->addScopeMetrics(scopeId, tensorMetricsHost);
           }

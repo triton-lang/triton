@@ -5,8 +5,8 @@
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
 #include "Driver/GPU/NvtxApi.h"
-#include "Profiler/Graph.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
+#include "Profiler/Graph.h"
 #include "Runtime/CudaRuntime.h"
 #include "Utility/Env.h"
 #include "Utility/Map.h"
@@ -589,8 +589,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto phase = Data::kNoFlushedPhase;
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
-        auto *dataMetricNodeEntryIds =
-            &metricNodeEntryIds[data];
+        auto *dataMetricNodeEntryIds = &metricNodeEntryIds[data];
         dataMetricNodeEntryIds->reserve(graphState.metricKernelNodeIds.size());
         auto *dataPtr = data;
         auto entryIt = dataToEntry.find(dataPtr);

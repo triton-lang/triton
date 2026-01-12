@@ -70,7 +70,8 @@ struct PendingGraphQueue {
   // Phase
   size_t phase{};
 
-  explicit PendingGraphQueue(size_t startBufferOffset, size_t phase, void *device)
+  explicit PendingGraphQueue(size_t startBufferOffset, size_t phase,
+                             void *device)
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
   void push(size_t numNodes,
@@ -112,6 +113,5 @@ private:
 };
 
 } // namespace proton
-
 
 #endif // PROTON_PROFILER_GRAPH_H_

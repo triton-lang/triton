@@ -67,7 +67,8 @@ template <bool CheckSuccess>
 hipError_t memHostAlloc(void **pp, size_t bytesize, unsigned int flags);
 
 template <bool CheckSuccess>
-hipError_t memHostGetDevicePointer(hipDeviceptr_t *pdptr, void *p, unsigned int flags);
+hipError_t memHostGetDevicePointer(hipDeviceptr_t *pdptr, void *p,
+                                   unsigned int flags);
 
 template <bool CheckSuccess> hipError_t memFreeHost(void *p);
 

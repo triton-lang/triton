@@ -39,9 +39,8 @@ DEFINE_DISPATCH(ExternLibHip, memHostAlloc, hipHostAlloc, void **, size_t,
 
 DEFINE_DISPATCH(ExternLibHip, memFreeHost, hipFreeHost, void *)
 
-DEFINE_DISPATCH(ExternLibHip, memHostGetDevicePointer,
-                hipHostGetDevicePointer, hipDeviceptr_t *, void *,
-                unsigned int)
+DEFINE_DISPATCH(ExternLibHip, memHostGetDevicePointer, hipHostGetDevicePointer,
+                hipDeviceptr_t *, void *, unsigned int)
 
 DEFINE_DISPATCH(ExternLibHip, memAlloc, hipMemAlloc, hipDeviceptr_t *, size_t)
 
