@@ -32,6 +32,14 @@ public:
   bool supportLdMatrix() const override { return computeCapability >= 75; }
   bool supportStMatrix() const override { return computeCapability >= 90; }
   bool supportLdStMatrixB8() const override { return computeCapability >= 100; }
+  bool supportBitwidth16Elementwise() const override {
+    // Hopper (sm90) and newer.
+    return computeCapability >= 90;
+  }
+  bool supportBitwidth32Elementwise() const override {
+    // Blackwell (sm100) and newer.
+    return computeCapability >= 100;
+  }
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
