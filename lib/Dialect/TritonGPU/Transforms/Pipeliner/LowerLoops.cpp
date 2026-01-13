@@ -247,8 +247,7 @@ void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
                                 Value barrier, Value view, Value pred) {
                               ttng::AsyncTMACopyGlobalToLocalOp::create(
                                   builder, loadOp.getLoc(), desc,
-                                  loadOp.getIndices(), ValueRange{}, barrier,
-                                  view, pred);
+                                  loadOp.getIndices(), barrier, view, pred);
                             });
 }
 

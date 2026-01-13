@@ -330,6 +330,20 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     DefaultValuedAttr<TTNG_TensorModeAttr, "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode
   );
 
+  let builders = [
+    // Builder for TILED mode (no offsets required, multicast defaults to false)
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
+                   "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast), [{
+      build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
+            result, pred, /*multicast=*/multicast,
+            /*cache=*/triton::CacheModifier::NONE,
+            /*evict=*/triton::EvictionPolicy::NORMAL,
+            /*isVolatile=*/false,
+            /*tensorMode=*/triton::nvidia_gpu::TensorMode::TILED);
+    }]>
+  ];
+
   let assemblyFormat = [{
     $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
