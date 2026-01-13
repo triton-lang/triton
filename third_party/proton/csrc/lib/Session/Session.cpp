@@ -406,6 +406,40 @@ SessionManager::drainFlushedPhaseMetrics(size_t sessionId) {
   return out;
 }
 
+void SessionManager::emitPhaseMetrics(size_t sessionId, size_t phase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot emit phase metrics while the session is active. Please "
+        "deactivate the session first.");
+  }
+  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for emitPhaseMetrics() for now");
+  }
+
+  // Keep the metric set small and targeted.
+  std::map<std::string, double> metrics;
+  auto perPathAvgMs =
+      treeData->summarizeKernelPathsAvgDurationMsByPrefix(phase, "_p_matmul_");
+  auto perPathFlops8 = treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
+      phase, "_p_matmul_", "flops8");
+  for (auto &kv : perPathAvgMs) {
+    metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
+  }
+  for (auto &kv : perPathFlops8) {
+    metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
+  }
+  if (!metrics.empty()) {
+    flushedPhaseMetrics_[sessionId].push_back(
+        FlushedPhaseMetrics{phase, std::move(metrics)});
+  }
+}
+
 std::optional<size_t> SessionManager::tryGetSessionIdForPath(
     const std::string &path) {
   std::lock_guard<std::mutex> lock(mutex);

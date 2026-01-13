@@ -100,3 +100,18 @@ def drain_flushed_phase_metrics(session: Optional[int] = 0):
     if flags.command_line and session != 0:
         raise ValueError("Only one session can drain flushed metrics when running from the command line.")
     return libproton.drain_flushed_phase_metrics(session)
+
+
+def emit_phase_metrics(session: Optional[int] = 0, phase: int = 0) -> None:
+    """
+    Manual-mode helper to compute and enqueue summary metrics for a specific phase.
+
+    Notes:
+    - The session must be deactivated (and typically flushed) so GPU activities are available.
+    - After calling this, use `drain_flushed_phase_metrics()` to retrieve the queued metrics.
+    """
+    if session is None:
+        return None
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can emit phase metrics when running from the command line.")
+    libproton.emit_phase_metrics(session, phase)

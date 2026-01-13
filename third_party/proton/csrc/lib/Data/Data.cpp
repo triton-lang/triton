@@ -51,7 +51,7 @@ void Data::dump(const std::string &outputFormat) {
   // This is useful when periodic flushing is configured to emit summaries
   // (e.g. to metrics/logs) instead of dumping full traces to disk.
   const auto fmt = toLower(outputFormat);
-  if (fmt == "none" || fmt == "metrics") {
+  if (fmt == "none") {
     return;
   }
 

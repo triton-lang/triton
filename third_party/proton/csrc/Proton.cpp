@@ -213,6 +213,13 @@ static void initProton(pybind11::module &&m) {
         return out;
       },
       pybind11::arg("sessionId"));
+
+  m.def(
+      "emit_phase_metrics",
+      [](size_t sessionId, size_t phase) {
+        SessionManager::instance().emitPhaseMetrics(sessionId, phase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
 }
 
 PYBIND11_MODULE(libproton, m) {

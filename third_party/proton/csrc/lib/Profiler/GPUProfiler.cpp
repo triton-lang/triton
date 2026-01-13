@@ -1,4 +1,5 @@
 #include "Profiler/GPUProfiler.h"
+#include "Data/TreeData.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,7 +27,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                                   ": unsupported option key: " + key);
     }
     if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
+        value != "hatchet" && value != "metrics") {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }
@@ -83,6 +84,7 @@ void flushDataPhasesImpl(
       continue;
 
     auto &path = data->getPath();
+    auto sessionIdOpt = SessionManager::instance().tryGetSessionIdForPath(path);
     uint64_t totalToJsonUs = 0;
     uint64_t totalToMsgPackUs = 0;
     uint64_t totalJsonWriteUs = 0;
@@ -94,6 +96,44 @@ void flushDataPhasesImpl(
 
     for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
          startPhase++) {
+      if (periodicFlushingFormat == "metrics") {
+        // Publish small summaries for this phase and skip writing the full trace.
+        auto *treeData = dynamic_cast<TreeData *>(data);
+        if (!treeData) {
+          static bool warned = false;
+          if (!warned) {
+            warned = true;
+            std::cerr
+                << "[PROTON] periodic_flushing:format=metrics is only supported for TreeData; "
+                   "skipping metrics flush for this Data instance."
+                << std::endl;
+          }
+          continue;
+        }
+        if (sessionIdOpt.has_value()) {
+          // Only export per-kernel latencies for `_p_matmul_` kernels to keep
+          // the metric set bounded and targeted.
+          std::map<std::string, double> metrics;
+          auto perPathAvgMs =
+              treeData->summarizeKernelPathsAvgDurationMsByPrefix(startPhase,
+                                                                 "_p_matmul_");
+          auto perPathFlops8 = treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
+              startPhase, "_p_matmul_", "flops8");
+          for (auto &kv : perPathAvgMs) {
+            // Encode full tree path in the key; Python side splits on `::`.
+            metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
+          }
+          for (auto &kv : perPathFlops8) {
+            metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
+          }
+          if (!metrics.empty()) {
+            SessionManager::instance().enqueueFlushedPhaseMetrics(
+                *sessionIdOpt, startPhase, std::move(metrics));
+          }
+        }
+        continue;
+      }
+
       auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
                            periodicFlushingFormat;
 

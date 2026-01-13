@@ -116,6 +116,11 @@ public:
                                   std::map<std::string, double> metrics);
   std::vector<FlushedPhaseMetrics> drainFlushedPhaseMetrics(size_t sessionId);
 
+  // Manual-mode helper: compute and enqueue summary metrics for a specific phase.
+  // This is intended to support `format=metrics` even when not using periodic_flushing.
+  // The session must be inactive (deactivated) so GPU activity has been flushed.
+  void emitPhaseMetrics(size_t sessionId, size_t phase);
+
   // Resolve a session id from its session path (same string passed to start()).
   // Returns nullopt if the session does not exist.
   std::optional<size_t> tryGetSessionIdForPath(const std::string &path);
