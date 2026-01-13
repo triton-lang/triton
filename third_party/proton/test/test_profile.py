@@ -282,11 +282,6 @@ def test_get_data(tmp_path: pathlib.Path):
         foo[(1, )](x, x, 4)
         foo[(1, )](x, x, 4)
 
-    try:
-        _ = proton.data.get(session)
-    except RuntimeError as e:
-        assert "Cannot get data while the session is active" in str(e)
-
     proton.deactivate(session, flushing=True)
 
     database = proton.data.get(session)

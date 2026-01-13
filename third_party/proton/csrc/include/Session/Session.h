@@ -33,7 +33,7 @@ public:
 
   size_t getContextDepth();
 
-  Profiler *getProfiler() { return profiler; }
+  Profiler *getProfiler() const { return profiler; }
 
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
@@ -141,6 +141,8 @@ private:
                                        const std::string &contextSourceName,
                                        const std::string &dataName,
                                        const std::string &mode);
+
+  Session *getSessionOrThrow(size_t sessionId);
 
   void activateSessionImpl(size_t sessionId);
 
