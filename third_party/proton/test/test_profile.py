@@ -1082,7 +1082,6 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     import msgpack
     hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
     assert len(hatchet_files) == 10
-    num_scopes = 0
     for hatchet_file in hatchet_files:
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
