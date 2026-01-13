@@ -65,6 +65,7 @@ struct PeriodicFlushStats {
   uint64_t totalToMsgPackUs{0};
   uint64_t totalJsonWriteUs{0};
   uint64_t totalMsgPackWriteUs{0};
+  uint64_t clearUs{0};
   size_t toJsonCalls{0};
   size_t toMsgPackCalls{0};
   size_t jsonWriteCalls{0};
@@ -149,34 +150,20 @@ void periodicFlushDataPhases(Data &data,
   }
 }
 
-void periodicClearDataPhases(Data &data, const std::string &path,
-                             const std::string &periodicFlushingFormat,
-                             size_t minPhaseToFlush, size_t maxPhaseToFlush,
-                             const PeriodicFlushStats &stats,
-                             const bool timingEnabled) {
+void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
+                             const bool timingEnabled,
+                             PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
-  uint64_t clearUs = 0;
-  if (timingEnabled) {
-    const auto t0 = Clock::now();
+  if (!timingEnabled) {
     data.clear(maxPhaseToFlush);
-    const auto t1 = Clock::now();
-    clearUs =
-        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-    std::cerr << "[PROTON] periodicFlush timing: path=" << path
-              << " format=" << periodicFlushingFormat << " phases=["
-              << minPhaseToFlush << "," << maxPhaseToFlush
-              << "] toJsonString_us=" << stats.totalToJsonUs
-              << " toJsonString_calls=" << stats.toJsonCalls
-              << " toMsgPack_us=" << stats.totalToMsgPackUs
-              << " toMsgPack_calls=" << stats.toMsgPackCalls
-              << " json_write_us=" << stats.totalJsonWriteUs
-              << " json_write_calls=" << stats.jsonWriteCalls
-              << " msgpack_write_us=" << stats.totalMsgPackWriteUs
-              << " msgpack_write_calls=" << stats.msgPackWriteCalls
-              << " clear_us=" << clearUs << std::endl;
-  } else {
-    data.clear(maxPhaseToFlush);
+    return;
   }
+
+  const auto t0 = Clock::now();
+  data.clear(maxPhaseToFlush);
+  const auto t1 = Clock::now();
+  stats.clearUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 }
 
 } // namespace
@@ -267,9 +254,21 @@ void flushDataPhasesImpl(
     PeriodicFlushStats stats{};
     periodicFlushDataPhases(*data, periodicFlushingFormat, minPhaseToFlush,
                             maxPhaseToFlush, timingEnabled, stats);
-    periodicClearDataPhases(*data, data->getPath(), periodicFlushingFormat,
-                            minPhaseToFlush, maxPhaseToFlush, stats,
-                            timingEnabled);
+    periodicClearDataPhases(*data, maxPhaseToFlush, timingEnabled, stats);
+    if (timingEnabled) {
+      std::cerr << "[PROTON] periodicFlush timing: path=" << data->getPath()
+                << " format=" << periodicFlushingFormat << " phases=["
+                << minPhaseToFlush << "," << maxPhaseToFlush
+                << "] toJsonString_us=" << stats.totalToJsonUs
+                << " toJsonString_calls=" << stats.toJsonCalls
+                << " toMsgPack_us=" << stats.totalToMsgPackUs
+                << " toMsgPack_calls=" << stats.toMsgPackCalls
+                << " json_write_us=" << stats.totalJsonWriteUs
+                << " json_write_calls=" << stats.jsonWriteCalls
+                << " msgpack_write_us=" << stats.totalMsgPackWriteUs
+                << " msgpack_write_calls=" << stats.msgPackWriteCalls
+                << " clear_us=" << stats.clearUs << std::endl;
+    }
   }
 }
 
