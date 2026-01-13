@@ -418,7 +418,7 @@ public:
     auto it = deviceBuffers.find(device);
     if (it != deviceBuffers.end()) {
       auto &buffer = it->second;
-      callback(buffer.hostPtr, buffer.hostOffset);
+      callback(buffer.hostPtr);
     }
   }
 
@@ -434,7 +434,7 @@ public:
     }
     for (auto &buffer : buffersToFlush) {
       synchronize(buffer);
-      callback(buffer.hostPtr, buffer.hostOffset);
+      callback(buffer.hostPtr);
     }
   }
 

@@ -70,8 +70,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 }
 } // namespace
 
-/// -------------------------------- PendingGraphPool
-/// -------------------------------
 
 void PendingGraphPool::push(
     size_t phase, const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
@@ -99,9 +97,7 @@ void PendingGraphPool::peek(size_t phase) {
   }
   auto &queue = queueIt->second;
   auto *device = queue.device;
-  metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr,
-                                                        uint64_t *hostOffset) {
-    (void)hostOffset;
+  metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
     emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                       queue);
   });
@@ -132,8 +128,7 @@ bool PendingGraphPool::flushAll() {
     return false;
   }
   metricBuffer->flush(
-      [&](uint8_t *hostPtr, uint64_t *hostOffset) {
-        (void)hostOffset;
+      [&](uint8_t *hostPtr) {
         for (auto &[phase, queue] : pool) {
           (void)phase;
           emitMetricRecords(*metricBuffer,
