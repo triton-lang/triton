@@ -331,16 +331,16 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   );
 
   let builders = [
-    // Builder for TILED mode (no offsets required, multicast defaults to false)
+    // Builder for TILED mode (no offsets required, attributes default to standard values)
     OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
                    "Value":$result, "Value":$pred,
-                   CArg<"bool", "false">:$multicast), [{
+                   CArg<"bool", "false">:$multicast,
+                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
+                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"bool", "false">:$isVolatile,
+                   CArg<"triton::nvidia_gpu::TensorMode", "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode), [{
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, /*multicast=*/multicast,
-            /*cache=*/triton::CacheModifier::NONE,
-            /*evict=*/triton::EvictionPolicy::NORMAL,
-            /*isVolatile=*/false,
-            /*tensorMode=*/triton::nvidia_gpu::TensorMode::TILED);
+            result, pred, multicast, cache, evict, isVolatile, tensorMode);
     }]>
   ];
 
