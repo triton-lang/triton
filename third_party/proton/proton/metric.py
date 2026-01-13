@@ -8,7 +8,7 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size, metric_id: tl.uint64, metric_value_ptr):
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr):
     device_offset = tl.load(device_offset_ptr)
     metric_value = tl.load(metric_value_ptr)
     tl.store(device_ptr + device_offset, metric_id)
@@ -20,7 +20,7 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size, metric_id: tl.uint
 
 
 @triton.jit
-def scalar_metric_kernel(device_ptr, device_offset_ptr, size, metric_id: tl.uint64, metric_value: tl.uint64):
+def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value: tl.uint64):
     device_offset = tl.load(device_offset_ptr)
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
