@@ -61,8 +61,6 @@ public:
 
   RankedTensorType getSrcTy() { return srcTy; }
 
-  bool isWarpSynchronous();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
@@ -70,6 +68,9 @@ public:
   bool isReduceWithinCTA();
 
   bool isAssociative();
+
+  // Get the shared memory scratch size required by this reduce op.
+  unsigned getScratchSizeInBytes();
 
   InThreadVectorizeOpKind getInThreadVectorizeOpKind(unsigned axisPack);
 
@@ -91,10 +92,6 @@ public:
                                                  Location loc,
                                                  InThreadVectorizeOpKind kind,
                                                  Value lhs, Value rhs);
-
-  SmallVector<unsigned>
-  getScratchBytesForCvt(const triton::LinearLayout &srcLayout,
-                        const triton::LinearLayout &dstLayout);
 
 private:
   triton::ReduceOp op;
