@@ -118,6 +118,54 @@ struct WaitBarrierOpConversion
     return success();
   }
 };
+
+struct ClusterBarrierSignalOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::ClusterBarrierSignalOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::ClusterBarrierSignalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Only one warp per CTA should signal the cluster barrier
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+    Value isFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterBlock =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *signalBlock = rewriter.createBlock(afterBlock);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, isFirstWarp, signalBlock, afterBlock);
+
+    rewriter.setInsertionPointToStart(signalBlock);
+    // Use ROCDL barrier signal op with barrier ID -3 for cluster barriers
+    ROCDL::BarrierSignalOp::create(rewriter, loc, -3);
+
+    LLVM::BrOp::create(rewriter, loc, afterBlock);
+    rewriter.setInsertionPointToStart(afterBlock);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClusterBarrierWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::ClusterBarrierWaitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::ClusterBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    // Use ROCDL barrier wait op with barrier ID -3 for cluster barriers
+    ROCDL::BarrierWaitOp::create(rewriter, loc, -3);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
@@ -126,4 +174,6 @@ void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<ClusterBarrierSignalOpConversion>(typeConverter, benefit);
+  patterns.add<ClusterBarrierWaitOpConversion>(typeConverter, benefit);
 }

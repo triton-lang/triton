@@ -967,6 +967,14 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
            })
+      .def("create_cluster_barrier_signal",
+           [](GluonOpBuilder &self) {
+             self.create<ttag::ClusterBarrierSignalOp>();
+           })
+      .def("create_cluster_barrier_wait",
+           [](GluonOpBuilder &self) {
+             self.create<ttag::ClusterBarrierWaitOp>();
+           })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker) {
              auto border = self.create<ROCDL::SchedBarrier>(0);
