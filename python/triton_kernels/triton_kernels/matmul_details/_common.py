@@ -192,7 +192,8 @@ def matmul_launch_metadata(grid, kernel, args):
         else:
             n_tokens = slice_sizes.sum()  # n_tokens can stay in gpu
 
-    K_repr = K    if args["RAGGED_DIMENSION"] == "K":
+    K_repr = K
+    if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else n_tokens
         K_repr = K if launch_metadata_allow_sync(
         ) else None  # make sure K_repr is string compatible as K can be on a GPU tensor
@@ -215,6 +216,7 @@ def matmul_launch_metadata(grid, kernel, args):
     Z = 1 if args["RAGGED_DIMENSION"] == "K" else batch_size
     ret[f"flops{nbits}"] = 2.0 * fM * N * K * Z
 
+    # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     n_w_bytes = W.numel() * W.element_size()

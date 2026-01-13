@@ -5,6 +5,7 @@ from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
+from .hooks.hook import Hook
 from .mode import BaseMode
 from typing import Optional, Union
 
@@ -54,10 +55,8 @@ def start(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[Union[str, BaseMode]] = None,
-    hook: Optional[str] = None,
-    hook_include: Optional[str] = None,
-    hook_exclude: Optional[str] = None,
-):
+    hook: Optional[Union[str, Hook]] = None,
+) -> Optional[int]:
     """
     Start profiling with the given name and backend.
 
@@ -92,9 +91,11 @@ def start(
                                                For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
                                                The can be set via `mode="periodic_flushing:format=chrome_trace"`.
-        hook (str, optional): The hook to use for profiling.
-                              Available options are [None, "launch"].
-                              Defaults to None.
+        hook (Union[str, Hook], optional): The hook to use for profiling.
+                                           You may pass either:
+                                           - a string hook name, e.g. "triton" (kernel launch metadata), or
+                                           - a custom Hook instance.
+                                           Defaults to None.
     Returns:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is disabled.
     """
@@ -113,15 +114,12 @@ def start(
 
     session = libproton.start(name, context, data, backend, mode_str)
 
-    if hook == "triton":
-        # Configure kernel filter for launch_metadata evaluation/recording.
-        # - hook_include/exclude are regexes over the compiled kernel name.
-        # - if not provided, we fall back to env vars for convenience.
-        hook_include = getenv("TRITON_PROTON_LAUNCH_METADATA_INCLUDE", None) if hook_include is None else hook_include
-        hook_exclude = getenv("TRITON_PROTON_LAUNCH_METADATA_EXCLUDE", None) if hook_exclude is None else hook_exclude
-        launch_hook = LaunchHook()
-        launch_hook.configure(include=hook_include, exclude=hook_exclude)
-        HookManager.register(launch_hook, session)
+    if isinstance(hook, Hook):
+        HookManager.register(hook, session)
+    elif hook == "triton":
+        HookManager.register(LaunchHook(), session)
+    elif hook is not None:
+        raise ValueError(f"Unsupported hook: {hook!r}")
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)
 
@@ -204,7 +202,7 @@ def _profiling(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[str] = None,
-    hook: Optional[str] = None,
+    hook: Optional[Union[str, Hook]] = None,
 ):
     """
     Context manager for profiling. Internally use only.
@@ -234,7 +232,7 @@ def profile(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[str] = None,
-    hook: Optional[str] = None,
+    hook: Optional[Union[str, Hook]] = None,
 ):
     """
     Decorator for profiling.

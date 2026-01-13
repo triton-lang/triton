@@ -16,8 +16,6 @@ enabled = ContextVar("enabled", default=False)
 class LaunchHook(Hook):
     # Highest priority
     priority = 100
-    # This is a singleton class
-    _instance = None
     flops_width = [8, 16, 32, 64]
     # Historical/derived metrics (e.g., used by viewer utilization computations).
     # Launch metadata can carry *additional* metrics; see _extract_metrics().
@@ -27,6 +25,11 @@ class LaunchHook(Hook):
     # We never treat these as metrics.
     _reserved_metadata_keys = {"name", "function", "stream"}
 
+    # LaunchHook is intended to be a process-wide singleton. HookManager dedupes
+    # by identity (object instance), so we must ensure repeated LaunchHook()
+    # constructions return the same instance to avoid double registration.
+    _instance = None
+
     def configure(self, *, include: Optional[str] = None, exclude: Optional[str] = None) -> None:
         # Regexes over the compiled kernel name (metadata.data["name"]).
         self._include_pattern = include
@@ -34,11 +37,7 @@ class LaunchHook(Hook):
         self._include_re = re.compile(include) if include else None
         self._exclude_re = re.compile(exclude) if exclude else None
 
-    def _matches_kernel(self, kernel_name: Optional[str]) -> bool:
-        if kernel_name is None:
-            # Be conservative: if the user asked for include filtering but we can't
-            # determine the name without evaluating metadata, skip.
-            return self._include_re is None
+    def _matches_kernel_name(self, kernel_name: str) -> bool:
         if self._include_re is not None and self._include_re.search(kernel_name) is None:
             return False
         if self._exclude_re is not None and self._exclude_re.search(kernel_name) is not None:
@@ -65,15 +64,20 @@ class LaunchHook(Hook):
             if k not in LaunchHook._reserved_metadata_keys and LaunchHook._is_supported_metric_value(v)
         }
 
-    def __init__(self):
-        # Ensure filter state is always initialized even if configure() isn't called.
-        if not hasattr(self, "_include_re"):
-            self.configure(include=None, exclude=None)
-
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         if cls._instance is None:
-            cls._instance = super(LaunchHook, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
         return cls._instance
+
+    def __init__(self):
+        # Singleton: __init__ is invoked on every construction even when __new__
+        # returns an existing instance.
+        if getattr(self, "_initialized", False):
+            return
+        # Ensure filter state is always initialized even if configure() isn't called.
+        self.configure(include=None, exclude=None)
+        self._initialized = True
 
     def init_handle(self, module, function, name: str, metadata_group: dict, hash: str) -> None:
         pass
@@ -85,19 +89,24 @@ class LaunchHook(Hook):
         pass
 
     def enter(self, metadata: LazyDict) -> None:
-        # IMPORTANT: Avoid evaluating launch_metadata (metadata.get()) unless the
-        # kernel matches the configured filter. This is what lets Proton skip
-        # running user launch_metadata for non-target kernels.
+        # Fast path: if the kernel name is already available without evaluating launch_metadata,
+        # apply include/exclude filters and potentially skip metadata evaluation entirely.
         kernel_name = None
         if hasattr(metadata, "data") and isinstance(metadata.data, dict):
             kernel_name = metadata.data.get("name")
-        if not self._matches_kernel(kernel_name):
+        if isinstance(kernel_name, str) and not self._matches_kernel_name(kernel_name):
             enabled.set(False)
             return
-        enabled.set(True)
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
         lazy_metadata = metadata.get()
         exit_state()
+
+        # If name wasn't available (or changed), apply filters using the evaluated name.
+        if not self._matches_kernel_name(lazy_metadata["name"]):
+            enabled.set(False)
+            return
+
+        enabled.set(True)
         fn_metrics = LaunchHook._extract_metrics(lazy_metadata)
         op_name.set(lazy_metadata["name"])
         id.set(libproton.record_scope())
