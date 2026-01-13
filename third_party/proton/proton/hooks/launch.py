@@ -38,9 +38,9 @@ class LaunchHook(Hook):
         self._exclude_re = re.compile(exclude) if exclude else None
 
     def _matches_kernel_name(self, kernel_name: str) -> bool:
-        if self._include_re is not None and self._include_re.search(kernel_name) is None:
+        if self._include_re is not None and self._include_re.match(kernel_name) is None:
             return False
-        if self._exclude_re is not None and self._exclude_re.search(kernel_name) is not None:
+        if self._exclude_re is not None and self._exclude_re.match(kernel_name) is not None:
             return False
         return True
 
@@ -91,24 +91,23 @@ class LaunchHook(Hook):
     def enter(self, metadata: LazyDict) -> None:
         # Fast path: if the kernel name is already available without evaluating launch_metadata,
         # apply include/exclude filters and potentially skip metadata evaluation entirely.
-        kernel_name = None
-        if hasattr(metadata, "data") and isinstance(metadata.data, dict):
-            kernel_name = metadata.data.get("name")
-        if isinstance(kernel_name, str) and not self._matches_kernel_name(kernel_name):
+        kernel_name = metadata.data.get("name")
+        if not self._matches_kernel_name(kernel_name):
             enabled.set(False)
             return
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
         lazy_metadata = metadata.get()
         exit_state()
 
+        kernel_name = lazy_metadata["name"]
         # If name wasn't available (or changed), apply filters using the evaluated name.
-        if not self._matches_kernel_name(lazy_metadata["name"]):
+        if not self._matches_kernel_name(kernel_name):
             enabled.set(False)
             return
 
         enabled.set(True)
         fn_metrics = LaunchHook._extract_metrics(lazy_metadata)
-        op_name.set(lazy_metadata["name"])
+        op_name.set(kernel_name)
         id.set(libproton.record_scope())
         if fn_metrics:
             set_metric_kernels()

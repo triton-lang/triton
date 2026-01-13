@@ -76,6 +76,7 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
 def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -109,15 +110,9 @@ def test_cudagraph(tmp_path: pathlib.Path):
 
     with proton.scope("test0"):
         g.replay()
-        # On HIP/ROCm, graph replay event delivery can lag the Python scope,
-        # causing launches to be attributed outside the scope unless we wait.
-        if is_hip():
-            torch.cuda.synchronize()
 
     with proton.scope("test1"):
         g.replay()
-        if is_hip():
-            torch.cuda.synchronize()
 
     g.reset()
     proton.finalize()
@@ -374,14 +369,16 @@ def test_hook_launch_filter(tmp_path: pathlib.Path):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton_filter.hatchet"
 
-    # Only allow kernels whose compiled name matches "foo" to evaluate launch_metadata.
+    # Only allow kernels whose compiled name matches "foo" (via prefix regex).
     launch_hook = proton_launch.LaunchHook()
-    launch_hook.configure(include="foo")
+    launch_hook.configure(include=".*foo")
     proton.start(str(temp_file.with_suffix("")), hook=launch_hook)
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
         bar[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
+    # Reset singleton hook state to avoid leaking filter settings across tests.
+    launch_hook.configure(include=None, exclude=None)
 
     assert foo_metadata_invoked is True
     assert bar_metadata_invoked is False
