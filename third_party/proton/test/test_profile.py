@@ -843,6 +843,57 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert "count" not in scope_b_frame["metrics"]
 
 
+def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    def fn(session):
+        proton.deactivate(session)
+        with proton.scope("scope_b", metrics={"sum": 4}):
+            b = torch.ones((2, 2), device="cuda")
+        proton.activate(session)
+        c = b * 2
+
+    temp_file = tmp_path / "test_tensor_metrics_cudagraph_deactivate.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    fn(session)
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for _ in range(10):
+            fn(session)
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    # only a single kernel b * 2
+    with temp_file.open() as f:
+        data = json.load(f)
+        children = data[0]["children"]
+        test0_frame = None
+        for child in children:
+            if child["frame"]["name"] == "test0":
+                test0_frame = child
+                break
+        assert test0_frame is not None
+        capture_at_frame = test0_frame["children"][0]
+        scope_b_frame = None
+        c_frame = None
+        for child in capture_at_frame["children"]:
+            if child["frame"]["name"] == "scope_b":
+                scope_b_frame = child
+            if child["frame"]["name"].startswith("elementwise"):
+                c_frame = child
+        assert scope_b_frame is None
+        assert c_frame is not None
+        assert c_frame["metrics"]["count"] == 10
+
+
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
