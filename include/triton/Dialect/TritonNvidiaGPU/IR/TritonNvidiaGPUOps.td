@@ -310,7 +310,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
         - For 3D tensors (NWC): 1 offset (offset_w)
         - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
         - For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
-        - General rule: number of offsets = coord.size() - 2    
+        - General rule: number of offsets = coord.size() - 2
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
   }];
