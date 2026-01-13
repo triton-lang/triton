@@ -164,96 +164,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 // -----
 
+// Tests for TMA im2col (3D/4D/5D) and tiled mode
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_im2col_3d
-  tt.func public @tma_load_im2col_3d(%arg0: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) -> tensor<64x128xf16, #blocked> {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}] {{.*}} tensorMode = im2col
+  tt.func public @tma_load_im2col_3d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i16 = arith.constant 1 : i16
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}] {{.*}} tensorMode = im2col
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32] offsets = [%c1_i16] %0, %1, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    ttng.wait_barrier %1, %c0_i32 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    %2 = ttg.local_load %0 : !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable> -> tensor<64x128xf16, #blocked>
-    tt.return %2 : tensor<64x128xf16, #blocked>
+    %c0 = arith.constant 0 : i32
+    %off = arith.constant 1 : i16
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0] offsets = [%off] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    tt.return
   }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
-#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_im2col_4d
-  tt.func public @tma_load_im2col_4d(%arg0: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) -> tensor<64x128xf16, #blocked> {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}] {{.*}} tensorMode = im2col
+  tt.func public @tma_load_im2col_4d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i16 = arith.constant 1 : i16
-    %c2_i16 = arith.constant 2 : i16
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}] {{.*}} tensorMode = im2col
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32, %c0_i32] offsets = [%c1_i16, %c2_i16] %0, %1, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    ttng.wait_barrier %1, %c0_i32 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    %2 = ttg.local_load %0 : !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable> -> tensor<64x128xf16, #blocked>
-    tt.return %2 : tensor<64x128xf16, #blocked>
+    %c0 = arith.constant 0 : i32
+    %off1 = arith.constant 1 : i16
+    %off2 = arith.constant 2 : i16
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    tt.return
   }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
-#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_im2col_5d
-  tt.func public @tma_load_im2col_5d(%arg0: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) -> tensor<64x128xf16, #blocked> {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}, {{.*}}] {{.*}} tensorMode = im2col
+  tt.func public @tma_load_im2col_5d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i16 = arith.constant 1 : i16
-    %c2_i16 = arith.constant 2 : i16
-    %c3_i16 = arith.constant 3 : i16
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}, {{.*}}] {{.*}} tensorMode = im2col
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] offsets = [%c1_i16, %c2_i16, %c3_i16] %0, %1, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    ttng.wait_barrier %1, %c0_i32 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    %2 = ttg.local_load %0 : !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable> -> tensor<64x128xf16, #blocked>
-    tt.return %2 : tensor<64x128xf16, #blocked>
+    %c0 = arith.constant 0 : i32
+    %off1 = arith.constant 1 : i16
+    %off2 = arith.constant 2 : i16
+    %off3 = arith.constant 3 : i16
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2, %off3] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    tt.return
   }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
-#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_tiled_mode
-  tt.func public @tma_load_tiled_mode(%arg0: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) -> tensor<64x128xf16, #blocked> {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}[{{.*}}, {{.*}}] %{{.*}}, %{{.*}}, {{.*}} : !tt.tensordesc
+  // CHECK-NOT: offsets
+  // CHECK-NOT: tensorMode
+  tt.func public @tma_load_tiled_mode(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
-    %c0_i32 = arith.constant 0 : i32
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    // CHECK: ttng.async_tma_copy_global_to_local {{.*}}[{{.*}}, {{.*}}] %{{.*}}, %{{.*}}, {{.*}} : !tt.tensordesc
-    // CHECK-NOT: offsets
-    // CHECK-NOT: tensorMode
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
-    ttng.wait_barrier %1, %c0_i32 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    %2 = ttg.local_load %0 : !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable> -> tensor<64x128xf16, #blocked>
-    tt.return %2 : tensor<64x128xf16, #blocked>
+    %c0 = arith.constant 0 : i32
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    tt.return
   }
 }
