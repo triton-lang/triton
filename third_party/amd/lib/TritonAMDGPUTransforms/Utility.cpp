@@ -199,14 +199,13 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned nonContigDim = isKContig ? nonKDim : kDim;
 
   // padding to avoid bank conflict
-  // For ds_read_b128. Lanes access LDS
-  // (bank conflicts) in 4 pairs of 16 lanes since we have 64 banks and each
-  // lane loads 4 banks. These lane groups are:
+  // For ds_read_b128. Lanes access LDS in 4 pairs of 16 lanes. we have 64 banks
+  // and each lane loads 4 banks. These lane groups are:
   //  1: 0-3, 12-15, 20-23, 24-27
   //  2: 4-7, 8-11, 16-19, 28-31
   // The upper half of the lanes follow the same pattern.
-  // For ds_read_b64, it splits conseuctive
-  // lanes into 2 groups which access LDS one after another
+  // For ds_read_b64, it splits conseuctive lanes into 2 groups which access LDS
+  // one after another
   unsigned padding = 0;
   if (isKContig) {
     padding = mfmaNonKDim == 16 ? (kWidth * 2) : kWidth;
