@@ -1044,19 +1044,20 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}", hook="triton")
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
+                           hook="triton")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
         x_sum = x.sum()
-        return {"name": f"foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
+        return {"name": "foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y, z):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def fn():
-        with proton.scope(f"scope_a", metrics={"bytes": 4 * 4}):
+        with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
             a = torch.ones((2, 2), device="cuda")
         c = a + a
         foo[(1, )](a, a, c)
