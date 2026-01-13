@@ -1090,7 +1090,12 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
         else:
             with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        capture_frame = data[0]["children"][0]["children"][0]
+        capture_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "test0":
+                capture_frame = child["children"][0]
+                break
+        assert capture_frame is not None
         scope_a_frame = None
         foo_test_frame = None
         for child in capture_frame["children"]:
