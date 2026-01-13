@@ -22,8 +22,12 @@ class DequantScaleRoundingMode(Enum):
     # chance of clipping the max value.
     ROUND_DOWN = 1
 
-def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
-                     DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
+def downcast_to_mxfp(
+    x: torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    out_dtype: torch.dtype,
+    axis: int,
+    DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
+):
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
 
@@ -53,9 +57,9 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     # output value storage
     y_layout = StridedLayout(major_dim=axis - x.ndim)
     y_scale_shape = (*x.shape[:axis], triton.cdiv(L, MXFP_BLOCK_SIZE), *x.shape[axis+1:])
-    y_value = empty(x.shape, out_dtype, x.device, y_layout)
-    y_scale = empty(y_scale_shape, UINT8, x.device, y_layout)
-    if x.numel() > 0:
+    y_value = empty(x.shape, out_dtype, x.storage.data.device, y_layout)
+    y_scale = empty(y_scale_shape, UINT8, x.storage.data.device, y_layout)
+    if x.storage.data.numel() > 0:
         # canonicalize to a 2D tensor that paxks 4-bit values on its inner-most dimension
         x_storage = x.storage.data.transpose(axis, -1).reshape(-1, x.shape[axis])
         y_storage_value = y_value.storage.data.transpose(axis, -1).view(-1, y_value.storage.data.shape[axis])

@@ -2,17 +2,25 @@ import contextlib
 import os
 import socket
 
+import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, SymmetricMemoryPool
-from triton_kernels.distributed_details.mesh import Mesh
-from triton_kernels.reduce import reduce
-from triton_kernels.topk import topk
+from triton_kernels.distributed import (
+    convert_dp_to_ep,
+    convert_ep_to_dp,
+    init_comms,
+    make_expt_assignment,
+    make_expt_dict_random,
+    make_expt_dict_uniform,
+    symmetric_memory_pool,
+)
 from triton_kernels.matmul import matmul
+from triton_kernels.reduce import reduce
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
-import pytest
+from triton_kernels.topk import topk
 
 
 def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
@@ -57,7 +65,7 @@ def _get_free_tcp_port():
 def _distributed_worker(rank, fn, world_size, kwargs):
     dev = f"cuda:{rank}"
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
-    torch.cuda.set_device(dev)
+    init_comms("nccl")
     try:
         fn(rank=rank, world_size=world_size, **kwargs)
         dist.barrier()
@@ -138,13 +146,27 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
     return y_global
 
 
-def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
-                              symm_mem_pool, y_indx=None):
+def mixture_of_expt_epsharded(
+    x_dp_local,
+    l_dp_local,
+    w_ep_local,
+    b_ep_local,
+    expt_assignment,
+    n_expts_act,
+    symm_mem_pool,
+    y_indx=None,
+):
     rank = dist.get_rank()
     expt_map = expt_assignment.expt_map[rank, :]
     # active global logits (sparse)
-    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, y_indx=y_indx,
-                           symm_mem_pool=symm_mem_pool)
+    l_global_active = topk(
+        l_dp_local,
+        n_expts_act,
+        apply_softmax=True,
+        all_gather=True,
+        y_indx=y_indx,
+        symm_mem_pool=symm_mem_pool,
+    )
     # expert histogram, dispatch/combine indx
     active_indx = l_global_active.indx
     expt_sizes = l_global_active.mask_metadata.col_sum
@@ -198,46 +220,45 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         y_indx=y_indx_global,
     )
 
-    symm_mem_pool = SymmetricMemoryPool(Mesh(dist.group.WORLD))
-    symm_mem_pool.initialize_matmul(
-        n_tokens_global=n_tokens_global,
-        d_input=d_model,
-        d_model=d_model,
-        n_expts_act=n_expts_act,
-        n_expts_tot=n_expts_tot,
-        dtype=torch.bfloat16,
-        device=dev,
-    )
-
-    def run_moe():
-        return mixture_of_expt_epsharded(
-            x_dp_local,
-            l_dp_local,
-            w_ep_local,
-            b_ep_local,
-            expt_assignment,
-            n_expts_act,
-            y_indx=y_indx_global,
-            symm_mem_pool=symm_mem_pool,
+    with symmetric_memory_pool() as symm_mem_pool:
+        symm_mem_pool.initialize_matmul(
+            n_tokens_global=n_tokens_global,
+            d_input=d_model,
+            d_model=d_model,
+            n_expts_act=n_expts_act,
+            n_expts_tot=n_expts_tot,
+            dtype=torch.bfloat16,
         )
 
-    y_dp_local_tri = run_moe()
-    y_global_tri = torch.empty_like(y_global_ref)
+        def run_moe():
+            return mixture_of_expt_epsharded(
+                x_dp_local,
+                l_dp_local,
+                w_ep_local,
+                b_ep_local,
+                expt_assignment,
+                n_expts_act,
+                y_indx=y_indx_global,
+                symm_mem_pool=symm_mem_pool,
+            )
 
-    # Validate warmup run.
-    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
-    triton.testing.assert_close(y_global_ref, y_global_tri)
+        y_dp_local_tri = run_moe()
+        y_global_tri = torch.empty_like(y_global_ref)
 
-    # Validate cuda graph capture + replay.
-    g = torch.cuda.CUDAGraph()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
-            y_dp_local_tri_graph = run_moe()
+        # Validate warmup run.
+        dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
+        triton.testing.assert_close(y_global_ref, y_global_tri)
 
-    g.replay()
-    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri_graph)
-    triton.testing.assert_close(y_global_ref, y_global_tri)
+        # Validate cuda graph capture + replay.
+        g = torch.cuda.CUDAGraph()
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            with torch.cuda.graph(g):
+                y_dp_local_tri_graph = run_moe()
+
+        g.replay()
+        dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri_graph)
+        triton.testing.assert_close(y_global_ref, y_global_tri)
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)

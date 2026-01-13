@@ -1,5 +1,7 @@
-import torch
 from dataclasses import dataclass
+from typing import Iterator
+
+import torch
 
 # ------ global scaling -------
 
@@ -12,12 +14,12 @@ MAX_FINITE_FLOAT8E4B8 = 240.0
 class BaseFlexData:
     dtype: torch.dtype | None = None
 
-    def view(self, x: torch.Tensor):
+    def view(self, x: torch.Tensor) -> torch.Tensor:
         if self.dtype is None:
             return x
         return x.view(self.dtype)
 
-    def reinterpret(self, x):
+    def reinterpret(self, x: torch.Tensor) -> torch.Tensor:
         if self.dtype is None or x.dtype.itemsize > 1:
             return x
         return x.view(self.dtype)
@@ -28,7 +30,7 @@ class InFlexData(BaseFlexData):
     scale: torch.Tensor | None = None
 
     @property
-    def is_per_batch(self):
+    def is_per_batch(self) -> bool:
         return False if self.scale is None else len(self.scale) > 1
 
 
@@ -39,10 +41,10 @@ class OutFlexData(BaseFlexData):
     checksum_scale: torch.Tensor | None = None
 
     @property
-    def is_per_batch(self):
+    def is_per_batch(self) -> bool:
         return False if self.expected_scale is None else len(self.expected_scale) > 1
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[torch.Tensor | None]:
         yield self.expected_scale
         yield self.actual_scale
         yield self.checksum_scale

@@ -10,7 +10,7 @@ from typing import Callable
 # utilities
 from triton_kernels import target_info
 from triton_kernels.meta import Closure
-from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.numerics import BaseFlexData, InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
@@ -19,7 +19,7 @@ from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
-from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
+from .matmul_details.opt_flags import OptFlags, make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
@@ -78,7 +78,7 @@ specializations = SpecializationModule("matmul",
 # -----------------------------------------------------------------------------
 
 
-def can_overflow_int32(tensor: torch.Tensor):
+def can_overflow_int32(tensor: Tensor | torch.Tensor) -> bool:  # REVIEW: torch.Tensor or triton_kernels.Tensor
     max_int32 = (1 << 31) - 1
     offset = 0
     # TODO: this should always be tensor
@@ -90,7 +90,7 @@ def can_overflow_int32(tensor: torch.Tensor):
     return offset > max_int32
 
 
-def should_upcast_indices(*args):
+def should_upcast_indices(*args: Tensor | torch.Tensor | None) -> bool:  # REVIEW: torch.Tensor or triton_kernels.Tensor
     return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
 
 
@@ -115,15 +115,15 @@ class PrecisionConfig:
     acc_scale: float = 1.0
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: Callable | None = None
-    a_mx_scale: torch.Tensor | Tensor | None = None
-    b_mx_scale: torch.Tensor | Tensor | None = None
-    c_mx_scale: torch.Tensor | Tensor | None = None
+    a_mx_scale: torch.Tensor | Tensor | None = None  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    b_mx_scale: torch.Tensor | Tensor | None = None  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    c_mx_scale: torch.Tensor | Tensor | None = None  # REVIEW: torch.Tensor or triton_kernels.Tensor
     out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
 
 # TODO: merge in opt_flags
-def get_swap_xw(precision_config, opt_flags):
+def get_swap_xw(precision_config: PrecisionConfig, opt_flags: OptFlags) -> bool:
     if target_info.cuda_capability_geq(10, 0):
         if precision_config.b_mx_scale is not None:
             return opt_flags.block_m <= 64 and opt_flags.is_persistent
@@ -145,9 +145,17 @@ class MatmulAllocation:
     output: tuple[tuple[int], torch.dtype]
     scratchpads: dict[str, tuple]
 
-def init_allocation(x, w, precision_config, fused_activation,
-                    gather_indx, scatter_indx, batch_dim,
-                    n_reduce_shards, opt_flags):
+def init_allocation(
+    x: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    w: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    precision_config: PrecisionConfig,
+    fused_activation: FusedActivation,
+    gather_indx: torch.Tensor | None,
+    scatter_indx: torch.Tensor | None,
+    batch_dim: int,
+    n_reduce_shards: int,
+    opt_flags: OptFlags,
+) -> MatmulAllocation:
     # ---- output ------
     N = w.shape[-1]
     # by default - M is number of rows in the activations
@@ -171,9 +179,13 @@ def init_allocation(x, w, precision_config, fused_activation,
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
         scratchpad["mx_c_mx_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N_scratch, MXFP_BLOCK_SIZE)), torch.uint8)
-    return MatmulAllocation(x.device, output, scratchpad)
+    device = x.storage.data.device if isinstance(x, Tensor) else x.device
+    return MatmulAllocation(device, output, scratchpad)
 
-def apply_allocation(allocation: MatmulAllocation, output):
+def apply_allocation(
+    allocation: MatmulAllocation,
+    output: torch.Tensor | None,
+) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     dtype = dtype_to_torch_dtype(allocation.output[1])
     ret = dict()
     if output is None:
@@ -195,7 +207,11 @@ def apply_allocation(allocation: MatmulAllocation, output):
 # the `matmul` kernel can operate on 2D or 3D inputs depending on the mode being used
 # we can canonicalize storages to make the implementation more uniform
 
-def _canonicalize_storage(storage, out_ndim, flex_data):
+def _canonicalize_storage(
+    storage: Storage,
+    out_ndim: int,
+    flex_data: BaseFlexData | None,
+) -> Storage:
     assert out_ndim >= storage.data.ndim
     # Need to use as_strided instead of view because for a tensor with
     # shape[-2] == 1 can have ambuiguity related to col-wise. Fo example,
@@ -217,13 +233,16 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 # Triton Implementation
 # -----------------------------------------------------------------------------
 
-def matmul_set_idle_sms(num_idle_sms):
+def matmul_set_idle_sms(num_idle_sms: int) -> None:
     """
     persistent kernels will leave `num_idle_sms` idle
     """
     update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
-def matmul(a, b, bias,
+def matmul(
+    a: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    b: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    bias: torch.Tensor | None,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
     b_ragged_metadata: RaggedTensorMetadata | None = None,
     gather_indx: torch.Tensor | None = None,
@@ -237,7 +256,7 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
-):
+) -> torch.Tensor:
     """
     Y[:, :] = 0.
     for e in num_experts:
@@ -274,23 +293,23 @@ def matmul(a, b, bias,
     if not isinstance(b, Tensor):
         dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
+    if not isinstance(a, Tensor):
+        a = wrap_torch_tensor(a)
     if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
-        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
+        assert b.storage.data.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if b_scale is not None and not isinstance(b_scale, Tensor):
         b_scale = wrap_torch_tensor(b_scale)
     if b_scale is not None:
-        b_scale.storage.data = b_scale.data.view(torch.uint8)
+        b_scale.storage.data = b_scale.storage.data.view(torch.uint8)
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
+    if is_hopper_fp8: assert b.storage.data.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
-    if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
+    if a_has_mx: assert a.storage.data.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
     if a_scale is not None and not isinstance(a_scale, Tensor):
         a_scale = wrap_torch_tensor(a_scale)
-    if not isinstance(a, Tensor):
-        a = wrap_torch_tensor(a)
-    a_transpose = a.stride(-1) != 1
+    a_transpose = a.storage.data.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
@@ -306,7 +325,9 @@ def matmul(a, b, bias,
     else:
         batch_size = 1
     if c_acc_in is not None:
-        c_acc_is_c = c_acc_in.data_ptr() == c.data_ptr() and c_acc_in.stride() == c.stride()
+        c_acc_data = c_acc_in.storage.data if isinstance(c_acc_in, Tensor) else c_acc_in
+        c_data = c.storage.data if isinstance(c, Tensor) else c
+        c_acc_is_c = c_acc_data.data_ptr() == c_data.data_ptr() and c_acc_data.stride() == c_data.stride()
     else:
         c_acc_is_c = None
     K = a.shape[-1]
@@ -317,15 +338,15 @@ def matmul(a, b, bias,
     out_dtype = precision_config.out_dtype or a.dtype
     out_dtype = torch_dtype_to_dtype(out_dtype)
     can_use_tma = (
-        a.numel() > 0 and is_tma_compliant(a) and
-        b.numel() > 0 and is_tma_compliant(b) and
+        a.storage.data.numel() > 0 and is_tma_compliant(a) and
+        b.storage.data.numel() > 0 and is_tma_compliant(b) and
         (b_scale is None or is_tma_compliant(b_scale)) and
-        (ragged_dimension != "M" or a.stride(-1) == 1) and
+        (ragged_dimension != "M" or a.storage.data.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
-        (c is None or c.stride(-1) == 1) and
+        (c is None or (c.storage.data if isinstance(c, Tensor) else c).stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
+        (ragged_dimension != "K" or b.storage.data.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
@@ -349,7 +370,7 @@ def matmul(a, b, bias,
     if ragged_dimension == "K" and torch.cuda.get_device_capability()[0] < 9:
         opt_flags.num_stages = 1
     if ragged_dimension == "K":
-        a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
+        a_has_tma = opt_flags.is_persistent and (a.storage.data.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
         # (For unpadded input, we assume that the first block_k unused rows are zero-filled,
         # when routing_data.expt_hist.sum() is less than K or K_W.)
@@ -383,7 +404,7 @@ def matmul(a, b, bias,
         return ret
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
-        triton.set_allocator(get_per_device_per_stream_alloc_fn(a.device))
+        triton.set_allocator(get_per_device_per_stream_alloc_fn(a.storage.data.device))
     # Intermediate tensors and postprocess kernels for each situation
     has_scratchpad = "matmul" in memory["scratchpad"]
     # Canonical output tensor (matmul scratchpad if present, otherwise final output tensor)
@@ -392,7 +413,8 @@ def matmul(a, b, bias,
     # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
     out_matmul_scale = precision_config.c_mx_scale
     if out_matmul_scale is not None:
-        out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
+        out_matmul_scale_data = out_matmul_scale.storage.data if isinstance(out_matmul_scale, Tensor) else out_matmul_scale
+        out_matmul_scale = out_matmul_scale_data.view(torch.uint8)
         if has_scratchpad and "mx_c_mx_scale" in memory["scratchpad"]:
             out_matmul_scale = memory["scratchpad"]["mx_c_mx_scale"]
     out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
@@ -414,9 +436,9 @@ def matmul(a, b, bias,
     # canonicalize storage
     has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
-    a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
-    b = Tensor(_canonicalize_storage(b.storage, 3, flex.rhs_data), dtype=b.dtype, shape=b.shape, shape_max=b.shape_max)
-    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
+    a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape)
+    b = Tensor(_canonicalize_storage(b.storage, 3, flex.rhs_data), dtype=b.dtype, shape=b.shape)
+    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data), dtype=c.dtype, shape=c.shape)
     # create tma descriptor for x
     if c_acc_in is not None:
         assert opt_flags.split_k == 1, "c_acc_in + split_k is not supported."
@@ -424,7 +446,9 @@ def matmul(a, b, bias,
         if c_acc_in.ndim == 2:
             c_acc_in = c_acc_in.unsqueeze(0)
         assert c_acc_in.shape == out_matmul.shape[-3:]
-        c_acc_strides = c_acc_in.stride()
+        c_acc_strides = (
+            c_acc_in.storage.data.stride() if isinstance(c_acc_in, Tensor) else c_acc_in.stride()
+        )
     else:
         c_acc_strides = (None, None, None)
 
@@ -456,7 +480,7 @@ def matmul(a, b, bias,
         b_scale_storage = b_scale.storage
         b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
-            b_scale = Tensor(_canonicalize_storage(b_scale.storage, 3, None), dtype=b_scale.dtype, shape=b_scale.shape, shape_max=b_scale.shape_max)
+            b_scale = Tensor(_canonicalize_storage(b_scale.storage, 3, None), dtype=b_scale.dtype, shape=b_scale.shape)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
@@ -474,12 +498,12 @@ def matmul(a, b, bias,
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
-        a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
+        a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data.view(torch.uint8)
     # canonicalize strides
     a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
-    a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
+    a_scale_strides = a_scale.storage.data.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
     a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
-    b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
+    b_scale_strides = b_scale.storage.data.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
 
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
@@ -592,7 +616,11 @@ def matmul(a, b, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def apply_precision(x_tri, w_tri, precision_config):
+def apply_precision(
+    x_tri: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    w_tri: Tensor | torch.Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    precision_config: PrecisionConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
     from .tensor import convert_layout
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
@@ -629,7 +657,7 @@ def apply_precision(x_tri, w_tri, precision_config):
     )
 
 
-def scale(val, scal):
+def scale(val: torch.Tensor, scal: torch.Tensor | None) -> torch.Tensor:
     if scal is None:
         return val
     elif scal.numel() == 1:
@@ -638,7 +666,11 @@ def scale(val, scal):
         assert val.ndim == 3
         return val / scal[:, None, None]
 
-def compute_actual_scale(x, dtype, per_batch_scale=False):
+def compute_actual_scale(
+    x: torch.Tensor,
+    dtype: torch.dtype,
+    per_batch_scale: bool = False,
+) -> torch.Tensor:
     from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
     max_finite = {
         torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
@@ -649,16 +681,20 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
     return maxvals / max_finite
 
 
-def matmul_torch(a, b, bias,
-                 a_ragged_metadata: RaggedTensorMetadata | None = None,
-                 b_ragged_metadata: RaggedTensorMetadata | None = None,
-                 gather_indx: torch.Tensor = None,
-                 scatter_indx: torch.Tensor = None,
-                 precision_config: PrecisionConfig = None,
-                 betas = None,
-                 gammas = None,
-                 round_x = None, round_y = None,
-                 ):
+def matmul_torch(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    bias: torch.Tensor | None,
+    a_ragged_metadata: RaggedTensorMetadata | None = None,
+    b_ragged_metadata: RaggedTensorMetadata | None = None,
+    gather_indx: torch.Tensor | None = None,
+    scatter_indx: torch.Tensor | None = None,
+    precision_config: PrecisionConfig | None = None,
+    betas: torch.Tensor | None = None,
+    gammas: torch.Tensor | None = None,
+    round_x: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+    round_y: Callable[[torch.Tensor], torch.Tensor] | None = None,
+) -> torch.Tensor:
     a, b = apply_precision(a, b, precision_config)
 
     if b_ragged_metadata is not None:
@@ -742,10 +778,13 @@ def matmul_torch(a, b, bias,
     return scale(out, precision_config.flex_ctx.out_data.expected_scale)
 
 
-def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
-                           world_size: int,
-                           scatter_shard_indx: torch.Tensor | None = None,
-):
+def post_matmul_comm_torch(
+    y: torch.Tensor,
+    rank: int,
+    n_reduce_shards: int,
+    world_size: int,
+    scatter_shard_indx: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
     Reference implementation of post matmul communication.
 

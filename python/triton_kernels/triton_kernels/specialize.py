@@ -1,14 +1,15 @@
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 import inspect
 import re
 import textwrap
 import types
-from dataclasses import dataclass
-from typing import Optional
 
 import triton
 
 
-def cacheable(f):
+# TODO: replace Any with a protocol describing Triton kernel wrappers.
+def cacheable(f: Callable[[], Any]) -> Any:
     """
     A decorator that allow you to write something of the form:
 
@@ -29,7 +30,12 @@ def cacheable(f):
     return g
 
 
-def define_kernel(src, module, attrs=None, **extra_globals):
+def define_kernel(
+    src: str,
+    module: types.ModuleType,
+    attrs: dict[str, object] | None = None,
+    **extra_globals: object,
+) -> "triton.runtime.jit.JITFunction":
     """
     Dynamically create a Triton function or kernel from a src string,
     linking any symbols in the kernel to objects specified by extra_globals.
@@ -74,11 +80,18 @@ class FnSpecs:
     reduction_n: int = 1
 
     @staticmethod
-    def default():
+    def default() -> "FnSpecs":
         return FnSpecs("dflt", None, tuple())
 
 
-def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
+def specialize(
+        fn: "triton.runtime.jit.JITFunction",
+        module: types.ModuleType,
+        constants: dict[str, object],
+        tuples: dict[str, list[str]],
+        name: str | None = None,
+        do_not_specialize: tuple[str, ...] = tuple(),
+) -> "triton.runtime.jit.JITFunction":
     assert isinstance(fn, triton.runtime.jit.JITFunction)
     if name is None:
         name = f"{fn.__name__}"
@@ -176,15 +189,19 @@ class ClosureArg:
 
 class SpecializationModule:
 
-    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: dict[str, ClosureArg]):
+    def __init__(
+        self,
+        module_name: str,
+        kernels: list[tuple[str, object]],
+        closure_args: dict[str, ClosureArg],
+    ) -> None:
         self.module_name = module_name
         self.kernels = kernels
         self.closure_args = closure_args
         self._modules = dict()
 
-    def get(self, **kwargs):
+    def get(self, **kwargs: FnSpecs) -> types.ModuleType:
         import sys
-        import types
         specs = [FnSpecs.default()] * len(self.closure_args)
         for key, value in kwargs.items():
             specs[list(self.closure_args.keys()).index(key)] = value
