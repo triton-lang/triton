@@ -852,7 +852,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
         with proton.scope("scope_b", metrics={"sum": 4}):
             b = torch.ones((2, 2), device="cuda")
         proton.activate(session)
-        c = b * 2
+        c = b * 2 # type: ignore
 
     temp_file = tmp_path / "test_tensor_metrics_cudagraph_deactivate.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
