@@ -345,8 +345,7 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
 void SessionManager::clearData(size_t sessionId, size_t phase,
                                bool clearUpToPhase) {
   std::lock_guard<std::mutex> lock(mutex);
-  auto *session = getSessionOrThrow(sessionId);
-  session->data->clear(phase, clearUpToPhase);
+  getSessionOrThrow(sessionId)->data->clear(phase, clearUpToPhase);
 }
 
 size_t SessionManager::advanceDataPhase(size_t sessionId) {
