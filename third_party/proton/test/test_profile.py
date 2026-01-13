@@ -887,7 +887,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
         for child in capture_at_frame["children"]:
             if child["frame"]["name"] == "scope_b":
                 scope_b_frame = child
-            if child["frame"]["name"].startswith("elementwise"):
+            if "elementwise" in child["frame"]["name"]:
                 c_frame = child
         assert scope_b_frame is None
         assert c_frame is not None
