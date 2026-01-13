@@ -23,9 +23,6 @@ class Storage:
     def device(self):
         return self.data.device
 
-    def clone(self, *, memory_format=torch.preserve_format):
-        return Storage(self.data.clone(memory_format=memory_format), layout=self.layout)
-
 
 # main tensor class
 # ---------------------------------------------------------------------------- #
@@ -95,12 +92,6 @@ class Tensor:
         if i is None:
             return self.shape
         return self.shape[i]
-
-    def clone(self, *, memory_format=torch.preserve_format):
-        shape = None if self.shape is None else list(self.shape)
-        shape_max = None if self.shape_max is None else list(self.shape_max)
-        return Tensor(self.storage.clone(memory_format=memory_format), dtype=self.dtype, shape=shape,
-                      shape_max=shape_max)
 
 
 def is_tma_compliant(tensor):
