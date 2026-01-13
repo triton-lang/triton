@@ -277,14 +277,28 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
 }
 
 static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
-                                          TypedValue<TensorDescType> desc) {
-  unsigned rank = desc.getType().getBlockType().getRank();
-  if (coords.size() != rank) {
-    return op->emitOpError("expected ")
-           << rank << " coordinates, but got " << coords.size();
+                                          TypedValue<TensorDescType> desc,
+                                          TensorMode tensorMode) {
+  unsigned blockRank = desc.getType().getBlockType().getRank();
+  
+  if (tensorMode == TensorMode::IM2COL) {
+    // For IM2COL mode, coordinates are for the full tensor (3D-5D)
+    // not the 2D block shape
+    if (coords.size() < 3)
+      return op->emitOpError("IM2COL mode requires at least 3D coordinates, but got ")
+             << coords.size() << "D";
+    if (coords.size() > 5)
+      return op->emitOpError("IM2COL mode supports at most 5D coordinates, but got ")
+             << coords.size() << "D";
+  } else {
+    // For TILED mode, coordinates must match the block rank
+    if (coords.size() != blockRank) {
+      return op->emitOpError("expected ")
+             << blockRank << " coordinates, but got " << coords.size();
+    }
+    if (coords.size() < 1 || coords.size() > 5)
+      return op->emitOpError("must have between 1 and 5 coordinates");
   }
-  if (coords.size() < 1 || coords.size() > 5)
-    return op->emitOpError("must have between 1 and 5 coordinates");
   return success();
 }
 
@@ -312,7 +326,7 @@ static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(), getTensorMode())))
     return failure();
   auto resultType = getResult().getType();
   if (failed(
@@ -328,7 +342,8 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
 
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  // Store ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(), TensorMode::TILED)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
@@ -338,7 +353,8 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
 
 // -- AsyncTMAReduceOp --
 LogicalResult AsyncTMAReduceOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  // Reduce ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(), TensorMode::TILED)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
