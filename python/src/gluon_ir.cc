@@ -827,8 +827,9 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tma_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value barrier, Value result, Value pred, bool multicast) {
+               std::vector<Value> offsets; // Empty offsets for TILED mode (default)
              self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                 descPtr, coord, barrier, result, pred, multicast);
+                 descPtr, coord, barrier, ValueRange(offsets), result, pred, multicast);
            })
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,

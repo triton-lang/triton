@@ -288,6 +288,28 @@ static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
   return success();
 }
 
+static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
+                                   ValueRange coords, ValueRange offsets) {
+  if (tensorMode == TensorMode::IM2COL) {
+    if (offsets.empty())
+      return op->emitOpError("IM2COL mode requires offsets to be provided");
+
+    // For IM2COL mode, the number of offsets should be coord.size() - 2
+    // 4D tensors (4 coords) need 2 offsets, 5D tensors (5 coords) need 3 offsets
+    size_t expectedOffsets = coords.size() - 2;
+    if (offsets.size() != expectedOffsets) {
+      return op->emitOpError("IM2COL mode with ")
+             << coords.size() << "D coordinates requires " << expectedOffsets
+             << " offsets, but got " << offsets.size();
+    }
+  } else {
+    // TILED mode should not have offsets
+    if (!offsets.empty())
+      return op->emitOpError("TILED mode does not support offsets");
+  }
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
@@ -296,8 +318,12 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(
           verifyDescriptorLoadStoreOp(*this, getDesc().getType(), resultType)))
     return failure();
-  return verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
-                              getResult().getType());
+  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
+                                  getResult().getType())))
+    return failure();
+  if (failed(verifyTMAMode(*this, getTensorMode(), getCoord(), getOffsets())))
+    return failure();
+  return success();
 }
 
 // -- AsyncTMACopyLocalToGlobalOp --

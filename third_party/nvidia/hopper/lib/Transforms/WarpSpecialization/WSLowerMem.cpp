@@ -230,7 +230,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
     auto pipelineBuffer = getBufferForPipelineStage(builder, tmaLoad.getType(),
                                                     buffer, bufferIdx, true);
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
+        loc, tmaLoad.getDesc(), tmaLoad.getIndices(), ValueRange{}, prodBarrier,
         pipelineBuffer, pred);
   }
 

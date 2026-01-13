@@ -295,7 +295,7 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
 void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
                    Value barrierAlloc, Value pred) {
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
-      rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
+      rewriter, op.getLoc(), op.getDesc(), op.getIndices(), ValueRange{}, barrierAlloc,
       op.getResult(), pred);
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
