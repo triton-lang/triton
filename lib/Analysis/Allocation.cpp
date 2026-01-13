@@ -31,48 +31,19 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
-unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
-  auto *ctx = srcTy.getContext();
-  auto srcLayout = gpu::toLinearLayout(srcTy);
-  auto dstLayout = gpu::toLinearLayout(dstTy);
-  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
-  dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto bitwidth = getBitwidth(srcTy);
-  auto smem = gpu::optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
+unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout,
+                                       int bitwidth) {
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
+  auto srcLayoutNoBroadcast =
+      actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
+  auto dstLayoutNoBroadcast =
+      actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
+  auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
+                                        dstLayoutNoBroadcast, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   return smem.getTotalOutDimSize() / reps;
 }
-
-namespace {
-constexpr int64_t kReduceScratchAlign = 16;
-
-Type getReduceMemElemTy(Type elemTy, MLIRContext *ctx) {
-  if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
-    return IntegerType::get(ctx, 8);
-  return elemTy;
-}
-
-int64_t getReduceScratchSizeBytes(triton::ReduceOp op,
-                                  ArrayRef<unsigned> bytesPerOperand) {
-  std::vector<unsigned> indices(op.getNumOperands());
-  std::iota(indices.begin(), indices.end(), 0);
-  auto *ctx = op.getContext();
-  std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-    auto lhsTy = getReduceMemElemTy(op.getElementTypes()[i], ctx);
-    auto rhsTy = getReduceMemElemTy(op.getElementTypes()[j], ctx);
-    return getIntOrFloatOrPtrBitWidth(lhsTy) >
-           getIntOrFloatOrPtrBitWidth(rhsTy);
-  });
-  // Aling to 16 bytes to allow for vectorisation
-  int64_t offset = 0;
-  for (unsigned idx : indices) {
-    offset += llvm::alignTo(bytesPerOperand[idx], kReduceScratchAlign);
-  }
-  return offset;
-}
-
-} // namespace
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
 // because Triton's block-based programming model ensures that
@@ -100,15 +71,35 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    ReduceOpHelper helper(reduceOp);
-    if (helper.isWarpSynchronous())
-      return 0;
+    auto srcTy = ReduceOpHelper(reduceOp).getSrcTy();
+    auto axis = reduceOp.getAxis();
+    auto kLane = StringAttr::get(reduceOp.getContext(), "lane");
 
-    auto regLl = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(),
-                                                      reduceOp.getAxis());
-    auto tmpLl = ReduceOpHelper::getInterLayout(regLl, reduceOp.getAxis());
-    auto bytesRegToTmp = helper.getScratchBytesForCvt(regLl, tmpLl);
-    return getReduceScratchSizeBytes(reduceOp, bytesRegToTmp);
+    auto isReduced = [axis](const LinearLayout &layout) {
+      return layout.getOutDimSizes().begin()[axis] == 1;
+    };
+    auto regLl =
+        ReduceOpHelper::reducedRegLaneLayout(srcTy, reduceOp.getAxis());
+
+    // All the inputs have the same layout so, since we order them from largest
+    // bitsize to smallest, and the first one is aligned, by induction, they are
+    // all aligned, so we don't need to align the byte numbers returned here.
+    auto bytesRegToTmp = 0;
+    while (!isReduced(regLl)) {
+      auto tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
+      // We take the maximum of the elements and multiply by the total bitwidth
+      // We do this as otherwise it's quite tricky to find the correct
+      // BaseOffsets in the lowering
+      int bytes = 0;
+      for (auto inputTy : reduceOp.getInputTypes()) {
+        auto nelem =
+            getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+        bytes += nelem * (getBitwidth(inputTy) / 8);
+      }
+      bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
+      regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
+    }
+    return bytesRegToTmp;
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     ScanLoweringHelper helper(scanOp);
@@ -131,7 +122,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
     // The generic pass uses swizzling
-    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+    auto elems = getNumScratchElemsSwizzledCvt(gpu::toLinearLayout(srcTy),
+                                               gpu::toLinearLayout(dstTy),
+                                               getBitwidth(srcTy));
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {

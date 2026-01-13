@@ -131,14 +131,60 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
 
 def _funky_reduce_layouts():
     # Broadcasting here and there and bases in a weird order
-    for axis in [0, 1]:
-        yield (ttgl.DistributedLinearLayout(
+    layouts = [
+        # Funky layout where the warp bases fit in the lane bases
+        ttgl.DistributedLinearLayout(
             reg_bases=[[0, 8], [1, 0], [0, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
             lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]],
             warp_bases=[[32, 0], [0, 16]],
             block_bases=[],
             shape=[128, 32],
-        ), axis)
+        ),
+        # Another funky layout for good measure
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[64, 8],
+        ),
+        # Funky layout where warp bases do *not* fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]],
+            warp_bases=[[16, 0], [32, 0], [64, 0]],
+            block_bases=[],
+            shape=[128, 8],
+        ),
+        # NYI: Need to generalize cross-CTA convert_layouts to support LinearLayouts
+        # Basic funky layout with block bases. They fit int he lane bases
+        #ttgl.DistributedLinearLayout(
+        #    reg_bases=[[1, 0], [2, 0]],
+        #    lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]],
+        #    warp_bases=[[16, 0], [32, 0]],
+        #    block_bases=[[64, 0]],
+        #    shape=[128, 4],
+        #),
+        ## Funky layout with two convert_layouts with block_bases
+        #ttgl.DistributedLinearLayout(
+        #    reg_bases=[],
+        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
+        #    warp_bases=[[4, 0], [8, 0]],
+        #    block_bases=[[2, 0]],
+        #    shape=[16, 8],
+        #),
+        ## three convert_layouts
+        #ttgl.DistributedLinearLayout(
+        #    reg_bases=[],
+        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
+        #    warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0], [1024, 0]],
+        #    block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
+        #    shape=[2048, 8],
+        #),
+    ]
+    for axis in [0, 1]:
+        for layout in layouts:
+            yield (layout, axis)
 
 
 @pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
@@ -150,6 +196,7 @@ def test_reduce_funky_layout(src_layout, axis, device):
 
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
+    num_ctas = 2**len(src_layout.block_bases)
 
     torch.manual_seed(0)
     x = torch.randn(shape, dtype=torch.float32, device=device)
@@ -164,9 +211,19 @@ def test_reduce_funky_layout(src_layout, axis, device):
         y_offs = ttgl.arange(0, shape[1 - axis])
         ttgl.store(y_ptr + y_offs, y)
 
-    kernel[(1, )](x, y, shape, axis, src_layout, num_warps=num_warps)
+    pm = kernel[(1, )](x, y, shape, axis, src_layout, num_warps=num_warps, num_ctas=num_ctas)
 
     torch.testing.assert_close(y, torch.sum(x, dim=axis))
+
+    def bases_along_axis(bases, axis):
+        return sum(basis[axis] != 0 for basis in bases)
+
+    axis_warps = bases_along_axis(src_layout.warp_bases, axis)
+    axis_blocks = bases_along_axis(src_layout.block_bases, axis)
+
+    # warp-sync
+    if axis_warps + axis_blocks == 0:
+        assert pm.asm["ptx"].count("bar.sync") == 0
 
 
 def _reduce_linear_layouts():

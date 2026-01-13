@@ -44,8 +44,6 @@ public:
 
   RankedTensorType getSrcTy() { return srcTy; }
 
-  bool isWarpSynchronous();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
@@ -66,10 +64,6 @@ public:
 
   static triton::LinearLayout reducedRegLaneLayout(RankedTensorType srcTy,
                                                    unsigned axis);
-
-  SmallVector<unsigned>
-  getScratchBytesForCvt(const triton::LinearLayout &srcLayout,
-                        const triton::LinearLayout &dstLayout);
 
 private:
   triton::ReduceOp op;

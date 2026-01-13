@@ -15,7 +15,9 @@ unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+  unsigned elems = getNumScratchElemsSwizzledCvt(gpu::toLinearLayout(srcTy),
+                                                 gpu::toLinearLayout(dstTy),
+                                                 getBitwidth(srcTy));
   return elems * getBitwidth(srcTy) / 8;
 }
 
