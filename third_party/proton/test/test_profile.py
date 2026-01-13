@@ -1037,3 +1037,69 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
+
+
+@pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size):
+    fresh_knobs.proton.profile_buffer_size = buffer_size
+    temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}", hook="triton")
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        x_sum = x.sum()
+        return {"name": f"foo_test", "bytes": x.numel() * x.element_size(), "flops": x_sum}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        with proton.scope(f"scope_a", metrics={"bytes": 4 * 4}):
+            a = torch.ones((2, 2), device="cuda")
+        c = a + a
+        foo[(1, )](a, a, c)
+
+    # warmup
+    fn()
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+
+    with proton.scope("test0"):
+        for i in range(10000):
+            if i != 0 and i % 1000 == 0:
+                proton.data.advance_phase(session=session)
+            g.replay()
+
+    proton.finalize(output_format=data_format)
+
+    # Find all *.hatchet files under the directory `tmp_path`
+    import glob
+    import msgpack
+    hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
+    assert len(hatchet_files) == 10
+    num_scopes = 0
+    for hatchet_file in hatchet_files:
+        if data_format == "hatchet_msgpack":
+            with open(hatchet_file, "rb") as f:
+                data = msgpack.load(f, raw=False, strict_map_key=False)
+        else:
+            with open(hatchet_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        capture_frame = data[0]["children"][0]["children"][0]
+        scope_a_frame = None
+        foo_test_frame = None
+        for child in capture_frame["children"]:
+            if child["frame"]["name"] == "scope_a":
+                scope_a_frame = child
+            if child["frame"]["name"] == "foo_test":
+                foo_test_frame = child
+        assert scope_a_frame is not None
+        assert foo_test_frame is not None
+        assert scope_a_frame["metrics"]["bytes"] == 16000
+        assert foo_test_frame["metrics"]["bytes"] == 16000
+        assert foo_test_frame["metrics"]["flops"] == 4000
