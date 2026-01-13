@@ -44,9 +44,7 @@ public:
     clearRangeInclusive(0, phase);
   }
 
-  void clearPhase(size_t phase) override {
-    clearRangeInclusive(phase, phase);
-  }
+  void clearPhase(size_t phase) override { clearRangeInclusive(phase, phase); }
 
   template <typename FnT> decltype(auto) withPtr(size_t phase, FnT &&fn) const {
     auto slot = getSlot(phase);
@@ -82,7 +80,8 @@ private:
     // Finally, prune the cleared phases from the map.
     {
       std::unique_lock<std::shared_mutex> lock(phasesMutex);
-      phases.erase(phases.lower_bound(beginPhase), phases.upper_bound(endPhase));
+      phases.erase(phases.lower_bound(beginPhase),
+                   phases.upper_bound(endPhase));
     }
   }
 
