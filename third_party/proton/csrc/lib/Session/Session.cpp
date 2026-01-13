@@ -325,7 +325,8 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error("Only TreeData is supported for getData() for now");
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
   }
   return treeData->toMsgPack(phase);
 }
@@ -335,7 +336,8 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error("Only TreeData is supported for getData() for now");
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString(phase);
 }
