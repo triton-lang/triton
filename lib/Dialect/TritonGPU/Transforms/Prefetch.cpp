@@ -120,32 +120,35 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
     ret = mapping.lookup(vals.back());
 }
 
-/*
-Get correct async wait token (AWT), if any, for new LocalLoad based on old
-LocalLoad. Parameters fromPriorIter and mapping specify from where to get AWT.
-
-Case 0 - Prologue. AWT is loop arg; returns init value before loop.
- - fromPriorIter=false
- - mapping=nullptr
-Case 1 - Slice[1,N-1]. AWT is loop arg; returns same arg but mapped to
-newForLoop.
- - fromPriorIter=false
- - mapping=valid
-Case 2 - Slice[0] prefetched. AWT comes from end of prior loop iteration.
- - fromPriorIter=true
- - mapping=valid
-
- NOTE: fromPriorIter=true & mapping=nullptr is invalid combination.
-*/
+// Get async wait token (awt), if any, for new LocalLoad in newForOp
+// based on old LocalLoad; args determine 3 cases where to
+// get/create awt.
+//
+// Args
+// - fromPriorIter, used for prefetching slice[0], means track the awt
+//   through block args, yield and find it in the previous loop iteration.
+// - mapping maps original forOp to newForOp, and is not used with
+//   not in for loop, e.g. for emitPrologue.
+// 
+// Case 0 - Prologue. awt is loop arg; returns init value before loop.
+//  - fromPriorIter=false
+//  - mapping=nullptr
+// Case 1 - Slice[1,N-1]. awt is loop arg; returns same arg but mapped to
+// newForLoop.
+//  - fromPriorIter=false
+//  - mapping=valid
+// Case 2 - Slice[0] prefetched. awt comes from end of prior loop iteration.
+//  - fromPriorIter=true
+//  - mapping=valid
+//
+//  NOTE: fromPriorIter=true & mapping=nullptr is invalid combination.
 FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
                                                            bool fromPriorIter,
                                                            OpBuilder &builder,
                                                            IRMapping *mapping) {
-  // If convert op is local_load
   if (auto llOp = dyn_cast<triton::gpu::LocalLoadOp>(cvt)) {
-    // If local_load has extra operand; assumed to be async wait token.
     if (llOp->getNumOperands() > 1) {
-      // old async_wait token
+      // Extra operand is async_wait token.
       Value awt = llOp->getOperand(1);
       assert(isa<AsyncTokenType>(awt.getType()));
       if (!fromPriorIter) {
@@ -158,18 +161,19 @@ FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
             Value initAwt = forOp.getInitArgs()[argIdx];
             return initAwt;
           } else {
-            assert(false);
+            assert(false || "Expected async wait token to be loop arg.");
+            return failure();
           }
           return awt;
         } else {
           // Case 1: return new async wait token from for(args) for
-          // local_load[1, N-1].
+          // LocalLoad[1, N-1].
           return mapping->lookup(awt);
         }
       }
 
       // Case 2: return new async wait token from end of prior iteration,
-      // this occurs for the prefetching local_loads at the end of the loop.
+      // this occurs for the prefetching LocalLoads at the end of the loop.
       // which may or may not have been created yet i.e. is in mapping.
       // Note: it may already be in mapping for two reasons,
       // (a) it is a duplicate of async_wait created below,
@@ -197,15 +201,13 @@ FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
           mapping->map(awOp->getResult(dstIdx), newAwOp->getResult(dstIdx));
         return newAwOp->getResult(0);
       } else {
-        assert(false || "Want awt fromPriorIter but it wasn't a loop arg?");
+        assert(false || "fromPriorIter specified but async wait token wasn't a loop arg.");
         return failure();
       }
     } else {
       // LocalLoad doesn't have async wait token.
       return failure();
     }
-  } else {
-    assert(false || "LocalLoad isn't a LocalLoad!");
   }
   return failure();
 }
@@ -360,6 +362,8 @@ LogicalResult Prefetcher::initialize() {
       Value bSmem = bVals.front();
       Value aHeaderDef = getIncomingOp(aSmem);
       Value bHeaderDef = getIncomingOp(bSmem);
+      LDBG("aHeaderDef: " << aHeaderDef);
+      LDBG("bHeaderDef: " << bHeaderDef);
       // Only prefetch loop arg
       if (aHeaderDef && bHeaderDef) {
         dots.insert(dot);
@@ -546,8 +550,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
 struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
   void runOnOperation() override {
-
-    llvm::outs() << "PrefetchPass - Running...\n";
+    LDBG("PrefetchPass");
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
@@ -570,7 +573,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
-      llvm::outs() << "PrefetchPass - SUCCEEDED\n";
+    LDBG("PrefetchPass - Succeeded");
     });
   }
 };
