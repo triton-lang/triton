@@ -78,10 +78,6 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   return getThreadsPerWarp(srcEncoding, srcShape)[axis];
 }
 
-bool ReduceOpHelper::isWarpSynchronous() {
-  return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
-}
-
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
@@ -107,6 +103,35 @@ bool ReduceOpHelper::isAssociative() {
     return WalkResult::advance();
   });
   return !hasNoAssociativeOp;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytes() {
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+
+  auto isReduced = [axis = axis](const LinearLayout &layout) {
+    return layout.getOutDimSizes().begin()[axis] == 1;
+  };
+  auto regLl = reducedRegLaneLayout(srcTy, axis);
+
+  // All the inputs have the same layout so, since we order them from largest
+  // bitsize to smallest, and the first one is aligned, by induction, they are
+  // all aligned, so we don't need to align the byte numbers returned here.
+  unsigned bytesRegToTmp = 0;
+  while (!isReduced(regLl)) {
+    auto tmpLl = getInterLayout(regLl, axis);
+    // We take the maximum of the elements and multiply by the total bitwidth.
+    // We do this as otherwise it's quite tricky to find the correct
+    // BaseOffsets in the lowering.
+    int bytes = 0;
+    for (auto inputTy : op.getInputTypes()) {
+      auto nelem =
+          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      bytes += nelem * (getBitwidth(inputTy) / 8);
+    }
+    bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
+    regLl = zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
+  }
+  return bytesRegToTmp;
 }
 
 ReduceOpHelper::InThreadVectorizeOpKind
@@ -298,26 +323,90 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kLane = mlir::StringAttr::get(ctx, "lane");
   auto kWarp = mlir::StringAttr::get(ctx, "warp");
-  auto regBases = layout.getBases();
-  auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, layout);
-  int laneBits = layout.getInDimSizeLog2(kLane);
-  int neededLaneBits = llvm::Log2_32(linearAttr.getWarpsPerCTA()[axis]);
-  // TODO move to verifier
-  assert(neededLaneBits <= laneBits && "NYI: more inter-warps than lanes");
-  // Move the warp axis bases we need to reduce into lane bases, while
-  // keeping non-axis components in their original in-dim.
-  auto &laneBases = regBases[kLane];
-  auto &warpBases = regBases[kWarp];
-  int moved = 0;
-  for (auto &warpBasis : warpBases) {
-    if (warpBasis[axis] == 0)
-      continue;
-    assert(moved < neededLaneBits && "unexpected warp axis bases count");
-    std::swap(laneBases[moved], warpBasis);
-    moved++;
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
+  auto bases = layout.getBases();
+  auto &laneBases = bases[kLane];
+  auto &warpBases = bases[kWarp];
+  auto &blockBases = bases[kBlock];
+
+  auto collectAxisBases = [&](ArrayRef<std::vector<int32_t>> bases) {
+    SmallVector<unsigned> out;
+    for (unsigned i = 0; i < bases.size(); ++i) {
+      if (bases[i][axis] != 0)
+        out.push_back(i);
+    }
+    return out;
+  };
+
+  SmallVector<unsigned> warpAxisBases = collectAxisBases(warpBases);
+  SmallVector<unsigned> blockAxisBases = collectAxisBases(blockBases);
+
+  SmallVector<unsigned> zeroLaneBases;
+  for (unsigned i = 0; i < laneBases.size(); ++i) {
+    if (llvm::all_of(laneBases[i], [](int32_t v) { return v == 0; }))
+      zeroLaneBases.push_back(i);
   }
 
-  return LinearLayout(std::move(regBases), to_vector(layout.getOutDimNames()));
+  auto axisSize = to_vector(layout.getOutDimSizes())[axis];
+  auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
+
+  // First try to place all warp/block axis bases into lane bases that are
+  // currently zero. If we can do this we will be able to perform the full
+  // reduction with just one convert_layout
+  if (zeroLaneBases.size() >= totalAxisBases) {
+    unsigned laneIdx = 0;
+    for (unsigned idx : warpAxisBases) {
+      std::swap(laneBases[zeroLaneBases[laneIdx]], warpBases[idx]);
+      ++laneIdx;
+    }
+    for (unsigned idx : blockAxisBases) {
+      std::swap(laneBases[zeroLaneBases[laneIdx]], blockBases[idx]);
+      ++laneIdx;
+    }
+    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  }
+
+  // If we can fit all the bases inside the lane dimension, we can perform the
+  // reduction with two convert_layouts
+  // The first cvt to move the relevant bases to the lane dimension
+  // The second to move all the bases we moved out of the lane dimension back to
+  // their original positions
+  if (warpAxisBases.size() + blockAxisBases.size() <= laneBases.size()) {
+    assert(totalAxisBases <= laneBases.size() &&
+           "unexpected lane base count for axis layout");
+    unsigned laneIdx = 0;
+    for (unsigned idx : warpAxisBases) {
+      std::swap(laneBases[laneIdx], warpBases[idx]);
+      ++laneIdx;
+    }
+    for (unsigned idx : blockAxisBases) {
+      std::swap(laneBases[laneIdx], blockBases[idx]);
+      ++laneIdx;
+    }
+    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  }
+
+  // Assumptions (easily relaxed if AMD needs it)
+  // We assume that
+  // max number of warps * max number of blocks <= (max number of lanes)^2
+  // We check this in logarithmic space (number of bases)
+  // This is true in nvidia as the max numbers are warps=64 ctas=16 so that
+  // 64 * 16 = 1024 = 32 * 32 = laneBases.size() * laneBases.size()
+  // This implies that, even if we have to perform 3 cvt_layouts, we can perform
+  // first one that does not cross CTAs, and then two that may cross CTAs
+  assert(blockBases.size() <= laneBases.size());
+  assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
+
+  // Otherwise, fit as many warp bases as possible into the lane dimension
+  unsigned laneIdx = 0;
+  for (unsigned idx : warpAxisBases) {
+    std::swap(laneBases[laneIdx], warpBases[idx]);
+    ++laneIdx;
+    if (laneIdx >= laneBases.size())
+      break;
+  }
+
+  return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
 }
 
 LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
@@ -327,9 +416,7 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   auto kLane = StringAttr::get(ctx, "lane");
   auto kWarp = StringAttr::get(ctx, "warp");
 
-  auto reduced = triton::gpu::toLinearLayout(srcTy);
-  reduced = reduced.sublayout({kReg, kLane, kWarp},
-                              to_vector(reduced.getOutDimNames()));
+  auto reduced = toLinearLayout(srcTy);
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
 
   reduced = moveAxisBasesToFront(reduced, axis).apply(reduced);
@@ -337,32 +424,6 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
   reduced = zeroBasesAlongDimAndReorder(reduced, axis, kLane);
   return reduced;
-}
-
-SmallVector<unsigned>
-ReduceOpHelper::getScratchBytesForCvt(const LinearLayout &srcLayout,
-                                      const LinearLayout &dstLayout) {
-  SmallVector<unsigned> bytes(srcElementTypes.size(), 0);
-  auto *ctx = op.getContext();
-  SmallVector<int64_t> shape;
-  shape.reserve(srcLayout.getNumOutDims());
-  for (auto dim : srcLayout.getOutDimNames()) {
-    shape.push_back(srcLayout.getOutDimSize(dim));
-  }
-  auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
-  auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
-  for (unsigned i = 0; i < srcElementTypes.size(); ++i) {
-    auto elemTy = srcElementTypes[i];
-    if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
-      elemTy = IntegerType::get(ctx, 8);
-    auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
-    auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-    if (!cvtNeedsSharedMemory(srcTy, dstTy))
-      continue;
-    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
-    bytes[i] = elems * getBitwidth(srcTy) / 8;
-  }
-  return bytes;
 }
 
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {

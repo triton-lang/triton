@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -32,21 +33,24 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isReduceWithinCTA() &&
-           "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
     unsigned axis = op.getAxis();
 
+    // The lowering already supports cross-CTA reductions in principle
+    // We are only missing:
+    // - Supporting them in convert_layout for LinearLayouts
+    // - Emitting cross-CTA barriers between convert_layouts when the second
+    //   convert_layout crosses CTAs
+    // After this, we can uncomment the tests in test_reduce_funky_layout
+    if (!helper.isReduceWithinCTA()) {
+      return failure();
+    }
+
     auto *ctx = op.getContext();
-    auto kReg = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
 
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
-    regLl = regLl.sublayout({kReg, kLane, kWarp},
-                            to_vector(regLl.getOutDimNames()));
     // Remove broadcasting in registers as SliceLayout removes them
     auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
     if (!removeBroadcast.isIdentity()) {
@@ -64,46 +68,47 @@ public:
     std::tie(regLl, accs) =
         reduceWithinWarps(op, std::move(regLl), std::move(accs), rewriter);
 
-    if (helper.isWarpSynchronous()) {
-      // If all the values to be reduced are within the same warp there is
-      // nothing left to do.
-      packResults(op, accs, rewriter);
-      return success();
-    }
-
     // reducedRegLaneLayout is used in the AllocationAnalysis to get the size
     // of the scratch space.
     assert(regLl ==
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
+    // If we still need to reduce along warps / blocks:
     // Create temporary layout for reduction within warps.
-    LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
+    // By construction of tmpLl, we will iterate at most 2 times, as the maximum
+    // number of warp / block bases is 64 * 16 = 32 * 32
+    // That is, they fit in 2 rounds of warp reductions
+    // Even more, if we do two rounds, getInterLayout will make sure that the
+    // first one does not cross CTAs
+    auto kAxis = *(regLl.getOutDimNames().begin() + axis);
+    int i = 0;
+    while (regLl.getOutDimSize(kAxis) != 1) {
+      LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
 
-    auto smemBaseOffsets = getSmemBaseOffsets(op, regLl, tmpLl);
-    accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs,
-                               smemBaseOffsets);
+      // Emit a barrier if we are reusing the shmem
+      if (i > 0) {
+        sync(rewriter, loc);
+      }
+      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
 
-    std::tie(tmpLl, accs) =
-        reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
-    // Remove the axis dimension
-    assert(to_vector(tmpLl.getOutDimSizes())[axis] == 1);
-    tmpLl = removeStandardDim(tmpLl, axis);
+      std::tie(regLl, accs) =
+          reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
+      ++i;
+    }
+    assert(i <= 2 && "expected at most 2 rounds of warp reductions");
+    // Remove the axis dimension, which at this point is of size 1
+    regLl = removeStandardDim(regLl, axis);
 
     // Convert to output layout if we didn't fit the warp bases within zero
     // bases in the tmpLl
-    // TODO Prefer tmp layouts that omit this conversion whenever possible
     if (auto resultTy =
             dyn_cast<RankedTensorType>(op.getResult()[0].getType())) {
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
-      outputLayout = outputLayout.sublayout(
-          {kReg, kLane, kWarp}, to_vector(outputLayout.getOutDimNames()));
-      if (tmpLl != outputLayout) {
+      if (regLl != outputLayout) {
         // Reuse the shmem
-        auto b = TritonLLVMOpBuilder(loc, rewriter);
-        sync(rewriter, loc, op);
-        smemBaseOffsets = getSmemBaseOffsets(op, tmpLl, outputLayout);
-        accs = convertLayoutValues(loc, rewriter, op, tmpLl, outputLayout, accs,
-                                   smemBaseOffsets);
+        sync(rewriter, loc);
+        accs =
+            convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
     }
 
@@ -155,8 +160,7 @@ private:
     return srcValues;
   }
 
-  void sync(ConversionPatternRewriter &rewriter, Location loc,
-            triton::ReduceOp op) const {
+  void sync(ConversionPatternRewriter &rewriter, Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.barrier(triton::gpu::AddrSpace::Local);
   }
@@ -394,8 +398,7 @@ private:
   convertLayoutValues(Location loc, ConversionPatternRewriter &rewriter,
                       triton::ReduceOp op, const LinearLayout &srcLayout,
                       const LinearLayout &dstLayout,
-                      const SmallVector<SmallVector<Value>> &inVals,
-                      ArrayRef<int64_t> smemBaseOffsets) const {
+                      const SmallVector<SmallVector<Value>> &inVals) const {
     SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
     auto *ctx = rewriter.getContext();
     SmallVector<int64_t> shape;
@@ -407,6 +410,7 @@ private:
     auto baseOffsetAttr = op->getAttrOfType<IntegerAttr>("allocation.offset");
     assert(baseOffsetAttr && "expected allocation.offset on reduce op");
     int64_t baseOffset = baseOffsetAttr.getValue().getZExtValue();
+    auto smemBaseOffsets = getSmemBaseOffsets(op, srcLayout, dstLayout);
     auto offsetTy = IntegerType::get(ctx, 32);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = op.getElementTypes()[i];
@@ -439,9 +443,16 @@ private:
   SmallVector<int64_t> getSmemBaseOffsets(triton::ReduceOp op,
                                           const LinearLayout &srcLayout,
                                           const LinearLayout &dstLayout) const {
-    constexpr int64_t kReduceScratchAlign = 16;
-    auto bytesPerOperand =
-        ReduceOpHelper(op).getScratchBytesForCvt(srcLayout, dstLayout);
+    // Hack:
+    // Here we know that we are never going to use ldmatrix/stmatrix
+    // instructions as by the time we go through shared memory, we have already
+    // reduced all the registers As such, we can use
+    // `getNumScratchElemsSwizzledCvt` which assumes ld.shared/st.shared
+    // instructions
+    // The proper way to lower reduce would be to lower it to:
+    // reduce_threads / reduce_lanes / convert_layout
+    // And let the AllocationAnalysis handle the shared memory allocation
+    // and membar the barriers
     std::vector<unsigned> indices(op.getNumOperands());
     std::iota(indices.begin(), indices.end(), 0);
     auto *ctx = op.getContext();
@@ -455,9 +466,12 @@ private:
     int64_t offset = 0;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
-      offset = llvm::alignTo(offset, kReduceScratchAlign);
       offsets[idx] = offset;
-      offset += bytesPerOperand[idx];
+      auto inputTy = op.getInputTypes()[idx];
+      auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
+                                                 getBitwidth(inputTy)) *
+                   (getBitwidth(inputTy) / 8);
+      offset += bytes;
     }
     return offsets;
   }
