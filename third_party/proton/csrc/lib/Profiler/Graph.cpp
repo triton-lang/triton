@@ -20,16 +20,13 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   const size_t phase = queue.phase;
   const auto &pendingGraphs = queue.pendingGraphs;
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
-
-  const size_t startWordOffset = queue.startBufferOffset / sizeof(uint64_t);
-  size_t wordOffset = startWordOffset;
+  size_t wordOffset = queue.startBufferOffset / sizeof(uint64_t);
   auto readWord = [&](size_t offset) -> uint64_t {
     return hostBasePtr[offset % capacityWords];
   };
 
   for (const auto &pendingGraph : pendingGraphs) {
-    const size_t graphMetricNodes = pendingGraph.numNodes;
-    for (size_t i = 0; i < graphMetricNodes; ++i) {
+    for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
       const uint64_t metricId = readWord(wordOffset);
       const uint64_t metricValue = readWord(wordOffset + 1);
       wordOffset = (wordOffset + kMetricWordsPerNode) % capacityWords;

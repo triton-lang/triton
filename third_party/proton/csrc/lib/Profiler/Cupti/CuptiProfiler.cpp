@@ -585,12 +585,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         graphNodeIdToState.clear();
       }
 
-      std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
-      auto phase = Data::kNoFlushedPhase;
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
-        auto *dataMetricNodeEntryIds = &metricNodeEntryIds[data];
-        dataMetricNodeEntryIds->reserve(graphState.metricKernelNodeIds.size());
         auto *dataPtr = data;
         auto entryIt = dataToEntry.find(dataPtr);
         if (entryIt == dataToEntry.end())
@@ -608,24 +604,31 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             graphNodeState.isMetricNode = nodeState.isMetricNode;
             graphNodeState.setEntry(data, nodeEntry);
             if (nodeState.isMetricNode) {
-              dataMetricNodeEntryIds->push_back(nodeEntry.id);
-              if (phase == Data::kNoFlushedPhase) {
-                phase = nodeEntry.phase;
-              } else if (phase != nodeEntry.phase) {
-                throw std::runtime_error(
-                    "[PROTON] Inconsistent phases in graph metric nodes");
-              }
             }
           }
         }
       }
 
       if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {
-        auto numNodes = graphStates[graphExecId].metricKernelNodeIds.size();
-        if (numNodes != metricNodeEntryIds.begin()->second.size()) {
-          throw std::runtime_error(
-              "[PROTON] Mismatched number of metric nodes and entries. Can be "
-              "caused by deactivating metric kernel launches.");
+        auto &graphExecState = graphStates[graphExecId];
+        std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
+        auto phase = Data::kNoFlushedPhase;
+        auto numNodes = graphExecState.metricKernelNodeIds.size();
+        for (auto nodeId : graphExecState.metricKernelNodeIds) {
+          auto *nodeState = graphNodeIdToState.find(nodeId);
+          if (!nodeState) {
+            throw std::runtime_error(
+                "[PROTON] Missing graph node state for metric node.");
+          }
+          nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
+            metricNodeEntryIds[data].push_back(entry.id);
+            if (phase == Data::kNoFlushedPhase) {
+              phase = entry.phase;
+            } else if (phase != entry.phase) {
+              throw std::runtime_error(
+                  "[PROTON] Inconsistent phases in graph metric nodes");
+            }
+          });
         }
         if (callbackData->context != nullptr)
           profiler.pendingGraphPool->flushIfNeeded(numNodes);
