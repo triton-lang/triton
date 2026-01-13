@@ -1,10 +1,22 @@
 # fmt: off
-import torch
-import triton
-import triton.language as tl
 import random
 from dataclasses import dataclass
-from .distributed_details.mesh import SymmetricMemoryPool
+
+import torch
+
+import triton
+import triton.language as tl
+
+from .distributed_details.mesh import (
+    Mesh,  # noqa: F401
+    SymmetricMemoryPool,
+    current_mesh,  # noqa: F401
+    default_mesh,  # noqa: F401
+    local_mesh,  # noqa: F401
+    mesh,  # noqa: F401
+    torch_mesh,  # noqa: F401
+)
+
 
 @dataclass
 class ExptAssignment:
@@ -22,7 +34,7 @@ class ExptAssignment:
     n_expts_per_shard: list[int]
 
 
-def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
+def make_expt_dict_uniform(n_expt_shard: int, n_expt_tot: int) -> dict[int, list[int]]:
     """
     create expert assignment dictionary where shard i owns:
     [i*(n_expt_tot//n_expt_shard)...(i+1)*(n_expt_tot//n_expt_shard))
@@ -35,7 +47,7 @@ def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
     return expt_dict
 
 
-def make_expt_dict_random(n_expt_shard, n_expt_tot):
+def make_expt_dict_random(n_expt_shard: int, n_expt_tot: int) -> dict[int, list[int]]:
     """
     create expert assignment dictionary where each shard owns
     a disjoint random subset of experts
@@ -53,7 +65,12 @@ def make_expt_dict_random(n_expt_shard, n_expt_tot):
     return expt_dict
 
 
-def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int]], device) -> ExptAssignment:
+def make_expt_assignment(
+    n_expt_shard: int,
+    n_expt_tot: int,
+    expt_dict: dict[int, list[int]],
+    device: torch.device | str,
+) -> ExptAssignment:
     """
     n_expt_shard: int
     n_expt_tot: int
@@ -98,7 +115,11 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 # ------------------------------------------------------------
 
 
-def _convert_launch_metadata(grid, kernel, args):
+def _convert_launch_metadata(
+    grid: tuple[int, ...],
+    kernel: object,
+    args: dict[str, object],
+) -> dict[str, int | str]:
     src = args["src_ptr"]
     src_rank = args["SRC_RANK"]
     n_tokens_local = args["n_tokens_local"]
@@ -173,7 +194,13 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool: SymmetricMemoryPool):
+def convert_dp_to_ep(
+    src: torch.Tensor,
+    expt_assignment: ExptAssignment,
+    expt_indx: torch.Tensor,
+    gate_indx: torch.Tensor,
+    symm_mem_pool: SymmetricMemoryPool,
+) -> torch.Tensor:
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     device = src.device
@@ -185,7 +212,7 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool: 
     assert expt_bitmask.dtype == torch.int32, "expt_bitmask must be int32 bitmask words"
     assert expt_bitmask.stride(-1) == 1 and expt_indx.stride(-1) == 1 and gate_indx.stride(-1) == 1
     assert n_tokens_local * symm_mem_pool.mesh.world_size <= n_tokens_global
-    peer_bufs = symm_mem_pool.make_empty(
+    peer_bufs = symm_mem_pool.get_tensors(
         region="dp_to_ep",
         shape=(n_tokens_global * n_expt_act, d_model),
         dtype=src.dtype,
@@ -253,12 +280,18 @@ def _convert_ep_to_dp(
         dst_ptrs += BLOCK
 
 
-def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx, symm_mem_pool: SymmetricMemoryPool):
+def convert_ep_to_dp(
+    src: torch.Tensor,
+    expt_assignment: ExptAssignment,
+    expt_indx: torch.Tensor,
+    topk_indx: torch.Tensor,
+    symm_mem_pool: SymmetricMemoryPool,
+) -> torch.Tensor:
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
     n_tokens_global, d_model = src.shape
     n_tokens_local = n_tokens_global // symm_mem_pool.mesh.world_size
-    peer_bufs = symm_mem_pool.make_empty(
+    peer_bufs = symm_mem_pool.get_tensors(
         region="ep_to_dp",
         shape=(n_tokens_local, d_model),
         dtype=src.dtype,

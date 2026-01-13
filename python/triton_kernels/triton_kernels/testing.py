@@ -1,24 +1,42 @@
 import enum
 import functools
+import itertools
 import os
 import subprocess
 import sys
-import torch
-from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE
-import itertools
 from dataclasses import replace
+from typing import Callable, Protocol, Sequence
+
+import torch
+
+from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata, Tensor
+from triton_kernels.tensor_details.layout import Layout
+from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE
 
 
-def assert_equal(ref, tri):
+class _TestDType(Protocol):
+    has_mx_scale: bool
+    torch_dtype: torch.dtype
+    is_mxfloat4: bool
+
+
+def assert_equal(ref: object, tri: object) -> None:
     if isinstance(ref, torch.Tensor):
         assert torch.all(ref == tri)
     else:
         assert ref == tri
 
 
-def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=True):
+def assert_close(
+    ref: torch.Tensor,
+    tri: torch.Tensor,
+    maxtol: float | None = None,
+    rmstol: float | None = None,
+    description: str = "--",
+    verbose: bool = True,
+) -> None:
     if tri.dtype.itemsize == 1:
         ref_as_type = ref.to(tri.dtype)
         if ref.dtype == tri.dtype:
@@ -87,7 +105,7 @@ class ComputeSanitizerTool(enum.Enum):
     INITCHECK = "initcheck"
 
 
-def compute_sanitizer(**target_kwargs):
+def compute_sanitizer(**target_kwargs: object) -> Callable[[Callable[..., object]], Callable[..., object]]:
     """
     Decorator to run a test with compute sanitizer enabled and pytorch caching allocator disabled,
     to expose potential memory access errors.
@@ -97,10 +115,10 @@ def compute_sanitizer(**target_kwargs):
     so use sparingly
     """
 
-    def decorator(test_fn):
+    def decorator(test_fn: Callable[..., object]) -> Callable[..., object]:
 
         @functools.wraps(test_fn)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> None:
             if os.environ.get("SKIP_COMPUTE_SANITIZER") == "1":
                 test_fn(*args, **kwargs)
                 return
@@ -190,7 +208,11 @@ def compute_sanitizer(**target_kwargs):
     return decorator
 
 
-def compute_actual_scale(x, dtype, per_batch_scale=False):
+def compute_actual_scale(
+    x: torch.Tensor,
+    dtype: torch.dtype,
+    per_batch_scale: bool = False,
+) -> torch.Tensor:
     max_finite = {
         torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
         torch.float8_e4m3fn: MAX_FINITE_FLOAT8E4NV,
@@ -203,7 +225,7 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 # --- create tensor ---
 
 
-def normalize_blocks(x, BLOCK_SIZE=None):
+def normalize_blocks(x: torch.Tensor, BLOCK_SIZE: int | None = None) -> torch.Tensor:
     if BLOCK_SIZE is None:
         BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
     x_ndim = x.ndim
@@ -229,7 +251,12 @@ def normalize_blocks(x, BLOCK_SIZE=None):
     return x
 
 
-def alloc_rand(shape, device, dtype, requires_grad=False):
+def alloc_rand(
+    shape: Sequence[int],
+    device: torch.device | str,
+    dtype: torch.dtype,
+    requires_grad: bool = False,
+) -> torch.Tensor:
     if dtype.itemsize == 1:
         tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)
@@ -238,7 +265,11 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     return ret
 
 
-def make_slice_sizes(n_slices, total_size, device="cuda"):
+def make_slice_sizes(
+    n_slices: int,
+    total_size: int,
+    device: torch.device | str = "cuda",
+) -> torch.Tensor:
     torch.manual_seed(0)
     dtype = torch.int32
     if total_size < 0:
@@ -259,7 +290,12 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
     return counts
 
 
-def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
+def pad_rows_to_multiples(
+        A: torch.Tensor,
+        indices: Sequence[int] | torch.Tensor,
+        multiple: int = 128,
+        pad_value: float = float("nan"),
+) -> torch.Tensor:
     """
     Insert padding so that each row A[i] (for i in indices)
     appears at an output row index that is a multiple of `multiple`.
@@ -275,7 +311,12 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
     return torch.vstack(out)
 
 
-def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
+def pad_ragged_tensor(
+    x: torch.Tensor,
+    x_ragged_metadata: RaggedTensorMetadata,
+    hbm_swizzling: bool,
+    transpose: bool,
+) -> tuple[torch.Tensor, RaggedTensorMetadata]:
     multiple = 128 if hbm_swizzling else 64
     if transpose:
         y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
@@ -287,8 +328,21 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     return y, y_ragged_metadata
 
 
-def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
-                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
+def make_random_tensor(
+    shape: Sequence[int],
+    n_slices: int,
+    ragged_dim: int | None,
+    ragged_padding: bool,
+    device: torch.device | str,
+    dtype: _TestDType,
+    mxfp_dim: int | None,
+    transpose: bool,
+    squeeze_batch_dim: bool,
+    is_mx_rowmajor: bool = False,
+    value_hbm_swizzling: Layout | None = None,
+    scale_hbm_swizzling: Layout | Callable[[RaggedTensorMetadata], Layout] | None = None,
+) -> tuple[torch.Tensor | Tensor, Tensor | None, RaggedTensorMetadata
+           | None]:  # REVIEW: returns torch.Tensor or triton_kernels.Tensor
     # allocate buffer
     buffer_shape = ((n_slices, ) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
