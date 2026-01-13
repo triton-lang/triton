@@ -97,7 +97,7 @@ public:
 
   std::string getData(size_t sessionId, size_t phase);
 
-  void clearData(size_t sessionId, size_t phase);
+  void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
 
   size_t advanceDataPhase(size_t sessionId);
 

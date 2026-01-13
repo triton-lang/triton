@@ -72,16 +72,21 @@ def is_phase_flushed(session: Optional[int] = 0, phase: int = 0) -> bool:
     return libproton.is_data_phase_flushed(session, phase)
 
 
-def clear(session: Optional[int] = 0, phase: int = 0) -> None:
+def clear(
+    session: Optional[int] = 0,
+    phase: int = 0,
+    clear_up_to_phase: bool = False,
+) -> None:
     """
     Clears profiling data for a given session.
 
     Args:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
         phase (int): The phase number to clear. Defaults to 0.
+        clear_up_to_phase (bool): If True, clear all phases up to and including `phase`.
     """
     if session is None:
         return
     if flags.command_line and session != 0:
         raise ValueError("Only one session can be cleared when running from the command line.")
-    libproton.clear_data(session, phase)
+    libproton.clear_data(session, phase, clear_up_to_phase)

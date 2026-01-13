@@ -353,7 +353,8 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   return treeData->toJsonString(phase);
 }
 
-void SessionManager::clearData(size_t sessionId, size_t phase) {
+void SessionManager::clearData(size_t sessionId, size_t phase,
+                               bool clearUpToPhase) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();
@@ -363,7 +364,7 @@ void SessionManager::clearData(size_t sessionId, size_t phase) {
         "Cannot clear data while the session is active. Please deactivate the "
         "session first.");
   }
-  sessions[sessionId]->data->clear(phase);
+  sessions[sessionId]->data->clear(phase, clearUpToPhase);
 }
 
 size_t SessionManager::advanceDataPhase(size_t sessionId) {

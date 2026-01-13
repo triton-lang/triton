@@ -184,10 +184,11 @@ static void initProton(pybind11::module &&m) {
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
       "clear_data",
-      [](size_t sessionId, size_t phase) {
-        SessionManager::instance().clearData(sessionId, phase);
+      [](size_t sessionId, size_t phase, bool clearUpToPhase) {
+        SessionManager::instance().clearData(sessionId, phase, clearUpToPhase);
       },
-      pybind11::arg("sessionId"), pybind11::arg("phase"));
+      pybind11::arg("sessionId"), pybind11::arg("phase"),
+      pybind11::arg("clearUpToPhase") = false);
   m.def(
       "advance_data_phase",
       [](size_t sessionId) {

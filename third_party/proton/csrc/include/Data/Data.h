@@ -81,7 +81,9 @@ public:
   void dump(const std::string &outputFormat);
 
   /// Clear all non-persistent fields in the data.
-  void clear(size_t phase);
+  /// If `clearUpToPhase` is false, clear the given phase only.
+  /// Otherwise, clear all phases up to and including the given phase.
+  void clear(size_t phase, bool clearUpToPhase = false);
 
   /// Update the flushed phase.
   void updateFlushedPhase(size_t phase);
@@ -143,6 +145,10 @@ protected:
   void initPhaseStore(PhaseStoreBase &store);
 
   template <typename T> T *currentPhasePtrAs() {
+    if (!currentPhasePtr) {
+      currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
+      activePhases.insert(currentPhase);
+    }
     return static_cast<T *>(currentPhasePtr);
   }
 

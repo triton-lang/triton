@@ -335,6 +335,29 @@ def test_clear_data(tmp_path: pathlib.Path):
     assert "elementwise" in kernel_frame["frame"]["name"]
 
 
+def test_clear_data_up_to_phase(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_clear_data_up_to_phase.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    with proton.scope("phase0"):
+        x = torch.ones((2, 2), device="cuda")
+        x + x  # type: ignore
+
+    phase1 = proton.data.advance_phase(session)
+    with proton.scope("phase1"):
+        x = torch.ones((2, 2), device="cuda")
+        x + x  # type: ignore
+
+    proton.deactivate(session, flushing=True)
+
+    # Clear a range of phases.
+    proton.data.clear(session, phase=phase1, clear_up_to_phase=True)
+    with pytest.raises(RuntimeError, match="has no data"):
+        _ = proton.data.get(session, phase=phase1)
+
+    proton.finalize()
+
+
 def test_data_is_phase_flushed(tmp_path: pathlib.Path):
     temp_path = tmp_path / "test_data_is_phase_flushed.hatchet"
     session = proton.start(str(temp_path.with_suffix("")), context="shadow")

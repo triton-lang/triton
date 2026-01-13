@@ -24,13 +24,31 @@ size_t Data::advancePhase() {
   return currentPhase;
 }
 
-void Data::clear(size_t phase) {
-  phaseStore->clearUpToInclusive(phase);
+void Data::clear(size_t phase, bool clearUpToPhase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
-  activePhases.clear();
-  for (phase += 1; phase <= currentPhase; phase++)
-    activePhases.insert(phase);
+
+  if (clearUpToPhase) {
+    phaseStore->clearUpToInclusive(phase);
+    for (auto it = activePhases.begin(); it != activePhases.end();) {
+      if (*it <= phase) {
+        it = activePhases.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  } else {
+    phaseStore->clearPhase(phase);
+    activePhases.erase(phase);
+  }
+
+  if (flushedPhase != kNoFlushedPhase &&
+      (clearUpToPhase ? (flushedPhase <= phase) : (phase <= flushedPhase))) {
+    flushedPhase = kNoFlushedPhase;
+  }
+
+  if (clearUpToPhase ? (currentPhase <= phase) : (currentPhase == phase)) {
+    currentPhasePtr = nullptr;
+  }
 }
 
 void Data::updateFlushedPhase(size_t phase) {
