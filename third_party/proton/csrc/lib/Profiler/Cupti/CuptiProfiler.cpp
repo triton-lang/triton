@@ -603,8 +603,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             graphNodeState.isMissingName = nodeState.isMissingName;
             graphNodeState.isMetricNode = nodeState.isMetricNode;
             graphNodeState.setEntry(data, nodeEntry);
-            if (nodeState.isMetricNode) {
-            }
           }
         }
       }
@@ -629,6 +627,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                   "[PROTON] Inconsistent phases in graph metric nodes");
             }
           });
+        }
+        // Check if all data contains the same number of metric nodes
+        for (const auto &[data, entryIds] : metricNodeEntryIds) {
+          if (entryIds.size() != numNodes) {
+            throw std::runtime_error(
+                "[PROTON] Inconsistent number of metric nodes in graph.");
+          }
         }
         if (callbackData->context != nullptr)
           profiler.pendingGraphPool->flushIfNeeded(numNodes);
