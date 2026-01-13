@@ -85,11 +85,11 @@ def TTNG_TensorModeAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton::nvidia_gpu";
   let description = [{
     Enum attribute for TMA tensor mode.
-    
+
     TILED: Tiled mode for regular tensor memory access.
     IM2COL: Im2col mode for convolution-friendly tensor memory access.
-    
-    See: 
+
+    See:
     - https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
     - https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
   }];
