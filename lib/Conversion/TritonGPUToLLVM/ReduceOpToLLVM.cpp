@@ -136,7 +136,7 @@ private:
     if (values.front().size() != 1)
       return nullptr;
     auto elemTy = values.front().front().getType();
-    if ((!elemTy.isF16() && !elemTy.isF32()) || isa<VectorType>(elemTy))
+    if (!(elemTy.isF16() || elemTy.isBF16() || elemTy.isF32()))
       return nullptr;
     Operation *combiner = nullptr;
     if (!combineOp.empty()) {
