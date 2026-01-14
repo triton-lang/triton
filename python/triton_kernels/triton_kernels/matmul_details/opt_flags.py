@@ -27,6 +27,7 @@ class OptFlags:
     idle_sms: int
     epilogue_subtile: int | None
     arch: str
+    occupancy_target: int
     target_kernel_kwargs: dict
 
 
@@ -166,6 +167,7 @@ def make_default_opt_flags_amd(
         epilogue_subtile=epilogue_subtile,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
+        occupancy_target=1,
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
@@ -294,20 +296,32 @@ def make_default_opt_flags_nvidia(
         has_y_acc_in,
     )
 
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+
+    occupancy_target = 1
+    if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
+        occupancy_target = 16 // num_warps
+    threads_per_warp = 32
+    reg_per_sm = 64 * 1024
+    if is_persistent:
+        maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
+    else:
+        maxnreg = None
+
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
     else:
         subtiles_to_check = [1, 2, 4]
     num_stages = -1
     for ep in subtiles_to_check:
-        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep)
+        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
+                                                 occupancy_target=occupancy_target)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     assert num_stages >= 1
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
@@ -321,8 +335,9 @@ def make_default_opt_flags_nvidia(
         is_persistent=is_persistent,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
-        target_kernel_kwargs=dict(),
+        target_kernel_kwargs=dict(maxnreg=maxnreg),
         idle_sms=constraints.get("idle_sms", 0),
+        occupancy_target=occupancy_target,
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
