@@ -33,6 +33,7 @@ include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -628,7 +629,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> 
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
+def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
   let description = [{
@@ -641,17 +642,34 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
-    Optional<TTG_AsyncToken>:$dep
+    Optional<TTG_AsyncToken>:$dep,
+    OptionalAttr<TTNG_TMEMLoadReduceModifierEnum>:$redOp,
+    OptionalAttr<BoolAttr>:$abs,
+    OptionalAttr<BoolAttr>:$NaN
   );
   let results = (outs
     TT_Tensor:$result,
-    Optional<TTG_AsyncToken>:$token
+    Optional<TTG_AsyncToken>:$token,
+    Optional<TT_Tensor>:$red
   );
 
   let assemblyFormat = [{
     $src `` custom<Token>($dep, type($token))
-    attr-dict `:` qualified(type($src)) `->` type($result)
+    attr-dict `:` qualified(type($src)) `->` type($result) (`,` type($red)^)?
   }];
+
+  let builders = [
+    // Basic builder: result type, optional token type, src, optional dep
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep), [{
+      build($_builder, $_state, result, token, /*red=*/Type(), src, dep,
+            /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+    // Builder without token
+    OpBuilder<(ins "Type":$result, "Value":$src), [{
+      build($_builder, $_state, result, /*token=*/Type(), /*red=*/Type(), src,
+            /*dep=*/Value(), /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+  ];
 
   let hasVerifier = 1;
 

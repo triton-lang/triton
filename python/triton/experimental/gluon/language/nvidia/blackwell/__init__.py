@@ -235,21 +235,42 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
+    def load(self, layout, red_op=None, abs=False, NaN=False, _semantic: GluonSemantic = None):
         """
-        Load a tensor from tensor memory.
+        Load a tensor from tensor memory with optional row-wise reduction.
 
         Args:
             layout (DistributedLayout): Destination layout of the tensor.
+            red_op (str, optional): Reduction operation - None, "min", or "max".
+            abs (bool): If True, reduce absolute values. Default: False.
+            NaN (bool): If True, propagate NaN in max. Default: False.
 
         Returns:
-            tensor: A distributed tensor containing the loaded data.
+            tensor: When red_op is None, a distributed tensor containing the loaded data.
+            Tuple[tensor, tensor]: When red_op is set, (full_tensor [M,N], reduced [M]).
         """
         layout = _unwrap_if_constexpr(layout)
+        red_op = _semantic.str_to_tmem_load_reduce_modifier(red_op)
+        abs_flag = _unwrap_if_constexpr(abs)
+        nan_flag = _unwrap_if_constexpr(NaN)
+
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
-        handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
-        return ttgl.tensor(handle, ret_ty)
+
+        if red_op is None:
+            # No reduction - original behavior
+            handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, None, None, False, False)
+            return ttgl.tensor(handle, ret_ty)
+        else:
+            # With reduction - SliceLayout derives 1D layout from 2D parent
+            red_shape = [self.shape[0]]  # [M] for [M,N] input
+            red_layout = SliceLayout(dim=1, parent=layout)
+            red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
+
+            result, reduced = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_ty.to_ir(builder),
+                                                       red_op, abs_flag, nan_flag)
+
+            return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:

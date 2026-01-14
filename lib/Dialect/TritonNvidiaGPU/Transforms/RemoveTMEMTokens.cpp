@@ -39,8 +39,33 @@ void removeTMEMToken(Operation *op, Value dummy) {
       eraseResult(alloc, 1, dummy);
   } else if (auto load = dyn_cast<TMEMLoadOp>(op)) {
     load.getDepMutable().clear();
-    if (load.getToken())
-      eraseResult(load, 1, dummy);
+    if (load.getToken()) {
+      // Special case TMEMLoadOp: clone with result and red
+      OpBuilder b(op);
+      TMEMLoadReduceModifierAttr redOp = nullptr;
+      BoolAttr abs = nullptr, NaN = nullptr;
+      Type redTy = Type();
+
+      TMEMLoadOp newLoad;
+      if (load.getRed()) {
+        redTy = load.getRed().getType();
+        TMEMLoadReduceModifierAttr::get(b.getContext(),
+                                        load.getRedOp().value());
+        if (load.getAbs())
+          abs = b.getBoolAttr(load.getAbs().value());
+        if (load.getNaN())
+          NaN = b.getBoolAttr(load.getNaN().value());
+      }
+      newLoad = TMEMLoadOp::create(b, load.getLoc(), load.getResult().getType(),
+                                   Type(), redTy, load.getSrc(), Value(), redOp,
+                                   abs, NaN);
+
+      load.getToken().replaceAllUsesWith(dummy);
+      load.getResult().replaceAllUsesWith(newLoad.getResult());
+      if (load.getRed())
+        load.getRed().replaceAllUsesWith(newLoad.getRed());
+      load->erase();
+    }
   }
 }
 

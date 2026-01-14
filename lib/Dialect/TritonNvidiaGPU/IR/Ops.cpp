@@ -931,6 +931,66 @@ LogicalResult TMEMLoadOp::verify() {
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
     return failure();
+
+  // Validate reduction-related attributes
+  auto redOp = getRedOp();
+  bool hasRed = getRed() != nullptr;
+  bool useAbs = getAbs().value_or(false);
+  bool useNaN = getNaN().value_or(false);
+
+  // redOp and red result must be consistent
+  if (redOp && !hasRed)
+    return emitOpError("redOp is set but 'red' result is not present");
+  if (hasRed && !redOp)
+    return emitOpError("'red' result is present but redOp is not set");
+
+  // abs and NaN require redOp
+  if (useAbs && !redOp)
+    return emitOpError("'abs' requires 'redOp' to be set");
+  if (useNaN && !redOp)
+    return emitOpError("'NaN' requires 'redOp' to be set");
+
+  // abs and NaN require floating-point element type
+  Type elemTy = getSrc().getType().getElementType();
+  if (useAbs && !elemTy.isF32())
+    return emitOpError("'abs' requires floating-point element type (f32)");
+  if (useNaN && !elemTy.isF32())
+    return emitOpError("'NaN' requires floating-point element type (f32)");
+
+  // Validate reduction shape compatibility
+  if (redOp) {
+    auto regTy = getType();
+    auto memTy = getSrc().getType();
+    auto maxnreg = getContextualMaxNReg(*this);
+    auto encodingInfoOr = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+    if (failed(encodingInfoOr))
+      return emitOpError("failed to compute TMEM encoding info");
+
+    auto atom = encodingInfoOr->atom;
+    if (atom != TMemAccessAtom::I32x32b && atom != TMemAccessAtom::I16x32bx2)
+      return emitOpError(
+          "reduction only supports shapes .32x32b and .16x32bx2");
+
+    // Check for split N dimension across warps - not supported with
+    // redOp because it would require cross-warp reduction via shared memory
+    auto regLayout = triton::gpu::toLinearLayout(regTy);
+    auto *ctx = regTy.getContext();
+    auto kWarp = StringAttr::get(ctx, "warp");
+
+    if (regLayout.hasInDim(kWarp)) {
+      auto const &bases = regLayout.getBases().lookup(kWarp);
+      auto dimN = StringAttr::get(ctx, "dim1");
+      int32_t dimNIdx = regLayout.getOutDimIndex(dimN);
+      for (const auto &basis : bases) {
+        if (basis[dimNIdx] != 0) {
+          return emitOpError("reduction with warps split across N dimension "
+                             "is not supported; "
+                             "use fewer warps or larger M dimension");
+        }
+      }
+    }
+  }
+
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
