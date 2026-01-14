@@ -97,22 +97,66 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
 
   let description = [{
-      A portable abstraction for nvidia-TMA descriptors.
+      A portable abstraction for TMA descriptors.
+      Supports both tiled and im2col modes for tensor memory access.
+
+      - mode: "tiled" (default) or "im2col"
+      - For im2col mode, additional parameters specify the convolution window:
+        - elementStrides: strides for traversing elements
+        - pixelBoxLowerCorner: lower corner of the pixel box
+        - pixelBoxUpperCorner: upper corner of the pixel box
+        - channelsPerPixel: number of channels per pixel
+        - pixelsPerColumn: number of pixels per column
+
+      Other backends can ignore the im2col parameters (they default to
+      tiled mode with no im2col configuration).
   }];
 
-  let parameters = (ins "RankedTensorType":$blockType);
-  let assemblyFormat = "`<` $blockType `>`";
+  let parameters = (ins
+    "RankedTensorType":$blockType,
+    DefaultValuedParameter<"mlir::StringAttr", "mlir::StringAttr::get($_ctxt, \"tiled\")">:$mode,
+    OptionalParameter<"mlir::DenseI64ArrayAttr">:$elementStrides,
+    OptionalParameter<"mlir::DenseI64ArrayAttr">:$pixelBoxLowerCorner,
+    OptionalParameter<"mlir::DenseI64ArrayAttr">:$pixelBoxUpperCorner,
+    OptionalParameter<"std::optional<int64_t>">:$channelsPerPixel,
+    OptionalParameter<"std::optional<int64_t>">:$pixelsPerColumn
+  );
+
+  let assemblyFormat = "`<` $blockType (`,` `mode` `=` $mode^)? "
+                       "(`,` `elementStrides` `=` $elementStrides^)? "
+                       "(`,` `pixelBoxLowerCorner` `=` $pixelBoxLowerCorner^)? "
+                       "(`,` `pixelBoxUpperCorner` `=` $pixelBoxUpperCorner^)? "
+                       "(`,` `channelsPerPixel` `=` $channelsPerPixel^)? "
+                       "(`,` `pixelsPerColumn` `=` $pixelsPerColumn^)? `>`";
 
   let builders = [
+    // Default builder with just blockType (backward compatible)
+    TypeBuilder<(ins "RankedTensorType":$blockType), [{
+      auto modeAttr = StringAttr::get($_ctxt, "tiled");
+      return Base::get($_ctxt, blockType, modeAttr,
+                       /*elementStrides=*/nullptr,
+                       /*pixelBoxLowerCorner=*/nullptr,
+                       /*pixelBoxUpperCorner=*/nullptr,
+                       /*channelsPerPixel=*/std::nullopt,
+                       /*pixelsPerColumn=*/std::nullopt);
+    }]>,
+    // Builder with signedness (backward compatible)
     TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
         blockType = blockType.clone(elemTy);
       }
-      return Base::get($_ctxt, blockType);
+      auto modeAttr = StringAttr::get($_ctxt, "tiled");
+      return Base::get($_ctxt, blockType, modeAttr,
+                       /*elementStrides=*/nullptr,
+                       /*pixelBoxLowerCorner=*/nullptr,
+                       /*pixelBoxUpperCorner=*/nullptr,
+                       /*channelsPerPixel=*/std::nullopt,
+                       /*pixelsPerColumn=*/std::nullopt);
     }]>,
   ];
+
   let extraClassDeclaration = [{
     RankedTensorType getSignlessBlockType() const {
       auto resTy = getBlockType();
@@ -124,6 +168,8 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
       return resTy;
     }
   }];
+
+  let genVerifyDecl = 1;
 }
 
 #endif
