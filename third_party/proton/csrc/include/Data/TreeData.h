@@ -42,6 +42,16 @@ public:
                                                 const std::string &prefix,
                                                 const std::string &metricName) const;
 
+  // Compute per-scope-path inclusive durations (ms) for scope nodes whose *node name*
+  // exactly matches `scopeName`, by summing descendant kernel durations.
+  //
+  // The key is the full tree path (ROOT excluded), e.g. "moduleA/opB/kiattn".
+  // The returned value is the total inclusive duration (ms) spent under that scope
+  // node in the phase.
+  std::map<std::string, double>
+  summarizeScopePathsInclusiveDurationMsByName(size_t phase,
+                                               const std::string &scopeName) const;
+
   DataEntry addOp(const std::string &name) override;
 
   DataEntry addOp(size_t phase, size_t contextId,

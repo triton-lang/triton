@@ -870,6 +870,76 @@ TreeData::summarizeKernelPathsSumFlexibleMetricByPrefix(
   });
 }
 
+std::map<std::string, double>
+TreeData::summarizeScopePathsInclusiveDurationMsByName(
+    size_t phase, const std::string &scopeName) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    // Precompute inclusive kernel duration (ns) for every node in the tree
+    // using a post-order walk: inclusive_ns[node] = sum(children) + self_kernel_ns.
+    std::unordered_map<size_t, uint64_t> inclusiveKernelNs;
+    inclusiveKernelNs.reserve(tree->size());
+
+    tree->template walk<TreeData::Tree::WalkPolicy::PostOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          uint64_t sum_ns = 0;
+          for (const auto &child : treeNode.children) {
+            auto it = inclusiveKernelNs.find(child.id);
+            if (it != inclusiveKernelNs.end()) {
+              sum_ns += it->second;
+            }
+          }
+          auto itKernel = treeNode.metrics.find(MetricKind::Kernel);
+          if (itKernel != treeNode.metrics.end() && itKernel->second != nullptr) {
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(itKernel->second.get());
+            const uint64_t dur_ns = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
+            sum_ns += dur_ns;
+          }
+          inclusiveKernelNs[treeNode.id] = sum_ns;
+        });
+
+    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
+      // Walk parents to build a full path. ROOT is excluded.
+      std::vector<std::string_view> parts;
+      const TreeData::Tree::TreeNode *cur = &node;
+      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
+        parts.push_back(cur->name);
+        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
+          break;
+        }
+        cur = &tree->getNode(cur->parentId);
+      }
+      std::string out;
+      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (!out.empty()) {
+          out.push_back('/');
+        }
+        out.append(it->data(), it->size());
+      }
+      return out;
+    };
+
+    std::map<std::string, double> out;
+    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
+            return;
+          }
+          if (treeNode.name != scopeName) {
+            return;
+          }
+          auto it = inclusiveKernelNs.find(treeNode.id);
+          if (it == inclusiveKernelNs.end()) {
+            return;
+          }
+          const std::string path = buildPath(treeNode);
+          out[path] = static_cast<double>(it->second) / 1e6;
+        });
+    return out;
+  });
+}
+
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
   initPhaseStore(treePhases);

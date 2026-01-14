@@ -119,12 +119,39 @@ void flushDataPhasesImpl(
                                                                  "_p_matmul_");
           auto perPathFlops8 = treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
               startPhase, "_p_matmul_", "flops8");
+          // Export inclusive duration for `kiattn` scopes (sum of descendant kernel durations).
+          auto kiattnScopePathMs =
+              treeData->summarizeScopePathsInclusiveDurationMsByName(startPhase, "kiattn");
+          const int64_t kiattnMaxPaths =
+              getIntEnv("PROTON_KIATTN_METRICS_MAX_PATHS", 200);
           for (auto &kv : perPathAvgMs) {
             // Encode full tree path in the key; Python side splits on `::`.
             metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
           }
           for (auto &kv : perPathFlops8) {
             metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
+          }
+          if (kiattnMaxPaths > 0 && !kiattnScopePathMs.empty()) {
+            std::vector<std::pair<std::string, double>> items;
+            items.reserve(kiattnScopePathMs.size());
+            for (auto &kv : kiattnScopePathMs) {
+              items.emplace_back(kv.first, kv.second);
+            }
+            // Keep the top-N slowest paths to maximize signal under the cap.
+            if (static_cast<int64_t>(items.size()) > kiattnMaxPaths) {
+              std::nth_element(
+                  items.begin(), items.begin() + kiattnMaxPaths, items.end(),
+                  [](const auto &a, const auto &b) { return a.second > b.second; });
+              items.resize(kiattnMaxPaths);
+            }
+            std::sort(items.begin(), items.end(),
+                      [](const auto &a, const auto &b) { return a.second > b.second; });
+            for (auto &kv : items) {
+              // Encode full tree path in the key; Python side splits on `::`.
+              // Name uses "avg_ms" for consistency with other per-path latency exports;
+              // value is inclusive duration (ms) for this scope path in the phase.
+              metrics["kiattn_path_avg_ms::" + kv.first] = kv.second;
+            }
           }
           if (!metrics.empty()) {
             SessionManager::instance().enqueueFlushedPhaseMetrics(
