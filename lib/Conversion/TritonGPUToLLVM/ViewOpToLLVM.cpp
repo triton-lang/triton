@@ -169,19 +169,57 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = cast<RankedTensorType>(op.getType());
-    unsigned elems = getTotalElemsPerThread(resultTy);
     auto typeConverter = getTypeConverter();
-    Type elemTy = typeConverter->convertType(resultTy.getElementType());
-    SmallVector<Type> types(elems, elemTy);
-    // unpack input values
+
+    // Note: We must explicitly handle broadcasted registers. The LLVM lowering
+    // generally represents broadcasted register bits by *duplicating* elements
+    // in the LLVM struct. Many conversions operate on a "stripped" (no-bcast)
+    // view and then re-introduce broadcasting at the end (see
+    // ConvertLayoutOpConversion).
+    StringAttr kReg = StringAttr::get(rewriter.getContext(), "register");
+
+    // Unpack input values.
     auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
     auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
+
+    // Strip broadcasted registers from inputs.
+    auto lhsTy = cast<RankedTensorType>(op.getLhs().getType());
+    auto rhsTy = cast<RankedTensorType>(op.getRhs().getType());
+    auto lhsLayout = toLinearLayout(lhsTy);
+    auto rhsLayout = toLinearLayout(rhsTy);
+    auto removeBroadcastLhs = actionRemoveBroadcastedRegs(lhsLayout);
+    auto removeBroadcastRhs = actionRemoveBroadcastedRegs(rhsLayout);
+    if (!removeBroadcastLhs.isIdentity())
+      lhsVals = removeBroadcastLhs.apply(lhsVals);
+    if (!removeBroadcastRhs.isIdentity())
+      rhsVals = removeBroadcastRhs.apply(rhsVals);
+
+    // Compute the expected non-broadcast register count for the result.
+    auto dstLayout = toLinearLayout(resultTy);
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    auto strippedDstLayout = removeBroadcastDst.apply(dstLayout);
+
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
       retVals.push_back(v);
     for (Value v : rhsVals)
       retVals.push_back(v);
+
+    if (retVals.size() != strippedDstLayout.getInDimSize(kReg)) {
+      return op->emitError()
+             << "tt.cat lowering expected "
+             << strippedDstLayout.getInDimSize(kReg)
+             << " (non-broadcast) register values for the result, but got "
+             << retVals.size()
+             << ". (hint: this usually means the operands/result encodings are "
+                "incompatible for the current CatOp lowering)";
+    }
+
+    // Re-introduce broadcasting if the destination expects it.
+    if (!removeBroadcastDst.isIdentity())
+      retVals = broadcastAs(retVals, dstLayout);
+
     // pack and replace
     Value ret = packLLElements(loc, typeConverter, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);

@@ -203,6 +203,30 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterArriveOp --
+LogicalResult ClusterArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterWaitOp --
+LogicalResult ClusterWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
 // -- TMA operation verifiers --
 static LogicalResult verifyTMAEncoding(Operation *op,
                                        TypedValue<TensorDescType> desc,
@@ -607,17 +631,27 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isAsync) {
+                        Value pred, bool twoCtas, bool multicast,
+                        ValueRange barriers, ValueRange barrierPreds,
+                        bool isAsync) {
   if (!barriers.empty()) {
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        twoCtas ? builder.getUnitAttr() : UnitAttr(),
+        multicast ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
+
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  auto numDescs = getDescs().size();
+  if (numDescs > 2)
+    return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  return success();
+}
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {

@@ -137,10 +137,10 @@ def is_hip_cdna4():
 
 
 def supports_block_scaling():
-    return (is_cuda() and torch.cuda.get_device_capability()[0] == 10) or is_hip_cdna4()
+    return (is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]) or is_hip_cdna4()
 
 
-if is_cuda() and torch.cuda.get_device_capability()[0] == 10:
+if is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)

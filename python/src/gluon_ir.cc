@@ -547,6 +547,11 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
                  ctx, ctaSplitNum[0], ctaSplitNum[1]);
            })
+      .def("get_shape_from_tensor",
+           [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
+             auto ty = dyn_cast<RankedTensorType>(tensor.getType());
+             return ty.getShape();
+           })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
@@ -780,15 +785,26 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
              self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
            })
+      .def("create_fence_mbarrier_init_release_cluster",
+           [](GluonOpBuilder &self) {
+             self.create<ttng::FenceMBarrierInitReleaseClusterOp>();
+           })
+      .def("create_cluster_arrive",
+           [](GluonOpBuilder &self, bool relaxed) {
+             self.create<ttng::ClusterArriveOp>(relaxed);
+           })
+      .def("create_cluster_wait",
+           [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas) {
+              std::vector<Value> &mbarrier_preds, bool two_ctas,
+              bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
-                                            pred, two_ctas, mbarriers,
-                                            mbarrier_preds);
+                                            pred, two_ctas, multicast,
+                                            mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
@@ -803,8 +819,9 @@ void init_gluon_ir(py::module &&m) {
                  useAcc, pred, mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_commit",
-           [](GluonOpBuilder &self, Value &barrier, Value &pred, bool twoCTAs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, twoCTAs);
+           [](GluonOpBuilder &self, Value &barrier, Value &pred,
+              std::vector<Value> &descs) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
            })
 
       .def("create_async_tma_copy_global_to_local",
@@ -920,6 +937,14 @@ void init_gluon_ir(py::module &&m) {
               Value src, Value barrier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src, barrier);
+           })
+      .def("create_tdm_prefetch",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value pred, bool speculative, bool returnOffsets) -> Value {
+             auto op = self.create<ttag::TDMPrefetchOp>(
+                 descPtr, indices, pred, speculative,
+                 returnOffsets ? UnitAttr::get(self.getContext()) : nullptr);
+             return returnOffsets ? op->getResult(0) : nullptr;
            })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {

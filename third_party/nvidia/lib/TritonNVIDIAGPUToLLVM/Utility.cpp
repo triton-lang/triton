@@ -140,7 +140,8 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
 }
 
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits, int numCTAs) {
+                             uint16_t broadcastBits) {
+  int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
   int blockBits = llvm::Log2_32(numCTAs);
   uint32_t fixedBits = (~broadcastBits) & (numCTAs - 1);
   uint32_t pattern = 1;

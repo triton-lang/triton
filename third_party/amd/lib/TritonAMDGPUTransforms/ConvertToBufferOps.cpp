@@ -368,6 +368,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
+    if (auto mask = op.getMask()) {
+      vecSize = std::min(vecSize, axisAnalysisPass.getMaskAlignment(mask));
+    }
     // f16/bf16 dtypes could only be efficiently calculated using instructions
     // that pack 2 elements (e.g. @llvm.amdgcn.raw.buffer.atomic.fadd.v2f16)
     if (vecSize % 2 != 0 && (checkType.isF16() || checkType.isBF16())) {

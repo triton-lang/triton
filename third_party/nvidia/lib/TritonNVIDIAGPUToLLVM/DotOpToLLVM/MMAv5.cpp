@@ -294,29 +294,47 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
 }
 
 static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
-                            Value barrier, Value pred, bool twoCTAs = false) {
+                            Value barrier, Value pred, bool twoCTAs,
+                            ValueRange descs) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value mask;
+  if (!descs.empty()) {
+    auto kBlock = StringAttr::get(rewriter.getContext(), "block");
+    for (Value desc : descs) {
+      auto descTy = cast<MemDescType>(desc.getType());
+      uint16_t broadcastBits =
+          toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
+      if (twoCTAs)
+        broadcastBits |= 1;
+      if (broadcastBits) {
+        Value descMask =
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        mask = mask ? b.or_(descMask, mask) : descMask;
+      }
+    }
+  } else if (twoCTAs) {
+    mask = LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, 0x1);
+  }
+
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
   barrier = b.ptrtoint(i32_ty, barrier);
   auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
-  std::string opcode;
-  if (twoCTAs) {
-    auto ctaId = b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
-    auto totalCTAs = lookupNumCTAs(rewriter);
-    auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
-    Value mask = b.shl(b.i16_val(3), ctaIdLead);
-    auto *ctaMask = ptxBuilder.newOperand(mask, "h");
-    ptxOperands.push_back(ctaMask);
-    opcode = "@$0 "
-             "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
-             "cluster.multicast::cluster.b64 [$1], $2;";
-  } else {
-    opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
+  std::string opcode =
+      "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+      ".mbarrier::arrive::one.shared::cluster";
+  if (mask)
+    opcode += ".multicast::cluster";
+  opcode += ".b64 [$1]";
+  if (mask) {
+    opcode += ", $2";
+    auto *maskOperand = ptxBuilder.newOperand(mask, "h");
+    ptxOperands.push_back(maskOperand);
   }
+  opcode += ";";
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
@@ -367,8 +385,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
                              Value a, Value b, Value loadedA, Value loadedB,
                              MemDescType dTensorTy, Value useDFlag, Value pred,
                              ValueRange barriers, ValueRange barrierPreds,
-                             bool twoCTAs, bool opKindIsMXFP4,
-                             const DotConversion &op) {
+                             bool twoCTAs, ValueRange commitDescs,
+                             bool opKindIsMXFP4, const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -487,7 +505,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     Value commitPred = tb.and_(barrierPred, elect);
     auto smemObj =
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
+    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs,
+                    commitDescs);
   }
   LLVM::BrOp::create(rewriter, loc, endBlock);
   return success();
@@ -502,6 +521,13 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
+  SmallVector<Value> commitDescs;
+  if (op.getMulticast()) {
+    if (isa<SharedEncodingTrait>(aTensorTy.getEncoding())) {
+      commitDescs.push_back(op.getA());
+    }
+    commitDescs.push_back(op.getB());
+  }
 
   DotConversion dot;
 
@@ -538,11 +564,11 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
                   useInitAcc, desc.aInTmem, twoCTAs);
   };
 
-  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
-                        adaptor.getA(), adaptor.getB(), dTensorTy,
-                        adaptor.getUseD(), adaptor.getPred(),
-                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
-                        twoCTAs, /*opKindIsMXFP4=*/false, dot);
+  return convertDotImpl(
+      typeConverter, rewriter, loc, op.getA(), op.getB(), adaptor.getA(),
+      adaptor.getB(), dTensorTy, adaptor.getUseD(), adaptor.getPred(),
+      adaptor.getBarriers(), adaptor.getBarrierPreds(), twoCTAs, commitDescs,
+      /*opKindIsMXFP4=*/false, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -657,7 +683,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                         adaptor.getA(), adaptor.getB(), dTensorTy,
                         adaptor.getUseD(), adaptor.getPred(),
                         adaptor.getBarriers(), adaptor.getBarrierPreds(),
-                        twoCTAs, opKindIsMXFP4, dot);
+                        twoCTAs, ValueRange{}, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -713,8 +739,16 @@ struct TCGen5CommitOpConversion
     if (adaptor.getPred())
       pred = b.and_(adaptor.getPred(), pred);
 
-    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
-                    ttng::getModuleTwoCTAs(op));
+    bool twoCTAs = ttng::getModuleTwoCTAs(op);
+    if (twoCTAs) {
+      Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+      leftClusterId = b.and_(leftClusterId, b.i32_val(1));
+      Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
+      pred = b.and_(pred, cluster0);
+    }
+
+    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred, twoCTAs,
+                    op.getDescs());
     rewriter.eraseOp(op);
     return success();
   }

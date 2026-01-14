@@ -1,5 +1,4 @@
-from dataclasses import dataclass, fields
-from typing import Type
+from dataclasses import dataclass
 
 import torch
 from triton.tools.ragged_tma import create_ragged_descriptor
@@ -10,6 +9,7 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
+from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64
 
 
 # storage
@@ -17,88 +17,11 @@ from .tensor_details.ragged_tensor import RaggedTensorMetadata
 @dataclass
 class Storage:
     data: torch.Tensor
-    layout: Layout = None
-
-    def __post_init__(self):
-        assert isinstance(self.data, torch.Tensor)
-        if self.layout is None:
-            self.layout = StridedLayout(self.data.shape)
+    layout: Layout
 
     @property
     def device(self):
         return self.data.device
-
-    def is_tma_compliant(self):
-        # TMAs didn't exist until Hopper
-        if not cuda_capability_geq(9, 0):
-            return False
-        # TMAs only exist for 2D, 3D, 5D inputs
-        if len(self.data.shape) not in [2, 3, 5]:
-            return False
-        # TMAs need at most one stride equal to 1
-        # and all other strides divisble by 16
-        strides = list(self.data.stride())
-        try:
-            major_dim = strides.index(1)
-        except ValueError:
-            major_dim = -1
-        ndim = self.data.ndim
-        bitwidth = 4 if self.data.dtype == torch.uint8 else self.data.element_size() * 8
-        compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
-        return all(compliant)
-
-    def make_dense_tma(self, block_shape, is_scale):
-        strides = list(self.data.stride())
-        shape = list(self.data.shape)
-        block_shape = self.layout.swizzle_block_shape(block_shape)
-        transpose = strides[-1] != 1
-        if transpose:
-            # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
-            # https://github.com/triton-lang/triton/blob/e5e0081db3335e7755e2c67c784cb1c92769812f/python/triton/tools/tensor_descriptor.py#L26
-            block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
-            shape = shape[:-2] + [shape[-1], shape[-2]]
-            strides = strides[:-2] + [strides[-1], strides[-2]]
-        if self.data.dtype == torch.uint8 and not is_scale:
-            indx = strides.index(1)
-            block_shape[indx] = block_shape[indx] // 2
-            if isinstance(self.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
-                raise ValueError(
-                    "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
-        return TensorDescriptor(self.data, shape, strides, block_shape)
-
-    def make_tma(self, block_shape, mode, is_scale=False):
-        if mode in ["dense", "gather", "scatter"]:
-            return self.make_dense_tma(block_shape, is_scale)
-        assert mode == "ragged"
-        ragged_dim = len(self.data.shape) - 2
-        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
-
-
-# data types
-# ---------------------------------------------------------------------------- #
-@dataclass
-class IntegerType:
-    bitwidth: int
-
-
-@dataclass
-class FloatType:
-    bitwidth_exponent: int
-    bitwidth_mantissa: int
-    is_signed: bool
-
-    def __post_init__(self):
-        self.bitwidth = int(self.is_signed) + self.bitwidth_exponent + self.bitwidth_mantissa
-
-
-BIT = IntegerType(1)
-FP4 = FloatType(bitwidth_exponent=2, bitwidth_mantissa=1, is_signed=True)
-
-
-def bitwidth(type: IntegerType | FloatType | torch.dtype):
-    if isinstance(type, torch.dtype):
-        return type.itemsize * 8
-    return type.bitwidth
 
 
 # main tensor class
@@ -107,23 +30,20 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
 
 @dataclass
 class Tensor:
-    storage: Storage | torch.Tensor
-    dtype: IntegerType | FloatType | torch.dtype = None
+    storage: Storage
+    dtype: IntegerType | FloatType
     shape: list[int] | None = None
     shape_max: list[int] | None = None
 
     def __post_init__(self):
-        # set storage
-        if isinstance(self.storage, torch.Tensor):
-            self.storage = Storage(self.storage)
+        assert isinstance(self.storage, Storage)
         # initialize dtype
-        if self.dtype is None:
-            self.dtype = self.storage.data.dtype
-        if bitwidth(self.dtype) < 8 and self.shape is None:
+        if self.dtype.bitwidth < 8 and self.shape is None:
             raise ValueError("shape must be provided for sub-byte types")
         # initialize shape
         if self.shape is None:
             self.shape = list(self.storage.data.shape)
+        self.shape = list(self.shape)
         # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
         is_int = lambda s: isinstance(s, int)
         is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
@@ -158,7 +78,7 @@ class Tensor:
         return self.storage.data.numel()
 
     def element_size(self):
-        return bitwidth(self.dtype) // 8
+        return self.dtype.bitwidth // 8
 
     @property
     def data(self):
@@ -174,16 +94,60 @@ class Tensor:
         return self.shape[i]
 
 
+def is_tma_compliant(tensor):
+    storage = tensor.storage
+    # TMAs didn't exist until Hopper
+    if not cuda_capability_geq(9, 0):
+        return False
+    # TMAs only exist for 2D, 3D, 5D inputs
+    if len(storage.data.shape) not in [2, 3, 5]:
+        return False
+    # TMAs need at most one stride equal to 1
+    # and all other strides divisble by 16
+    strides = list(storage.data.stride())
+    try:
+        major_dim = strides.index(1)
+    except ValueError:
+        major_dim = -1
+    ndim = storage.data.ndim
+    bitwidth = 4 if storage.data.dtype == torch.uint8 else storage.data.element_size() * 8
+    compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
+    return all(compliant)
+
+
+def make_dense_tma(tensor, block_shape, is_scale):
+    storage = tensor.storage
+    strides = list(storage.data.stride())
+    shape = list(storage.data.shape)
+    block_shape = storage.layout.swizzle_block_shape(block_shape)
+    transpose = strides[-1] != 1
+    if transpose:
+        # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
+        # https://github.com/triton-lang/triton/blob/e5e0081db3335e7755e2c67c784cb1c92769812f/python/triton/tools/tensor_descriptor.py#L26
+        block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
+        shape = shape[:-2] + [shape[-1], shape[-2]]
+        strides = strides[:-2] + [strides[-1], strides[-2]]
+    if storage.data.dtype == torch.uint8 and not is_scale:
+        indx = strides.index(1)
+        block_shape[indx] = block_shape[indx] // 2
+        if isinstance(storage.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
+            raise ValueError(
+                "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
+    return TensorDescriptor(storage.data, shape, strides, block_shape)
+
+
+def make_tma(tensor, block_shape, mode, is_scale=False):
+    if mode in ["dense", "gather", "scatter"]:
+        return make_dense_tma(tensor, block_shape, is_scale)
+    assert mode == "ragged"
+    storage = tensor.storage
+    ragged_dim = len(storage.data.shape) - 2
+    return create_ragged_descriptor(storage.data, block_shape, ragged_dim=ragged_dim)
+
+
 # ---------------------------------------------------------------------------- #
 # bitmatrix
 # ---------------------------------------------------------------------------- #
-@dataclass
-class Bitmatrix(Tensor):
-
-    def __post_init__(self):
-        assert self.dtype == BIT
-        super().__post_init__()
-
 
 make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
 make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
@@ -227,7 +191,7 @@ remap_ragged_tensor_metadata_torch = ragged_tensor_details.remap_ragged_tensor_m
 class SparseMatrix:
     indx: torch.Tensor
     vals: torch.Tensor
-    mask: Bitmatrix
+    mask: Tensor
 
     def __post_init__(self):
         self.mask_metadata = make_bitmatrix_metadata(self.indx, self.mask)
@@ -237,27 +201,91 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def get_layout(tensor: torch.Tensor | Tensor | None):
-    if tensor is None:
-        return None
-    if isinstance(tensor, Tensor):
-        return tensor.storage.layout
-    return StridedLayout
-
-
-def wrap_torch_tensor(torch_tensor, dtype=None):
+def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
     if dtype is None:
         dtype = torch_tensor.dtype
-    shape = list(torch_tensor.shape)
-    shape[torch_tensor.stride().index(1)] *= bitwidth(torch_tensor.dtype) // bitwidth(dtype)
-    return Tensor(Storage(torch_tensor), dtype=dtype, shape=shape)
+    dtype = torch_dtype_to_dtype(dtype)
+    if shape is None:
+        shape = list(torch_tensor.shape)
+        if dtype == FP4:
+            shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
+    if shape_max is None:
+        shape_max = list(shape)
+    if layout is None:
+        # For a strided (dense) tensor we only track which dimension has unit stride.
+        # This is consistent with how we expand `shape` for packed sub-byte dtypes.
+        major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
+        layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
+    return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
-def convert_layout(tensor: Tensor, layout_cls: Type[Layout], **layout_kwargs):
-    assert isinstance(tensor, Tensor)
-    old_storage = tensor.storage
-    old_data = old_storage.layout.unswizzle_data(old_storage.data)
-    new_layout = layout_cls(old_data.shape, **layout_kwargs)
-    new_data = new_layout.swizzle_data(old_data)
-    attrs = {k.name: getattr(tensor, k.name) for k in fields(tensor) if k.name != "storage"}
-    return Tensor(Storage(new_data, new_layout), **attrs)
+def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    shape = list(tensor.shape)
+    # convert `tensor` into canonical form
+    transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
+    canonical_data = transformation.unswizzle_data(tensor.storage.data)
+    # convert canonical form to `layout`
+    transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
+    new_data = transformation.swizzle_data(canonical_data)
+    return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
+
+
+def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
+    if dtype is None:
+        return None
+    if not isinstance(dtype, DataType):
+        return dtype
+    return {
+        FP4: torch.uint8,
+        UINT8: torch.uint8,
+        FP8_E4M3FN: torch.float8_e4m3fn,
+        FP8_E4M3FNUZ: torch.float8_e4m3fnuz,
+        FP8_E5M2: torch.float8_e5m2,
+        BF16: torch.bfloat16,
+        FP32: torch.float32,
+        FP16: torch.float16,
+        FP64: torch.float64,
+    }[dtype]
+
+
+def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
+    if isinstance(dtype, DataType):
+        return dtype
+    id = str(dtype).split(".")[-1]
+    vals = {
+        "uint8": UINT8,
+        "float8_e4m3fn": FP8_E4M3FN,
+        "float8_e4m3fnuz": FP8_E4M3FNUZ,
+        "float8_e5m2": FP8_E5M2,
+        "float16": FP16,
+        "bfloat16": BF16,
+        "float32": FP32,
+        "float64": FP64,
+    }
+    if id in vals:
+        return vals[id]
+    if "float8" in id:
+        return FP8_E4M3FN
+    assert False, f"Unknown dtype: {id}"
+
+
+def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
+    storage_shape = list(shape)
+    storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
+    # pack sub-byte datatype along last dimension
+    if layout is None:
+        layout = StridedLayout()
+    # storage shape
+    assert isinstance(layout, StridedLayout)
+    order = layout.order(len(storage_shape))
+    dim = order[0]
+    storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
+    # storage strides
+    strides = [0] * len(storage_shape)
+    running = 1
+    for d in order:  # iterate minor -> major
+        strides[d] = running
+        running *= storage_shape[d]
+    storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
+    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
