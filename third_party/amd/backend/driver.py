@@ -220,24 +220,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-FLOAT_STORAGE_TYPE = {
-    "fp16": "uint16_t",
-    "bf16": "uint16_t",
-    "fp32": "uint32_t",
-    "f32": "uint32_t",
-    "fp64": "uint64_t",
-}
-FLOAT_PACK_FUNCTION = {
-    "fp16": "pack_fp16",
-    "bf16": "pack_bf16",
-    "fp32": "pack_fp32",
-    "f32": "pack_fp32",
-    "fp64": "pack_fp64",
-}
-
-_BASE_ARGS_FORMAT = "piiiKKOOOOO"
-
-
 def expand_signature(signature, tensordesc_meta):
     output = []
     tensordesc_idx = 0
@@ -271,6 +253,10 @@ def expand_signature(signature, tensordesc_meta):
 
 
 def make_kernel_signature(signature):
+    """
+    Creates a kernel signature in C to be able to efficiently extract
+    arguments in the launcher.
+    """
 
     def _flatten_signature(sig, output):
         # Flatten tuples
@@ -288,9 +274,11 @@ def make_kernel_signature(signature):
     return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
-# This creates a signature with an efficient method to flatten tuples,
-# and remove constexpr in the launcher.
 def annotate_arguments(signature):
+    """
+    This recreates the signature with annotations as C objects which can then
+    be used to efficiently flatten tuples, and remove constexpr in the launcher.
+    """
     annotated_arguments = []
     for sig in signature:
         if isinstance(sig, tuple):

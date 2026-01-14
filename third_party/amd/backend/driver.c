@@ -666,6 +666,7 @@ bool extractPointer(void *ptr, PyObject *obj) {
     return false;
   }
   *dev_ptr = (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
+  Py_DECREF(ret);
   if (*dev_ptr == 0) {
     return true; // valid nullptr
   }
@@ -983,6 +984,17 @@ cleanup:
   return false;
 }
 
+bool launchHook(PyObject *hook, PyObject *metadata) {
+  if (hook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(hook, metadata);
+    if (!ret) {
+      return false;
+    }
+    Py_DECREF(ret);
+  }
+  return true;
+}
+
 static PyObject *launchKernel(PyObject *self, PyObject *args) {
   int gridX, gridY, gridZ;
   uint64_t _stream;
@@ -991,33 +1003,24 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   PyObject *profile_scratch_obj = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
-  PyObject *kernel_metadata = NULL;
+  int num_warps, num_ctas, shared_memory;
   PyObject *launch_metadata = NULL;
   int warp_size;
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
-  if (!PyArg_ParseTuple(
-          args, "piiiKKOOOOOiOy*O", &launch_cooperative_grid, &gridX, &gridY,
-          &gridZ, &_stream, &_function, &profile_scratch_obj, &kernel_metadata,
-          &launch_metadata, &launch_enter_hook, &launch_exit_hook, &warp_size,
-          &arg_annotations, &signature, &kernel_args)) {
+  if (!PyArg_ParseTuple(args, "piiiKKO(iii)OOOiOy*O", &launch_cooperative_grid,
+                        &gridX, &gridY, &gridZ, &_stream, &_function,
+                        &profile_scratch_obj, &num_warps, &num_ctas,
+                        &shared_memory, &launch_metadata, &launch_enter_hook,
+                        &launch_exit_hook, &warp_size, &arg_annotations,
+                        &signature, &kernel_args)) {
     return NULL;
   }
 
-  // extract kernel metadata
-  int num_warps, num_ctas, shared_memory;
-  if (!PyArg_ParseTuple(kernel_metadata, "iii", &num_warps, &num_ctas,
-                        &shared_memory)) {
+  // launch entry hook.
+  if (!launchHook(launch_enter_hook, launch_metadata)) {
     goto cleanup;
-  }
-  // extract launch metadata
-  if (launch_enter_hook != Py_None) {
-    PyObject *ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
-    if (!ret) {
-      goto cleanup;
-    }
-    Py_DECREF(ret);
   }
 
   uint8_t *extractor_data = (uint8_t *)signature.buf;
@@ -1068,12 +1071,8 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
           shared_memory, warp_size, (hipStream_t)_stream,
           (hipFunction_t)_function, params);
 
-  if (launch_exit_hook != Py_None) {
-    PyObject *ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
-    if (!ret) {
-      goto cleanup;
-    }
-    Py_DECREF(ret);
+  if (!launchHook(launch_exit_hook, launch_metadata)) {
+    goto cleanup;
   }
 
   if (PyErr_Occurred()) {
