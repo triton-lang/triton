@@ -8,6 +8,8 @@ from triton_kernels.target_info import get_cdna_version, get_rdna_version
 from triton_kernels.tensor import FP4, FP32, Tensor
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
+from triton_kernels.tensor_details.layout_details.strided import StridedLayout
+from triton_kernels.tensor_details.layout_details.base import Layout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
 @dataclass
@@ -236,10 +238,10 @@ def make_default_opt_flags_nvidia(
         # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
         supports_persistent = False
 
-    def _layout_name(layout):
-        return None if layout is None else layout.name
+    def _is_layout_strided(layout: Layout | None) -> bool:
+        return layout is None or isinstance(layout, StridedLayout)
 
-    requires_persistent = (_layout_name(a_mx_scale_layout) is not None or _layout_name((b_mx_scale_layout)) is not None) and target_info.has_native_mxfp()
+    requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
