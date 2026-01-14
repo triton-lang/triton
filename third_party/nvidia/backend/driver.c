@@ -807,43 +807,43 @@ Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
                                             .name = NULL},
     [EXTRACTOR_INT8_INDEX] = (Extractor){.extract = extractI8,
                                          .size = sizeof(int8_t),
-                                         .name = {"'i8'"}},
+                                         .name = {"i8"}},
     [EXTRACTOR_INT16_INDEX] = (Extractor){.extract = extractI16,
                                           .size = sizeof(int16_t),
-                                          .name = {"'i16'"}},
+                                          .name = {"i16"}},
     [EXTRACTOR_INT32_INDEX] = (Extractor){.extract = extractI32,
                                           .size = sizeof(int32_t),
-                                          .name = {"'i1'", "'i32'"}},
+                                          .name = {"i1", "i32"}},
     [EXTRACTOR_INT64_INDEX] = (Extractor){.extract = extractI64,
                                           .size = sizeof(int64_t),
-                                          .name = {"'i64'"}},
+                                          .name = {"i64"}},
     [EXTRACTOR_UINT8_INDEX] = (Extractor){.extract = extractU8,
                                           .size = sizeof(uint8_t),
-                                          .name = {"'u8'"}},
+                                          .name = {"u8"}},
     [EXTRACTOR_UINT16_INDEX] = (Extractor){.extract = extractU16,
                                            .size = sizeof(uint16_t),
-                                           .name = {"'u16'"}},
+                                           .name = {"u16"}},
     [EXTRACTOR_UINT32_INDEX] = (Extractor){.extract = extractU32,
                                            .size = sizeof(uint32_t),
-                                           .name = {"'u1'", "'u32'"}},
+                                           .name = {"u1", "u32"}},
     [EXTRACTOR_UINT64_INDEX] = (Extractor){.extract = extractU64,
                                            .size = sizeof(uint64_t),
-                                           .name = {"'u64'"}},
+                                           .name = {"u64"}},
     [EXTRACTOR_FP16_INDEX] = (Extractor){.extract = extractFP16,
                                          .size = sizeof(uint16_t),
-                                         .name = {"'fp16'"}},
+                                         .name = {"fp16"}},
     [EXTRACTOR_BF16_INDEX] = (Extractor){.extract = extractBF16,
                                          .size = sizeof(uint16_t),
-                                         .name = {"'bf16'"}},
+                                         .name = {"bf16"}},
     [EXTRACTOR_FP32_INDEX] = (Extractor){.extract = extractFP32,
                                          .size = sizeof(uint32_t),
-                                         .name = {"'fp32'", "'f32'"}},
+                                         .name = {"fp32", "f32"}},
     [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
                                          .size = sizeof(uint64_t),
-                                         .name = {"'fp64'"}},
+                                         .name = {"fp64"}},
     [EXTRACTOR_NVTMADESC_INDEX] = (Extractor){.extract = extractTmaDesc,
                                               .size = sizeof(CUtensorMap),
-                                              .name = {"'nvTmaDesc'"}},
+                                              .name = {"nvTmaDesc"}},
 };
 
 Extractor getExtractor(uint8_t index) {
@@ -865,45 +865,28 @@ bool isMatch(const char *type_bytes, ExtractorTypeIndex idx) {
 }
 
 ExtractorTypeIndex getExtractorIndex(PyObject *type) {
-  ExtractorTypeIndex index = EXTRACTOR_UNKOWN_INDEX;
-  PyObject *type_repr = PyObject_Repr(type);
-  if (!type_repr) {
-    return index;
-  }
-  PyObject *type_str = PyUnicode_AsEncodedString(type_repr, "utf-8", "~E~");
-  if (!type_str) {
-    Py_DECREF(type_repr);
-    return index;
-  }
-  const char *type_bytes = PyBytes_AsString(type_str);
+  Py_ssize_t type_len = 0;
+  const char *type_bytes = PyUnicode_AsUTF8AndSize(type, &type_len);
   if (!type_bytes) {
-    goto cleanup;
+    return EXTRACTOR_UNKOWN_INDEX;
   }
-  if (strlen(type_bytes) < 2) {
-    PyErr_Format(PyExc_RuntimeError, "Unexpected data type: %R", type_repr);
-    goto cleanup;
+  if (type_len < 2) {
+    PyErr_Format(PyExc_RuntimeError, "Unexpected data type: %R", type);
+    return EXTRACTOR_UNKOWN_INDEX;
   }
-
   // Examples: '*fp32', 'fp32', 'i8', etc.
-  if (type_bytes[1] == '*') {
-    index = EXTRACTOR_POINTER_INDEX;
-    goto cleanup;
+  if (type_bytes[0] == '*') {
+    return EXTRACTOR_POINTER_INDEX;
   }
   for (ExtractorTypeIndex i = EXTRACTOR_INT8_INDEX; i < EXTRACTOR_TYPE_COUNT;
        i++) {
     if (isMatch(type_bytes, i)) {
-      index = i;
-      goto cleanup;
+      return i;
     }
   }
 
-  PyErr_Format(PyExc_RuntimeError, "Unknown data type: %R", type_repr);
-  goto cleanup;
-
-cleanup:
-  Py_DECREF(type_repr);
-  Py_DECREF(type_str);
-  return index;
+  PyErr_Format(PyExc_RuntimeError, "Unknown data type: %R", type);
+  return EXTRACTOR_UNKOWN_INDEX;
 }
 
 // Takes in a list of types (ex: ['*fp32', 'u8', 'nvTmaDesc']) and returns
