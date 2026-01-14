@@ -285,3 +285,88 @@ tt.func @unsplat(%arg0: tensor<1x1xf32>) -> f32 {
   %0 = tt.unsplat %arg0 : tensor<1x1xf32>
   tt.return %0 : f32
 }
+
+// -----
+// TensorDescType IM2COL Mode Tests
+
+// CHECK-LABEL: @tensordesc_default_tiled
+// Test that tensordesc defaults to tiled mode
+tt.func @tensordesc_default_tiled(%arg0: !tt.tensordesc<tensor<16x16xf16>>) {
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>>
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_explicit_tiled
+// Test tensordesc with explicit tiled mode (default mode is elided in output)
+tt.func @tensordesc_explicit_tiled(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode = "tiled">) {
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>>
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_im2col_basic
+// Test tensordesc with im2col mode
+tt.func @tensordesc_im2col_basic(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col">) {
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col">
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_im2col_full
+// Test tensordesc with im2col mode and all parameters for 2D convolution (rank 4)
+// Note: elementStrides included to maintain parameter order
+tt.func @tensordesc_im2col_full(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col",
+                                                      elementStrides = [1, 1],
+                                                      pixelBoxLowerCorner = [0, -1], 
+                                                      pixelBoxUpperCorner = [0, 1],
+                                                      channelsPerPixel = 16,
+                                                      pixelsPerColumn = 16>) {
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col", elementStrides = [1, 1], pixelBoxLowerCorner = [0, -1], pixelBoxUpperCorner = [0, 1], channelsPerPixel = 16, pixelsPerColumn = 16>
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_im2col_3d
+// Test tensordesc with im2col mode for 3D convolution (rank 5, requires 3 offset values)
+tt.func @tensordesc_im2col_3d(%arg0: !tt.tensordesc<tensor<8x8xf16>, mode = "im2col",
+                                                     elementStrides = [1, 1],
+                                                     pixelBoxLowerCorner = [0, -1, -1],
+                                                     pixelBoxUpperCorner = [0, 1, 1],
+                                                     channelsPerPixel = 8,
+                                                     pixelsPerColumn = 8>) {
+  // CHECK: !tt.tensordesc<tensor<8x8xf16>, mode = "im2col", elementStrides = [1, 1], pixelBoxLowerCorner = [0, -1, -1], pixelBoxUpperCorner = [0, 1, 1], channelsPerPixel = 8, pixelsPerColumn = 8>
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_im2col
+// Test tensordesc with im2col mode and im2col-specific parameters
+// Note: im2col parameters (elementStrides, pixelBoxLowerCorner, etc.) are only valid in im2col mode
+tt.func @tensordesc_im2col(%arg0: !tt.tensordesc<tensor<16x16xf16>>,
+                           %arg1: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col", 
+                                                 elementStrides = [1, 1],
+                                                 pixelBoxLowerCorner = [0, -1],
+                                                 pixelBoxUpperCorner = [0, 1],
+                                                 channelsPerPixel = 16,
+                                                 pixelsPerColumn = 16>) {
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>>
+  // CHECK: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col", elementStrides = [1, 1], pixelBoxLowerCorner = [0, -1], pixelBoxUpperCorner = [0, 1], channelsPerPixel = 16, pixelsPerColumn = 16>
+  tt.return
+}
+
+// CHECK-LABEL: @tensordesc_im2col_with_ops
+// Test that im2col tensordesc works with descriptor operations
+tt.func @tensordesc_im2col_with_ops(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col",
+                                                           elementStrides = [1, 1],
+                                                           pixelBoxLowerCorner = [0, -1],
+                                                           pixelBoxUpperCorner = [0, 1],
+                                                           channelsPerPixel = 16,
+                                                           pixelsPerColumn = 16>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: tt.descriptor_load %arg0[%{{.+}}, %{{.+}}] : !tt.tensordesc<tensor<16x16xf16>, mode = "im2col", elementStrides = [1, 1], pixelBoxLowerCorner = [0, -1], pixelBoxUpperCorner = [0, 1], channelsPerPixel = 16, pixelsPerColumn = 16> -> tensor<16x16xf16>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<tensor<16x16xf16>, mode = "im2col",
+                                                             elementStrides = [1, 1],
+                                                             pixelBoxLowerCorner = [0, -1],
+                                                             pixelBoxUpperCorner = [0, 1],
+                                                             channelsPerPixel = 16,
+                                                             pixelsPerColumn = 16> -> tensor<16x16xf16>
+  tt.return
+}
+
+// -----
