@@ -217,12 +217,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: reduce_xor_max
   tt.func @reduce_xor_max(%arg0: tensor<32xf32, #blocked4>) {
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 177, 15, 15, false : i32
+    // CHECK: rocdl.ds_swizzle
     // CHECK: llvm.intr.maxnum
 
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 78, 15, 15, false : i32
+    // CHECK-SAME: with 280, 15, 12, false : i32
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 264, 15, 3, false : i32
     // CHECK: llvm.intr.maxnum
 
     // CHECK: rocdl.update.dpp
@@ -232,11 +233,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: llvm.intr.maxnum
 
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 280, 15, 12, false : i32
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 264, 15, 3, false : i32
+    // CHECK-SAME: with 78, 15, 15, false : i32
     // CHECK: llvm.intr.maxnum
-    // CHECK: rocdl.ds_swizzle
+
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 177, 15, 15, false : i32
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
       %1 = arith.maxnumf %arg1, %arg2 : f32
