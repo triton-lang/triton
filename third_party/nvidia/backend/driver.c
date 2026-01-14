@@ -616,11 +616,6 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
   }
 }
 
-typedef struct _DevicePtrInfo {
-  CUdeviceptr dev_ptr;
-  bool valid;
-} DevicePtrInfo;
-
 static PyObject *data_ptr_str = NULL;
 
 // Extract a CUDA device pointer from a pointer-like PyObject obj, and store
@@ -643,6 +638,7 @@ bool extractPointer(void *ptr, PyObject *obj) {
     return false;
   }
   *dev_ptr = PyLong_AsUnsignedLongLong(ret);
+  Py_DECREF(ret);
   if (*dev_ptr == 0) {
     return true; // valid nullptr
   }

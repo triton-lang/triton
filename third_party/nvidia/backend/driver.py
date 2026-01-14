@@ -3,9 +3,7 @@ import os
 import subprocess
 import triton
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
@@ -121,25 +119,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-FLOAT_STORAGE_TYPE = {
-    "fp16": "uint16_t",
-    "bf16": "uint16_t",
-    "fp32": "uint32_t",
-    "f32": "uint32_t",
-    "fp64": "uint64_t",
-}
-FLOAT_PACK_FUNCTION = {
-    "fp16": "pack_fp16",
-    "bf16": "pack_bf16",
-    "fp32": "pack_fp32",
-    "f32": "pack_fp32",
-    "fp64": "pack_fp64",
-}
-
-_BASE_ARGS_FORMAT = "iiiKKppOOOOOO"
-_BASE_ARGS_FORMAT_LEN = len(_BASE_ARGS_FORMAT)
-
-
 def expand_signature(signature, tensordesc_meta):
     output = []
     tensordesc_idx = 0
@@ -181,6 +160,10 @@ def expand_signature(signature, tensordesc_meta):
 
 
 def make_kernel_signature(signature):
+    """
+    Creates a kernel signature in C to be able to efficiently extract
+    arguments in the launcher.
+    """
 
     def _flatten_signature(sig, output):
         # Flatten tuples
@@ -198,17 +181,11 @@ def make_kernel_signature(signature):
     return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
-@dataclass(frozen=True)
-class KernelArg:
-    signature: Any
-    is_kernel_arg: bool = False
-    is_tuple: bool = False
-
-
-# This creates a signature with an efficient method to flatten tuples,
-# remove constexpr, and expand tensor descriptors from the args list before
-# passing it to the launcher.
 def annotate_arguments(signature):
+    """
+    This recreates the signature with annotations as C objects which can then
+    be used to efficiently flatten tuples, and remove constexpr in the launcher.
+    """
     annotated_arguments = []
     for sig in signature:
         if isinstance(sig, tuple):
@@ -272,6 +249,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
     if not has_tensor_desc_arg:
         return launcher
+
     tensordesc_indices = set(
         [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
     assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
