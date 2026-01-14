@@ -239,7 +239,6 @@ class HIPBackend(BaseBackend):
         use_async_copy = is_async_copy_enabled(options.arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
         use_lds_prefetch = is_lds_prefetch_enabled(options.arch)
-        print("use_lds_prefetch: ", use_lds_prefetch)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong, use_lds_prefetch)
 
