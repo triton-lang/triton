@@ -186,7 +186,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto maybeOpRange =
         estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
     if (!maybeOpRange.has_value())
-      return true;
+      return false;
     auto opRange = maybeOpRange.value();
 
     auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
@@ -206,7 +206,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto maybeOpRange =
         estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
     if (!maybeOpRange.has_value())
-      return true;
+      return false;
     auto opRange = maybeOpRange.value();
 
     auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
