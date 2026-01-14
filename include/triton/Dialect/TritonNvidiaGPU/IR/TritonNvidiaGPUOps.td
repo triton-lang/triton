@@ -703,6 +703,22 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
       build($_builder, $_state, result, /*token=*/Type(), /*red=*/Type(), src,
             /*dep=*/Value(), /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
     }]>,
+    // Builder with reduction - infers red type from result type
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep,
+               "::mlir::triton::nvidia_gpu::TMEMLoadReduceModifierAttr":$redOp,
+               "BoolAttr":$abs, "BoolAttr":$NaN), [{
+      Type redTy;
+      if (redOp) {
+        auto tensorTy = ::mlir::cast<RankedTensorType>(result);
+        SmallVector<int64_t> redShape = {tensorTy.getShape()[0]};
+        auto parentEnc = ::mlir::cast<::mlir::triton::gpu::DistributedEncodingTrait>(
+            tensorTy.getEncoding());
+        auto sliceEnc = ::mlir::triton::gpu::SliceEncodingAttr::get(
+            $_builder.getContext(), 1, parentEnc);
+        redTy = RankedTensorType::get(redShape, tensorTy.getElementType(), sliceEnc);
+      }
+      build($_builder, $_state, result, token, redTy, src, dep, redOp, abs, NaN);
+    }]>,
   ];
 
   let hasVerifier = 1;

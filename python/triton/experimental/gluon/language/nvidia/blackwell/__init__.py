@@ -263,13 +263,11 @@ class tensor_memory_descriptor(base_value):
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
 
-        # With reduction - SliceLayout derives 1D layout from 2D parent
-        red_shape = [self.shape[0]]  # [M] for [M,N] input
-        red_layout = SliceLayout(dim=1, parent=layout)
-        red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
+        result, reduced, red_layout = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_op, abs_flag,
+                                                               propagate_nan)
 
-        result, reduced = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_ty.to_ir(builder), red_op,
-                                                   abs_flag, propagate_nan)
+        red_shape = [self.shape[0]]  # [M] for [M,N] input
+        red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
 
         return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
 

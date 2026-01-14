@@ -957,7 +957,7 @@ LogicalResult TMEMLoadOp::verify() {
   if (useNaN && !elemTy.isF32())
     return emitOpError("'NaN' requires floating-point element type (f32)");
 
-  // Validate reduction shape compatibility
+  // Validate reduction conditions
   if (redOp) {
     auto regTy = getType();
     auto memTy = getSrc().getType();
@@ -966,19 +966,48 @@ LogicalResult TMEMLoadOp::verify() {
     if (failed(encodingInfoOr))
       return emitOpError("failed to compute TMEM encoding info");
 
-    auto atom = encodingInfoOr->atom;
-    // Verify that N is not shared across threads in a warp
-    if (atom != TMemAccessAtom::I32x32b)
-      return emitOpError("tmem_load reduction only supports shapes .32x32b");
+    if (encodingInfoOr->unpacked)
+      return emitOpError(
+          "tmem_load reduction requires packed format (unpacked=false)");
 
-    // Verify that N is not shared across warps
-    auto regLayout = triton::gpu::toLinearLayout(regTy);
     auto *ctx = regTy.getContext();
-    auto kWarp = StringAttr::get(ctx, "warp");
+    auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+    auto kReg = S("register");
+    auto kLane = S("lane");
+    auto kWarp = S("warp");
+    auto kBlock = S("block");
+    auto kRow = S("row");
+
+    // Reduction requires registers to expand only along columns, not rows.
+    // Interleaved layouts where registers span multiple rows would mix values
+    // from different rows during reduction.
+    auto &reps = encodingInfoOr->reps;
+    if (!reps.sublayoutIsZero({kReg}, {kRow})) {
+      return emitOpError("tmem_load reduction requires strided TMEM layout "
+                         "(TensorMemoryLayout)");
+    }
+
+    // Verify that each thread's elements along N can be reduced independently.
+    // This could be relaxed in the future to only reduce the kReg bases along N
+    // then cross-warp/block reduction becomes needed.
+    auto regLayout = triton::gpu::toLinearLayout(regTy);
     auto dimN = llvm::to_vector(regLayout.getOutDimNames())[1];
+
+    if (!regLayout.sublayoutIsZero({kLane}, {dimN})) {
+      return emitOpError(
+          "tmem_load reduction with N sharded across lanes is not "
+          "supported");
+    }
+
     if (!regLayout.sublayoutIsZero({kWarp}, {dimN})) {
       return emitOpError(
-          "tmem_load reduction with N shared across warps is not supported");
+          "tmem_load reduction with N sharded across warps is not supported");
+    }
+
+    if (regLayout.hasInDim(kBlock) &&
+        !regLayout.sublayoutIsZero({kBlock}, {dimN})) {
+      return emitOpError(
+          "tmem_load reduction with N sharded across blocks is not supported");
     }
   }
 

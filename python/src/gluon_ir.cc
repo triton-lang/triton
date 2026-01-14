@@ -760,13 +760,11 @@ void init_gluon_ir(py::module &&m) {
       .def(
           "create_tmem_load",
           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
-             std::optional<Type> redTy,
              std::optional<ttng::TMEMLoadReduceModifier> redOp, bool useAbs,
              tt::PropagateNan propagateNan) -> py::object {
             ttng::TMEMLoadReduceModifierAttr redOpAttr = nullptr;
             BoolAttr absAttr = nullptr;
             BoolAttr nanAttr = nullptr;
-            Type redResultTy = redTy.value_or(Type());
 
             if (redOp) {
               redOpAttr = ttng::TMEMLoadReduceModifierAttr::get(
@@ -778,20 +776,21 @@ void init_gluon_ir(py::module &&m) {
             }
 
             auto op = self.create<ttng::TMEMLoadOp>(
-                resultTy, /*token=*/Type(), redResultTy, memDesc,
-                /*dep=*/Value(), redOpAttr, absAttr, nanAttr);
+                resultTy, /*token=*/Type(), memDesc, /*dep=*/Value(), redOpAttr,
+                absAttr, nanAttr);
 
             if (redOp) {
               Value result = op.getResult();
               Value red = op.getRed();
-              return py::make_tuple(result, red);
+              auto redTy = cast<RankedTensorType>(red.getType());
+              py::object redLayout = layoutToGluon(redTy.getEncoding());
+              return py::make_tuple(result, red, redLayout);
             }
             Value result = op.getResult();
             return py::cast(result);
           },
           py::arg("resultTy"), py::arg("memDesc"),
-          py::arg("redTy") = py::none(), py::arg("redOp") = py::none(),
-          py::arg("useAbs") = false,
+          py::arg("redOp") = py::none(), py::arg("useAbs") = false,
           py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
            [](GluonOpBuilder &self, Value src, Value dst) {

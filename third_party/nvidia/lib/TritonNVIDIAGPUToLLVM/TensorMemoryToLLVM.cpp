@@ -342,7 +342,9 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
   return resultVals;
 }
 
-// Returns {resultVals, redvalVals} where redvalVals is empty if no reduction
+// Returns {resultVals, redvalVals} where redvalVals is empty if no reduction.
+// Reduction produces exactly one value per thread; if multiple messages
+// contribute partial reductions, they are combined into one.
 std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
     Location loc, ConversionPatternRewriter &rewriter, const LinearLayout &reps,
     ArrayRef<Value> vals, TMemAccessAtom atom, Type llvmElemTy, Value tmemBase,
@@ -411,6 +413,24 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
       if (redval)
         redvalVals.push_back(redval);
     }
+  }
+
+  // Combine partial reductions into one value per thread
+  if (redvalVals.size() > 1) {
+    auto isMin = *redOp == TMEMLoadReduceModifier::MIN;
+    auto applyMinMax = [&](Value lhs, Value rhs) {
+      return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
+                             : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
+                          ->getResult(0)
+                    : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
+                             : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
+                          ->getResult(0);
+    };
+    Value combined = redvalVals[0];
+    for (size_t i = 1; i < redvalVals.size(); ++i) {
+      combined = applyMinMax(combined, redvalVals[i]);
+    }
+    redvalVals = {combined};
   }
 
   return {resultVals, redvalVals};
@@ -516,6 +536,11 @@ struct TensorMemoryLoadOpConversion
     auto redOp = op.getRedOp();
     auto useAbs = op.getAbs().value_or(false);
     auto useNaN = op.getNaN().value_or(false);
+    if (redOp) {
+      auto redTy = cast<RankedTensorType>(op.getRed().getType());
+      assert(getTotalElemsPerThread(redTy) == 1 &&
+             "reduction layout must produce exactly one value per thread");
+    }
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto maxnreg = getContextualMaxNReg(op);
@@ -532,47 +557,6 @@ struct TensorMemoryLoadOpConversion
     // Handle reduction output if present
     SmallVector<Value> results = {resultStruct};
     if (redOp) {
-      // Get expected number of redvals per thread from the red result layout
-      auto redTy = cast<RankedTensorType>(op.getRed().getType());
-      size_t expectedSize = getTotalElemsPerThread(redTy);
-
-      assert(isa<Float32Type>(redTy.getElementType()));
-      auto isMin = *redOp == TMEMLoadReduceModifier::MIN;
-      // Apply the appropriate min/max operation based on type and flags
-      auto applyMinMax = [&](Value lhs, Value rhs) -> Value {
-        if (useNaN) {
-          // minimum/maximum propagate NaN
-          return isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
-                             ->getResult(0)
-                       : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs)
-                             ->getResult(0);
-        } else {
-          // minnum/maxnum ignore NaN
-          return isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
-                             ->getResult(0)
-                       : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs)
-                             ->getResult(0);
-        }
-      };
-
-      // If we have more redvalVals than expected, we had multiple messages per
-      // thread and need to combine the partial reductions
-      if (redvalVals.size() > expectedSize) {
-        assert(redvalVals.size() % expectedSize == 0 &&
-               "redvalVals must be a multiple of expectedSize");
-        size_t ratio = redvalVals.size() / expectedSize;
-        SmallVector<Value> combinedRedVals;
-        for (size_t i = 0; i < expectedSize; ++i) {
-          Value combined = redvalVals[i * ratio];
-          for (size_t j = 1; j < ratio; ++j) {
-            Value other = redvalVals[i * ratio + j];
-            combined = applyMinMax(combined, other);
-          }
-          combinedRedVals.push_back(combined);
-        }
-        redvalVals = combinedRedVals;
-      }
-
       // Pack redval values into the red tensor result
       Type redStructTy = getTypeConverter()->convertType(op.getRed().getType());
       Value redStruct = packLLElements(loc, getTypeConverter(), redvalVals,
