@@ -15,13 +15,14 @@ using namespace mlir::triton;
 //===----------------------------------------------------------------------===//
 // TensorDescType Verifier
 //===----------------------------------------------------------------------===//
-LogicalResult TensorDescType::verify(
-    function_ref<InFlightDiagnostic()> emitError, RankedTensorType blockType,
-    mlir::StringAttr mode, mlir::DenseI64ArrayAttr elementStrides,
-    mlir::DenseI64ArrayAttr pixelBoxLowerCorner,
-    mlir::DenseI64ArrayAttr pixelBoxUpperCorner,
-    std::optional<int64_t> channelsPerPixel,
-    std::optional<int64_t> pixelsPerColumn) {
+LogicalResult
+TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
+                       RankedTensorType blockType, mlir::StringAttr mode,
+                       mlir::DenseI64ArrayAttr elementStrides,
+                       mlir::DenseI64ArrayAttr pixelBoxLowerCorner,
+                       mlir::DenseI64ArrayAttr pixelBoxUpperCorner,
+                       std::optional<int64_t> channelsPerPixel,
+                       std::optional<int64_t> pixelsPerColumn) {
   // Validate mode is either "tiled" or "im2col"
   if (mode.getValue() != "tiled" && mode.getValue() != "im2col") {
     return emitError() << "TensorDescType mode must be 'tiled' or 'im2col', "
@@ -47,8 +48,8 @@ LogicalResult TensorDescType::verify(
                             "channelsPerPixel";
     }
     if (pixelsPerColumn.has_value()) {
-      return emitError()
-             << "TensorDescType in 'tiled' mode should not have pixelsPerColumn";
+      return emitError() << "TensorDescType in 'tiled' mode should not have "
+                            "pixelsPerColumn";
     }
   }
 
@@ -68,10 +69,10 @@ LogicalResult TensorDescType::verify(
 
     // Validate pixelsPerColumn matches M dimension
     if (pixelsPerColumn.has_value() && pixelsPerColumn.value() != M) {
-      return emitError()
-             << "TensorDescType in 'im2col' mode: pixelsPerColumn ("
-             << pixelsPerColumn.value()
-             << ") must equal blockType's first dimension (" << M << ")";
+      return emitError() << "TensorDescType in 'im2col' mode: pixelsPerColumn ("
+                         << pixelsPerColumn.value()
+                         << ") must equal blockType's first dimension (" << M
+                         << ")";
     }
 
     // Validate channelsPerPixel matches N dimension

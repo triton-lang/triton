@@ -315,7 +315,7 @@ tt.func @tensordesc_im2col_basic(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode =
 // Note: elementStrides included to maintain parameter order
 tt.func @tensordesc_im2col_full(%arg0: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col",
                                                       elementStrides = [1, 1],
-                                                      pixelBoxLowerCorner = [0, -1], 
+                                                      pixelBoxLowerCorner = [0, -1],
                                                       pixelBoxUpperCorner = [0, 1],
                                                       channelsPerPixel = 16,
                                                       pixelsPerColumn = 16>) {
@@ -339,7 +339,7 @@ tt.func @tensordesc_im2col_3d(%arg0: !tt.tensordesc<tensor<8x8xf16>, mode = "im2
 // Test tensordesc with im2col mode and im2col-specific parameters
 // Note: im2col parameters (elementStrides, pixelBoxLowerCorner, etc.) are only valid in im2col mode
 tt.func @tensordesc_im2col(%arg0: !tt.tensordesc<tensor<16x16xf16>>,
-                           %arg1: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col", 
+                           %arg1: !tt.tensordesc<tensor<16x16xf16>, mode = "im2col",
                                                  elementStrides = [1, 1],
                                                  pixelBoxLowerCorner = [0, -1],
                                                  pixelBoxUpperCorner = [0, 1],
