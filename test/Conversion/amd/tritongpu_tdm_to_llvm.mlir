@@ -66,7 +66,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     // CHECK-DAG: %[[STRIDE0:.*]] = llvm.mlir.constant(128 : i64) : i64
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.cluster.workgroup.id.x"
     // CHECK-DAG: %[[STRIDE0_TRUNC:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
     // CHECK: %[[OFFSET_DIM0:.*]] = llvm.mul{{.*}}%[[STRIDE0_TRUNC]]
     // CHECK: %[[OFFSET_TMP1:.*]] = llvm.add{{.*}}%[[OFFSET_DIM0]]
@@ -98,8 +97,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     // CHECK-DAG: %[[STRIDE0:.*]] = llvm.mlir.constant(128 : i64) : i64
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.cluster.workgroup.id.x"
-    // CHECK-DAG: %[[STRIDE0_TRUNC:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: %[[STRIDE0_TRUNC:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: rocdl.cluster.id.x : i32
     // CHECK: %[[OFFSET_DIM0:.*]] = llvm.mul{{.*}}%[[STRIDE0_TRUNC]]
     // CHECK: %[[OFFSET_TMP1:.*]] = llvm.add{{.*}}%[[OFFSET_DIM0]]
     // CHECK: %[[OFFSET_DIM1:.*]] = llvm.mul{{.*}}%[[STRIDE1]]
@@ -129,7 +128,7 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, "ttg.th
     // Check we compute the multicast mask and used it in the second group of SGPRs (vector<8xi32>)
     // CHECK-DAG: %[[GROUP_MASK:.*]] = llvm.mlir.constant(4369 : i32) : i32
     // CHECK-DAG: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-13 : i32) : i32
-    // CHECK-DAG: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK-DAG: %[[CTA_ID:.*]] = rocdl.cluster.id.x : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
     // Combine with other values
@@ -161,13 +160,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_pred = arith.constant true
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <tensor<64x64xf16, #shared>>
 
-    // CHECK-DAG: %[[NON_SPECULATIVE_BITS:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK-DAG: %[[SPECULATIVE_BITS:.*]] = llvm.mlir.constant(9 : i32) : i32
-
-    // CHECK: llvm.amdgcn.global.prefetch{{.*}}%[[NON_SPECULATIVE_BITS]]
+    // CHECK: rocdl.global.prefetch %{{.*}}, scope 8 : !llvm.ptr<1>
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = false : !tt.tensordesc<tensor<64x64xf16, #shared>>
 
-    // CHECK: llvm.amdgcn.global.prefetch{{.*}}%[[SPECULATIVE_BITS]]
+    // CHECK: rocdl.global.prefetch %{{.*}}, scope 9 : !llvm.ptr<1>
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = true : !tt.tensordesc<tensor<64x64xf16, #shared>>
     tt.return
   }
