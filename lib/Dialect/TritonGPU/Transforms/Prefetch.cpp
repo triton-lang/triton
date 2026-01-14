@@ -129,7 +129,7 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
 //   through block args, yield and find it in the previous loop iteration.
 // - mapping maps original forOp to newForOp, and is not used with
 //   not in for loop, e.g. for emitPrologue.
-// 
+//
 // Case 0 - Prologue. awt is loop arg; returns init value before loop.
 //  - fromPriorIter=false
 //  - mapping=nullptr
@@ -201,7 +201,9 @@ FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
           mapping->map(awOp->getResult(dstIdx), newAwOp->getResult(dstIdx));
         return newAwOp->getResult(0);
       } else {
-        assert(false || "fromPriorIter specified but async wait token wasn't a loop arg.");
+        assert(
+            false ||
+            "fromPriorIter specified but async wait token wasn't a loop arg.");
         return failure();
       }
     } else {
@@ -274,7 +276,9 @@ LogicalResult Prefetcher::initialize() {
           dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
       auto dstMfmaEnc =
           dyn_cast<AMDMfmaEncodingAttr>(getEncoding(dotOp.getResult()));
-      if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2))
+      auto dstWmmaEnc =
+          dyn_cast<AMDWmmaEncodingAttr>(getEncoding(dotOp.getResult()));
+      if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2) && !dstWmmaEnc)
         // Don't rewrite if any other type is found.
         return failure();
       dotsInFor.push_back(dotOp);
@@ -573,7 +577,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
-    LDBG("PrefetchPass - Succeeded");
+      LDBG("PrefetchPass - Succeeded");
     });
   }
 };
