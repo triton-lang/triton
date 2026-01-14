@@ -948,6 +948,15 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
+  LinearLayout withoutBroadcast = linearLayout;
+  for (auto inDim : linearLayout.getInDimNames()) {
+    withoutBroadcast = withoutBroadcast.removeZeroBasesAlongDim(inDim);
+  }
+  if (!withoutBroadcast.isInvertible()) {
+    return emitError()
+           << "After removing the zero bases the layout must be bijective";
+  }
+
   return success();
 }
 
