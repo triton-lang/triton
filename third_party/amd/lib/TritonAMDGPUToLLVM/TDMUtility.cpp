@@ -1,5 +1,4 @@
 #include "TDMUtility.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -704,7 +703,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // computed indices
     Value localOffset =
         dot64(to_vector(make_second_range(indices)), scaledStride);
-    Value prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
+    auto prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
 
     // Mask the prefetch if the offset is out of bounds
     Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
@@ -724,9 +723,10 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     int cache_scope = 8; // (8) = L2 scope
     int speculative = isSpeculative;
     int llvmTemporalHint = cache_scope | speculative;
-    IntegerAttr scope = rewriter.getI32IntegerAttr(llvmTemporalHint);
-    mlir::ROCDL::GlobalPrefetchOp::create(rewriter, loc, {}, prefetchPtr, scope,
-                                          {}, {}, {});
+    Value scope = LLVM::ConstantOp::create(
+        rewriter, loc, i32_ty, rewriter.getI32IntegerAttr(llvmTemporalHint));
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, scope});
 
     rewriter.setInsertionPointToEnd(prefetchBlock);
     LLVM::BrOp::create(rewriter, loc, afterPrefetch);
