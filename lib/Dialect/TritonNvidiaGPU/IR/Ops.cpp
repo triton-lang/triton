@@ -972,42 +972,19 @@ LogicalResult TMEMLoadOp::verify() {
 
     auto *ctx = regTy.getContext();
     auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
-    auto kReg = S("register");
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto kBlock = S("block");
-    auto kRow = S("row");
-
-    // Reduction requires registers to expand only along columns, not rows.
-    // Interleaved layouts where registers span multiple rows would mix values
-    // from different rows during reduction.
-    auto &reps = encodingInfoOr->reps;
-    if (!reps.sublayoutIsZero({kReg}, {kRow})) {
-      return emitOpError("tmem_load reduction requires strided TMEM layout "
-                         "(TensorMemoryLayout)");
-    }
+    auto kCol = S("dim1");
 
     // Verify that each thread's elements along N can be reduced independently.
     // This could be relaxed in the future to only reduce the kReg bases along N
     // then cross-warp/block reduction becomes needed.
     auto regLayout = triton::gpu::toLinearLayout(regTy);
-    auto dimN = llvm::to_vector(regLayout.getOutDimNames())[1];
-
-    if (!regLayout.sublayoutIsZero({kLane}, {dimN})) {
+    if (!regLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kCol})) {
       return emitOpError(
-          "tmem_load reduction with N sharded across lanes is not "
+          "tmem_load reduction with N sharded across threads is not "
           "supported");
-    }
-
-    if (!regLayout.sublayoutIsZero({kWarp}, {dimN})) {
-      return emitOpError(
-          "tmem_load reduction with N sharded across warps is not supported");
-    }
-
-    if (regLayout.hasInDim(kBlock) &&
-        !regLayout.sublayoutIsZero({kBlock}, {dimN})) {
-      return emitOpError(
-          "tmem_load reduction with N sharded across blocks is not supported");
     }
   }
 

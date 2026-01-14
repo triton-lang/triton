@@ -426,11 +426,16 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
                              : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
                           ->getResult(0);
     };
-    Value combined = redvalVals[0];
-    for (size_t i = 1; i < redvalVals.size(); ++i) {
-      combined = applyMinMax(combined, redvalVals[i]);
+    // Use tree reduction: pair up elements at each level
+    while (redvalVals.size() > 1) {
+      SmallVector<Value> reduced;
+      for (size_t i = 0; i < redvalVals.size(); i += 2) {
+        reduced.push_back(i + 1 < redvalVals.size()
+                              ? applyMinMax(redvalVals[i], redvalVals[i + 1])
+                              : redvalVals[i]);
+      }
+      redvalVals = std::move(reduced);
     }
-    redvalVals = {combined};
   }
 
   return {resultVals, redvalVals};
