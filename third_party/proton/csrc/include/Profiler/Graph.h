@@ -90,7 +90,7 @@ public:
             const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
             size_t numNodes);
 
-  // No GPU synchronization
+  // No GPU synchronization, No CPU locks
   void peek(size_t phase);
 
   // Synchronize and flush all pending graph
