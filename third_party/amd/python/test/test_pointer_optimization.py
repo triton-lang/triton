@@ -13,10 +13,8 @@ if not is_hip():
     "input_size, input_offset, block_size, num_blocks, increment, initial_offset, expect_optimization",
     [(256 * 32, 0, 256, 32, 256, 0, True),  # step forward
      (256 * 33, 0, 256, 32, -256, 256 * 32, True),  # step backward
-     (256 * 32, 0, 256, 32, -256, 256 * 31,
-      False),  # step backward #2, possible correct case, but analysis is conservative in this case
-     (2**29 - 1, 0, 256, 2, 1, 2**29 - 1 - 256 - 1,
-      True),  # step forward near the upper limit of befferized tensor size
+     (256 * 32, 0, 256, 32, -256, 256 * 31, False),  # step backward #2, analysis is too conservative
+     (2**29 - 1, 0, 256, 2, 1, 2**29 - 1 - 256 - 1, True),  # go near the upper limit of befferized tensor size
      (2048, 1024, 256, 2, -1024, 0, False),  # on first iteration offset is positive, on second becomes negative
      ])
 def test_buffer_op_ptr_optimization(input_size, input_offset, block_size, num_blocks, increment, initial_offset,
