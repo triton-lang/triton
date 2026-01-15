@@ -98,8 +98,8 @@ class Tensor:
 
     def clone(self, *, memory_format=torch.preserve_format):
         return Tensor(
-            storage=self.storage.clone(memory_format=memory_format), 
-            dtype=self.dtype, 
+            storage=self.storage.clone(memory_format=memory_format),
+            dtype=self.dtype,
             shape=self.shape,
             shape_max=self.shape_max,
         )
