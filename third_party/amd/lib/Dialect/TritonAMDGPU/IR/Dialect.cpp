@@ -869,7 +869,7 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
 }
 
 // -- ClusterBarrierSignalOp --
-LogicalResult ClusterBarrierSignalOp::verify() {
+LogicalResult ClusterBarrierArriveOp::verify() {
   int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
   if (numCTAs <= 1)
     return emitOpError("requires ttg.num-ctas > 1");

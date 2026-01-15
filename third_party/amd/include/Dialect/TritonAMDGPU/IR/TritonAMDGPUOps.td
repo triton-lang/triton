@@ -1028,12 +1028,12 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive"> {
 // ClusterBarrierSignalOp
 //===----------------------------------------------------------------------===//
 
-def ClusterBarrierSignalOp : TT_AMDGPU_Op<"cluster_barrier_signal"> {
-  let summary = "Signal a cluster barrier";
+def ClusterBarrierArriveOp : TT_AMDGPU_Op<"cluster_barrier_arrive"> {
+  let summary = "Arrive at a cluster barrier";
   let description = [{
-    Signals the cluster barrier, used to synchronizing CTAs within a cluster.
+    Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.
 
-    See ClusterBarrierWaitOp for how to wait on the signaled barrier.
+    See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
   }];
   let hasVerifier = 1;
   let assemblyFormat = "attr-dict";
@@ -1046,9 +1046,9 @@ def ClusterBarrierSignalOp : TT_AMDGPU_Op<"cluster_barrier_signal"> {
 def ClusterBarrierWaitOp : TT_AMDGPU_Op<"cluster_barrier_wait"> {
   let summary = "Wait on a cluster barrier";
   let description = [{
-    Waits for all CTAs of the same cluster to have signaled a cluster barrier.
-    Signal and wait operations must come in pairs. Waiting before signalling or signaling more than once
-    without a corresponding wait will result in undefined behavior.
+    Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
+    Arrive and wait operations must come in pairs. Waiting before arriving or arriving
+    more than once without a corresponding wait will result in undefined behavior.
   }];
   let hasVerifier = 1;
   let assemblyFormat = "attr-dict";

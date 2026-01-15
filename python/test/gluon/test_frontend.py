@@ -3527,18 +3527,18 @@ def amd_tdm_load_mbarrier_kernel(ptr):
 
 
 @gluon.jit
-def amd_cluster_barrier_signal_kernel():
-    gfx1250_cluster.signal()
+def amd_cluster_barrier_arrive_kernel():
+    gfx1250_cluster.arrive()
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
-def test_amd_cluster_barrier_signal(target):
-    mod = run_parser(amd_cluster_barrier_signal_kernel, *make_args(num_ctas=2), target=target)
+def test_amd_cluster_barrier_arrive(target):
+    mod = run_parser(amd_cluster_barrier_arrive_kernel, *make_args(num_ctas=2), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_cluster_barrier_signal_kernel() attributes {noinline = false} {
-    amdg.cluster_barrier_signal
+  tt.func public @amd_cluster_barrier_arrive_kernel() attributes {noinline = false} {
+    amdg.cluster_barrier_arrive
     tt.return
   }
 }

@@ -116,12 +116,12 @@ struct WaitBarrierOpConversion
   }
 };
 
-struct ClusterBarrierSignalOpConversion
-    : public ConvertOpToLLVMPattern<triton::amdgpu::ClusterBarrierSignalOp> {
+struct ClusterBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::ClusterBarrierArriveOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::amdgpu::ClusterBarrierSignalOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::amdgpu::ClusterBarrierArriveOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -171,6 +171,6 @@ void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
-  patterns.add<ClusterBarrierSignalOpConversion>(typeConverter, benefit);
+  patterns.add<ClusterBarrierArriveOpConversion>(typeConverter, benefit);
   patterns.add<ClusterBarrierWaitOpConversion>(typeConverter, benefit);
 }

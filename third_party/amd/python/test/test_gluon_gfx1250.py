@@ -2962,8 +2962,8 @@ def test_async_copy_shared_to_global_multi_cta(blocked_layout):
 
 
 @gluon.jit
-def cluster_barrier_signal_kernel():
-    ttgl.amd.gfx1250.cluster.signal()
+def cluster_barrier_arrive_kernel():
+    ttgl.amd.gfx1250.cluster.arrive()
 
 
 @gluon.jit
@@ -2971,9 +2971,9 @@ def cluster_barrier_wait_kernel():
     ttgl.amd.gfx1250.cluster.wait()
 
 
-def test_compile_cluster_barrier_signal():
-    """Test that cluster barrier signal operation compiles correctly."""
-    k = triton.compile(src=gluon._runtime.GluonASTSource(cluster_barrier_signal_kernel, {}, {}),
+def test_compile_cluster_barrier_arrive():
+    """Test that cluster barrier arrive operation compiles correctly."""
+    k = triton.compile(src=gluon._runtime.GluonASTSource(cluster_barrier_arrive_kernel, {}, {}),
                        target=GPUTarget("hip", 'gfx1250', 32), options={"num_ctas": 2})
     amdgcn = k.asm["amdgcn"]
     # Check that the ROCDL barrier signal instruction is present in the assembly
@@ -2990,12 +2990,12 @@ def test_compile_cluster_barrier_wait():
 
 
 @gluon.jit
-def cluster_barrier_signal_and_wait_kernel():
-    ttgl.amd.gfx1250.cluster.signal()
+def cluster_barrier_arrive_and_wait_kernel():
+    ttgl.amd.gfx1250.cluster.arrive()
     ttgl.amd.gfx1250.cluster.wait()
 
 
-def test_runtime_cluster_barrier_signal_and_wait():
-    # Ensure that signal and wait don't hang
-    cluster_barrier_signal_and_wait_kernel[(4, )](num_warps=8, num_ctas=2)
+def test_runtime_cluster_barrier_arrive_and_wait():
+    # Ensure that arrive and wait don't hang
+    cluster_barrier_arrive_and_wait_kernel[(4, )](num_warps=8, num_ctas=2)
     torch.cuda.synchronize()

@@ -967,11 +967,11 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
            })
-      .def("create_cluster_barrier_signal",
+      .def("create_amd_cluster_arrive",
            [](GluonOpBuilder &self) {
-             self.create<ttag::ClusterBarrierSignalOp>();
+             self.create<ttag::ClusterBarrierArriveOp>();
            })
-      .def("create_cluster_barrier_wait",
+      .def("create_amd_cluster_wait",
            [](GluonOpBuilder &self) {
              self.create<ttag::ClusterBarrierWaitOp>();
            })
