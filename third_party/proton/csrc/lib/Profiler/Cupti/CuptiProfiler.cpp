@@ -585,8 +585,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       } else {
         graphNodeIdToState.clear();
       }
+      static const bool timingEnabled =
+          getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
-      auto t0 = Clock::now();
+      auto t0 = decltype(Clock::now()){};
+      if (timingEnabled)
+        t0 = Clock::now();
 
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
@@ -609,14 +613,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           }
         }
       }
-      auto t1 = Clock::now();
-      auto elapsed =
-          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-              .count();
-      std::cerr << "[PROTON] Graph launch call path time: " << elapsed
-                << " us for graphExecId: " << graphExecId << std::endl;
+      if (timingEnabled) {
+        auto t1 = Clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
+                  << " us for graphExecId: " << graphExecId << std::endl;
+        t0 = Clock::now();
+      }
 
-      t0 = Clock::now();
       if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
@@ -649,11 +655,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           profiler.pendingGraphPool->flushIfNeeded(numNodes);
         profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numNodes);
       }
-      t1 = Clock::now();
-      elapsed = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                    .count();
-      std::cerr << "[PROTON] Graph launch metric time: " << elapsed
-                << " us for graphExecId: " << graphExecId << std::endl;
+      if (timingEnabled) {
+        auto t1 = Clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        std::cerr << "[PROTON] Graph launch metric time: " << elapsed
+                  << " us for graphExecId: " << graphExecId << std::endl;
+      }
     }
   }
 
