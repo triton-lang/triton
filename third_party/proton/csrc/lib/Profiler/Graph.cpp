@@ -102,7 +102,7 @@ void PendingGraphPool::peek(size_t phase) {
                       queue);
   });
   {
-    std::lock_guard<std::mutex> lock(mutex);}
+    std::lock_guard<std::mutex> lock(mutex);
     pool.erase(queueIt);
     deviceRemainingCapacity[device] += bytesForNodes(queue.numNodes);
   }
