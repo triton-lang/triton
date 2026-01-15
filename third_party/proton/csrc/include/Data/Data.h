@@ -150,10 +150,6 @@ protected:
     return static_cast<T *>(currentPhasePtr);
   }
 
-  template <typename T> const T *currentPhasePtrAs() const {
-    return static_cast<const T *>(currentPhasePtr);
-  }
-
   std::size_t currentPhase{0};
   std::size_t flushedPhase{kNoFlushedPhase};
   std::set<size_t> activePhases{};
