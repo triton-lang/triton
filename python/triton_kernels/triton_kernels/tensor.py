@@ -97,10 +97,12 @@ class Tensor:
         return self.shape[i]
 
     def clone(self, *, memory_format=torch.preserve_format):
-        shape = None if self.shape is None else list(self.shape)
-        shape_max = None if self.shape_max is None else list(self.shape_max)
-        return Tensor(self.storage.clone(memory_format=memory_format), dtype=self.dtype, shape=shape,
-                      shape_max=shape_max)
+        return Tensor(
+            storage=self.storage.clone(memory_format=memory_format), 
+            dtype=self.dtype, 
+            shape=self.shape,
+            shape_max=self.shape_max,
+        )
 
 
 def is_tma_compliant(tensor):
