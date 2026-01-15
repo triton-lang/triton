@@ -143,15 +143,16 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     return (int64_t)stepRangeValue.value().smax().isNonNegative();
   }
 
+  // Estimates range of offset used in buffer op.
+  // offset is 32 bit unsigned integer, equal to blockArg + advancedStep.
+  // blockArg and advancedStep unit is a potentially multibyte element, offset
+  // is measured in bytes.
   static std::optional<std::pair<int64_t, int64_t>>
-  estimateRangeOfOffsetValues(amdttg::BufferOpInterface bufferOp,
-                              Value blockArg, Value advanceStep,
-                              DataFlowSolver *solver) {
+  estimateRangeOfOffsetWithCarryValues(int elemByteWidth, Value blockArg,
+                                       Value advanceStep,
+                                       DataFlowSolver *solver) {
     auto stepType = cast<RankedTensorType>(advanceStep.getType());
     assert(stepType.getElementType().getIntOrFloatBitWidth() < 64);
-
-    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
 
     const auto *blockArgRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
@@ -170,62 +171,60 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     auto blockArgRangeValue = blockArgRange->getValue().getValue();
     auto stepRangeValue = stepRange->getValue().getValue();
 
+    // Use limit to crop MSB from negative indexing
+    constexpr uint64_t maxOffsetValue = 0xff'ff'ff'ff;
+
     int64_t operationUncappedResultMax =
-        (int64_t)blockArgRangeValue.umax().getLimitedValue() +
-        (int64_t)stepRangeValue.umax().getLimitedValue();
+        (int64_t)(blockArgRangeValue.umax() * elemByteWidth)
+            .getLimitedValue(maxOffsetValue) +
+        (int64_t)(stepRangeValue.umax() * elemByteWidth)
+            .getLimitedValue(maxOffsetValue);
     int64_t operationUncappedResultMin =
-        (int64_t)blockArgRangeValue.umin().getLimitedValue() +
-        (int64_t)stepRangeValue.umin().getLimitedValue();
+        (int64_t)(blockArgRangeValue.umin() * elemByteWidth)
+            .getLimitedValue(maxOffsetValue) +
+        (int64_t)(stepRangeValue.umin() * elemByteWidth)
+            .getLimitedValue(maxOffsetValue);
 
     return {{operationUncappedResultMin, operationUncappedResultMax}};
   }
 
-  static bool unsignedOverflowImpossible(amdttg::BufferOpInterface bufferOp,
-                                         Value blockArg, Value advanceStep,
+  static bool unsignedOverflowImpossible(int elemByteWidth, Value blockArg,
+                                         Value advanceStep,
                                          DataFlowSolver *solver) {
-    auto maybeOpRange =
-        estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
-    if (!maybeOpRange.has_value())
+    auto maybeOffsetRange = estimateRangeOfOffsetWithCarryValues(
+        elemByteWidth, blockArg, advanceStep, solver);
+    if (!maybeOffsetRange.has_value())
       return false;
-    auto opRange = maybeOpRange.value();
+    auto offsetWithCarryRange = maybeOffsetRange.value();
+    assert(offsetWithCarryRange.first >= 0 && "offset is unsigned");
+    assert(offsetWithCarryRange.first <= offsetWithCarryRange.second);
 
-    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
-    auto dtypeByteWidth = elemBitwidth / 8;
-    assert(dtypeByteWidth > 0);
-    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
-    int64_t minOffsetValue = 0;
-
-    return (opRange.first >= minOffsetValue &&
-            opRange.second <= maxOffsetValue);
+    return offsetWithCarryRange.second <= 0xff'ff'ff'ff;
   }
 
-  static bool unsignedOverflowInevitable(amdttg::BufferOpInterface bufferOp,
-                                         Value blockArg, Value advanceStep,
+  static bool unsignedOverflowInevitable(int elemByteWidth, Value blockArg,
+                                         Value advanceStep,
                                          DataFlowSolver *solver) {
-    auto maybeOpRange =
-        estimateRangeOfOffsetValues(bufferOp, blockArg, advanceStep, solver);
-    if (!maybeOpRange.has_value())
+    auto maybeOffsetRange = estimateRangeOfOffsetWithCarryValues(
+        elemByteWidth, blockArg, advanceStep, solver);
+    if (!maybeOffsetRange.has_value())
       return false;
-    auto opRange = maybeOpRange.value();
+    auto offsetWithCarryRange = maybeOffsetRange.value();
+    assert(offsetWithCarryRange.first <= offsetWithCarryRange.second);
 
-    auto ptrType = cast<PointerType>(bufferOp.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
-    auto dtypeByteWidth = elemBitwidth / 8;
-    assert(dtypeByteWidth > 0);
-    int64_t maxOffsetValue = 0xff'ff'ff'ff / dtypeByteWidth;
-
-    return opRange.first > maxOffsetValue;
+    return offsetWithCarryRange.first > 0xff'ff'ff'ff;
   }
 
-  static bool isTransformationEquivalent(amdttg::BufferOpInterface bufferOp,
-                                         Value blockArg, Value advanceStep,
+  static bool isTransformationEquivalent(int elemByteWidth, Value blockArg,
+                                         Value advanceStep,
                                          DataFlowSolver *solver) {
     if (isNonNegative(advanceStep, solver) &&
-        unsignedOverflowImpossible(bufferOp, blockArg, advanceStep, solver))
+        unsignedOverflowImpossible(elemByteWidth, blockArg, advanceStep,
+                                   solver))
       return true;
     if (isStrictlyNegative(advanceStep, solver) &&
-        unsignedOverflowInevitable(bufferOp, blockArg, advanceStep, solver))
+        unsignedOverflowInevitable(elemByteWidth, blockArg, advanceStep,
+                                   solver))
       return true;
     return false;
   }
@@ -381,8 +380,12 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       return {};
     }
 
-    if (!isTransformationEquivalent(op, offsetLoopArgument, advanceStep,
-                                    solver)) {
+    auto ptrType = cast<PointerType>(op.getPtr().getType());
+    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto dtypeByteWidth = elemBitwidth / 8;
+    assert(dtypeByteWidth > 0);
+    if (!isTransformationEquivalent(dtypeByteWidth, offsetLoopArgument,
+                                    advanceStep, solver)) {
       LDBG("Rejected: it is arithmetically unsafe to split offset computation");
       return {};
     }
