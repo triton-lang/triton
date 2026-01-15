@@ -235,8 +235,10 @@ void flushDataPhasesImpl(
       }
     }
     if (timingEnabled && peekCalls > 0) {
-      std::cerr << "[PROTON] pendingGraphPool peek timing: phases="
-                << phasesToPeek.size() << " peek_us=" << totalPeekUs
+      auto minPhase = *phasesToPeek.begin();
+      auto maxPhase = *phasesToPeek.rbegin();
+      std::cerr << "[PROTON] pendingGraphPool peek timing: phases=[" << minPhase
+                << "," << maxPhase << "] peek_us=" << totalPeekUs
                 << " peek_calls=" << peekCalls << std::endl;
     }
   }

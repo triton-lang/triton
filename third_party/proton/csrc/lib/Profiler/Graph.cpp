@@ -75,25 +75,23 @@ void PendingGraphPool::push(
     size_t numNodes) {
   std::lock_guard<std::mutex> lock(mutex);
   auto *device = runtime->getDevice();
-  if (deviceRemainingCapacity.find(device) == deviceRemainingCapacity.end()) {
-    deviceRemainingCapacity[device] = metricBuffer->getCapacity();
-  }
-  auto [it, inserted] = pool.try_emplace(
-      phase, PendingGraphQueue(deviceBufferOffset[device], phase, device));
-  (void)inserted;
-  it->second.push(numNodes, dataToEntryIds);
-  deviceBufferOffset[device] =
-      (deviceBufferOffset[device] + bytesForNodes(numNodes)) %
-      metricBuffer->getCapacity();
-  deviceRemainingCapacity[device] -= bytesForNodes(numNodes);
+  auto bufferOffsetIt = deviceBufferOffset.try_emplace(device, 0).first;
+  auto remainingCapacityIt =
+      deviceRemainingCapacity.try_emplace(device, metricBuffer->getCapacity())
+          .first;
+  auto [poolIt, inserted] = pool.try_emplace(
+      phase, PendingGraphQueue(bufferOffsetIt->second, phase, device));
+  poolIt->second.push(numNodes, dataToEntryIds);
+  bufferOffsetIt->second = (bufferOffsetIt->second + bytesForNodes(numNodes)) %
+                           metricBuffer->getCapacity();
+  remainingCapacityIt->second -= bytesForNodes(numNodes);
 }
 
 void PendingGraphPool::peek(size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   auto queueIt = pool.find(phase);
-  if (queueIt == pool.end()) {
+  if (queueIt == pool.end())
     return;
-  }
   auto &queue = queueIt->second;
   auto *device = queue.device;
   metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
@@ -106,16 +104,14 @@ void PendingGraphPool::peek(size_t phase) {
 
 bool PendingGraphPool::flushIfNeeded(size_t numNodes) {
   auto *device = runtime->getDevice();
+  const size_t requiredBytes = bytesForNodes(numNodes);
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (deviceRemainingCapacity.find(device) == deviceRemainingCapacity.end()) {
-      deviceRemainingCapacity[device] = metricBuffer->getCapacity();
-    }
-    size_t requiredBytes = bytesForNodes(numNodes);
-    size_t &remainingCapacity = deviceRemainingCapacity[device];
-    if (remainingCapacity >= requiredBytes) {
+    auto it =
+        deviceRemainingCapacity.try_emplace(device, metricBuffer->getCapacity())
+            .first;
+    if (it->second >= requiredBytes)
       return false;
-    }
   }
   flushAll();
   return true;
@@ -123,21 +119,19 @@ bool PendingGraphPool::flushIfNeeded(size_t numNodes) {
 
 bool PendingGraphPool::flushAll() {
   std::lock_guard<std::mutex> lock(mutex);
-  if (pool.empty()) {
+  if (pool.empty())
     return false;
-  }
+  const size_t bufferCapacity = metricBuffer->getCapacity();
   metricBuffer->flush(
       [&](uint8_t *hostPtr) {
         for (auto &[phase, queue] : pool) {
-          (void)phase;
           emitMetricRecords(*metricBuffer,
                             reinterpret_cast<uint64_t *>(hostPtr), queue);
         }
       },
       true);
-  for (auto &[device, capacity] : deviceRemainingCapacity) {
-    capacity = metricBuffer->getCapacity();
-  }
+  for (auto &[device, remainingCapacity] : deviceRemainingCapacity)
+    remainingCapacity = bufferCapacity;
   pool.clear();
   return true;
 }
