@@ -13,7 +13,6 @@
 #include "Utility/String.h"
 #include "Utility/Vector.h"
 
-#include <chrono>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -611,9 +610,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
       auto t1 = Clock::now();
       auto elapsed =
-          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+              .count();
       std::cerr << "[PROTON] Graph launch call path time: " << elapsed
-                << " us for graphExecId: " << graphExecId << std::endl; 
+                << " us for graphExecId: " << graphExecId << std::endl;
 
       t0 = Clock::now();
       if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {

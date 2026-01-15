@@ -7,8 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
