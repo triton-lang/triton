@@ -145,6 +145,8 @@ protected:
   void initPhaseStore(PhaseStoreBase &store);
 
   template <typename T> T *currentPhasePtrAs() {
+    if (!currentPhasePtr)
+      currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
     return static_cast<T *>(currentPhasePtr);
   }
 
