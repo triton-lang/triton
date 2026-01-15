@@ -975,26 +975,22 @@ LogicalResult TMEMLoadOp::verify() {
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto kBlock = S("block");
+    auto kReg = S("register");
     auto kRow = S("row");
-    auto kDim1 = S("dim1");
+    auto nDim = S("dim1");
 
-    // Verify that N dimension is mapped to registers entirely, and is not
-    // sharded across threads. This could be relaxed in the future to only
-    // reduce the kReg bases along N then cross-warp/block reduction becomes
-    // needed.
     auto regLayout = triton::gpu::toLinearLayout(regTy);
-    if (!regLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kDim1})) {
-      return emitOpError(
-          "tmem_load reduction with N dimension sharded across threads is not "
-          "supported");
-    }
-
-    // Verify that N dimension is mapped to tmem row entirely.
     auto tmemLayout = triton::gpu::toLinearLayout(memTy);
-    if (!tmemLayout.sublayoutIsZero({kRow}, {kDim1})) {
-      return emitOpError(
-          "tmem_load reduction requires N dimension to map entirely to "
-          "tensor memory columns");
+    auto cvt = regLayout.invertAndCompose(tmemLayout);
+    auto nDimInRegs = regLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {nDim});
+    auto colInReg = cvt.sublayoutIsZero({kReg}, {kRow});
+
+    // Verify that N dimension is in registers entirely, and is not sharded
+    // across threads. This could be relaxed in the future to only reduce the
+    // kReg bases along N then cross-warp/block reduction becomes needed.
+    if (!nDimInRegs || !colInReg) {
+      return emitOpError("tmem_load reduction with N dimension sharded across "
+                         "threads is not supported.");
     }
   }
 

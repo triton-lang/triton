@@ -291,7 +291,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
   tt.func public @tensor_memory_ld_red_warp_split_rejected() {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked_split>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_split>) -> !ttg.memdesc<128x256xf32, #tmem_warp_split, #ttng.tensor_memory, mutable>
-    // expected-error @below {{reduction with N dimension sharded across threads is not supported}}
+    // expected-error @below {{tmem_load reduction with N dimension sharded across threads is not supported.}}
     %result, %red = ttng.tmem_load %0 {redOp = #ttng.redOp<min>} : !ttg.memdesc<128x256xf32, #tmem_warp_split, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked_split>, tensor<128xf32, #blocked_red>
     tt.return
   }
@@ -307,7 +307,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @tensor_memory_ld_red_16x32bx2_atom_rejected() {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked_split>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<64x128xf32, #blocked_split>) -> !ttg.memdesc<64x128xf32, #bm64_bn128, #ttng.tensor_memory, mutable>
-    // expected-error @below {{reduction with N dimension sharded across threads is not supported}}
+    // expected-error @below {{tmem_load reduction with N dimension sharded across threads is not supported.}}
     %result, %red = ttng.tmem_load %0 {redOp = #ttng.redOp<min>} : !ttg.memdesc<64x128xf32, #bm64_bn128, #ttng.tensor_memory, mutable> -> tensor<64x128xf32, #blocked_split>, tensor<64xf32, #blocked_red>
     tt.return
   }
