@@ -190,6 +190,22 @@ def test_mxfp_casting(
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
 
 
+@pytest.mark.parametrize("quant_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
+def test_mxfp_implicit_padding_allows_non_divisible_axis(quant_dtype, device, monkeypatch):
+    if "float8" in quant_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
+        pytest.skip("Float8 not tested on A100")
+    monkeypatch.setenv("TRITON_ALLOW_MXFP_IMPLICIT_PADDING", "1")
+    quant_torch_type = dtype_str_to_torch(quant_dtype)
+
+    # Axis length 34 is even (needed for mxfp4 packing) but not divisible by 32.
+    x = torch.randn((2, 34, 5), device=device, dtype=torch.float16)
+    quant, scale = downcast_to_mxfp(x, quant_torch_type, axis=1)
+    quant_torch, scale_torch = downcast_to_mxfp_torch(x, quant_torch_type, axis=1)
+
+    assert_equal(quant_torch, quant)
+    assert_equal(scale_torch, scale)
+
+
 def _benchmark_mxfp_quantization(shape, src_dtype: torch.dtype, target_quant_dtype: torch.dtype, n_iters=1000):
     x = torch.randn(*shape, dtype=src_dtype, device="cuda")
     elapsed = (triton.testing.do_bench(
