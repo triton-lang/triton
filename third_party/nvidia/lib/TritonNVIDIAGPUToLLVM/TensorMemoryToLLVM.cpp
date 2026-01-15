@@ -429,10 +429,10 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
     // Use tree reduction: pair up elements at each level
     while (redvalVals.size() > 1) {
       SmallVector<Value> reduced;
+      assert(redvalVals.size() % 2 == 0 &&
+             "redvalVals must be a multiple of 2");
       for (size_t i = 0; i < redvalVals.size(); i += 2) {
-        reduced.push_back(i + 1 < redvalVals.size()
-                              ? applyMinMax(redvalVals[i], redvalVals[i + 1])
-                              : redvalVals[i]);
+        reduced.push_back(applyMinMax(redvalVals[i], redvalVals[i + 1]));
       }
       redvalVals = std::move(reduced);
     }
