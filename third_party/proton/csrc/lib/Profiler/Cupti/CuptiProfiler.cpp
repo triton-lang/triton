@@ -648,11 +648,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           profiler.pendingGraphPool->flushIfNeeded(numNodes);
         profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numNodes);
       }
-      auto t1 = Clock::now();
-      auto elapsed =
-          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+      t1 = Clock::now();
+      elapsed = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                    .count();
       std::cerr << "[PROTON] Graph launch metric time: " << elapsed
-                << " us for graphExecId: " << graphExecId << std::endl; 
+                << " us for graphExecId: " << graphExecId << std::endl;
     }
   }
 

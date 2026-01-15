@@ -36,8 +36,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       const auto metricTypeIndex = metricDesc.typeIndex;
 
       for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
-        // XXX(Keren): It assumes all data have the same number of entries,
-        // which may not be true in very hacky cases
         const auto entryId = entryIds[i];
         switch (metricTypeIndex) {
         case variant_index_v<uint64_t, MetricValueType>: {
@@ -73,39 +71,57 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 void PendingGraphPool::push(
     size_t phase, const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
     size_t numNodes) {
-  std::lock_guard<std::mutex> lock(mutex);
-  auto *device = runtime->getDevice();
-  auto bufferOffsetIt = deviceBufferOffset.try_emplace(device, 0).first;
-  auto remainingCapacityIt =
+  const size_t requiredBytes = bytesForNodes(numNodes);
+  std::unique_lock<std::mutex> lock(mutex);
+  auto [poolIt, inserted] = pool.try_emplace(phase);
+  if (inserted)
+    poolIt->second = std::make_shared<Slot>();
+
+  auto &slot = poolIt->second;
+  std::unique_lock<std::mutex> slotLock(slot->mutex);
+
+  void *device = nullptr;
+  if (slot->queue.has_value()) {
+    device = slot->queue->device;
+  } else {
+    device = runtime->getDevice();
+    const auto startBufferOffset =
+        deviceBufferOffset.try_emplace(device, 0).first->second;
+    slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
+  }
+
+  auto &remainingCapacity =
       deviceRemainingCapacity.try_emplace(device, metricBuffer->getCapacity())
-          .first;
-  auto [poolIt, inserted] = pool.try_emplace(
-      phase, PendingGraphQueue(bufferOffsetIt->second, phase, device));
-  poolIt->second.push(numNodes, dataToEntryIds);
-  bufferOffsetIt->second = (bufferOffsetIt->second + bytesForNodes(numNodes)) %
-                           metricBuffer->getCapacity();
-  remainingCapacityIt->second -= bytesForNodes(numNodes);
+          .first->second;
+  slot->queue->push(numNodes, dataToEntryIds);
+  auto &bufferOffset = deviceBufferOffset[device];
+  bufferOffset = (bufferOffset + requiredBytes) % metricBuffer->getCapacity();
+  remainingCapacity -= requiredBytes;
 }
 
 void PendingGraphPool::peek(size_t phase) {
-  auto queueIt = decltype(pool)::iterator{};
+  std::shared_ptr<Slot> slotPtr;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    queueIt = pool.find(phase);
-    if (queueIt == pool.end())
+    auto slotIt = pool.find(phase);
+    if (slotIt == pool.end())
       return;
+    slotPtr = slotIt->second;
   }
-  auto &queue = queueIt->second;
+
+  std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
+  if (slotPtr->queue == std::nullopt)
+    return;
+  auto &queue = slotPtr->queue.value();
   auto *device = queue.device;
   metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
     emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                       queue);
   });
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    pool.erase(queueIt);
-    deviceRemainingCapacity[device] += bytesForNodes(queue.numNodes);
-  }
+
+  std::lock_guard<std::mutex> lock(mutex);
+  pool.erase(phase);
+  deviceRemainingCapacity[device] += bytesForNodes(queue.numNodes);
 }
 
 bool PendingGraphPool::flushIfNeeded(size_t numNodes) {
@@ -124,21 +140,35 @@ bool PendingGraphPool::flushIfNeeded(size_t numNodes) {
 }
 
 bool PendingGraphPool::flushAll() {
-  std::lock_guard<std::mutex> lock(mutex);
-  if (pool.empty())
-    return false;
-  const size_t bufferCapacity = metricBuffer->getCapacity();
+  auto poolCopy = decltype(pool){};
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (pool.empty())
+      return false;
+    poolCopy = pool;
+  }
   metricBuffer->flush(
       [&](uint8_t *hostPtr) {
-        for (auto &[phase, queue] : pool) {
+        for (auto &[phase, slot] : poolCopy) {
+          std::lock_guard<std::mutex> lock(slot->mutex);
+          if (slot->queue == std::nullopt)
+            continue;
           emitMetricRecords(*metricBuffer,
-                            reinterpret_cast<uint64_t *>(hostPtr), queue);
+                            reinterpret_cast<uint64_t *>(hostPtr),
+                            *slot->queue);
         }
       },
       true);
-  for (auto &[device, remainingCapacity] : deviceRemainingCapacity)
-    remainingCapacity = bufferCapacity;
-  pool.clear();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto &[phase, slot] : poolCopy) {
+      std::lock_guard<std::mutex> slotLock(slot->mutex);
+      if (slot->queue == std::nullopt)
+        continue;
+      auto *device = slot->queue->device;
+      deviceRemainingCapacity[device] += bytesForNodes(slot->queue->numNodes);
+    }
+  }
   return true;
 }
 

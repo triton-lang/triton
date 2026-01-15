@@ -7,10 +7,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <utility>
 #include <vector>
 
@@ -100,6 +102,11 @@ public:
   bool flushIfNeeded(size_t numNodes);
 
 private:
+  struct Slot {
+    mutable std::mutex mutex;
+    std::optional<PendingGraphQueue> queue;
+  };
+
   // The current starting buffer offset in the metric buffer
   // device -> offset
   std::map<void *, size_t> deviceBufferOffset{};
@@ -109,7 +116,7 @@ private:
   MetricBuffer *metricBuffer{};
   Runtime *runtime{};
   mutable std::mutex mutex;
-  std::map<size_t, PendingGraphQueue> pool;
+  std::map<size_t, std::shared_ptr<Slot>> pool;
 };
 
 } // namespace proton
