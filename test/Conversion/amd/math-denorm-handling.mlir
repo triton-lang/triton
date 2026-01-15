@@ -5,7 +5,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @test_exp2(%arg0: tensor<64xf32, #blocked>) {
-    // LLVM_FTZ: llvm.amdgcn.exp2.f32
+    // LLVM_FTZ: rocdl.exp2
     // LLVM_NO_FTZ: llvm.exp2.f32
     %0 = math.exp2 %arg0 : tensor<64xf32, #blocked>
     tt.return
@@ -43,7 +43,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   tt.func public @test_sqrt_f32(%arg0: tensor<64xf32, #blocked>) {
     // LLVM_FTZ-LABEL: test_sqrt_f32
     // LLVM_FTZ-NOT: llvm.fcmp "ogt"
-    // LLVM_FTZ: llvm.amdgcn.sqrt.f32
+    // LLVM_FTZ: rocdl.sqrt
     // LLVM_FTZ-NOT: llvm.fmul
     // LLVM_FTZ-NOT: llvm.select
     //
@@ -51,7 +51,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // LLVM_NO_FTZ: llvm.fcmp "ogt"
     // LLVM_NO_FTZ: llvm.fmul
     // LLVM_NO_FTZ-NEXT: llvm.select
-    // LLVM_NO_FTZ-NEXT: llvm.amdgcn.sqrt.f32
+    // LLVM_NO_FTZ-NEXT: rocdl.sqrt
     // LLVM_NO_FTZ: llvm.fmul
     // LLVM_NO_FTZ-NEXT: llvm.select
     %0 = math.sqrt %arg0 : tensor<64xf32, #blocked>

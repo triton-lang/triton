@@ -479,7 +479,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
-      arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar);
+      arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar,
+                                                    Value(), ValueRange{});
       break;
     case AsyncOp::TMALoad:
       // nothing to do, the arrive is done by HW

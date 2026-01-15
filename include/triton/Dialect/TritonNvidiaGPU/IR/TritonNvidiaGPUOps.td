@@ -23,6 +23,7 @@
 #define TRITONNVIDIAGPU_OPS
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
@@ -61,13 +62,29 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   }];
 }
 
+def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
+    "fence_mbarrier_init_release_cluster"> {
+  let summary = "fence mbarrier init release.cluster";
+
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 //
@@ -273,7 +290,7 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
 }
 
 
-def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local"> {
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [AttrSizedOperandSegments]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -282,24 +299,54 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc`.
+
+    The operation supports two tensor modes:
+    - TILED (default): Regular tiled tensor memory access
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
+    - IM2COL: Im2col mode for convolution-friendly access patterns
+      - In IM2COL mode, 'coord' is the coordinates in the input tensor
+        - For example, for a 4D tensor (NHWC), 'coord' is [batch_idx, channel_idx, h, w]
+      - In IM2COL mode, additional `offsets` must be provided (uint16 values)
+        - For 3D tensors (NWC): 1 offset (offset_w)
+        - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
+        - For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
+        - General rule: number of offsets = coord.size() - 2
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+
   }];
 
   let hasVerifier = 1;
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
+    Variadic<I16>:$offsets,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
     UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<TTNG_TensorModeAttr, "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode
   );
 
+  let builders = [
+    // Builder for TILED mode (no offsets required, attributes default to standard values)
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
+                   "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast,
+                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
+                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"bool", "false">:$isVolatile,
+                   CArg<"triton::nvidia_gpu::TensorMode", "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode), [{
+      build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
+            result, pred, multicast, cache, evict, isVolatile, tensorMode);
+    }]>
+  ];
+
   let assemblyFormat = [{
-    $desc `[` $coord `]` $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
@@ -445,7 +492,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async,
-    UnitAttr:$two_ctas
+    UnitAttr:$two_ctas,
+    UnitAttr:$multicast
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -453,6 +501,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     OpBuilder<(ins "Type":$token,
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
+      CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async)>
@@ -536,7 +585,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let hasVerifier = 1;
 }
 
-def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
 
   let description = [{
@@ -545,9 +594,9 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
     operations. Upon completion of all asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
 
-    If `two_ctas` is set, then the mbarrier tracks all prior operations
-    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
-    operations initiated without `two_ctas`.
+    If `descs` are provided, the commit will be multicast across the CTA cluster
+    based on the shared layouts of those descriptors. This should be used when
+    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
 
     Note that the completion mechanisms are guaranteed to occur sequentially in
     the order the commit operations were issued. This means, for example:
@@ -568,18 +617,15 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Optional<I1>:$pred,
-    UnitAttr:$two_ctas
+    Variadic<TTG_MemDescType>:$descs
   );
 
   let assemblyFormat = [{
-    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+    $barrier (`,` $pred^)? (`descs` $descs^)? attr-dict `:`
+    qualified(type($barrier)) (`,` qualified(type($descs))^)?
   }];
 
-  let builders = [
-    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
-      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
-    }]>,
-  ];
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {

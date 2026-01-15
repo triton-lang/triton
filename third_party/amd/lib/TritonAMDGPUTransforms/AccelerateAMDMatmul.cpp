@@ -1468,8 +1468,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
                                                RankedTensorType cType,
                                                Type aElemType, Type bElemType,
-                                               Type cElemType, int inputKSize,
-                                               int enforcedNonKDim) {
+                                               Type cElemType, int inputKSize) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
 
@@ -1480,18 +1479,11 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
 
   unsigned mDim = 0;
   unsigned nDim = 0;
-  if (enforcedNonKDim != 0) {
-    mDim = nDim = enforcedNonKDim;
-  } else {
-    int minSize = std::min(M, N);
-    if (minSize >= 16) {
-      mDim = 16;
-      nDim = 16;
-    }
+  int minSize = std::min(M, N);
+  if (minSize >= 16) {
+    mDim = 16;
+    nDim = 16;
   }
-  if (mDim == 0 || nDim == 0)
-
-    return failure();
 
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
@@ -1506,33 +1498,26 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);
-  assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
-  // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is preferred, except cases Wmma layout is enforced.
-  if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
-    return failure();
+  assert(M % mDim == 0 && N % nDim == 0);
   return maybeWmmaIntrinsic;
 }
 
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
                                                OperandTypesVector operandTypes,
-                                               int wmmaVersion, int nonKDim) {
+                                               int wmmaVersion) {
 
-  return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
-                               operandTypes[0], operandTypes[1],
-                               operandTypes[2],
-                               dot.getA().getType().getShape().back(), nonKDim);
+  return chooseWmmaInstruction(
+      dot.getLoc(), wmmaVersion, dot.getC().getType(), operandTypes[0],
+      operandTypes[1], operandTypes[2], dot.getA().getType().getShape().back());
 }
 
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
-  int nonKDim;
 
 public:
   BlockedToWMMA(MLIRContext *context, int wmmaVersion, int nonKDim,
                 PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
-        nonKDim(nonKDim) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1559,7 +1544,7 @@ public:
 
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
-        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion, nonKDim);
+        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion);
     if (failed(wmmaInstr)) {
       return rewriter.notifyMatchFailure(
           dotOp, "Unable to choose WMMA intrinsic for dot operation.");

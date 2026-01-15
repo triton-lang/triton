@@ -746,25 +746,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     waitOperands.push_back(forOp.getResult(iterArgIdx));
   }
-
-  // Insert a wait(0) before the first use outside the loop
-  auto curBlock = forOp->getBlock();
-  Operation *firstUse = nullptr;
-  for (auto accVal : waitOperands) {
-    for (auto user : accVal.getUsers()) {
-      auto target = curBlock->findAncestorOpInBlock(*user);
-      if (!target)
-        continue;
-      if (!firstUse || target->isBeforeInBlock(firstUse))
-        firstUse = target;
-    }
-  }
-
-  if (firstUse) {
-    builder.setInsertionPoint(firstUse);
-  } else {
-    builder.setInsertionPoint(curBlock->getTerminator());
-  }
+  // Wait until there are 0 outstanding async dot ops.
+  builder.setInsertionPointAfter(forOp);
   auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
       builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);

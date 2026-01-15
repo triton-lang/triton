@@ -76,6 +76,7 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
 def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -218,13 +219,13 @@ def test_get_data(tmp_path: pathlib.Path):
         foo[(1, )](x, x, 4)
 
     try:
-        _ = proton.get_data(session)
+        _ = proton.data.get(session)
     except RuntimeError as e:
         assert "Cannot get data while the session is active" in str(e)
 
-    proton.deactivate(session)
+    proton.deactivate(session, flushing=True)
 
-    database = proton.get_data(session)
+    database = proton.data.get(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
     ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
@@ -235,8 +236,8 @@ def test_get_data(tmp_path: pathlib.Path):
     assert int(ones_frame["count"].values[0]) == 1
 
     import msgpack
-    msgpack_data = proton.get_data_msgpack(session)
-    database_unpacked = msgpack.loads(msgpack_data)
+    msgpack_data = proton.data.get_msgpack(session)
+    database_unpacked = msgpack.loads(msgpack_data, raw=False, strict_map_key=False)
     assert database == database_unpacked
 
     proton.finalize()
@@ -250,23 +251,60 @@ def test_clear_data(tmp_path: pathlib.Path):
         x = torch.ones((2, 2), device="cuda")
         x + x  # type: ignore
 
-    proton.deactivate(session)
-    proton.clear_data(session)
-    database = proton.get_data(session)
-    assert database[0]["children"] == []
-    assert database[0]["frame"]["name"] == "ROOT"
+    proton.deactivate(session, flushing=True)
+    proton.data.clear(session)
+    try:
+        database = proton.data.get(session)
+    except RuntimeError as e:
+        assert "has no data" in str(e)
 
     proton.activate(session)
     with proton.scope("test1"):
         x * x  # type: ignore
-    proton.deactivate(session)
-    database = proton.get_data(session)
+    proton.deactivate(session, flushing=True)
+    database = proton.data.get(session)
 
     proton.finalize()
     assert len(database[0]["children"]) == 1
     assert database[0]["children"][0]["frame"]["name"] == "test1"
     kernel_frame = database[0]["children"][0]["children"][0]
     assert "elementwise" in kernel_frame["frame"]["name"]
+
+
+def test_data_is_phase_flushed(tmp_path: pathlib.Path):
+    temp_path = tmp_path / "test_data_is_phase_flushed.hatchet"
+    session = proton.start(str(temp_path.with_suffix("")), context="shadow")
+
+    def fn():
+        with proton.scope("test0"):
+            x = torch.ones((2, 2), device="cuda")
+            x + x  # type: ignore
+
+    fn()
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    assert not is_flushed
+
+    proton.deactivate(session)
+    # likely the GPU has not flushed the data yet
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    assert not is_flushed
+
+    proton.activate(session)
+    phase = proton.data.advance_phase(session)
+    fn()
+    proton.deactivate(session, flushing=True)
+    is_flushed = proton.data.is_phase_flushed(session, 0)
+    # session 0 is a previous phase but we have called deactivate with flushing
+    assert is_flushed
+    is_flushed = proton.data.is_phase_flushed(session, phase)
+    # session 1 is the current phase so cannot be a flushed phase
+    assert not is_flushed
+    proton.data.advance_phase(session)
+    is_flushed = proton.data.is_phase_flushed(session, phase - 1)
+    # now phase 1 should be considered flushed as we have advanced to phase 2
+    assert is_flushed
+
+    proton.finalize()
 
 
 def test_hook_launch(tmp_path: pathlib.Path):
@@ -277,7 +315,8 @@ def test_hook_launch(tmp_path: pathlib.Path):
         size = args["size"]  # const
         key = "flops" + str(element_size * 8)
         num_ctas = metadata.num_ctas
-        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0}
+        # Return an extra metric key beyond the historical flops/bytes allowlist.
+        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0, "extra_metric": 7.0}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, size: tl.constexpr, y):
@@ -297,7 +336,67 @@ def test_hook_launch(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["frame"]["name"] == "test0"
     assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
     assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
+    assert data[0]["children"][0]["children"][0]["metrics"]["extra_metric"] == 7.0
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
+def test_hook_launch_filter(tmp_path: pathlib.Path):
+
+    foo_metadata_invoked = False
+    bar_metadata_invoked = False
+
+    def foo_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal foo_metadata_invoked
+        foo_metadata_invoked = True
+        return {"name": "foo_meta", "flops": 1.0}
+
+    def bar_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal bar_metadata_invoked
+        bar_metadata_invoked = True
+        return {"name": "bar_meta", "flops": 2.0}
+
+    @triton.jit(launch_metadata=foo_metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    @triton.jit(launch_metadata=bar_metadata_fn)
+    def bar(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_triton_filter.hatchet"
+
+    # Only allow kernels whose compiled name matches "foo" (via prefix regex).
+    launch_hook = proton_launch.LaunchHook()
+    launch_hook.configure(include=".*foo")
+    proton.start(str(temp_file.with_suffix("")), hook=launch_hook)
+    with proton.scope("test0"):
+        foo[(1, )](x, 1, y, num_warps=4)
+        bar[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    # Reset singleton hook state to avoid leaking filter settings across tests.
+    launch_hook.configure(include=None, exclude=None)
+
+    assert foo_metadata_invoked is True
+    assert bar_metadata_invoked is False
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    # Ensure the "foo_meta" override exists and "bar_meta" does not.
+    all_names = set()
+    queue = [data[0]]
+    while queue:
+        node = queue.pop()
+        if "frame" in node and "name" in node["frame"]:
+            all_names.add(node["frame"]["name"])
+        queue.extend(node.get("children", []))
+
+    assert "foo_meta" in all_names
+    assert "bar_meta" not in all_names
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -830,3 +929,103 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(data) > 1
     cuda_devices = data[1].get("CUDA", {})
     assert len(cuda_devices) >= 2
+
+
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support cudagraph deactivation")
+def test_cudagraph_deactivate(tmp_path):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn(session):
+        with proton.scope("scope_a"):
+            a = torch.ones((2, 2), device="cuda")
+        proton.deactivate(session)
+        with proton.scope("scope_b"):
+            b = torch.ones((2, 2), device="cuda")
+        proton.activate(session)
+        with proton.scope("scope_c"):
+            c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_cudagraph_deactivate.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    fn(session)
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for i in range(10):
+            with proton.scope(f"iter_{i}"):
+                fn(session)
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    # scope a and c should be recorded, b should be skipped
+    children = data[0]["children"]
+    test0_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    iter_frame = test0_frame["children"][0]["children"][0]
+    scope_a_frame = None
+    scope_b_frame = None
+    scope_c_frame = None
+    for child in iter_frame["children"]:
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
+        if child["frame"]["name"] == "scope_c":
+            scope_c_frame = child
+    assert scope_a_frame is not None
+    assert scope_b_frame is None
+    assert scope_c_frame is not None
+
+
+@pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
+    fresh_knobs.proton.profile_buffer_size = buffer_size
+    temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+
+    for i in range(10000):
+        if i != 0 and i % 1000 == 0:
+            proton.data.advance_phase(session=session)
+        with proton.scope(f"test_{i}"):
+            torch.zeros((100), device="cuda")
+
+    proton.finalize(output_format=data_format)
+
+    # Find all *.hatchet files under the directory `tmp_path`
+    import glob
+    import msgpack
+    hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
+    assert len(hatchet_files) == 10
+    num_scopes = 0
+    for hatchet_file in hatchet_files:
+        if data_format == "hatchet_msgpack":
+            with open(hatchet_file, "rb") as f:
+                data = msgpack.load(f, raw=False, strict_map_key=False)
+        else:
+            with open(hatchet_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        assert len(data[0]["children"]) == 1000
+        assert data[0]["children"][0]["frame"]["name"].startswith("test_")
+        assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+        num_scopes += len(data[0]["children"])
+    assert num_scopes == 10000
