@@ -868,4 +868,20 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   return success();
 }
 
+// -- ClusterBarrierSignalOp --
+LogicalResult ClusterBarrierArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterBarrierWaitOp --
+LogicalResult ClusterBarrierWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
 } // namespace mlir::triton::amdgpu

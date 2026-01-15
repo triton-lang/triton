@@ -14,6 +14,7 @@ from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.amd.gfx1250 import async_copy as gfx1250_async_copy
 from triton.experimental.gluon.language.amd.gfx1250 import mbarrier as gfx1250_mbarrier
+from triton.experimental.gluon.language.amd.gfx1250 import cluster as gfx1250_cluster
 from triton.experimental.gluon.language.extra import libdevice
 
 from triton._filecheck import filecheck_test, run_parser
@@ -3523,6 +3524,44 @@ def amd_tdm_load_mbarrier_kernel(ptr):
     gfx1250_mbarrier.init(bar, count=1)
     ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, mbarrier=bar)
     buffer.load(layout=BLOCKED_LAYOUT)
+
+
+@gluon.jit
+def amd_cluster_barrier_arrive_kernel():
+    gfx1250_cluster.arrive()
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_cluster_barrier_arrive(target):
+    mod = run_parser(amd_cluster_barrier_arrive_kernel, *make_args(num_ctas=2), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_cluster_barrier_arrive_kernel() attributes {noinline = false} {
+    amdg.cluster_barrier_arrive
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def amd_cluster_barrier_wait_kernel():
+    gfx1250_cluster.wait()
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_cluster_barrier_wait(target):
+    mod = run_parser(amd_cluster_barrier_wait_kernel, *make_args(num_ctas=2), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_cluster_barrier_wait_kernel() attributes {noinline = false} {
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+""")
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
