@@ -23,6 +23,7 @@
 #define TRITONNVIDIAGPU_OPS
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
@@ -289,7 +290,7 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
 }
 
 
-def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local"> {
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [AttrSizedOperandSegments]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -298,24 +299,54 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc`.
+
+    The operation supports two tensor modes:
+    - TILED (default): Regular tiled tensor memory access
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
+    - IM2COL: Im2col mode for convolution-friendly access patterns
+      - In IM2COL mode, 'coord' is the coordinates in the input tensor
+        - For example, for a 4D tensor (NHWC), 'coord' is [batch_idx, channel_idx, h, w]
+      - In IM2COL mode, additional `offsets` must be provided (uint16 values)
+        - For 3D tensors (NWC): 1 offset (offset_w)
+        - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
+        - For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
+        - General rule: number of offsets = coord.size() - 2
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+
   }];
 
   let hasVerifier = 1;
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
+    Variadic<I16>:$offsets,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
     UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<TTNG_TensorModeAttr, "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode
   );
 
+  let builders = [
+    // Builder for TILED mode (no offsets required, attributes default to standard values)
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
+                   "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast,
+                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
+                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"bool", "false">:$isVolatile,
+                   CArg<"triton::nvidia_gpu::TensorMode", "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode), [{
+      build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
+            result, pred, multicast, cache, evict, isVolatile, tensorMode);
+    }]>
+  ];
+
   let assemblyFormat = [{
-    $desc `[` $coord `]` $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
