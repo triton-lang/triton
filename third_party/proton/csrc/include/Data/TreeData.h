@@ -4,9 +4,9 @@
 #include "Context/Context.h"
 #include "Data.h"
 #include "nlohmann/json.hpp"
+#include <map>
 #include <stdexcept>
 #include <string>
-#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -24,33 +24,20 @@ public:
   std::string toJsonString(size_t phase) const override;
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
-  // Compute per-node-path average durations (ms) for kernels whose *node name*
-  // starts with `prefix`.
+  // Compute per-node-path inclusive durations (ms) for all nodes.
   //
-  // The key is the full tree path (ROOT excluded), e.g. "moduleA/opB/_p_matmul_X".
-  // This disambiguates kernels that share a leaf name but occur under different
-  // module/op paths.
-  std::map<std::string, double>
-  summarizeKernelPathsAvgDurationMsByPrefix(size_t phase,
-                                            const std::string &prefix) const;
-  // Sum a named flexible metric (e.g. "flops8", "bytes") for nodes whose *node name*
-  // starts with `prefix`, grouped by full tree path (ROOT excluded).
-  //
-  // The returned value is the summed metric value for that path in the phase.
-  std::map<std::string, double>
-  summarizeKernelPathsSumFlexibleMetricByPrefix(size_t phase,
-                                                const std::string &prefix,
-                                                const std::string &metricName) const;
-
-  // Compute per-scope-path inclusive durations (ms) for scope nodes whose *node name*
-  // exactly matches `scopeName`, by summing descendant kernel durations.
-  //
-  // The key is the full tree path (ROOT excluded), e.g. "moduleA/opB/kiattn".
-  // The returned value is the total inclusive duration (ms) spent under that scope
+  // The key is the full tree path (ROOT excluded), e.g. "moduleA/opB/kernelX".
+  // The returned value is the total inclusive duration (ms) spent under that
   // node in the phase.
   std::map<std::string, double>
-  summarizeScopePathsInclusiveDurationMsByName(size_t phase,
-                                               const std::string &scopeName) const;
+  summarizeNodePathsInclusiveDurationMs(size_t phase) const;
+
+  // Summarize flexible metrics for all nodes, keyed by "<metric>::<path>".
+  //
+  // The key is the metric value name followed by the full tree path (ROOT
+  // excluded), e.g. "flops8::moduleA/opB/kernelX".
+  std::map<std::string, double>
+  summarizeNodePathsFlexibleMetricValues(size_t phase) const;
 
   DataEntry addOp(const std::string &name) override;
 

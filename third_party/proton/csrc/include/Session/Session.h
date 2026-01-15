@@ -111,14 +111,16 @@ public:
 
   bool isDataPhaseFlushed(size_t sessionId, size_t phase);
 
-  // Thread-safe queue used by backend profilers to publish periodic flush summaries.
+  // Thread-safe queue used by backend profilers to publish periodic flush
+  // summaries.
   void enqueueFlushedPhaseMetrics(size_t sessionId, size_t phase,
                                   std::map<std::string, double> metrics);
   std::vector<FlushedPhaseMetrics> drainFlushedPhaseMetrics(size_t sessionId);
 
-  // Manual-mode helper: compute and enqueue summary metrics for a specific phase.
-  // This is intended to support `format=metrics` even when not using periodic_flushing.
-  // The session must be inactive (deactivated) so GPU activity has been flushed.
+  // Manual-mode helper: compute and enqueue summary metrics for a specific
+  // phase. This is intended to support `format=buffer` even when not using
+  // periodic_flushing. The session must be inactive (deactivated) so GPU
+  // activity has been flushed.
   void emitPhaseMetrics(size_t sessionId, size_t phase);
 
   // Resolve a session id from its session path (same string passed to start()).

@@ -733,149 +733,12 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
   }
 }
 
-std::map<std::string, double> TreeData::summarizeKernelPathsAvgDurationMsByPrefix(
-    size_t phase, const std::string &prefix) const {
-  return treePhases.withPtr(phase, [&](Tree *tree) {
-    // sums[path] = (sum_duration_ns, sum_invocations)
-    std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> sums;
-
-    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
-      // Walk parents to build a full path. ROOT is excluded.
-      std::vector<std::string_view> parts;
-      const TreeData::Tree::TreeNode *cur = &node;
-      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
-        parts.push_back(cur->name);
-        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
-          break;
-        }
-        cur = &tree->getNode(cur->parentId);
-      }
-      std::string out;
-      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
-        if (!out.empty()) {
-          out.push_back('/');
-        }
-        out.append(it->data(), it->size());
-      }
-      return out;
-    };
-
-    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
-        [&](TreeData::Tree::TreeNode &treeNode) {
-          if (!prefix.empty() && treeNode.name.rfind(prefix, 0) != 0) {
-            return;
-          }
-          auto it = treeNode.metrics.find(MetricKind::Kernel);
-          if (it == treeNode.metrics.end() || it->second == nullptr) {
-            return;
-          }
-          auto *kernelMetric = static_cast<KernelMetric *>(it->second.get());
-          const uint64_t dur_ns = std::get<uint64_t>(
-              kernelMetric->getValue(KernelMetric::Duration));
-          const uint64_t n_invocations = std::get<uint64_t>(
-              kernelMetric->getValue(KernelMetric::Invocations));
-          if (n_invocations == 0) {
-            return;
-          }
-          const std::string path = buildPath(treeNode);
-          auto &entry = sums[path];
-          entry.first += dur_ns;
-          entry.second += n_invocations;
-        });
-
-    std::map<std::string, double> out;
-    for (auto &kv : sums) {
-      const auto &name = kv.first;
-      const uint64_t sum_ns = kv.second.first;
-      const uint64_t inv = kv.second.second;
-      if (inv == 0) {
-        continue;
-      }
-      out[name] =
-          (static_cast<double>(sum_ns) / static_cast<double>(inv)) / 1e6;
-    }
-    return out;
-  });
-}
-
 std::map<std::string, double>
-TreeData::summarizeKernelPathsSumFlexibleMetricByPrefix(
-    size_t phase, const std::string &prefix,
-    const std::string &metricName) const {
-  return treePhases.withPtr(phase, [&](Tree *tree) {
-    std::unordered_map<std::string, double> sums;
-
-    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
-      std::vector<std::string_view> parts;
-      const TreeData::Tree::TreeNode *cur = &node;
-      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
-        parts.push_back(cur->name);
-        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
-          break;
-        }
-        cur = &tree->getNode(cur->parentId);
-      }
-      std::string out;
-      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
-        if (!out.empty()) {
-          out.push_back('/');
-        }
-        out.append(it->data(), it->size());
-      }
-      return out;
-    };
-
-    auto toDouble = [&](const MetricValueType &v,
-                        double &out) -> bool {
-      bool ok = false;
-      std::visit(
-          [&](auto &&value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, uint64_t> ||
-                          std::is_same_v<T, int64_t> ||
-                          std::is_same_v<T, double>) {
-              out = static_cast<double>(value);
-              ok = true;
-            } else {
-              ok = false;
-            }
-          },
-          v);
-      return ok;
-    };
-
-    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
-        [&](TreeData::Tree::TreeNode &treeNode) {
-          if (!prefix.empty() && treeNode.name.rfind(prefix, 0) != 0) {
-            return;
-          }
-          auto it = treeNode.flexibleMetrics.find(metricName);
-          if (it == treeNode.flexibleMetrics.end()) {
-            return;
-          }
-          const auto &v = it->second.getValues()[0];
-          double dv = 0.0;
-          if (!toDouble(v, dv)) {
-            return;
-          }
-          const std::string path = buildPath(treeNode);
-          sums[path] += dv;
-        });
-
-    std::map<std::string, double> out;
-    for (auto &kv : sums) {
-      out[kv.first] = kv.second;
-    }
-    return out;
-  });
-}
-
-std::map<std::string, double>
-TreeData::summarizeScopePathsInclusiveDurationMsByName(
-    size_t phase, const std::string &scopeName) const {
+TreeData::summarizeNodePathsInclusiveDurationMs(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
     // Precompute inclusive kernel duration (ns) for every node in the tree
-    // using a post-order walk: inclusive_ns[node] = sum(children) + self_kernel_ns.
+    // using a post-order walk: inclusive_ns[node] = sum(children) +
+    // self_kernel_ns.
     std::unordered_map<size_t, uint64_t> inclusiveKernelNs;
     inclusiveKernelNs.reserve(tree->size());
 
@@ -889,7 +752,8 @@ TreeData::summarizeScopePathsInclusiveDurationMsByName(
             }
           }
           auto itKernel = treeNode.metrics.find(MetricKind::Kernel);
-          if (itKernel != treeNode.metrics.end() && itKernel->second != nullptr) {
+          if (itKernel != treeNode.metrics.end() &&
+              itKernel->second != nullptr) {
             auto *kernelMetric =
                 static_cast<KernelMetric *>(itKernel->second.get());
             const uint64_t dur_ns = std::get<uint64_t>(
@@ -926,15 +790,80 @@ TreeData::summarizeScopePathsInclusiveDurationMsByName(
           if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
             return;
           }
-          if (treeNode.name != scopeName) {
-            return;
-          }
           auto it = inclusiveKernelNs.find(treeNode.id);
-          if (it == inclusiveKernelNs.end()) {
+          if (it == inclusiveKernelNs.end() || it->second == 0) {
             return;
           }
           const std::string path = buildPath(treeNode);
           out[path] = static_cast<double>(it->second) / 1e6;
+        });
+    return out;
+  });
+}
+
+std::map<std::string, double>
+TreeData::summarizeNodePathsFlexibleMetricValues(size_t phase) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    std::map<std::string, double> out;
+
+    auto buildPath = [&](const TreeData::Tree::TreeNode &node) -> std::string {
+      // Walk parents to build a full path. ROOT is excluded.
+      std::vector<std::string_view> parts;
+      const TreeData::Tree::TreeNode *cur = &node;
+      while (cur && cur->id != TreeData::Tree::TreeNode::RootId) {
+        parts.push_back(cur->name);
+        if (cur->parentId == TreeData::Tree::TreeNode::DummyId) {
+          break;
+        }
+        cur = &tree->getNode(cur->parentId);
+      }
+      std::string out;
+      for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (!out.empty()) {
+          out.push_back('/');
+        }
+        out.append(it->data(), it->size());
+      }
+      return out;
+    };
+
+    auto toDouble = [&](const MetricValueType &v, double &outVal) -> bool {
+      bool ok = false;
+      std::visit(
+          [&](auto &&value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, uint64_t> ||
+                          std::is_same_v<T, int64_t> ||
+                          std::is_same_v<T, double>) {
+              outVal = static_cast<double>(value);
+              ok = true;
+            } else {
+              ok = false;
+            }
+          },
+          v);
+      return ok;
+    };
+
+    tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+        [&](TreeData::Tree::TreeNode &treeNode) {
+          if (treeNode.id == TreeData::Tree::TreeNode::RootId) {
+            return;
+          }
+          if (treeNode.flexibleMetrics.empty()) {
+            return;
+          }
+          const std::string path = buildPath(treeNode);
+          for (const auto &kv : treeNode.flexibleMetrics) {
+            const auto &metricName = kv.first;
+            const auto &metric = kv.second;
+            const auto &v = metric.getValues()[0];
+            double dv = 0.0;
+            if (!toDouble(v, dv)) {
+              continue;
+            }
+            out[metricName + "::" + path] = dv;
+          }
         });
     return out;
   });

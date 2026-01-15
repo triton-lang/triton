@@ -952,7 +952,7 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
             "[PROTON] CuptiProfiler: unsupported option key: " + key);
       }
       if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-          value != "hatchet" && value != "metrics") {
+          value != "hatchet" && value != "buffer") {
         throw std::invalid_argument(
             "[PROTON] CuptiProfiler: unsupported format: " + value);
       }

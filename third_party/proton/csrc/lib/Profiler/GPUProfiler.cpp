@@ -27,7 +27,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                                   ": unsupported option key: " + key);
     }
     if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet" && value != "metrics") {
+        value != "hatchet" && value != "buffer") {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }
@@ -96,62 +96,34 @@ void flushDataPhasesImpl(
 
     for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
          startPhase++) {
-      if (periodicFlushingFormat == "metrics") {
-        // Publish small summaries for this phase and skip writing the full trace.
+      if (periodicFlushingFormat == "buffer") {
+        // Publish per-node summaries for this phase and skip writing the full
+        // trace.
         auto *treeData = dynamic_cast<TreeData *>(data);
         if (!treeData) {
           static bool warned = false;
           if (!warned) {
             warned = true;
-            std::cerr
-                << "[PROTON] periodic_flushing:format=metrics is only supported for TreeData; "
-                   "skipping metrics flush for this Data instance."
-                << std::endl;
+            std::cerr << "[PROTON] periodic_flushing:format=buffer is only "
+                         "supported for TreeData; "
+                         "skipping buffer flush for this Data instance."
+                      << std::endl;
           }
           continue;
         }
         if (sessionIdOpt.has_value()) {
-          // Only export per-kernel latencies for `_p_matmul_` kernels to keep
-          // the metric set bounded and targeted.
           std::map<std::string, double> metrics;
           auto perPathAvgMs =
-              treeData->summarizeKernelPathsAvgDurationMsByPrefix(startPhase,
-                                                                 "_p_matmul_");
-          auto perPathFlops8 = treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
-              startPhase, "_p_matmul_", "flops8");
-          // Export inclusive duration for `kiattn` scopes (sum of descendant kernel durations).
-          auto kiattnScopePathMs =
-              treeData->summarizeScopePathsInclusiveDurationMsByName(startPhase, "kiattn");
-          const int64_t kiattnMaxPaths =
-              getIntEnv("PROTON_KIATTN_METRICS_MAX_PATHS", 200);
+              treeData->summarizeNodePathsInclusiveDurationMs(startPhase);
+          auto perPathFlexibleMetrics =
+              treeData->summarizeNodePathsFlexibleMetricValues(startPhase);
           for (auto &kv : perPathAvgMs) {
             // Encode full tree path in the key; Python side splits on `::`.
-            metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
+            metrics["path_avg_ms::" + kv.first] = kv.second;
           }
-          for (auto &kv : perPathFlops8) {
-            metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
-          }
-          if (kiattnMaxPaths > 0 && !kiattnScopePathMs.empty()) {
-            std::vector<std::pair<std::string, double>> items;
-            items.reserve(kiattnScopePathMs.size());
-            for (auto &kv : kiattnScopePathMs) {
-              items.emplace_back(kv.first, kv.second);
-            }
-            // Keep the top-N slowest paths to maximize signal under the cap.
-            if (static_cast<int64_t>(items.size()) > kiattnMaxPaths) {
-              std::nth_element(
-                  items.begin(), items.begin() + kiattnMaxPaths, items.end(),
-                  [](const auto &a, const auto &b) { return a.second > b.second; });
-              items.resize(kiattnMaxPaths);
-            }
-            std::sort(items.begin(), items.end(),
-                      [](const auto &a, const auto &b) { return a.second > b.second; });
-            for (auto &kv : items) {
-              // Encode full tree path in the key; Python side splits on `::`.
-              // Name uses "avg_ms" for consistency with other per-path latency exports;
-              // value is inclusive duration (ms) for this scope path in the phase.
-              metrics["kiattn_path_avg_ms::" + kv.first] = kv.second;
-            }
+          for (auto &kv : perPathFlexibleMetrics) {
+            // Key is "<metric>::<path>" from TreeData; prepend a namespace.
+            metrics["path_metric::" + kv.first] = kv.second;
           }
           if (!metrics.empty()) {
             SessionManager::instance().enqueueFlushedPhaseMetrics(

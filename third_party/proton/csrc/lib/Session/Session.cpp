@@ -6,10 +6,7 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
-#include "Utility/Env.h"
 #include "Utility/String.h"
-
-#include <algorithm>
 
 namespace proton {
 
@@ -425,43 +422,15 @@ void SessionManager::emitPhaseMetrics(size_t sessionId, size_t phase) {
         "Only TreeData is supported for emitPhaseMetrics() for now");
   }
 
-  // Keep the metric set small and targeted.
   std::map<std::string, double> metrics;
-  auto perPathAvgMs =
-      treeData->summarizeKernelPathsAvgDurationMsByPrefix(phase, "_p_matmul_");
-  auto perPathFlops8 = treeData->summarizeKernelPathsSumFlexibleMetricByPrefix(
-      phase, "_p_matmul_", "flops8");
-  // Export inclusive duration for `kiattn` scopes (sum of descendant kernel durations).
-  auto kiattnScopePathMs =
-      treeData->summarizeScopePathsInclusiveDurationMsByName(phase, "kiattn");
-  const int64_t kiattnMaxPaths =
-      getIntEnv("PROTON_KIATTN_METRICS_MAX_PATHS", 200);
+  auto perPathAvgMs = treeData->summarizeNodePathsInclusiveDurationMs(phase);
+  auto perPathFlexibleMetrics =
+      treeData->summarizeNodePathsFlexibleMetricValues(phase);
   for (auto &kv : perPathAvgMs) {
-    metrics["p_matmul_path_avg_ms::" + kv.first] = kv.second;
+    metrics["path_avg_ms::" + kv.first] = kv.second;
   }
-  for (auto &kv : perPathFlops8) {
-    metrics["p_matmul_path_flops8::" + kv.first] = kv.second;
-  }
-  if (kiattnMaxPaths > 0 && !kiattnScopePathMs.empty()) {
-    std::vector<std::pair<std::string, double>> items;
-    items.reserve(kiattnScopePathMs.size());
-    for (auto &kv : kiattnScopePathMs) {
-      items.emplace_back(kv.first, kv.second);
-    }
-    // Keep the top-N slowest paths to maximize signal under the cap.
-    if (static_cast<int64_t>(items.size()) > kiattnMaxPaths) {
-      std::nth_element(
-          items.begin(), items.begin() + kiattnMaxPaths, items.end(),
-          [](const auto &a, const auto &b) { return a.second > b.second; });
-      items.resize(kiattnMaxPaths);
-    }
-    std::sort(items.begin(), items.end(),
-              [](const auto &a, const auto &b) { return a.second > b.second; });
-    for (auto &kv : items) {
-      // Name uses "avg_ms" for consistency with other per-path latency exports;
-      // value is inclusive duration (ms) for this scope path in the phase.
-      metrics["kiattn_path_avg_ms::" + kv.first] = kv.second;
-    }
+  for (auto &kv : perPathFlexibleMetrics) {
+    metrics["path_metric::" + kv.first] = kv.second;
   }
   if (!metrics.empty()) {
     flushedPhaseMetrics_[sessionId].push_back(
@@ -469,8 +438,8 @@ void SessionManager::emitPhaseMetrics(size_t sessionId, size_t phase) {
   }
 }
 
-std::optional<size_t> SessionManager::tryGetSessionIdForPath(
-    const std::string &path) {
+std::optional<size_t>
+SessionManager::tryGetSessionIdForPath(const std::string &path) {
   std::lock_guard<std::mutex> lock(mutex);
   if (!hasSession(path)) {
     return std::nullopt;
