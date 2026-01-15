@@ -155,12 +155,12 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
                              PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
   if (!timingEnabled) {
-    data.clear(maxPhaseToFlush);
+    data.clear(maxPhaseToFlush, /*clearUpToPhase=*/true);
     return;
   }
 
   const auto t0 = Clock::now();
-  data.clear(maxPhaseToFlush);
+  data.clear(maxPhaseToFlush, /*clearUpToPhase=*/true);
   const auto t1 = Clock::now();
   stats.clearUs =
       std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
