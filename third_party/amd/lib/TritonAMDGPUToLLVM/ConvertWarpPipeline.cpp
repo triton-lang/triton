@@ -70,7 +70,7 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
             if (isa<MemoryEffects::Write>(eff.getEffect()))
               info.syncWriteSlices[slice].insert(op);
             else if (isa<MemoryEffects::Read>(eff.getEffect()))
-              info.syncWriteSlices[slice].insert(op);
+              info.syncReadSlices[slice].insert(op);
           }
         }
       }
