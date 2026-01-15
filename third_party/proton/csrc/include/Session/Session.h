@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <numeric>
 #include <set>
 #include <string>
@@ -96,6 +97,12 @@ public:
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
 
   std::string getData(size_t sessionId, size_t phase);
+
+  std::optional<std::pair<size_t, std::string>>
+  popFlushedData(size_t sessionId);
+
+  std::optional<std::pair<size_t, std::vector<uint8_t>>>
+  popFlushedDataMsgPack(size_t sessionId);
 
   void clearData(size_t sessionId, size_t phase);
 

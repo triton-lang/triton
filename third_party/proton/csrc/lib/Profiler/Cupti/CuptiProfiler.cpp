@@ -943,7 +943,8 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
     pcSamplingEnabled = true;
   } else if (proton::toLower(mode) == "periodic_flushing") {
     detail::setPeriodicFlushingMode(periodicFlushingEnabled,
-                                    periodicFlushingFormat, modeAndOptions,
+                                    periodicFlushingFormat,
+                                    periodicFlushingTarget, modeAndOptions,
                                     "CuptiProfiler");
   } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +

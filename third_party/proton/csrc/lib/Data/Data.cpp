@@ -44,6 +44,36 @@ bool Data::isPhaseFlushed(size_t phase) const {
   return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
 }
 
+void Data::enqueueFlushedJson(size_t phase, std::string payload) {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  flushedJsonQueue.emplace_back(phase, std::move(payload));
+}
+
+void Data::enqueueFlushedMsgPack(size_t phase, std::vector<uint8_t> payload) {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  flushedMsgPackQueue.emplace_back(phase, std::move(payload));
+}
+
+std::optional<Data::FlushedJson> Data::popFlushedJson() {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  if (flushedJsonQueue.empty()) {
+    return std::nullopt;
+  }
+  auto payload = std::move(flushedJsonQueue.front());
+  flushedJsonQueue.pop_front();
+  return payload;
+}
+
+std::optional<Data::FlushedMsgPack> Data::popFlushedMsgPack() {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  if (flushedMsgPackQueue.empty()) {
+    return std::nullopt;
+  }
+  auto payload = std::move(flushedMsgPackQueue.front());
+  flushedMsgPackQueue.pop_front();
+  return payload;
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 

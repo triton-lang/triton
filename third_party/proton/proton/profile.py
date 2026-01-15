@@ -88,9 +88,10 @@ def start(
                                                For "roctracer", available options are ["periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
-                                               For example, "periodic_flushing" mode has a knob:
+                                               For example, "periodic_flushing" mode has knobs:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
-                                               The can be set via `mode="periodic_flushing:format=chrome_trace"`.
+                                               - target: The flushing target. Available options are ["disk", "buffer"]. Default is "disk".
+                                               These can be set via `mode="periodic_flushing:format=chrome_trace:target=buffer"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
                                            - a string hook name, e.g. "triton" (kernel launch metadata), or
