@@ -428,6 +428,9 @@ public:
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
           mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
           dotOp.getMaxNumImpreciseAcc(), false);
+      llvm::errs() << "\n\n\n\nWGMMA created!!!: \n\n";
+      auto mod = dotOp->getParentOfType<ModuleOp>();
+      mod.dump();
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
