@@ -156,7 +156,7 @@ bool PendingGraphPool::flushAll() {
     std::lock_guard<std::mutex> lock(mutex);
     if (pool.empty())
       return false;
-    poolCopy = pool;
+    poolCopy.swap(pool);
   }
   metricBuffer->flush(
       [&](uint8_t *hostPtr) {
