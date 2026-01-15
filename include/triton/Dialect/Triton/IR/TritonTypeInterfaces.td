@@ -47,46 +47,6 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
         return resTy;
       }]
     >,
-    InterfaceMethod<
-      /*desc=*/"Returns the element type of the block",
-      /*retType=*/"mlir::Type",
-      /*methodName=*/"getElementType",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImpl=*/[{
-        return $_type.getBlockType().getElementType();
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/"Returns the shape of the block",
-      /*retType=*/"llvm::ArrayRef<int64_t>",
-      /*methodName=*/"getShape",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImpl=*/[{
-        return $_type.getBlockType().getShape();
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/"Returns the rank of the block",
-      /*retType=*/"int64_t",
-      /*methodName=*/"getRank",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImpl=*/[{
-        return $_type.getBlockType().getRank();
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/"Returns the encoding attribute of the block type, if any",
-      /*retType=*/"mlir::Attribute",
-      /*methodName=*/"getEncoding",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImpl=*/[{
-        return $_type.getBlockType().getEncoding();
-      }]
-    >,
   ];
 }
 
