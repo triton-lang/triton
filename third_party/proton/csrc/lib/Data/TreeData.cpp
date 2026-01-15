@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <stdexcept>
@@ -20,6 +21,21 @@
 namespace proton {
 
 namespace {
+
+double metricValueToDouble(const MetricValueType &value, bool &ok) {
+  ok = true;
+  if (std::holds_alternative<uint64_t>(value)) {
+    return static_cast<double>(std::get<uint64_t>(value));
+  }
+  if (std::holds_alternative<int64_t>(value)) {
+    return static_cast<double>(std::get<int64_t>(value));
+  }
+  if (std::holds_alternative<double>(value)) {
+    return std::get<double>(value);
+  }
+  ok = false;
+  return 0.0;
+}
 
 const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
     kDeviceTypeNames = []() {
@@ -33,6 +49,65 @@ const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
 } // namespace
+
+std::vector<Data::PathMetrics> TreeData::toPathMetrics(size_t phase) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    std::vector<Data::PathMetrics> results;
+    std::string path;
+
+    std::function<void(size_t)> walk = [&](size_t nodeId) {
+      auto &node = tree->getNode(nodeId);
+      auto previousPath = path;
+      if (nodeId != Tree::TreeNode::RootId) {
+        if (!path.empty()) {
+          path += "/";
+        }
+        path += node.name;
+      }
+
+      if (nodeId != Tree::TreeNode::RootId) {
+        std::optional<double> timeNs;
+        std::optional<double> flops;
+
+        auto kernelIt = node.metrics.find(MetricKind::Kernel);
+        if (kernelIt != node.metrics.end()) {
+          auto *kernelMetric =
+              static_cast<KernelMetric *>(kernelIt->second.get());
+          auto duration = std::get<uint64_t>(
+              kernelMetric->getValue(KernelMetric::Duration));
+          timeNs = static_cast<double>(duration);
+        }
+
+        double flopsSum = 0.0;
+        for (auto &[name, flexibleMetric] : node.flexibleMetrics) {
+          if (name.rfind("flops", 0) != 0) {
+            continue;
+          }
+          bool ok = false;
+          auto value = metricValueToDouble(flexibleMetric.getValue(0), ok);
+          if (ok) {
+            flopsSum += value;
+          }
+        }
+        if (flopsSum > 0.0) {
+          flops = flopsSum;
+        }
+
+        if (timeNs || flops) {
+          results.push_back({path, timeNs, flops});
+        }
+      }
+
+      for (const auto &child : node.children) {
+        walk(child.id);
+      }
+      path = std::move(previousPath);
+    };
+
+    walk(Tree::TreeNode::RootId);
+    return results;
+  });
+}
 
 class TreeData::Tree {
 public:

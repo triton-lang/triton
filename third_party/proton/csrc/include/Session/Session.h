@@ -2,7 +2,7 @@
 #define PROTON_SESSION_SESSION_H_
 
 #include "Context/Context.h"
-#include "Data/Metric.h"
+#include "Data/Data.h"
 #include "Utility/Singleton.h"
 #include <algorithm>
 #include <map>
@@ -103,6 +103,11 @@ public:
 
   std::optional<std::pair<size_t, std::vector<uint8_t>>>
   popFlushedDataMsgPack(size_t sessionId);
+
+  std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
+  popFlushedPathMetrics(size_t sessionId);
+
+  std::vector<Data::PathMetrics> getPathMetrics(size_t sessionId, size_t phase);
 
   void clearData(size_t sessionId, size_t phase);
 

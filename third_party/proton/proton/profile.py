@@ -89,7 +89,9 @@ def start(
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has knobs:
-                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
+                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace", "path_list"]. Default is "hatchet".
+                                               - format can be combined with '+' or ',' (e.g. "hatchet_msgpack+path_list").
+                                               - per-format targets can be specified with '@', e.g. "hatchet@disk+path_list@buffer".
                                                - target: The flushing target. Available options are ["disk", "buffer"]. Default is "disk".
                                                These can be set via `mode="periodic_flushing:format=chrome_trace:target=buffer"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.

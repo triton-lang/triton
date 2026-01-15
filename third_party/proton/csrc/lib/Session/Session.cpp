@@ -367,6 +367,27 @@ SessionManager::popFlushedDataMsgPack(size_t sessionId) {
   return sessions[sessionId]->data->popFlushedMsgPack();
 }
 
+std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
+SessionManager::popFlushedPathMetrics(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId]->data->popFlushedPathMetrics();
+}
+
+std::vector<Data::PathMetrics>
+SessionManager::getPathMetrics(size_t sessionId, size_t phase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  auto *profiler = sessions[sessionId]->getProfiler();
+  auto dataSet = profiler->getDataSet();
+  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
+    throw std::runtime_error(
+        "Cannot get data while the session is active. Please deactivate the "
+        "session first.");
+  }
+  return sessions[sessionId]->data->toPathMetrics(phase);
+}
+
 void SessionManager::clearData(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);

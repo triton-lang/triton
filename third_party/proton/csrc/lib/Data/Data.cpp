@@ -54,6 +54,12 @@ void Data::enqueueFlushedMsgPack(size_t phase, std::vector<uint8_t> payload) {
   flushedMsgPackQueue.emplace_back(phase, std::move(payload));
 }
 
+void Data::enqueueFlushedPathMetrics(size_t phase,
+                                     std::vector<PathMetrics> metrics) {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  flushedPathMetricsQueue.emplace_back(phase, std::move(metrics));
+}
+
 std::optional<Data::FlushedJson> Data::popFlushedJson() {
   std::lock_guard<std::mutex> lock(flushedMutex);
   if (flushedJsonQueue.empty()) {
@@ -71,6 +77,17 @@ std::optional<Data::FlushedMsgPack> Data::popFlushedMsgPack() {
   }
   auto payload = std::move(flushedMsgPackQueue.front());
   flushedMsgPackQueue.pop_front();
+  return payload;
+}
+
+std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
+Data::popFlushedPathMetrics() {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  if (flushedPathMetricsQueue.empty()) {
+    return std::nullopt;
+  }
+  auto payload = std::move(flushedPathMetricsQueue.front());
+  flushedPathMetricsQueue.pop_front();
   return payload;
 }
 

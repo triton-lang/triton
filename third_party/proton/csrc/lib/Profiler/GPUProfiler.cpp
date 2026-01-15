@@ -4,10 +4,62 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 namespace proton {
 namespace detail {
+
+std::vector<std::string> splitFormats(const std::string &format) {
+  std::vector<std::string> formats;
+  std::string token;
+  token.reserve(format.size());
+  for (char ch : format) {
+    if (ch == '+' || ch == ',') {
+      if (!token.empty()) {
+        formats.push_back(token);
+        token.clear();
+      }
+      continue;
+    }
+    token.push_back(ch);
+  }
+  if (!token.empty()) {
+    formats.push_back(token);
+  }
+  if (formats.empty()) {
+    formats.push_back(format);
+  }
+  return formats;
+}
+
+struct FormatSpec {
+  std::string name;
+  std::optional<PeriodicFlushTarget> target;
+};
+
+std::vector<FormatSpec>
+parseFormatSpecs(const std::string &format, PeriodicFlushTarget defaultTarget) {
+  std::vector<FormatSpec> specs;
+  for (const auto &token : splitFormats(format)) {
+    auto atPos = token.find('@');
+    if (atPos == std::string::npos) {
+      specs.push_back({token, defaultTarget});
+      continue;
+    }
+    auto name = token.substr(0, atPos);
+    auto targetStr = token.substr(atPos + 1);
+    if (targetStr == "disk") {
+      specs.push_back({name, PeriodicFlushTarget::Disk});
+    } else if (targetStr == "buffer") {
+      specs.push_back({name, PeriodicFlushTarget::Buffer});
+    } else {
+      throw std::invalid_argument(std::string("[PROTON] ") +
+                                  "unsupported target: " + targetStr);
+    }
+  }
+  return specs;
+}
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
@@ -27,10 +79,33 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
     const std::string key = modeAndOptions[i].substr(0, delimiterPos);
     const std::string value = modeAndOptions[i].substr(delimiterPos + 1);
     if (key == "format") {
-      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-          value != "hatchet") {
-        throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
-                                    ": unsupported format: " + value);
+      const auto specs = parseFormatSpecs(value, periodicFlushingTarget);
+      std::set<std::string> seenFormats;
+      bool bufferJsonFormatSeen = false;
+      for (const auto &spec : specs) {
+        const auto &fmt = spec.name;
+        if (fmt != "hatchet_msgpack" && fmt != "chrome_trace" &&
+            fmt != "hatchet" && fmt != "path_list") {
+          throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                      ": unsupported format: " + fmt);
+        }
+        if (!seenFormats.emplace(fmt).second) {
+          throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                      ": duplicate format: " + fmt);
+        }
+        if ((fmt == "hatchet" || fmt == "chrome_trace") &&
+            spec.target == PeriodicFlushTarget::Buffer) {
+          if (bufferJsonFormatSeen) {
+            throw std::invalid_argument(
+                std::string("[PROTON] ") + profilerName +
+                ": only one JSON format can target buffer at a time");
+          }
+          bufferJsonFormatSeen = true;
+        }
+        if (fmt == "path_list" && spec.target == PeriodicFlushTarget::Disk) {
+          throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                      ": format=path_list requires target=buffer");
+        }
       }
       periodicFlushingFormat = value;
     } else if (key == "target") {
@@ -47,6 +122,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                                   ": unsupported option key: " + key);
     }
   }
+  // Validation for format targets happens above.
 }
 
 void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
@@ -106,16 +182,34 @@ void flushDataPhasesImpl(
     size_t jsonWriteCalls = 0;
     size_t msgPackWriteCalls = 0;
 
+    const auto specs =
+        parseFormatSpecs(periodicFlushingFormat, periodicFlushingTarget);
+    std::optional<PeriodicFlushTarget> hatchetTarget;
+    std::optional<PeriodicFlushTarget> chromeTraceTarget;
+    std::optional<PeriodicFlushTarget> msgPackTarget;
+    std::optional<PeriodicFlushTarget> pathListTarget;
+    for (const auto &spec : specs) {
+      if (spec.name == "hatchet") {
+        hatchetTarget = spec.target;
+      } else if (spec.name == "chrome_trace") {
+        chromeTraceTarget = spec.target;
+      } else if (spec.name == "hatchet_msgpack") {
+        msgPackTarget = spec.target;
+      } else if (spec.name == "path_list") {
+        pathListTarget = spec.target;
+      }
+    }
+
     for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
          startPhase++) {
-      const bool flushToBuffer =
-          (periodicFlushingTarget == PeriodicFlushTarget::Buffer);
-      auto pathWithPhase =
-          path + ".part_" + std::to_string(startPhase) + "." +
-          periodicFlushingFormat;
+      if (pathListTarget.has_value()) {
+        auto metrics = data->toPathMetrics(startPhase);
+        if (!metrics.empty()) {
+          data->enqueueFlushedPathMetrics(startPhase, std::move(metrics));
+        }
+      }
 
-      if (periodicFlushingFormat == "hatchet" ||
-          periodicFlushingFormat == "chrome_trace") {
+      if (hatchetTarget.has_value() || chromeTraceTarget.has_value()) {
         std::string jsonStr;
         if (timingEnabled) {
           const auto t0 = Clock::now();
@@ -129,23 +223,39 @@ void flushDataPhasesImpl(
           jsonStr = data->toJsonString(startPhase);
         }
 
-        if (flushToBuffer) {
+        if ((hatchetTarget == PeriodicFlushTarget::Buffer) ||
+            (chromeTraceTarget == PeriodicFlushTarget::Buffer)) {
           data->enqueueFlushedJson(startPhase, std::move(jsonStr));
-        } else if (timingEnabled) {
-          const auto t0 = Clock::now();
-          std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-          ofs << jsonStr;
-          ofs.flush();
-          const auto t1 = Clock::now();
-          totalJsonWriteUs +=
-              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                  .count();
-          ++jsonWriteCalls;
         } else {
-          std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-          ofs << jsonStr;
+          const auto writeJson = [&](const std::string &formatSuffix) {
+            auto pathWithPhase =
+                path + ".part_" + std::to_string(startPhase) + "." +
+                formatSuffix;
+            if (timingEnabled) {
+              const auto t0 = Clock::now();
+              std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+              ofs << jsonStr;
+              ofs.flush();
+              const auto t1 = Clock::now();
+              totalJsonWriteUs +=
+                  std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                      .count();
+              ++jsonWriteCalls;
+            } else {
+              std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+              ofs << jsonStr;
+            }
+          };
+          if (hatchetTarget == PeriodicFlushTarget::Disk) {
+            writeJson("hatchet");
+          }
+          if (chromeTraceTarget == PeriodicFlushTarget::Disk) {
+            writeJson("chrome_trace");
+          }
         }
-      } else if (periodicFlushingFormat == "hatchet_msgpack") {
+      }
+
+      if (msgPackTarget.has_value()) {
         std::vector<uint8_t> msgPack;
         if (timingEnabled) {
           const auto t0 = Clock::now();
@@ -159,10 +269,13 @@ void flushDataPhasesImpl(
           msgPack = data->toMsgPack(startPhase);
         }
 
-        if (flushToBuffer) {
+        if (msgPackTarget == PeriodicFlushTarget::Buffer) {
           data->enqueueFlushedMsgPack(startPhase, std::move(msgPack));
         } else if (timingEnabled) {
           const auto t0 = Clock::now();
+          auto pathWithPhase = path + ".part_" +
+                               std::to_string(startPhase) +
+                               ".hatchet_msgpack";
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),
@@ -174,6 +287,9 @@ void flushDataPhasesImpl(
                   .count();
           ++msgPackWriteCalls;
         } else {
+          auto pathWithPhase = path + ".part_" +
+                               std::to_string(startPhase) +
+                               ".hatchet_msgpack";
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),

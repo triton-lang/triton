@@ -24,6 +24,8 @@ public:
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
+  std::vector<PathMetrics> toPathMetrics(size_t phase) const override;
+
   DataEntry addOp(const std::string &name) override;
 
   DataEntry addOp(size_t phase, size_t contextId,
