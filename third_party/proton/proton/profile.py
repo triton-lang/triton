@@ -5,6 +5,7 @@ from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
+from .hooks.hook import Hook
 from .mode import BaseMode
 from typing import Optional, Union
 
@@ -54,7 +55,7 @@ def start(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[Union[str, BaseMode]] = None,
-    hook: Optional[str] = None,
+    hook: Optional[Union[str, Hook]] = None,
 ) -> Optional[int]:
     """
     Start profiling with the given name and backend.
@@ -90,9 +91,11 @@ def start(
                                                For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
                                                The can be set via `mode="periodic_flushing:format=chrome_trace"`.
-        hook (str, optional): The hook to use for profiling.
-                              Available options are [None, "launch"].
-                              Defaults to None.
+        hook (Union[str, Hook], optional): The hook to use for profiling.
+                                           You may pass either:
+                                           - a string hook name, e.g. "triton" (kernel launch metadata), or
+                                           - a custom Hook instance.
+                                           Defaults to None.
     Returns:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is disabled.
     """
@@ -111,8 +114,12 @@ def start(
 
     session = libproton.start(name, context, data, backend, mode_str)
 
-    if hook == "triton":
+    if isinstance(hook, Hook):
+        HookManager.register(hook, session)
+    elif hook == "triton":
         HookManager.register(LaunchHook(), session)
+    elif hook is not None:
+        raise ValueError(f"Unsupported hook: {hook!r}")
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)
 
@@ -195,7 +202,7 @@ def _profiling(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[str] = None,
-    hook: Optional[str] = None,
+    hook: Optional[Union[str, Hook]] = None,
 ):
     """
     Context manager for profiling. Internally use only.
@@ -225,7 +232,7 @@ def profile(
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
     mode: Optional[str] = None,
-    hook: Optional[str] = None,
+    hook: Optional[Union[str, Hook]] = None,
 ):
     """
     Decorator for profiling.

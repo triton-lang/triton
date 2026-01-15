@@ -29,22 +29,22 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tens
   // CHECK-NEXT: [[SUM1:%.*]] = add i32 [[SRC1]], [[SRC3]]
 
   // Reduce within warp.
-  // CHECK-NEXT: [[W0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[SUM0]], i32 2, i32 31)
+  // CHECK-NEXT: [[W0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[SUM0]], i32 16, i32 31)
   // CHECK-NEXT: [[WSUM0:%.*]] = add i32 [[W0]], [[SUM0]]
-  // CHECK-NEXT: [[W1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM0]], i32 4, i32 31)
+  // CHECK-NEXT: [[W1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM0]], i32 8, i32 31)
   // CHECK-NEXT: [[WSUM1:%.*]] = add i32 [[WSUM0]], [[W1]]
-  // CHECK-NEXT: [[W2:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM1]], i32 8, i32 31)
+  // CHECK-NEXT: [[W2:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM1]], i32 4, i32 31)
   // CHECK-NEXT: [[WSUM2:%.*]] = add i32 [[WSUM1]], [[W2]]
-  // CHECK-NEXT: [[W3:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM2]], i32 16, i32 31)
+  // CHECK-NEXT: [[W3:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM2]], i32 2, i32 31)
   // CHECK-NEXT: [[WSUM3:%.*]] = add i32 [[WSUM2]], [[W3]]
 
-  // CHECK-NEXT: [[W4:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[SUM1]], i32 2, i32 31)
+  // CHECK-NEXT: [[W4:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[SUM1]], i32 16, i32 31)
   // CHECK-NEXT: [[WSUM4:%.*]] = add i32 [[W4]], [[SUM1]]
-  // CHECK-NEXT: [[W5:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM4]], i32 4, i32 31)
+  // CHECK-NEXT: [[W5:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM4]], i32 8, i32 31)
   // CHECK-NEXT: [[WSUM5:%.*]] = add i32 [[WSUM4]], [[W5]]
-  // CHECK-NEXT: [[W6:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM5]], i32 8, i32 31)
+  // CHECK-NEXT: [[W6:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM5]], i32 4, i32 31)
   // CHECK-NEXT: [[WSUM6:%.*]] = add i32 [[WSUM5]], [[W6]]
-  // CHECK-NEXT: [[W7:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM6]], i32 16, i32 31)
+  // CHECK-NEXT: [[W7:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM6]], i32 2, i32 31)
   // CHECK-NEXT: [[WSUM7:%.*]] = add i32 [[WSUM6]], [[W7]]
 
   // CHECK-NEXT: [[DST0:%.*]] = insertvalue { i32, i32 } undef, i32 [[WSUM3]], 0

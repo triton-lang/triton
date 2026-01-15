@@ -105,10 +105,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                         "llvm.amdgcn.cluster.workgroup.id.x",
-                                         {rewriter.getI32Type()}, {})
-      .getResult(0);
+  return ROCDL::ClusterIdXOp::create(rewriter, loc, rewriter.getI32Type());
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -294,13 +291,14 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 //   step 4: apply reduction to get the final results
 static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
                                  SmallVector<Value> &acc, triton::ReduceOp op,
-                                 unsigned activeLanes) {
+                                 unsigned numLaneToReduce,
+                                 unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma32Case = activeLanes == 32;
-  bool mfma16Case = activeLanes == (16 | 32);
+  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
+  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
   if (!(mfma32Case || mfma16Case))
     return false;
 
@@ -325,12 +323,12 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
                              SmallVector<Value> &acc, triton::ReduceOp op,
-                             unsigned activeLanes) {
+                             unsigned numLaneToReduce, unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma16Case = activeLanes == 16;
+  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
   if (!mfma16Case)
     return false;
 
@@ -348,16 +346,17 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned activeLanes) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceSwap16or32(rewriter, loc, acc, op, activeLanes))
+      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if ((getISAFamily() == ISAFamily::GFX1250) &&
-      warpReduceSwap16(rewriter, loc, acc, op, activeLanes))
+      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
-  if (activeLanes != (getWarpSize() - 1))
+  if (numLaneToReduce != getWarpSize())
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;

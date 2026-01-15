@@ -1,5 +1,3 @@
-import warnings
-
 import torch
 import triton
 from triton_kernels import target_info
@@ -147,8 +145,5 @@ def compute_num_stages(
         stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
     num_stages = min(smem_capacity // int(stage_size), 4)
     if num_stages == 0:
-        warnings.warn("num_stages computed is 0, bumping up to 1 but this may "
-                      "lead to out of shared memory errors, and in that case "
-                      "consider reducing block sizes.")
         num_stages = 1
     return num_stages

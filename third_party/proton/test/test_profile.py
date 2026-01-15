@@ -76,6 +76,7 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
 def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -314,7 +315,8 @@ def test_hook_launch(tmp_path: pathlib.Path):
         size = args["size"]  # const
         key = "flops" + str(element_size * 8)
         num_ctas = metadata.num_ctas
-        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0}
+        # Return an extra metric key beyond the historical flops/bytes allowlist.
+        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0, "extra_metric": 7.0}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, size: tl.constexpr, y):
@@ -334,7 +336,67 @@ def test_hook_launch(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["frame"]["name"] == "test0"
     assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
     assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
+    assert data[0]["children"][0]["children"][0]["metrics"]["extra_metric"] == 7.0
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
+def test_hook_launch_filter(tmp_path: pathlib.Path):
+
+    foo_metadata_invoked = False
+    bar_metadata_invoked = False
+
+    def foo_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal foo_metadata_invoked
+        foo_metadata_invoked = True
+        return {"name": "foo_meta", "flops": 1.0}
+
+    def bar_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal bar_metadata_invoked
+        bar_metadata_invoked = True
+        return {"name": "bar_meta", "flops": 2.0}
+
+    @triton.jit(launch_metadata=foo_metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    @triton.jit(launch_metadata=bar_metadata_fn)
+    def bar(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_triton_filter.hatchet"
+
+    # Only allow kernels whose compiled name matches "foo" (via prefix regex).
+    launch_hook = proton_launch.LaunchHook()
+    launch_hook.configure(include=".*foo")
+    proton.start(str(temp_file.with_suffix("")), hook=launch_hook)
+    with proton.scope("test0"):
+        foo[(1, )](x, 1, y, num_warps=4)
+        bar[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    # Reset singleton hook state to avoid leaking filter settings across tests.
+    launch_hook.configure(include=None, exclude=None)
+
+    assert foo_metadata_invoked is True
+    assert bar_metadata_invoked is False
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    # Ensure the "foo_meta" override exists and "bar_meta" does not.
+    all_names = set()
+    queue = [data[0]]
+    while queue:
+        node = queue.pop()
+        if "frame" in node and "name" in node["frame"]:
+            all_names.add(node["frame"]["name"])
+        queue.extend(node.get("children", []))
+
+    assert "foo_meta" in all_names
+    assert "bar_meta" not in all_names
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
