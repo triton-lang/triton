@@ -188,7 +188,7 @@ def matmul_launch_metadata(grid, kernel, args):
     n_tokens = None
     if slice_sizes is not None:
         if launch_metadata_allow_sync():
-            n_tokens = float(slice_sizes.sum())
+            n_tokens = int(slice_sizes.sum())
         else:
             n_tokens = slice_sizes.sum()  # n_tokens can stay in gpu
 
