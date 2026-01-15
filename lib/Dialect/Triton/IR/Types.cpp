@@ -9,83 +9,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
+
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/Types.cpp.inc"
 
-//===----------------------------------------------------------------------===//
-// TensorDescType Verifier
-//===----------------------------------------------------------------------===//
-LogicalResult
-TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
-                       RankedTensorType blockType, mlir::StringAttr mode,
-                       mlir::DenseI64ArrayAttr elementStrides,
-                       mlir::DenseI64ArrayAttr pixelBoxLowerCorner,
-                       mlir::DenseI64ArrayAttr pixelBoxUpperCorner,
-                       std::optional<int64_t> channelsPerPixel,
-                       std::optional<int64_t> pixelsPerColumn) {
-  // Validate mode is either "tiled" or "im2col"
-  if (mode.getValue() != "tiled" && mode.getValue() != "im2col") {
-    return emitError() << "TensorDescType mode must be 'tiled' or 'im2col', "
-                       << "got '" << mode.getValue() << "'";
-  }
-
-  // In tiled mode, im2col-specific parameters should not be set
-  if (mode.getValue() == "tiled") {
-    if (elementStrides) {
-      return emitError()
-             << "TensorDescType in 'tiled' mode should not have elementStrides";
-    }
-    if (pixelBoxLowerCorner) {
-      return emitError() << "TensorDescType in 'tiled' mode should not have "
-                            "pixelBoxLowerCorner";
-    }
-    if (pixelBoxUpperCorner) {
-      return emitError() << "TensorDescType in 'tiled' mode should not have "
-                            "pixelBoxUpperCorner";
-    }
-    if (channelsPerPixel.has_value()) {
-      return emitError() << "TensorDescType in 'tiled' mode should not have "
-                            "channelsPerPixel";
-    }
-    if (pixelsPerColumn.has_value()) {
-      return emitError() << "TensorDescType in 'tiled' mode should not have "
-                            "pixelsPerColumn";
-    }
-  }
-
-  // In im2col mode, validate blockType shape matches channelsPerPixel and
-  // pixelsPerColumn
-  if (mode.getValue() == "im2col") {
-    // blockType must be rank 2 for im2col mode
-    if (blockType.getRank() != 2) {
-      return emitError()
-             << "TensorDescType in 'im2col' mode requires rank-2 blockType, "
-             << "got rank " << blockType.getRank();
-    }
-
-    auto shape = blockType.getShape();
-    int64_t M = shape[0]; // pixelsPerColumn
-    int64_t N = shape[1]; // channelsPerPixel
-
-    // Validate pixelsPerColumn matches M dimension
-    if (pixelsPerColumn.has_value() && pixelsPerColumn.value() != M) {
-      return emitError() << "TensorDescType in 'im2col' mode: pixelsPerColumn ("
-                         << pixelsPerColumn.value()
-                         << ") must equal blockType's first dimension (" << M
-                         << ")";
-    }
-
-    // Validate channelsPerPixel matches N dimension
-    if (channelsPerPixel.has_value() && channelsPerPixel.value() != N) {
-      return emitError()
-             << "TensorDescType in 'im2col' mode: channelsPerPixel ("
-             << channelsPerPixel.value()
-             << ") must equal blockType's second dimension (" << N << ")";
-    }
-  }
-
-  return success();
-}
 
 //===----------------------------------------------------------------------===//
 // Triton Dialect
