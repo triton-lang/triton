@@ -554,8 +554,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataToEntry = threadState.dataToEntry;
   if (isGraphLaunch(cbId)) {
-    using Clock = std::chrono::steady_clock;
-    const auto t0 = Clock::now();
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
             ->hGraph;
@@ -587,6 +585,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       } else {
         graphNodeIdToState.clear();
       }
+      using Clock = std::chrono::steady_clock;
+      auto t0 = Clock::now();
 
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
@@ -609,7 +609,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           }
         }
       }
+      auto t1 = Clock::now();
+      auto elapsed =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+      std::cerr << "[PROTON] Graph launch call path time: " << elapsed
+                << " us for graphExecId: " << graphExecId << std::endl; 
 
+      t0 = Clock::now();
       if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
@@ -642,12 +648,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           profiler.pendingGraphPool->flushIfNeeded(numNodes);
         profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numNodes);
       }
+      auto t1 = Clock::now();
+      auto elapsed =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+      std::cerr << "[PROTON] Graph launch metric time: " << elapsed
+                << " us for graphExecId: " << graphExecId << std::endl; 
     }
-    const auto t1 = Clock::now();
-    auto elapsed =
-        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-    std::cerr << "[PROTON] Graph launch handling time: " << elapsed
-              << " us for graphExecId: " << graphExecId << std::endl; 
   }
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
