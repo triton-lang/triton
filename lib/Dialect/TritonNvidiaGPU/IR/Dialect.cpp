@@ -511,10 +511,10 @@ LogicalResult TensorDescIm2ColType::verify(
 
   // Validate pixelBox corners have matching sizes
   if (pixelBoxLowerCorner.size() != pixelBoxUpperCorner.size()) {
-    return emitError()
-           << "TensorDescIm2ColType: pixelBoxLowerCorner and "
-              "pixelBoxUpperCorner must have the same size, got "
-           << pixelBoxLowerCorner.size() << " vs " << pixelBoxUpperCorner.size();
+    return emitError() << "TensorDescIm2ColType: pixelBoxLowerCorner and "
+                          "pixelBoxUpperCorner must have the same size, got "
+                       << pixelBoxLowerCorner.size() << " vs "
+                       << pixelBoxUpperCorner.size();
   }
 
   return success();
