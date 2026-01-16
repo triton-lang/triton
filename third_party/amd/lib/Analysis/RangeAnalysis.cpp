@@ -716,20 +716,18 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         }
         visitNonControlFlowArguments(
-            branch,
-            RegionSuccessor(
-                branch, branch->getResults().slice(firstIndex, inputs.size())),
-            lattices, firstIndex);
+            branch, RegionSuccessor::parent(),
+            branch->getResults().slice(firstIndex, inputs.size()), lattices,
+            firstIndex);
       } else {
         if (!inputs.empty()) {
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
         }
         Region *region = point->getBlock()->getParent();
         visitNonControlFlowArguments(
-            branch,
-            RegionSuccessor(region, region->getArguments().slice(
-                                        firstIndex, inputs.size())),
-            lattices, firstIndex);
+            branch, RegionSuccessor(region),
+            region->getArguments().slice(firstIndex, inputs.size()), lattices,
+            firstIndex);
       }
     }
 
