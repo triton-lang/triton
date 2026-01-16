@@ -33,20 +33,6 @@ std::vector<std::string> splitFormats(const std::string &format) {
   return formats;
 }
 
-std::vector<std::string> parseFormats(const std::string &format) {
-  std::vector<std::string> formats;
-  for (const auto &token : splitFormats(format)) {
-    auto atPos = token.find('@');
-    if (atPos != std::string::npos) {
-      throw std::invalid_argument(
-          std::string("[PROTON] target is not configurable for format: ") +
-          token);
-    }
-    formats.push_back(token);
-  }
-  return formats;
-}
-
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
@@ -55,9 +41,14 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
   periodicFlushingFormat = "hatchet";
 
   const auto validateFormats = [&](const std::string &format) {
-    const auto formats = parseFormats(format);
+    const auto formats = splitFormats(format);
     std::set<std::string> seenFormats;
     for (const auto &fmt : formats) {
+      if (fmt.find('@') != std::string::npos) {
+        throw std::invalid_argument(
+            std::string("[PROTON] target is not configurable for format: ") +
+            fmt);
+      }
       if (fmt != "hatchet_msgpack" && fmt != "chrome_trace" &&
           fmt != "hatchet" && fmt != "path_metrics") {
         throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
@@ -146,7 +137,7 @@ void flushDataPhasesImpl(
     size_t jsonWriteCalls = 0;
     size_t msgPackWriteCalls = 0;
 
-    const auto formats = parseFormats(periodicFlushingFormat);
+    const auto formats = splitFormats(periodicFlushingFormat);
     bool hatchetDisk = false;
     bool chromeTraceDisk = false;
     bool msgPackDisk = false;
