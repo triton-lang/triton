@@ -282,40 +282,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 
 // -----
 
-// Test invalid TensorDescIm2ColType: wrong channelsPerPixel
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // expected-error @below {{TensorDescIm2ColType: channelsPerPixel (32) must equal blockType's second dimension (128)}}
-  tt.func @tensordesc_im2col_wrong_channels(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16>, elementStrides = [1], pixelBoxLowerCorner = [0], pixelBoxUpperCorner = [3], channelsPerPixel = 32, pixelsPerColumn = 64>) {
-    tt.return
-  }
-}
-
-// -----
-
-// Test invalid TensorDescIm2ColType: wrong pixelsPerColumn
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // expected-error @below {{TensorDescIm2ColType: pixelsPerColumn (32) must equal blockType's first dimension (64)}}
-  tt.func @tensordesc_im2col_wrong_pixels(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16>, elementStrides = [1], pixelBoxLowerCorner = [0], pixelBoxUpperCorner = [3], channelsPerPixel = 128, pixelsPerColumn = 32>) {
-    tt.return
-  }
-}
-
-// -----
-
-// Test invalid TensorDescIm2ColType: mismatched pixelBox corners
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // expected-error @below {{TensorDescIm2ColType: pixelBoxLowerCorner and pixelBoxUpperCorner must have the same size, got 2 vs 1}}
-  tt.func @tensordesc_im2col_mismatched_corners(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16>, elementStrides = [1, 1], pixelBoxLowerCorner = [0, 0], pixelBoxUpperCorner = [3], channelsPerPixel = 128, pixelsPerColumn = 64>) {
-    tt.return
-  }
-}
-
-// -----
-
 // Test invalid TensorDescIm2ColType: rank-3 blockType (must be rank-2)
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   // expected-error @below {{TensorDescIm2ColType requires rank-2 blockType, got rank 3}}
-  tt.func @tensordesc_im2col_wrong_rank(%desc: !ttng.tensordesc_im2col<tensor<32x64x128xf16>, elementStrides = [1], pixelBoxLowerCorner = [0], pixelBoxUpperCorner = [3], channelsPerPixel = 128, pixelsPerColumn = 64>) {
+  tt.func @tensordesc_im2col_wrong_rank(%desc: !ttng.tensordesc_im2col<tensor<32x64x128xf16>>) {
     tt.return
   }
 }

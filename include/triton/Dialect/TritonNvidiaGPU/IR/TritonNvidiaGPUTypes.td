@@ -53,11 +53,6 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
 
     Parameters:
     - blockType: The shape and element type of the data block being accessed
-    - elementStrides: Strides for traversing elements within a pixel
-    - pixelBoxLowerCorner: Lower corner of the pixel bounding box
-    - pixelBoxUpperCorner: Upper corner of the pixel bounding box
-    - channelsPerPixel: Number of channels per pixel (innermost dimension)
-    - pixelsPerColumn: Number of pixels per column (outermost dimension)
 
     This type implements TensorDescInterface, sharing common operations with
     the tiled TensorDescType in the base Triton dialect.
@@ -67,59 +62,25 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
   }];
 
   let parameters = (ins
-    "RankedTensorType":$blockType,
-    "mlir::DenseI64ArrayAttr":$elementStrides,
-    "mlir::DenseI64ArrayAttr":$pixelBoxLowerCorner,
-    "mlir::DenseI64ArrayAttr":$pixelBoxUpperCorner,
-    "int64_t":$channelsPerPixel,
-    "int64_t":$pixelsPerColumn
+    "RankedTensorType":$blockType
   );
 
   let assemblyFormat = [{
-    `<` $blockType `,`
-    `elementStrides` `=` $elementStrides `,`
-    `pixelBoxLowerCorner` `=` $pixelBoxLowerCorner `,`
-    `pixelBoxUpperCorner` `=` $pixelBoxUpperCorner `,`
-    `channelsPerPixel` `=` $channelsPerPixel `,`
-    `pixelsPerColumn` `=` $pixelsPerColumn `>`
+    `<` $blockType `>`
   }];
 
   let builders = [
-    // Full builder with all im2col parameters
-    TypeBuilder<(ins
-      "RankedTensorType":$blockType,
-      "ArrayRef<int64_t>":$elementStrides,
-      "ArrayRef<int64_t>":$pixelBoxLowerCorner,
-      "ArrayRef<int64_t>":$pixelBoxUpperCorner,
-      "int64_t":$channelsPerPixel,
-      "int64_t":$pixelsPerColumn
-    ), [{
-      return Base::get($_ctxt, blockType,
-                       DenseI64ArrayAttr::get($_ctxt, elementStrides),
-                       DenseI64ArrayAttr::get($_ctxt, pixelBoxLowerCorner),
-                       DenseI64ArrayAttr::get($_ctxt, pixelBoxUpperCorner),
-                       channelsPerPixel, pixelsPerColumn);
-    }]>,
     // Builder with signedness for integer types
     TypeBuilder<(ins
       "RankedTensorType":$blockType,
-      "bool":$isSigned,
-      "ArrayRef<int64_t>":$elementStrides,
-      "ArrayRef<int64_t>":$pixelBoxLowerCorner,
-      "ArrayRef<int64_t>":$pixelBoxUpperCorner,
-      "int64_t":$channelsPerPixel,
-      "int64_t":$pixelsPerColumn
+      "bool":$isSigned
     ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
         blockType = blockType.clone(elemTy);
       }
-      return Base::get($_ctxt, blockType,
-                       DenseI64ArrayAttr::get($_ctxt, elementStrides),
-                       DenseI64ArrayAttr::get($_ctxt, pixelBoxLowerCorner),
-                       DenseI64ArrayAttr::get($_ctxt, pixelBoxUpperCorner),
-                       channelsPerPixel, pixelsPerColumn);
+      return Base::get($_ctxt, blockType);
     }]>
   ];
 

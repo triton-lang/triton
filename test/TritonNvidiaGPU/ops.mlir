@@ -160,23 +160,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 
-  // CHECK-LABEL: @tensordesc_im2col_type
-  // CHECK-SAME: !ttng.tensordesc_im2col<tensor<64x128xf16, {{.*}}>, elementStrides = [1, 2], pixelBoxLowerCorner = [0, 0], pixelBoxUpperCorner = [3, 3], channelsPerPixel = 128, pixelsPerColumn = 64>
-  tt.func public @tensordesc_im2col_type(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>, elementStrides = [1, 2], pixelBoxLowerCorner = [0, 0], pixelBoxUpperCorner = [3, 3], channelsPerPixel = 128, pixelsPerColumn = 64>) {
-    // CHECK: tt.return
-    tt.return
-  }
-
-  // CHECK-LABEL: @tensordesc_im2col_type_f32
-  // CHECK-SAME: [[DESC:%arg[0-9]+]]: !ttng.tensordesc_im2col<tensor<32x64xf32>, elementStrides = [1, 1, 1], pixelBoxLowerCorner = [-1, -1], pixelBoxUpperCorner = [1, 1], channelsPerPixel = 64, pixelsPerColumn = 32>
-  tt.func public @tensordesc_im2col_type_f32(%desc: !ttng.tensordesc_im2col<tensor<32x64xf32>, elementStrides = [1, 1, 1], pixelBoxLowerCorner = [-1, -1], pixelBoxUpperCorner = [1, 1], channelsPerPixel = 64, pixelsPerColumn = 32>) {
-    // CHECK: tt.return
-    tt.return
-  }
-
-  // CHECK-LABEL: @tensordesc_im2col_type_bf16
-  // CHECK-SAME: [[DESC:%arg[0-9]+]]: !ttng.tensordesc_im2col<tensor<128x256xbf16>, elementStrides = [2], pixelBoxLowerCorner = [0], pixelBoxUpperCorner = [2], channelsPerPixel = 256, pixelsPerColumn = 128>
-  tt.func public @tensordesc_im2col_type_bf16(%desc: !ttng.tensordesc_im2col<tensor<128x256xbf16>, elementStrides = [2], pixelBoxLowerCorner = [0], pixelBoxUpperCorner = [2], channelsPerPixel = 256, pixelsPerColumn = 128>) {
+  // CHECK-LABEL: @tensordesc_im2col
+  // CHECK-SAME: !ttng.tensordesc_im2col<tensor<64x128xf16, {{.*}}>>
+  tt.func public @tensordesc_im2col(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>) {
     // CHECK: tt.return
     tt.return
   }

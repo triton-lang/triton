@@ -477,46 +477,13 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 // TensorDescIm2ColType Verifier
 //===----------------------------------------------------------------------===//
 LogicalResult TensorDescIm2ColType::verify(
-    function_ref<InFlightDiagnostic()> emitError, RankedTensorType blockType,
-    mlir::DenseI64ArrayAttr elementStrides,
-    mlir::DenseI64ArrayAttr pixelBoxLowerCorner,
-    mlir::DenseI64ArrayAttr pixelBoxUpperCorner, int64_t channelsPerPixel,
-    int64_t pixelsPerColumn) {
+    function_ref<InFlightDiagnostic()> emitError, RankedTensorType blockType) {
   // blockType must be rank 2 for im2col mode
   if (blockType.getRank() != 2) {
     return emitError()
            << "TensorDescIm2ColType requires rank-2 blockType, got rank "
            << blockType.getRank();
   }
-
-  auto shape = blockType.getShape();
-  int64_t M = shape[0]; // pixelsPerColumn
-  int64_t N = shape[1]; // channelsPerPixel
-
-  // Validate pixelsPerColumn matches M dimension
-  if (pixelsPerColumn != M) {
-    return emitError() << "TensorDescIm2ColType: pixelsPerColumn ("
-                       << pixelsPerColumn
-                       << ") must equal blockType's first dimension (" << M
-                       << ")";
-  }
-
-  // Validate channelsPerPixel matches N dimension
-  if (channelsPerPixel != N) {
-    return emitError() << "TensorDescIm2ColType: channelsPerPixel ("
-                       << channelsPerPixel
-                       << ") must equal blockType's second dimension (" << N
-                       << ")";
-  }
-
-  // Validate pixelBox corners have matching sizes
-  if (pixelBoxLowerCorner.size() != pixelBoxUpperCorner.size()) {
-    return emitError()
-           << "TensorDescIm2ColType: pixelBoxLowerCorner and "
-              "pixelBoxUpperCorner must have the same size, got "
-           << pixelBoxLowerCorner.size() << " vs " << pixelBoxUpperCorner.size();
-  }
-
   return success();
 }
 
