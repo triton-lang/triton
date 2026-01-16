@@ -49,7 +49,7 @@ findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
     // - barriers
     // - loops
     if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, gpu::BarrierOp,
-            scf::ForOp, scf::WhileOp>(op)) {
+            triton::gpu::BarrierOp, scf::ForOp, scf::WhileOp>(op)) {
       ipnt = bi;
     }
   }
@@ -59,6 +59,16 @@ findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
 //===----------------------------------------------------------------------===//
 // Reorder mechanisms
 //===----------------------------------------------------------------------===//
+
+// Move transpositions just after their definition.
+static void moveUpTranspose(triton::FuncOp funcOp) {
+  SmallVector<triton::TransposeOpInterface> transOps;
+  funcOp.walk([&](triton::TransposeOpInterface op) { transOps.push_back(op); });
+
+  for (auto op : transOps)
+    if (Operation *argOp = op.getSrc().getDefiningOp())
+      op->moveAfter(argOp);
+}
 
 // Schedule global load ops in prologue for better GEMM performance.
 static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
@@ -126,6 +136,7 @@ struct TritonAMDGPUReorderInstructionsPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<triton::FuncOp>()) {
+      moveUpTranspose(funcOp);
       moveUpGlobalLoadInPrologue(funcOp);
     }
   }

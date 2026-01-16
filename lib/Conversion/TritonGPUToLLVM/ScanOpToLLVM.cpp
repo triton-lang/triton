@@ -523,7 +523,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
                          smemBases, smemTypes, flatIdParallel, isRepresentative,
                          targetInfo);
-    b.barrier();
+    b.barrier(triton::gpu::AddrSpace::Local);
     // Read back the partial reduction of each warp and accumulate them based on
     // warpId. Then update each chunk of contiguous elements by adding the
     // accumulated value from the previous lane.
