@@ -11,7 +11,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::NVIDIA;
+
 
 namespace mlir::triton::plugin {
 #define GEN_PASS_DEF_DIALECTPLUGINMAGICOP
@@ -26,7 +26,7 @@ class PluginTypeConverter : public TypeConverter {
                                                int numCTAs,
                                                bool enableSourceRemat){
       addConversion([](Type type) { return type; });
-                                               }
+    }
 };
 
 class PluginConversionTarget : public ConversionTarget {
@@ -44,31 +44,20 @@ struct PluginMagicOpConversion : OpConversionPattern<mlir::triton::plugin::Magic
   LogicalResult
   matchAndRewrite(mlir::triton::plugin::MagicOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm::errs() << "Here 4!!!!!!!!!!!!" << "\n";
-    auto input = adaptor.getInput();
+
+    Value input = adaptor.getInput();
     rewriter.replaceOp(op, input);
     return success();
   }
 };
 
 } // namespace
-namespace mlir::triton::plugin {
-// void populatePluginGPUOpPatterns(TritonGPUTypeConverter &typeConverter,
-//                                  RewritePatternSet &patterns,
-//                                  MLIRContext &context) {
-//   llvm::errs() << "Here 2!!!!!!!!!!!!" << "\n";
-//   patterns.add<PluginMagicOpConversion>(typeConverter, &context);
-//   return;
-// }
-} // namespace mlir::triton::plugin
 
 struct ConvertPluginGPUToLLVMPass
     : public mlir::triton::plugin::impl::DialectPluginMagicOpBase<
           ConvertPluginGPUToLLVMPass> {
-  explicit ConvertPluginGPUToLLVMPass(int32_t computeCapability,
-                                      int32_t ptxVersion) {
-    this->computeCapability = computeCapability;
-    this->ptxVersion = ptxVersion;
+  explicit ConvertPluginGPUToLLVMPass(int32_t num_warps) {
+    this->num_warps = num_warps;
   }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -80,22 +69,16 @@ struct ConvertPluginGPUToLLVMPass
     PluginTypeConverter typeConverter(context, numWarps, threadsPerWarp,
                                          numCTAs, /*enableSourceRemat=*/false);
     PluginConversionTarget convTarget(*context, typeConverter);
-    // mlir::triton::plugin::populatePluginGPUOpPatterns(typeConverter, patterns, *context);
-    // auto convTarget = PluginLLVMConversionTarget(*context);
-    llvm::errs() << "Here 3!!!!!!!!!!!!" << "\n";
     patterns.add<PluginMagicOpConversion>(typeConverter, context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
-    // llvm::errs() << "Here 2.5!!!!!!!!!!!!" << "\n";
   }
 };
 
 namespace mlir::triton::plugin {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertPluginGPUToLLVMPass(int32_t computeCapability,
-                                 int32_t ptxVersion) {
+createConvertPluginGPUToLLVMPass(int32_t num_warps) {
 
-  return std::make_unique<ConvertPluginGPUToLLVMPass>(computeCapability,
-                                                      ptxVersion);
+  return std::make_unique<ConvertPluginGPUToLLVMPass>(num_warps);
 }
 } // namespace mlir::triton::plugin

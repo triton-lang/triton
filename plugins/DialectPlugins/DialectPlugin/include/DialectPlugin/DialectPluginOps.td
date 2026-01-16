@@ -16,13 +16,11 @@ def DialectPlugin_MagicOp : DialectPlugin_Op<"magic", [Pure,
         operation in a dialect. It uses an operation trait to declare that it
         has no side effects.
 
-        This operation takes an integer argument and returns an integer.
-
         Example:
 
         ```mlir
         %0 = arith.constant 2 : i32
-        // Apply the magic operation to %0
+        // Apply the magic operation to tensor %0 and return %1
         %1 = plugin.magic %0 : i32
         ```
     }];
