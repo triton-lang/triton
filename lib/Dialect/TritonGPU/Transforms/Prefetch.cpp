@@ -146,72 +146,71 @@ FailureOr<Value> Prefetcher::getAsyncWaitTokenForLocalLoad(Operation *cvt,
                                                            bool fromPriorIter,
                                                            OpBuilder &builder,
                                                            IRMapping *mapping) {
-  if (auto llOp = dyn_cast<triton::gpu::LocalLoadOp>(cvt)) {
-    if (llOp->getNumOperands() > 1) {
-      // Extra operand is async_wait token.
-      Value awt = llOp->getOperand(1);
-      assert(isa<AsyncTokenType>(awt.getType()));
-      if (!fromPriorIter) {
-        if (!mapping) {
-          // Case 0: return async wait token in prologue.
-          if (mlir::BlockArgument loopArg =
-                  dyn_cast<mlir::BlockArgument>(awt)) {
-            unsigned argIdx =
-                loopArg.getArgNumber() - forOp.getNumInductionVars();
-            Value initAwt = forOp.getInitArgs()[argIdx];
-            return initAwt;
-          } else {
-            assert(false || "Expected async wait token to be loop arg.");
-            return failure();
-          }
-          return awt;
-        } else {
-          // Case 1: return new async wait token from for(args) for
-          // LocalLoad[1, N-1].
-          return mapping->lookup(awt);
-        }
-      }
+  auto llOp = dyn_cast<triton::gpu::LocalLoadOp>(cvt);
+  if (!llOp)
+    return failure();
+  if (llOp->getNumOperands() != 2)
+    return failure();
+  Value awt = llOp->getOperand(1);
+  if (!isa<AsyncTokenType>(awt.getType()))
+    return failure();
 
-      // Case 2: return new async wait token from end of prior iteration,
-      // this occurs for the prefetching LocalLoads at the end of the loop.
-      // which may or may not have been created yet i.e. is in mapping.
-      // Note: it may already be in mapping for two reasons,
-      // (a) it is a duplicate of async_wait created below,
-      // (b) associated async_wait was already created previously in new loop
-      // even though want prior iter of it. Now we want to wrap around the loop
-      // body and find this token in the previous iteration because it was
-      // prefetched.
-      assert(mapping);
-      assert(fromPriorIter);
-
-      // Want awt from prior iter, but it isn't in map yet, so follow across
-      // loop backedge and create.
-      if (mlir::BlockArgument loopArg = dyn_cast<mlir::BlockArgument>(awt)) {
-        unsigned argIdx = loopArg.getArgNumber() - forOp.getNumInductionVars();
+  if (!fromPriorIter) {
+    if (!mapping) {
+      // Case 0: return async wait token in prologue.
+      if (mlir::BlockArgument loopArg =
+              dyn_cast<mlir::BlockArgument>(awt)) {
+        unsigned argIdx =
+            loopArg.getArgNumber() - forOp.getNumInductionVars();
         Value initAwt = forOp.getInitArgs()[argIdx];
-        Value yieldedAwt = yieldOp.getOperand(argIdx);
-        if (mapping->contains(yieldedAwt)) {
-          return mapping->lookup(yieldedAwt);
-        }
-        LDBG("Case 2 yieldedAwt not yet in map");
-        auto awOp = yieldedAwt.getDefiningOp();
-        // Create new async_wait op in new loop
-        Operation *newAwOp = builder.clone(*awOp, *mapping);
-        for (unsigned dstIdx : llvm::seq(unsigned(0), awOp->getNumResults()))
-          mapping->map(awOp->getResult(dstIdx), newAwOp->getResult(dstIdx));
-        return newAwOp->getResult(0);
+        return initAwt;
       } else {
-        assert(
-            false ||
-            "fromPriorIter specified but async wait token wasn't a loop arg.");
+        assert(false || "Expected async wait token to be loop arg.");
         return failure();
       }
+      return awt;
     } else {
-      // LocalLoad doesn't have async wait token.
-      return failure();
+      // Case 1: return new async wait token from for(args) for
+      // LocalLoad[1, N-1].
+      return mapping->lookup(awt);
     }
   }
-  return failure();
+  assert(mapping);
+  assert(fromPriorIter);
+
+
+  mlir::BlockArgument loopArg = dyn_cast<mlir::BlockArgument>(awt);
+  if (!loopArg) {
+    assert(
+      false ||
+      "fromPriorIter specified but awt isn't a loop arg.");
+    return failure();
+  }
+
+  // Case 2: return new async wait token from end of prior iteration,
+  // this occurs for the prefetching LocalLoads at the end of the loop;
+  // which may or may not have been created yet i.e. is in mapping.
+  // Note: awt may already be in mapping for two reasons,
+  // (a) it is a duplicate of async_wait created below,
+  // (b) associated async_wait was already created previously in new loop
+  // even though want prior iter of it. Now we want to wrap around the loop
+  // body and find this token in the previous iteration because it was
+  // prefetched.
+  unsigned argIdx = loopArg.getArgNumber() - forOp.getNumInductionVars();
+  Value initAwt = forOp.getInitArgs()[argIdx];
+  Value yieldedAwt = yieldOp.getOperand(argIdx);
+  if (mapping->contains(yieldedAwt))
+    return mapping->lookup(yieldedAwt);
+
+  // Want awt fromPriorIter, but it isn't in map yet because the async_wait op
+  // hasn't been visited yet, so create and place in mapping.
+  LDBG("Case 2 yieldedAwt not yet in map");
+  auto awOp = yieldedAwt.getDefiningOp();
+  // Create new async_wait op in new loop
+  Operation *newAwOp = builder.clone(*awOp, *mapping);
+  for (unsigned dstIdx : llvm::seq(unsigned(0), awOp->getNumResults()))
+    mapping->map(awOp->getResult(dstIdx), newAwOp->getResult(dstIdx));
+  return newAwOp->getResult(0);
 }
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
@@ -278,7 +277,8 @@ LogicalResult Prefetcher::initialize() {
           dyn_cast<AMDMfmaEncodingAttr>(getEncoding(dotOp.getResult()));
       auto dstWmmaEnc =
           dyn_cast<AMDWmmaEncodingAttr>(getEncoding(dotOp.getResult()));
-      if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2) && !dstWmmaEnc)
+      if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2) &&
+          !dstWmmaEnc)
         // Don't rewrite if any other type is found.
         return failure();
       dotsInFor.push_back(dotOp);
