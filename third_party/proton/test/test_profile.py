@@ -1029,3 +1029,73 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
+
+
+@pytest.mark.parametrize("buffer_size", [256 * 1024])
+def test_periodic_flushing_path_metrics(tmp_path, fresh_knobs, buffer_size):
+    fresh_knobs.proton.profile_buffer_size = buffer_size
+    temp_file = tmp_path / "test_periodic_flushing.path_metrics"
+    session = proton.start(
+        str(temp_file.with_suffix("")),
+        mode="periodic_flushing:format=path_metrics",
+    )
+
+    for i in range(10000):
+        if i != 0 and i % 1000 == 0:
+            proton.data.advance_phase(session=session)
+        with proton.scope(f"test_{i}"):
+            torch.zeros((100), device="cuda")
+
+    proton.deactivate(session=session, flushing=True)
+    flushed = []
+    while True:
+        result = proton.data.pop_flushed_path_metrics(session=session)
+        if result is None:
+            break
+        flushed.append(result)
+
+    assert flushed
+    phase, metrics = flushed[0]
+    assert isinstance(phase, int)
+    assert metrics
+    assert isinstance(metrics[0], tuple)
+    assert len(metrics[0]) == 3
+
+    proton.finalize(session=session)
+
+
+@pytest.mark.parametrize("buffer_size", [256 * 1024])
+def test_periodic_flushing_path_metrics_rules(tmp_path, fresh_knobs, buffer_size):
+    fresh_knobs.proton.profile_buffer_size = buffer_size
+    temp_file = tmp_path / "test_periodic_flushing.path_metrics_rules"
+    session = proton.start(
+        str(temp_file.with_suffix("")),
+        mode=(
+            "periodic_flushing:format=path_metrics:"
+            "path_metrics_rules=end=test_1,contains=block_1"
+        ),
+    )
+
+    for i in range(10000):
+        if i != 0 and i % 1000 == 0:
+            proton.data.advance_phase(session=session)
+        with proton.scope(f"step_{i % 2}"):
+            with proton.scope(f"block_{i % 2}"):
+                with proton.scope(f"test_{i % 3}"):
+                    torch.zeros((100), device="cuda")
+
+    proton.deactivate(session=session, flushing=True)
+    collected = []
+    while True:
+        result = proton.data.pop_flushed_path_metrics(session=session)
+        if result is None:
+            break
+        _, metrics = result
+        collected.extend(metrics)
+
+    assert collected
+    assert all(path == "block_1/test_1" for path, _, _ in collected)
+
+    proton.finalize(session=session)
+
+
