@@ -476,8 +476,9 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 //===----------------------------------------------------------------------===//
 // TensorDescIm2ColType Verifier
 //===----------------------------------------------------------------------===//
-LogicalResult TensorDescIm2ColType::verify(
-    function_ref<InFlightDiagnostic()> emitError, RankedTensorType blockType) {
+LogicalResult
+TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
+                             RankedTensorType blockType) {
   // blockType must be rank 2 for im2col mode
   if (blockType.getRank() != 2) {
     return emitError()
