@@ -477,10 +477,11 @@ public:
     // In CDNA we can lower local_barrier to s_waitcnt + s_barrier
     // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
     //   when the instruction completes.
-    //   In this case we require 0 outstanding LDS operations
+    //   MODIFIED: Allow up to 4 outstanding LDS operations for better pipelining
     //   amdgpu::MemoryCounterWaitOp will lower s_waitcnt
     // - s_barrier syncronizes the execution for the CTA
-    auto dsAttr = rewriter.getI32IntegerAttr(0);
+    // TODO: Make this configurable or compute based on data flow analysis
+    auto dsAttr = rewriter.getI32IntegerAttr(4);  // Was 0, now allow 4 outstanding
     amdgpu::MemoryCounterWaitOp::create(
         rewriter, op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
         /* ds= */ dsAttr);
