@@ -861,6 +861,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert "count" not in scope_b_frame["metrics"]
 
 
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1038,7 +1039,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
 
-
+@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size):
