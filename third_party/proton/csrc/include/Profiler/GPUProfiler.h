@@ -23,11 +23,8 @@ namespace proton {
 
 namespace detail {
 
-enum class PeriodicFlushTarget { Disk, Buffer };
-
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const PeriodicFlushTarget periodicFlushingTarget,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -40,7 +37,6 @@ void updateDataPhases(
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
-                             PeriodicFlushTarget &periodicFlushingTarget,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
 } // namespace detail
@@ -126,8 +122,7 @@ protected:
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
           &dataPhases) {
     detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
-                                periodicFlushingTarget, dataFlushedPhases,
-                                dataPhases);
+                                dataFlushedPhases, dataPhases);
   }
 
   // Profiler
@@ -283,8 +278,6 @@ protected:
   bool pcSamplingEnabled{false};
   bool periodicFlushingEnabled{false};
   std::string periodicFlushingFormat{};
-  detail::PeriodicFlushTarget periodicFlushingTarget{
-      detail::PeriodicFlushTarget::Disk};
 };
 
 } // namespace proton

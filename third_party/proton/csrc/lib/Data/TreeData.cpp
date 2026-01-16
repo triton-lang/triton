@@ -279,9 +279,9 @@ private:
   std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
 
-std::vector<Data::PathMetrics> TreeData::toPathMetrics(size_t phase) const {
+std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
-    std::vector<Data::PathMetrics> results;
+    std::vector<PathMetrics> results;
     std::string path;
 
     constexpr size_t rootId = 0;

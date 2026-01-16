@@ -98,10 +98,10 @@ public:
 
   std::string getData(size_t sessionId, size_t phase);
 
-  std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
+  std::optional<std::pair<size_t, std::vector<PathMetrics>>>
   popFlushedPathMetrics(size_t sessionId);
 
-  std::vector<Data::PathMetrics> getPathMetrics(size_t sessionId, size_t phase);
+  std::vector<PathMetrics> getPathMetrics(size_t sessionId, size_t phase);
 
   void clearData(size_t sessionId, size_t phase);
 

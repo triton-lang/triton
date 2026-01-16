@@ -50,7 +50,7 @@ void Data::enqueueFlushedPathMetrics(size_t phase,
   flushedPathMetricsQueue.emplace_back(phase, std::move(metrics));
 }
 
-std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
+std::optional<std::pair<size_t, std::vector<PathMetrics>>>
 Data::popFlushedPathMetrics() {
   std::lock_guard<std::mutex> lock(flushedMutex);
   if (flushedPathMetricsQueue.empty()) {

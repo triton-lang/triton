@@ -222,7 +222,7 @@ std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
   return std::move(writer).take();
 }
 
-std::vector<Data::PathMetrics> TraceData::toPathMetrics(size_t phase) const {
+std::vector<PathMetrics> TraceData::toPathMetrics(size_t phase) const {
   (void)phase;
   return {};
 }
