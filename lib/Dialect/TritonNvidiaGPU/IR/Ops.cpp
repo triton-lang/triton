@@ -970,25 +970,14 @@ LogicalResult TMEMLoadOp::verify() {
       return emitOpError(
           "tmem_load reduction requires packed format (unpacked=false)");
 
-    auto *ctx = regTy.getContext();
-    auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
-    auto kLane = S("lane");
-    auto kWarp = S("warp");
-    auto kBlock = S("block");
-    auto kReg = S("register");
-    auto kRow = S("row");
-    auto nDim = S("dim1");
-
-    auto regLayout = triton::gpu::toLinearLayout(regTy);
-    auto tmemLayout = triton::gpu::toLinearLayout(memTy);
-    auto cvt = regLayout.invertAndCompose(tmemLayout);
-    auto nDimInRegs = regLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {nDim});
-    auto colInReg = cvt.sublayoutIsZero({kReg}, {kRow});
-
     // Verify that N dimension is in registers entirely, and is not sharded
     // across threads. This could be relaxed in the future to only reduce the
     // kReg bases along N then cross-warp/block reduction becomes needed.
-    if (!nDimInRegs || !colInReg) {
+    auto kReg = StringAttr::get(regTy.getContext(), "register");
+    int dimM = 0, dimN = 1;
+    auto regDims = toLinearEncoding(regTy).basesPerDim(kReg);
+    if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
+        regDims[dimM] != 1) {
       return emitOpError("tmem_load reduction with N dimension sharded across "
                          "threads is not supported.");
     }
