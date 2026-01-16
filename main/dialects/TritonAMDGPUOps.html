@@ -139,6 +139,8 @@
 <li class="toctree-l4"><a class="reference internal" href="#id27">Operands:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#amdg-cluster-barrier-arrive-triton-amdgpu-clusterbarrierarriveop"><code class="docutils literal notranslate"><span class="pre">amdg.cluster_barrier_arrive</span></code> (triton::amdgpu::ClusterBarrierArriveOp)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#amdg-cluster-barrier-wait-triton-amdgpu-clusterbarrierwaitop"><code class="docutils literal notranslate"><span class="pre">amdg.cluster_barrier_wait</span></code> (triton::amdgpu::ClusterBarrierWaitOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#amdg-concat-triton-amdgpu-concatop"><code class="docutils literal notranslate"><span class="pre">amdg.concat</span></code> (triton::amdgpu::ConcatOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id28">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id29">Results:</a></li>
@@ -953,6 +955,27 @@ This allows to use buffer_store even if the alignment cannot be proven based on 
 </tbody>
 </table>
 </section>
+</section>
+<section id="amdg-cluster-barrier-arrive-triton-amdgpu-clusterbarrierarriveop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdg.cluster_barrier_arrive</span></code> (triton::amdgpu::ClusterBarrierArriveOp)<a class="headerlink" href="#amdg-cluster-barrier-arrive-triton-amdgpu-clusterbarrierarriveop" title="Link to this heading">¶</a></h2>
+<p><em>Arrive at a cluster barrier</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.cluster_barrier_arrive` attr-dict
+</pre></div>
+</div>
+<p>Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.</p>
+<p>See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.</p>
+</section>
+<section id="amdg-cluster-barrier-wait-triton-amdgpu-clusterbarrierwaitop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdg.cluster_barrier_wait</span></code> (triton::amdgpu::ClusterBarrierWaitOp)<a class="headerlink" href="#amdg-cluster-barrier-wait-triton-amdgpu-clusterbarrierwaitop" title="Link to this heading">¶</a></h2>
+<p><em>Wait on a cluster barrier</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.cluster_barrier_wait` attr-dict
+</pre></div>
+</div>
+<p>Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
+Arrive and wait operations must come in pairs. Waiting before arriving or arriving
+more than once without a corresponding wait will result in undefined behavior.</p>
 </section>
 <section id="amdg-concat-triton-amdgpu-concatop">
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.concat</span></code> (triton::amdgpu::ConcatOp)<a class="headerlink" href="#amdg-concat-triton-amdgpu-concatop" title="Link to this heading">¶</a></h2>

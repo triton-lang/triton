@@ -512,6 +512,36 @@ Interfaces: `BufferOpInterface`
 | `mask` | ranked tensor of 1-bit signless integer values |
 
 
+### `amdg.cluster_barrier_arrive` (triton::amdgpu::ClusterBarrierArriveOp)
+
+_Arrive at a cluster barrier_
+
+Syntax:
+
+```
+operation ::= `amdg.cluster_barrier_arrive` attr-dict
+```
+
+Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.
+
+See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
+
+
+### `amdg.cluster_barrier_wait` (triton::amdgpu::ClusterBarrierWaitOp)
+
+_Wait on a cluster barrier_
+
+Syntax:
+
+```
+operation ::= `amdg.cluster_barrier_wait` attr-dict
+```
+
+Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
+Arrive and wait operations must come in pairs. Waiting before arriving or arriving
+more than once without a corresponding wait will result in undefined behavior.
+
+
 ### `amdg.concat` (triton::amdgpu::ConcatOp)
 
 _Concat operation_

@@ -74,8 +74,8 @@ _Copy data based on descriptor from global memory to local memory asynchronously
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_copy_global_to_local` $desc `[` $coord `]` $result `,` $barrier `,` $pred
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+operation ::= `ttng.async_tma_copy_global_to_local` $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
               attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
 ```
 
@@ -85,7 +85,21 @@ local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by `desc`.
 
-Traits: `VerifyTensorLayoutsTrait`
+The operation supports two tensor modes:
+- TILED (default): Regular tiled tensor memory access
+  - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
+- IM2COL: Im2col mode for convolution-friendly access patterns
+  - In IM2COL mode, 'coord' is the coordinates in the input tensor
+    - For example, for a 4D tensor (NHWC), 'coord' is [batch_idx, channel_idx, h, w]
+  - In IM2COL mode, additional `offsets` must be provided (uint16 values)
+    - For 3D tensors (NWC): 1 offset (offset_w)
+    - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
+    - For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
+    - General rule: number of offsets = coord.size() - 2
+  - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+
+
+Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -95,6 +109,16 @@ Traits: `VerifyTensorLayoutsTrait`
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>tensorMode</code></td><td>::mlir::triton::nvidia_gpu::TensorModeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1</summary>{{% markdown %}}
+    Enum attribute for TMA tensor mode.
+
+    TILED: Tiled mode for regular tensor memory access.
+    IM2COL: Im2col mode for convolution-friendly tensor memory access.
+
+    See:
+    - https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
+    - https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+  {{% /markdown %}}</details></td></tr>
 </table>
 
 #### Operands:
@@ -103,6 +127,7 @@ Traits: `VerifyTensorLayoutsTrait`
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `coord` | variadic of 32-bit signless integer |
+| `offsets` | variadic of 16-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `pred` | 1-bit signless integer |
