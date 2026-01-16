@@ -659,50 +659,6 @@ class SharedLinearLayout(SharedLayout):
         ))
 
 
-@constexpr_function
-def coalesced_layout(layout: DistributedLinearLayout, axis: int, bitwidth: int) -> DistributedLinearLayout:
-    """
-    Given a DistributedLinearLayout, return a new layout that will be efficiently
-    stored into global memory via ld.global
-    """
-    assert 0 <= axis < layout.rank, "axis must be between 0 and the rank of the layout"
-
-    def log2_int(x):
-        return x.bit_length() - 1
-
-    # The vectorisation is given by fitting as many bases as we can in the lanes and then
-    # as many as we can in the registers
-    log_lane_bases = min(len(layout.lane_bases), log2_int(layout.shape[axis]))
-    log_reg_bases = min(log2_int(128 // bitwidth), log2_int(layout.shape[axis]) - log_lane_bases)
-    new_regs = []
-    for i in range(log_reg_bases):
-        basis = [0] * layout.rank
-        basis[axis] = 1 << i
-        new_regs.append(basis)
-    new_lanes = []
-    for i in range(log_reg_bases, log_reg_bases + log_lane_bases):
-        basis = [0] * layout.rank
-        basis[axis] = 1 << i
-        new_lanes.append(basis)
-    # Reshuffle the rest of the bases
-    used_bases = set(tuple(basis) for basis in itertools.chain(new_regs, new_lanes))
-    new_warps = []
-    new_blocks = []
-    for i, basis in enumerate(
-            itertools.chain(layout.reg_bases, layout.lane_bases, layout.warp_bases, layout.block_bases)):
-        if tuple(basis) in used_bases:
-            continue
-        if len(new_regs) < len(layout.reg_bases):
-            new_regs.append(basis)
-        elif len(new_lanes) < len(layout.lane_bases):
-            new_lanes.append(basis)
-        elif len(new_warps) < len(layout.warp_bases):
-            new_warps.append(basis)
-        elif len(new_blocks) < len(layout.block_bases):
-            new_blocks.append(basis)
-    return DistributedLinearLayout(new_regs, new_lanes, new_warps, new_blocks, layout.shape)
-
-
 # Python impl of LinearEncodingAttr::basesPerDim
 def bases_per_dim(bases, rank, skip_broadcast=True):
     result = [1] * rank
