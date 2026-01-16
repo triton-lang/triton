@@ -464,6 +464,7 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
 
 //===----------------------------------------------------------------------===//

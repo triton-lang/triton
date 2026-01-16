@@ -6,37 +6,141 @@ import triton
 import triton.language as tl
 
 from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
-from .base import Layout
+from .base import Layout, LayoutTransformation
 from triton_kernels import target_info
 
-SWIZZLE_ALIGN_INNER = tl.constexpr(8)
-SWIZZLE_SIZE_INNER = tl.constexpr(4)
-SWIZZLE_SIZE_OUTER = tl.constexpr(128)
+# ------------------- Blackwell MX Scale Layout -------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class BlackwellMXScaleLayout(Layout):
-    B: int
-    ALIGN_K: int
-    ALIGN_N: int
-    SWIZZLE_K: int
-    K_pad: int
-    N_pad: int
-    name: str = "BLACKWELL_SCALE"
 
-    def __init__(self, shape) -> None:
-        super().__init__(shape)
-        (
-            *self.leading_shape,
+    @property
+    def name(self):
+        return "BLACKWELL_SCALE"
+
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellMXScaleLayoutTransformation(shape, is_fp4)
+
+    def swizzle_block_shape(self, block_shape):
+        K, N = block_shape
+        assert N >= 128, f"{block_shape[1]=} must be >= 128"
+        return [1, N // 128, K // 4, 2, 256]
+
+
+@dataclass(frozen=True)
+class BlackwellActMXScaleLayout(Layout):
+
+    ragged_metadata: RaggedTensorMetadata
+
+    @property
+    def name(self):
+        return "BLACKWELL_ACT_SCALE"
+
+    def swizzle_block_shape(self, block_shape):
+        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
+        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
+
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata)
+
+
+# ------------------- Blackwell MX Scale Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
+
+    ragged_metadata: RaggedTensorMetadata
+    ALIGN_K: int = 8
+    ALIGN_M: int = 128
+    SWIZZLE_K: int = 4
+
+    def __post_init__(self):
+        assert len(self.shape) in [2, 3]
+        if len(self.shape) == 2:
+            B, M, K = 1, *self.shape
+            # In ragged mode, input often include padded tokens
+            # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
+            # And the rest of rows are padded tokens
+            n_slices = self.ragged_metadata.slice_sizes.shape[0]
+            # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
+            max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
+            # create a static size scratchpad for output
+            M_pad = self.ALIGN_M * max_n_blocks
+            mode = "ragged"
+        else:
+            B, M, K = self.shape
+            M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+            mode = "batched"
+        K_pad = (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
+        # initialize attributes
+        object.__setattr__(self, "B", B)
+        object.__setattr__(self, "M", M)
+        object.__setattr__(self, "K", K)
+        object.__setattr__(self, "M_pad", M_pad)
+        object.__setattr__(self, "K_pad", K_pad)
+        object.__setattr__(self, "mode", mode)
+
+    def swizzle_data(self, data):
+        if self.mode == "batched":
+            padded_data = torch.nn.functional.pad(
+                data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
+            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        else:
+            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+            padded_data = pad_segments_triton(
+                data,
+                self.ragged_metadata,
+                self.ALIGN_M,
+                self.M_pad,
+                self.K,
+                self.K_pad,
+            )
+
+            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+
+        return padded_data
+
+    def unswizzle_data(self, data):
+        data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
+        data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
+        data = data.reshape(self.B, self.M_pad, self.K_pad)
+
+        if self.mode == "batched":
+            return data[..., :self.M, :self.K]
+
+        # ragged path: map padded blocks back into the original ragged rows
+        assert self.B == 1, "ragged scale layout only supports 2D input"
+        data = unpad_segments_triton(
+            data.squeeze(0),
+            self.ragged_metadata,
+            self.ALIGN_M,
+            self.M,
             self.K,
-            self.N,
-        ) = shape
-        self.B = math.prod(self.leading_shape)
-        self.ALIGN_K = 8
-        self.ALIGN_N = 128
-        self.SWIZZLE_K = 4
-        self.K_pad = (self.K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K
-        self.N_pad = (self.N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N
+            self.K_pad,
+        )
+        return data.contiguous()
+
+
+@dataclass(frozen=True)
+class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
+
+    def __post_init__(self) -> None:
+        *leading_shape, K, N = self.shape
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "K", K)
+        object.__setattr__(self, "N", N)
+        object.__setattr__(self, "B", math.prod(leading_shape))
+        object.__setattr__(self, "ALIGN_K", 8)
+        object.__setattr__(self, "ALIGN_N", 128)
+        object.__setattr__(self, "SWIZZLE_K", 4)
+        object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
+        object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
@@ -52,13 +156,14 @@ class BlackwellMXScaleLayout(Layout):
                             self.SWIZZLE_K)
         data = data.transpose(2, 4)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
-        data = data.transpose(-1, -2)
-        return data[..., :self.K, :self.N]
+        data = data.transpose(-1, -2).contiguous()
+        data = data[..., :self.K, :self.N]
+        return data
 
-    def swizzle_block_shape(self, block_shape):
-        K, N = block_shape
-        assert N >= 128, f"{block_shape[1]=} must be >= 128"
-        return [1, N // 128, K // 4, 2, 256]
+
+SWIZZLE_ALIGN_INNER = tl.constexpr(8)
+SWIZZLE_SIZE_INNER = tl.constexpr(4)
+SWIZZLE_SIZE_OUTER = tl.constexpr(128)
 
 
 @triton.jit
@@ -284,95 +389,7 @@ def unpad_segments_triton(padded_data, ragged_metadata, block_size_to_align, M, 
     return data
 
 
-class BlackwellActMXScaleLayout(Layout):
-    # Swizzling for activation tensor [M, K], M can be ragged dimension and equals to sum of expert bs
-    name: str = "BLACKWELL_SCALE"
-
-    def __init__(self, shape, ragged_metadata: RaggedTensorMetadata | None = None) -> None:
-        super().__init__(shape)
-        if len(shape) == 2:
-            (
-                self.M,
-                self.K,
-            ) = shape
-            self.B = 1
-            self.mode = "ragged"
-        else:
-            assert len(shape) == 3, f"Only support 3D shape for BlackwellActMXScaleLayout, got {shape}"
-            (
-                self.B,
-                self.M,
-                self.K,
-            ) = shape
-            self.mode = "batched"
-        self.ALIGN_K = 8
-        self.ALIGN_M = 128
-        self.SWIZZLE_K = 4
-        self.K_pad = (self.K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
-
-        if self.mode == "batched":
-            self.M_pad = (self.M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
-        else:
-            # In ragged mode, input often include padded tokens
-            # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
-            # And the rest of rows are padded tokens
-            self.ragged_metadata = ragged_metadata
-
-            n_slices = ragged_metadata.slice_sizes.shape[0]
-            max_n_blocks = ragged_metadata.n_blocks(
-                n_slices, self.M, self.ALIGN_M
-            )  # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
-
-            # create a static size scratchpad for output
-            self.M_pad = self.ALIGN_M * max_n_blocks
-
-    def swizzle_data(self, data):
-        if self.mode == "batched":
-            padded_data = torch.nn.functional.pad(
-                data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-        else:
-            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-            padded_data = pad_segments_triton(
-                data,
-                self.ragged_metadata,
-                self.ALIGN_M,
-                self.M_pad,
-                self.K,
-                self.K_pad,
-            )
-
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-
-        return padded_data
-
-    def unswizzle_data(self, data):
-        data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
-        data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
-        data = data.reshape(self.B, self.M_pad, self.K_pad)
-
-        if self.mode == "batched":
-            return data[..., :self.M, :self.K]
-
-        # ragged path: map padded blocks back into the original ragged rows
-        assert self.B == 1, "ragged scale layout only supports 2D input"
-        data = unpad_segments_triton(
-            data.squeeze(0),
-            self.ragged_metadata,
-            self.ALIGN_M,
-            self.M,
-            self.K,
-            self.K_pad,
-        )
-        return data
-
-    def swizzle_block_shape(self, block_shape):
-        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
-        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
+# ---
 
 
 @triton.jit

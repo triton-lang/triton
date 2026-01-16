@@ -105,10 +105,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                         "llvm.amdgcn.cluster.workgroup.id.x",
-                                         {rewriter.getI32Type()}, {})
-      .getResult(0);
+  return ROCDL::ClusterIdXOp::create(rewriter, loc, rewriter.getI32Type());
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,

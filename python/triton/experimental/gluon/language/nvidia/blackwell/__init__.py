@@ -2,11 +2,9 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
-import itertools
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import SharedLinearLayout
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
@@ -378,7 +376,8 @@ def tcgen05_copy(src, dst, _semantic=None):
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
+                _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -389,6 +388,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
@@ -407,8 +407,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
+    multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast)
 
 
 @builtin
@@ -456,17 +457,63 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
 
 
+@constexpr_function
+def tcgen05_mma_barrier_count(smems, multicast):
+    """
+    Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
+
+    Args:
+        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
+        multicast (bool): Whether the tcgen05 instruction is multicast.
+
+    Returns:
+        int: The number of CTAs that will commit the tcgen05 MMA instruction.
+    """
+    assert 0 <= len(smems) <= 2, "tcgen05_mma_barrier_count supports 0, 1, or 2 smem descriptors"
+    if not smems or not multicast:
+        return 1
+
+    def basis_is_zero(basis):
+        return all(b == 0 for b in basis)
+
+    def num_broadcast_bits(smem):
+        return sum(basis_is_zero(basis) for basis in smem.layout.cga_layout)
+
+    if len(smems) == 1:
+        return 2**num_broadcast_bits(smems[0])
+
+    assert len(smems) == 2
+    num_broadcast_bits_a = num_broadcast_bits(smems[0])
+    num_broadcast_bits_b = num_broadcast_bits(smems[1])
+    # Asser that for every basis, at least one of them is non-zero
+    # so that the inclusion-exclusion principle below works
+    # This can be generalised if needed by substracting below 2**size_intersection
+    for i in range(len(smems[0].layout.cga_layout)):
+        assert not basis_is_zero(smems[0].layout.cga_layout[i]) or not basis_is_zero(smems[1].layout.cga_layout[i])
+
+    # Inclusion-exclusion
+    num_cta_commits = 2**num_broadcast_bits_a + 2**num_broadcast_bits_b - 1
+    return num_cta_commits
+
+
 @builtin
-def tcgen05_commit(barrier, pred=True, two_ctas=False, _semantic=None):
+def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when all async tcgen05 MMA and copy instructions previously issued by
     the thread are complete.
 
+    If `descs` are provided, the commit will be multicast across the CTA cluster
+    based on the shared layouts of those descriptors. This should be used when
+    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
+
     Args:
         barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
-        two_ctas (bool): Whether to use two-CTA mode. Defaults to False.
+        descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
+            the preceding multiplication inputs. Defaults to ().
     """
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, two_ctas)
+    descs = _unwrap_if_constexpr(descs)
+    descs = [d.handle for d in descs]
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs)

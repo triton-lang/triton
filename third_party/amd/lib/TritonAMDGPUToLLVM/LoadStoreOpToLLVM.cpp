@@ -1955,6 +1955,9 @@ struct AtomicRMWOpConversion
     // element and reduce contention.
     bool applyPackingF16 = false;
     auto vec = getVectorSize(ptr, axisAnalysisPass);
+    if (llMask) {
+      vec = std::min<unsigned>(vec, getMaskAlignment(op.getMask()));
+    }
 
     // CDNA3/CDNA4 arch allows to accelerate its atomics with LDS reduction
     // algorithm, which is only applicable for atomics with no return. Otherwise
@@ -2176,10 +2179,9 @@ struct AsyncCopyMbarrierArriveOpConversion
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, "llvm.amdgcn.ds.atomic.async.barrier.arrive.b64",
-        void_ty(getContext()), smemObj.getBase());
-    rewriter.eraseOp(op);
+    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(rewriter, loc, {},
+                                                             smemObj.getBase());
+    rewriter.replaceOp(op, newOp);
     return success();
   }
 };

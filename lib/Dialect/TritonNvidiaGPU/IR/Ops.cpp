@@ -203,6 +203,30 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterArriveOp --
+LogicalResult ClusterArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterWaitOp --
+LogicalResult ClusterWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
 // -- TMA operation verifiers --
 static LogicalResult verifyTMAEncoding(Operation *op,
                                        TypedValue<TensorDescType> desc,
@@ -253,32 +277,78 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
 }
 
 static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
-                                          TypedValue<TensorDescType> desc) {
-  unsigned rank = desc.getType().getBlockType().getRank();
-  if (coords.size() != rank) {
-    return op->emitOpError("expected ")
-           << rank << " coordinates, but got " << coords.size();
+                                          TypedValue<TensorDescType> desc,
+                                          TensorMode tensorMode) {
+  unsigned blockRank = desc.getType().getBlockType().getRank();
+
+  if (tensorMode == TensorMode::IM2COL) {
+    // For IM2COL mode, coordinates are for the full tensor (3D-5D)
+    // not the 2D block shape
+    if (coords.size() < 3)
+      return op->emitOpError(
+                 "IM2COL mode requires at least 3D coordinates, but got ")
+             << coords.size() << "D";
+    if (coords.size() > 5)
+      return op->emitOpError(
+                 "IM2COL mode supports at most 5D coordinates, but got ")
+             << coords.size() << "D";
+  } else {
+    // For TILED mode, coordinates must match the block rank
+    if (coords.size() != blockRank) {
+      return op->emitOpError("expected ")
+             << blockRank << " coordinates, but got " << coords.size();
+    }
+    if (coords.size() < 1 || coords.size() > 5)
+      return op->emitOpError("must have between 1 and 5 coordinates");
   }
-  if (coords.size() < 1 || coords.size() > 5)
-    return op->emitOpError("must have between 1 and 5 coordinates");
+  return success();
+}
+
+static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
+                                   ValueRange coords, ValueRange offsets) {
+  if (tensorMode == TensorMode::IM2COL) {
+    if (offsets.empty())
+      return op->emitOpError("IM2COL mode requires offsets to be provided");
+
+    // For IM2COL mode, the number of offsets should be coord.size() - 2
+    // 4D tensors (4 coords) need 2 offsets, 5D tensors (5 coords) need 3
+    // offsets
+    size_t expectedOffsets = coords.size() - 2;
+    if (offsets.size() != expectedOffsets) {
+      return op->emitOpError("IM2COL mode with ")
+             << coords.size() << "D coordinates requires " << expectedOffsets
+             << " offsets, but got " << offsets.size();
+    }
+  } else {
+    // TILED mode should not have offsets
+    if (!offsets.empty())
+      return op->emitOpError("TILED mode does not support offsets");
+  }
   return success();
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  if (failed(
+          verifyAsyncTMACoords(*this, getCoord(), getDesc(), getTensorMode())))
     return failure();
   auto resultType = getResult().getType();
   if (failed(
           verifyDescriptorLoadStoreOp(*this, getDesc().getType(), resultType)))
     return failure();
-  return verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
-                              getResult().getType());
+  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
+                                  getResult().getType())))
+    return failure();
+  if (failed(verifyTMAMode(*this, getTensorMode(), getCoord(), getOffsets())))
+    return failure();
+  return success();
 }
 
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  // Store ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
+                                  TensorMode::TILED)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
@@ -288,7 +358,9 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
 
 // -- AsyncTMAReduceOp --
 LogicalResult AsyncTMAReduceOp::verify() {
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc())))
+  // Reduce ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
+                                  TensorMode::TILED)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
@@ -607,17 +679,27 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isAsync) {
+                        Value pred, bool twoCtas, bool multicast,
+                        ValueRange barriers, ValueRange barrierPreds,
+                        bool isAsync) {
   if (!barriers.empty()) {
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        twoCtas ? builder.getUnitAttr() : UnitAttr(),
+        multicast ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
+
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  auto numDescs = getDescs().size();
+  if (numDescs > 2)
+    return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  return success();
+}
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {

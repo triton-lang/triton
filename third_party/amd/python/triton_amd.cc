@@ -80,6 +80,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUHoistLayoutConversions());
   });
+  m.def("add_sink_layout_conversions", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUSinkLayoutConversions());
+  });
   m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUCanonicalizePointers());

@@ -574,6 +574,15 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
         }
       };
 
+  uint32_t deviceTypeEntries = 0;
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    if (deviceIdMasks[deviceType] != 0) {
+      ++deviceTypeEntries;
+    }
+  }
+  // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
+  // the JSON serializer, even if device_metadata is empty.
   writer.packArray(2);
   packNode(tree->getNode(TreeData::Tree::TreeNode::RootId));
 
@@ -586,13 +595,6 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
     return count;
   };
 
-  uint32_t deviceTypeEntries = 0;
-  for (size_t deviceType = 0;
-       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
-    if (deviceIdMasks[deviceType] != 0) {
-      ++deviceTypeEntries;
-    }
-  }
   writer.packMap(deviceTypeEntries);
   for (size_t deviceType = 0;
        deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
@@ -632,84 +634,100 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
 void TreeData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTree = currentPhasePtrAs<Tree>();
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto contextId = tree->addNode(contexts);
+  auto contextId = currentTree->addNode(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
 void TreeData::exitScope(const Scope &scope) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
   scopeIdToContextId.erase(scope.scopeId);
 }
 
 DataEntry TreeData::addOp(const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTree = currentPhasePtrAs<Tree>();
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   if (!name.empty())
     contexts.emplace_back(name);
-  auto contextId = tree->addNode(contexts);
-  auto &node = tree->getNode(contextId);
-  return DataEntry(contextId, node.metrics);
+  auto contextId = currentTree->addNode(contexts);
+  auto &node = currentTree->getNode(contextId);
+  return DataEntry(contextId, currentPhase, node.metrics);
 }
 
-DataEntry TreeData::addOp(size_t contextId,
+DataEntry TreeData::addOp(size_t phase, size_t contextId,
                           const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *tree = (phase == currentPhase)
+                   ? currentPhasePtrAs<Tree>()
+                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, node.metrics);
+  return DataEntry(newContextId, phase, node.metrics);
 }
 
 void TreeData::addScopeMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTree = currentPhasePtrAs<Tree>();
   auto contextId = scopeIdToContextId.at(scopeId);
-  auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
-    tree->upsertFlexibleMetric(contextId,
-                               FlexibleMetric(metricName, metricValue));
+    currentTree->upsertFlexibleMetric(contextId,
+                                      FlexibleMetric(metricName, metricValue));
   }
 }
 
 void TreeData::addEntryMetrics(
-    size_t contextId, const std::map<std::string, MetricValueType> &metrics) {
+    size_t phase, size_t contextId,
+    const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto &node = tree->getNode(contextId);
+  auto *tree = (phase == currentPhase)
+                   ? currentPhasePtrAs<Tree>()
+                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
                                FlexibleMetric(metricName, metricValue));
   }
 }
 
-void TreeData::clear() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto newTree = std::make_unique<Tree>();
-  tree.swap(newTree);
+void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
+  treePhases.withPtr(phase, [&](Tree *tree) {
+    auto output = buildHatchetJson(tree);
+    os << std::endl << output.dump(4) << std::endl;
+  });
 }
 
-void TreeData::dumpHatchet(std::ostream &os) const {
-  auto output = buildHatchetJson(tree.get());
-  os << std::endl << output.dump(4) << std::endl;
+void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
+  treePhases.withPtr(phase, [&](Tree *tree) {
+    auto msgPack = buildHatchetMsgPack(tree);
+    os.write(reinterpret_cast<const char *>(msgPack.data()),
+             static_cast<std::streamsize>(msgPack.size()));
+  });
 }
 
-std::vector<uint8_t> TreeData::toMsgPack() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetMsgPack(tree.get());
+std::string TreeData::toJsonString(size_t phase) const {
+  return treePhases.withPtr(
+      phase, [&](Tree *tree) { return buildHatchetJson(tree).dump(); });
 }
 
-std::string TreeData::toJsonString() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return buildHatchetJson(tree.get()).dump();
+std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
+  return treePhases.withPtr(
+      phase, [&](Tree *tree) { return buildHatchetMsgPack(tree); });
 }
 
-void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
+void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
+                      size_t phase) const {
   if (outputFormat == OutputFormat::Hatchet) {
-    dumpHatchet(os);
+    dumpHatchet(os, phase);
+  } else if (outputFormat == OutputFormat::HatchetMsgPack) {
+    dumpHatchetMsgPack(os, phase);
   } else {
     throw std::logic_error("Output format not supported");
   }
@@ -717,7 +735,7 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
 
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  tree = std::make_unique<Tree>();
+  initPhaseStore(treePhases);
 }
 
 TreeData::~TreeData() {}
