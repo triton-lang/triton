@@ -19,7 +19,7 @@ import textwrap
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
 
-triton.language.__all__.append("custom_add")
+triton.language.__all__.append("custom_op")
 tensor: Type[TensorTy] = tl.tensor
 builder: ir.builder
 
@@ -49,11 +49,7 @@ def builtin(fn: T) -> T:
 
     return wrapper
 
-@builtin
-def custom_add(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
-    x = _unwrap_if_constexpr(x)
-    builder = _semantic.getBuilder()
-    return tl.tensor(builder.create_custom_fadd2(x.handle), x.type)
+
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -71,22 +67,26 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     spec = importlib.util.spec_from_loader(module_name, loader=None)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    stage_src = textwrap.dedent(inspect.getsource(self.make_ttgir))
+    stage_src = textwrap.dedent(inspect.getsource(self.make_ttir))
     stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
     # Inject plugin pass right after loop unroll in the dynamically loaded stage source
     stage_src = stage_src.replace(
-        "passes.ttgpuir.add_remove_layout_conversions(pm)",
-        "passes.ttgpuir.add_remove_layout_conversions(pm)\n    passes.plugin.plugingpu_conversion(pm)\n"
+        "pm = ir.pass_manager(mod.context)",
+        "pm = ir.pass_manager(mod.context)\n    passes.plugin.plugingpu_conversion(pm)\n"
     )
     # print(stage_src)
     exec(stage_src, module.__dict__)
     make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
-    stages["ttgir"] = make_lambda(module.make_ttgir)
+    stages["ttir"] = make_lambda(module.make_ttir)
     return get_key(), get_hash()
 
+@builtin
+def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
+    x = _unwrap_if_constexpr(x)
+    builder = _semantic.getBuilder()
+    return tl.tensor(builder.create_custom_op(x.handle), x.type)
 @triton.jit
 def add_kernel(x_ptr,
-               y_ptr,
                output_ptr,
                n_elements,
                BLOCK_SIZE: tl.constexpr,
@@ -96,20 +96,20 @@ def add_kernel(x_ptr,
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    output = custom_add(x)
+    output = custom_op(x)
     tl.store(output_ptr + offsets, output, mask=mask)
 
 if __name__ == "__main__":
     size = 256
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
-    y = torch.ones(size, device=DEVICE, dtype=torch.float32)
+    # y = torch.ones(size, device=DEVICE, dtype=torch.float32)
     # output_torch = x + y
     output_triton = torch.empty_like(x)
     n_elements = output_triton.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
-    h = add_kernel[grid](x, y, output_triton, n_elements, BLOCK_SIZE=1024)
-    print(output_triton)
+    h = add_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
+    # print(output_triton)
     # print(h.asm["ttgir"])
 
     # print(f'The maximum difference between torch and custom triton op is '

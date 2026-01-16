@@ -106,7 +106,7 @@ tritonEnumeratePluginCustomOps(uint32_t *opCount, const char **opNames) {
   *opCount = 1;
   if (!opNames)
     return TP_SUCCESS;
-  opNames[0] = "create_custom_fadd2";
+  opNames[0] = "create_custom_op";
   return TP_SUCCESS;
 }
 
@@ -116,16 +116,8 @@ tritonAddPluginCustomOp(const char *opName, TritonOpBuilder &self,
   ::mlir::Value *dst = static_cast<::mlir::Value*>(operands[0]);
   ::mlir::Value *lhs = static_cast<::mlir::Value*>(operands[1]);
 
-  ::mlir::Value one = Value(self.create<arith::ConstantFloatOp>(
-                 self.getBuilder().getF32Type(), llvm::APFloat(1.0f)));
-
-  ::mlir::Value temp = Value(self.create<mlir::triton::plugin::MagicOp>(one));
-
-  Value broadcastedSclar = self.create<tensor::SplatOp>(lhs->getType(), temp);
-
-  // llvm::errs() << "temp: " << temp << "\n";
-  // llvm::errs() << "broadcastedSclar: " << broadcastedSclar << "\n";
-  *dst = self.create<::mlir::arith::AddFOp>(*lhs, broadcastedSclar);
+  *dst = self.create<mlir::triton::plugin::MagicOp>(*lhs);
+  llvm::errs() << "Here 1!!!!!!!!!!!!" << "\n";
 
   return TP_SUCCESS;
 }
@@ -135,8 +127,6 @@ tritonGetDialectPluginInfo(const char *name) {
   return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {
             registry->insert<mlir::triton::plugin::DialectPluginDialect>();
-            registry->insert<mlir::tensor::TensorDialect>();
-            registry->insert<mlir::vector::VectorDialect>();
             mlir::triton::plugin::registerpluginPasses();
           }};
 }
