@@ -93,6 +93,9 @@ def start(
                                                - format can be combined with '+' or ',' (e.g. "hatchet_msgpack+path_list").
                                                - per-format targets can be specified with '@', e.g. "hatchet@disk+path_list@buffer".
                                                - target: The flushing target. Available options are ["disk", "buffer"]. Default is "disk".
+                                               - path_list can be filtered with PROTON_PATH_LIST_RULES:
+                                               -   "end=<prefix>,contains=<p1>|<p2>;end=<prefix2>"
+                                               -   end matches node name prefix; contains matches any path segment prefix.
                                                These can be set via `mode="periodic_flushing:format=chrome_trace:target=buffer"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
