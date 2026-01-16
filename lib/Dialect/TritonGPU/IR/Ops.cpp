@@ -1053,7 +1053,7 @@ void WarpSpecializeOp::getSuccessorRegions(
   // And the default region branches transparently back to the parent.
   if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
       &getDefaultRegion())
-    successors.push_back(RegionSuccessor(getOperation(), getResults()));
+    successors.push_back(RegionSuccessor::parent());
 }
 
 void WarpSpecializePartitionsOp::getSuccessorRegions(
@@ -1062,7 +1062,7 @@ void WarpSpecializePartitionsOp::getSuccessorRegions(
   // of the partition regions.
   if (src.isParent())
     for (Region &region : getPartitionRegions())
-      successors.emplace_back(&region, region.getArguments());
+      successors.emplace_back(&region);
 }
 
 OperandRange
