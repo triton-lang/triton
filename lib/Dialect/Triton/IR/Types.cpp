@@ -14,7 +14,6 @@ using namespace mlir::triton;
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/Types.cpp.inc"
 
-
 //===----------------------------------------------------------------------===//
 // Triton Dialect
 //===----------------------------------------------------------------------===//
