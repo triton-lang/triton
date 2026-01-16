@@ -1039,6 +1039,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
 
+
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
