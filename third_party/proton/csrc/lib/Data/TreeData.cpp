@@ -2,7 +2,6 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
-#include "Utility/Env.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
 #include <cstdint>
@@ -80,35 +79,53 @@ std::vector<std::string> splitTokenList(const std::string &raw, char sep) {
   return values;
 }
 
-const std::vector<PathListRule> &getPathListRules() {
-  static const std::vector<PathListRule> rules = []() {
-    std::vector<PathListRule> values;
-    auto raw = proton::getStrEnv("PROTON_PATH_LIST_RULES");
-    if (raw.empty()) {
-      return values;
-    }
-    for (const auto &ruleToken : splitTokenList(raw, ';')) {
-      PathListRule rule;
-      for (const auto &entry : splitTokenList(ruleToken, ',')) {
-        auto eq = entry.find('=');
-        if (eq == std::string::npos) {
-          continue;
-        }
-        auto key = trimToken(entry.substr(0, eq));
-        auto value = trimToken(entry.substr(eq + 1));
-        if (key == "end" || key == "end_prefix") {
-          rule.end_prefix = value;
-        } else if (key == "contains") {
-          rule.contains_prefixes = splitTokenList(value, '|');
-        }
-      }
-      if (!rule.end_prefix.empty()) {
-        values.push_back(std::move(rule));
-      }
-    }
+std::vector<PathListRule> parsePathMetricsRules(const std::string &raw) {
+  std::vector<PathListRule> values;
+  if (raw.empty()) {
     return values;
-  }();
-  return rules;
+  }
+  for (const auto &ruleToken : splitTokenList(raw, ';')) {
+    PathListRule rule;
+    for (const auto &entry : splitTokenList(ruleToken, ',')) {
+      auto eq = entry.find('=');
+      if (eq == std::string::npos) {
+        continue;
+      }
+      auto key = trimToken(entry.substr(0, eq));
+      auto value = trimToken(entry.substr(eq + 1));
+      if (key == "end" || key == "end_prefix") {
+        rule.end_prefix = value;
+      } else if (key == "contains") {
+        rule.contains_prefixes = splitTokenList(value, '|');
+      }
+    }
+    if (!rule.end_prefix.empty()) {
+      values.push_back(std::move(rule));
+    }
+  }
+  return values;
+}
+
+struct PathMetricsRuleState {
+  std::mutex mutex;
+  std::string raw;
+  std::vector<PathListRule> parsed;
+  bool parsedReady = false;
+};
+
+PathMetricsRuleState &pathMetricsRuleState() {
+  static PathMetricsRuleState state;
+  return state;
+}
+
+const std::vector<PathListRule> &getPathMetricsRules() {
+  auto &state = pathMetricsRuleState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  if (!state.parsedReady) {
+    state.parsed = parsePathMetricsRules(state.raw);
+    state.parsedReady = true;
+  }
+  return state.parsed;
 }
 
 bool matchesSegmentPrefix(std::string_view path,
@@ -137,6 +154,14 @@ bool matchesSegmentPrefix(std::string_view path,
 }
 
 } // namespace
+
+void TreeData::setPathMetricsRules(const std::string &rules) {
+  auto &state = pathMetricsRuleState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.raw = rules;
+  state.parsedReady = false;
+  state.parsed.clear();
+}
 
 class TreeData::Tree {
 public:
@@ -260,7 +285,7 @@ std::vector<Data::PathMetrics> TreeData::toPathMetrics(size_t phase) const {
     std::string path;
 
     constexpr size_t rootId = 0;
-    const auto &rules = getPathListRules();
+    const auto &rules = getPathMetricsRules();
     if (rules.empty()) {
       auto walk = [&](auto &&self, size_t nodeId) -> void {
         auto &node = tree->getNode(nodeId);

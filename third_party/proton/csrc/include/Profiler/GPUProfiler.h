@@ -27,7 +27,7 @@ enum class PeriodicFlushTarget { Disk, Buffer };
 
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    PeriodicFlushTarget periodicFlushingTarget,
+    const PeriodicFlushTarget periodicFlushingTarget,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>

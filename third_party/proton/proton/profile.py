@@ -89,14 +89,15 @@ def start(
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has knobs:
-                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace", "path_list"]. Default is "hatchet".
-                                               - format can be combined with '+' or ',' (e.g. "hatchet_msgpack+path_list").
-                                               - per-format targets can be specified with '@', e.g. "hatchet@disk+path_list@buffer".
+                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace", "path_metrics"]. Default is "hatchet".
+                                               - format can be combined with '+' or ',' (e.g. "hatchet_msgpack+path_metrics").
+                                               - per-format targets can be specified with '@', e.g. "hatchet@disk+path_metrics@buffer".
                                                - target: The flushing target. Available options are ["disk", "buffer"]. Default is "disk".
-                                               - path_list can be filtered with PROTON_PATH_LIST_RULES:
+                                               - target=buffer only supports format=path_metrics.
+                                               - path_metrics can be filtered with path_metrics_rules:
                                                -   "end=<prefix>,contains=<p1>|<p2>;end=<prefix2>"
                                                -   end matches node name prefix; contains matches any path segment prefix.
-                                               These can be set via `mode="periodic_flushing:format=chrome_trace:target=buffer"`.
+                                               These can be set via `mode="periodic_flushing:format=path_metrics:target=buffer:path_metrics_rules=..."`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
                                            - a string hook name, e.g. "triton" (kernel launch metadata), or

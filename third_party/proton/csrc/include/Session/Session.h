@@ -98,12 +98,6 @@ public:
 
   std::string getData(size_t sessionId, size_t phase);
 
-  std::optional<std::pair<size_t, std::string>>
-  popFlushedData(size_t sessionId);
-
-  std::optional<std::pair<size_t, std::vector<uint8_t>>>
-  popFlushedDataMsgPack(size_t sessionId);
-
   std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
   popFlushedPathMetrics(size_t sessionId);
 

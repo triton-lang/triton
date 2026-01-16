@@ -183,29 +183,6 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
-      "pop_flushed_data",
-      [](size_t sessionId) -> pybind11::object {
-        auto result = SessionManager::instance().popFlushedData(sessionId);
-        if (!result) {
-          return pybind11::none();
-        }
-        return pybind11::make_tuple(result->first, result->second);
-      },
-      pybind11::arg("sessionId"));
-  m.def(
-      "pop_flushed_data_msgpack",
-      [](size_t sessionId) -> pybind11::object {
-        auto result = SessionManager::instance().popFlushedDataMsgPack(sessionId);
-        if (!result) {
-          return pybind11::none();
-        }
-        return pybind11::make_tuple(
-            result->first,
-            pybind11::bytes(reinterpret_cast<const char *>(result->second.data()),
-                            result->second.size()));
-      },
-      pybind11::arg("sessionId"));
-  m.def(
       "pop_flushed_path_metrics",
       [](size_t sessionId) -> pybind11::object {
         auto result =

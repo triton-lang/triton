@@ -58,8 +58,6 @@ struct DataEntry {
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoFlushedPhase = std::numeric_limits<size_t>::max();
-  using FlushedJson = std::pair<size_t, std::string>;
-  using FlushedMsgPack = std::pair<size_t, std::vector<uint8_t>>;
   struct PathMetrics {
     std::string path;
     std::optional<double> timeNs;
@@ -100,14 +98,10 @@ public:
   bool isPhaseFlushed(size_t phase) const;
 
   /// Enqueue flushed payloads for in-memory draining.
-  void enqueueFlushedJson(size_t phase, std::string payload);
-  void enqueueFlushedMsgPack(size_t phase, std::vector<uint8_t> payload);
   void enqueueFlushedPathMetrics(size_t phase,
                                  std::vector<PathMetrics> metrics);
 
   /// Dequeue flushed payloads for in-memory draining.
-  std::optional<FlushedJson> popFlushedJson();
-  std::optional<FlushedMsgPack> popFlushedMsgPack();
   std::optional<std::pair<size_t, std::vector<PathMetrics>>>
   popFlushedPathMetrics();
 
@@ -117,10 +111,8 @@ public:
   /// To MsgPack
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
-  /// Per-path metrics for OTEL emission.
-  virtual std::vector<PathMetrics> toPathMetrics(size_t phase) const {
-    return {};
-  }
+  /// To per-path metrics
+  virtual std::vector<PathMetrics> toPathMetrics(size_t phase) const = 0;
 
   /// Add an op to the data of the current phase.
   /// If `opName` is empty, just use the current context as is.
@@ -193,8 +185,6 @@ private:
   void *currentPhasePtr{};
 
   std::mutex flushedMutex;
-  std::deque<FlushedJson> flushedJsonQueue;
-  std::deque<FlushedMsgPack> flushedMsgPackQueue;
   std::deque<std::pair<size_t, std::vector<PathMetrics>>>
       flushedPathMetricsQueue;
 };

@@ -222,6 +222,11 @@ std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
   return std::move(writer).take();
 }
 
+std::vector<Data::PathMetrics> TraceData::toPathMetrics(size_t phase) const {
+  (void)phase;
+  return {};
+}
+
 namespace {
 
 // Structure to pair CycleMetric with its context for processing

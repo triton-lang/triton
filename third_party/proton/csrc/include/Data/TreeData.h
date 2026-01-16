@@ -20,6 +20,9 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
+  // Configure path metrics filtering rules for periodic flushing.
+  static void setPathMetricsRules(const std::string &rules);
+
   std::string toJsonString(size_t phase) const override;
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;

@@ -353,20 +353,6 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   return treeData->toJsonString(phase);
 }
 
-std::optional<std::pair<size_t, std::string>>
-SessionManager::popFlushedData(size_t sessionId) {
-  std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->data->popFlushedJson();
-}
-
-std::optional<std::pair<size_t, std::vector<uint8_t>>>
-SessionManager::popFlushedDataMsgPack(size_t sessionId) {
-  std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->data->popFlushedMsgPack();
-}
-
 std::optional<std::pair<size_t, std::vector<Data::PathMetrics>>>
 SessionManager::popFlushedPathMetrics(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);

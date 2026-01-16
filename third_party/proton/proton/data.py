@@ -87,44 +87,6 @@ def clear(session: Optional[int] = 0, phase: int = 0) -> None:
     libproton.clear_data(session, phase)
 
 
-def pop_flushed(session: Optional[int] = 0):
-    """
-    Pops one flushed JSON payload from the in-memory periodic flushing buffer.
-
-    Args:
-        session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
-
-    Returns:
-        Optional[Tuple[int, object]]: (phase, parsed_json) or None if empty.
-    """
-    if session is None:
-        return None
-    if flags.command_line and session != 0:
-        raise ValueError("Only one session can be drained when running from the command line.")
-    result = libproton.pop_flushed_data(session)
-    if result is None:
-        return None
-    phase, payload = result
-    return phase, json.loads(payload)
-
-
-def pop_flushed_msgpack(session: Optional[int] = 0):
-    """
-    Pops one flushed MessagePack payload from the in-memory periodic flushing buffer.
-
-    Args:
-        session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
-
-    Returns:
-        Optional[Tuple[int, bytes]]: (phase, msgpack_bytes) or None if empty.
-    """
-    if session is None:
-        return None
-    if flags.command_line and session != 0:
-        raise ValueError("Only one session can be drained when running from the command line.")
-    return libproton.pop_flushed_data_msgpack(session)
-
-
 def pop_flushed_path_metrics(session: Optional[int] = 0):
     """
     Pops one flushed per-path metrics payload from the in-memory periodic flushing buffer.
