@@ -1583,7 +1583,7 @@ def test_zeros():
 @filecheck_test
 @gluon.jit
 def test_barrier():
-    # CHECK: gpu.barrier
+    # CHECK: ttg.barrier
     ttgl.barrier()
 
 
@@ -1600,7 +1600,7 @@ def test_fence_async_shared():
 @filecheck_test
 @gluon.jit
 def test_barrier_cluster_single_cta():
-    # CHECK: gpu.barrier
+    # CHECK: ttg.barrier
     ttgl.barrier(cluster=True)
 
 

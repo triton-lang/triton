@@ -25,17 +25,17 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
       %c42_i32 = arith.constant 42 : i32
-      gpu.barrier
+      ttg.barrier local
       ttg.warp_specialize(%arg0)
       default {
         tt.store %arg0, %c42_i32 : !tt.ptr<i32>
-        gpu.barrier
+        ttg.barrier local
         ttg.warp_yield
       }
       partition0(%arg1: !tt.ptr<i32>) num_warps(1) {
         %c5555_i32 = arith.constant 5555 : i32
         %c1_i32 = arith.constant 1 : i32
-        gpu.barrier
+        ttg.barrier local
         %ptr = tt.addptr %arg1, %c1_i32 : !tt.ptr<i32>, i32
         tt.store %ptr, %c5555_i32 : !tt.ptr<i32>
         ttg.warp_return
