@@ -959,20 +959,15 @@ def is_blackwell():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
-@pytest.mark.parametrize("Z", [1])
-@pytest.mark.parametrize("H", [2])
-@pytest.mark.parametrize("N_CTX", [256])
-@pytest.mark.parametrize("HEAD_DIM", [64])
-@pytest.mark.parametrize("causal", [False])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [2, 48])
+@pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
     device = "cuda"
-
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
 
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -982,14 +977,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
 
     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
-    import time
-    start_time = time.time()
-
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
-
-    end_time = time.time()
-    print(f"Time taken: {end_time - start_time} seconds")
-
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
