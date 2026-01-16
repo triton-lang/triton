@@ -1070,10 +1070,8 @@ def test_periodic_flushing_path_metrics_rules(tmp_path, fresh_knobs, buffer_size
     temp_file = tmp_path / "test_periodic_flushing.path_metrics_rules"
     session = proton.start(
         str(temp_file.with_suffix("")),
-        mode=(
-            "periodic_flushing:format=path_metrics:"
-            "path_metrics_rules=end=test_1,contains=block_1"
-        ),
+        mode=("periodic_flushing:format=path_metrics:"
+              "path_metrics_rules=end=test_1,contains=block_1"),
     )
 
     for i in range(10000):
@@ -1097,5 +1095,3 @@ def test_periodic_flushing_path_metrics_rules(tmp_path, fresh_knobs, buffer_size
     assert all(path == "block_1/test_1" for path, _, _ in collected)
 
     proton.finalize(session=session)
-
-

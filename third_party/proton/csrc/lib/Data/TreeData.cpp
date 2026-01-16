@@ -286,7 +286,8 @@ std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
 
     constexpr size_t rootId = 0;
     const auto &rules = getPathMetricsRules();
-    const auto trimStepPrefix = [](std::string_view inPath) -> std::string_view {
+    const auto trimStepPrefix =
+        [](std::string_view inPath) -> std::string_view {
       auto stepPos = inPath.find("/step");
       if (stepPos != std::string_view::npos) {
         auto stepEnd = inPath.find('/', stepPos + 1);
@@ -304,8 +305,8 @@ std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
       }
       return inPath;
     };
-    const auto computeSelfMetrics =
-        [&](const Tree::TreeNode &node, size_t nodeId)
+    const auto computeSelfMetrics = [&](const Tree::TreeNode &node,
+                                        size_t nodeId)
         -> std::pair<std::optional<double>, std::optional<double>> {
       std::optional<double> selfTimeNs;
       std::optional<double> selfFlops;
@@ -316,8 +317,8 @@ std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
       if (kernelIt != node.metrics.end()) {
         auto *kernelMetric =
             static_cast<KernelMetric *>(kernelIt->second.get());
-        auto duration = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Duration));
+        auto duration =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
         selfTimeNs = static_cast<double>(duration);
       }
       double flopsSum = 0.0;
@@ -415,7 +416,8 @@ std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
           if (!matchesSegmentPrefix(outPath, rule.contains_prefixes)) {
             continue;
           }
-          results.push_back({std::string(outPath), inclusiveTime, inclusiveFlops});
+          results.push_back(
+              {std::string(outPath), inclusiveTime, inclusiveFlops});
           break;
         }
       }

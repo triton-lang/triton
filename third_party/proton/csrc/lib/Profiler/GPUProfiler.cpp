@@ -219,9 +219,8 @@ void flushDataPhasesImpl(
 
         if (timingEnabled) {
           const auto t0 = Clock::now();
-          auto pathWithPhase = path + ".part_" +
-                               std::to_string(startPhase) +
-                               ".hatchet_msgpack";
+          auto pathWithPhase =
+              path + ".part_" + std::to_string(startPhase) + ".hatchet_msgpack";
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),
@@ -233,9 +232,8 @@ void flushDataPhasesImpl(
                   .count();
           ++msgPackWriteCalls;
         } else {
-          auto pathWithPhase = path + ".part_" +
-                               std::to_string(startPhase) +
-                               ".hatchet_msgpack";
+          auto pathWithPhase =
+              path + ".part_" + std::to_string(startPhase) + ".hatchet_msgpack";
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);
           ofs.write(reinterpret_cast<const char *>(msgPack.data()),

@@ -360,8 +360,8 @@ SessionManager::popFlushedPathMetrics(size_t sessionId) {
   return sessions[sessionId]->data->popFlushedPathMetrics();
 }
 
-std::vector<PathMetrics>
-SessionManager::getPathMetrics(size_t sessionId, size_t phase) {
+std::vector<PathMetrics> SessionManager::getPathMetrics(size_t sessionId,
+                                                        size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   throwIfSessionNotInitialized(sessions, sessionId);
   auto *profiler = sessions[sessionId]->getProfiler();

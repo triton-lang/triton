@@ -439,9 +439,7 @@ void RoctracerProfiler::doSetMode(
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "periodic_flushing") {
     detail::setPeriodicFlushingMode(periodicFlushingEnabled,
-                                    periodicFlushingFormat,
-                                    periodicFlushingTarget,
-                                    modeAndOptions,
+                                    periodicFlushingFormat, modeAndOptions,
                                     "RoctracerProfiler");
   } else if (!mode.empty()) {
     throw std::invalid_argument(
