@@ -628,7 +628,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> 
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
+def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
   let description = [{
@@ -638,20 +638,87 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
     This operation takes and produces an optional token to indicate TMEM read
     on its source operand. When the tokens are present, they can
     be used to check aliasing and modref on the TMEM buffer.
+
+    Optional reduction modifier:
+    When `redOp` is specified, the load operation additionally performs an
+    element-wise reduction along the N-dimension of the input and produces a
+    second result tensor `red`. For a input of shape `[M, N]`, the
+    reduced result has shape `[M]`, containing one reduced value per "slice"
+    of the N-dimension.
+
+    Currently restricted to f32 element type.
+
+    - redOp: Specifies the reduction operation (MIN or MAX) to apply along
+             the N-dimension. When set, the `red` result must be present.
+    - abs:   When true, applies absolute value to each element before performing
+             the reduction. Only valid when `redOp` is specified.
+    - NaN:   When true, the reduction propagates NaN values (if any input element
+             in a slice is NaN, the corresponding reduced value is NaN).
+             When false, NaN values are ignored during reduction.
+             Only valid when `redOp` is specified.
+
+    Example:
+      Input in TMEM of shape[M=2, N=4]:
+        [[ 1.0, 3.0, 2.0, 4.0],
+         [-5.0, 1.0, 8.0, 2.0]]
+
+      With redOp=MAX:
+        result = [[ 1.0, 3.0, 2.0, 4.0],   // unchanged
+                  [-5.0, 1.0, 8.0, 2.0]]
+        red    = [4.0, 8.0]               // max along N per row
+
+      With redOp=MIN, abs=true:
+        red    = [1.0, 1.0]               // min of |values| per row
+
+    This operation lowers to hardware-accelerated reduction via the PTX
+    tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
-    Optional<TTG_AsyncToken>:$dep
+    Optional<TTG_AsyncToken>:$dep,
+    OptionalAttr<TTNG_TMEMLoadReduceModifierEnum>:$redOp,
+    OptionalAttr<BoolAttr>:$abs,
+    OptionalAttr<BoolAttr>:$NaN
   );
   let results = (outs
     TT_Tensor:$result,
-    Optional<TTG_AsyncToken>:$token
+    Optional<TTG_AsyncToken>:$token,
+    Optional<TT_Tensor>:$red
   );
 
   let assemblyFormat = [{
     $src `` custom<Token>($dep, type($token))
-    attr-dict `:` qualified(type($src)) `->` type($result)
+    attr-dict `:` qualified(type($src)) `->` type($result) (`,` type($red)^)?
   }];
+
+  let builders = [
+    // Basic builder: result type, optional token type, src, optional dep
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep), [{
+      build($_builder, $_state, result, token, /*red=*/Type(), src, dep,
+            /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+    // Builder without token
+    OpBuilder<(ins "Type":$result, "Value":$src), [{
+      build($_builder, $_state, result, /*token=*/Type(), /*red=*/Type(), src,
+            /*dep=*/Value(), /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+    // Builder with reduction - infers red type from result type
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep,
+               "::mlir::triton::nvidia_gpu::TMEMLoadReduceModifierAttr":$redOp,
+               "BoolAttr":$abs, "BoolAttr":$NaN), [{
+      Type redTy;
+      if (redOp) {
+        auto tensorTy = ::mlir::cast<RankedTensorType>(result);
+        SmallVector<int64_t> redShape = {tensorTy.getShape()[0]};
+        auto parentEnc = ::mlir::cast<::mlir::triton::gpu::DistributedEncodingTrait>(
+            tensorTy.getEncoding());
+        auto sliceEnc = ::mlir::triton::gpu::SliceEncodingAttr::get(
+            $_builder.getContext(), 1, parentEnc);
+        redTy = RankedTensorType::get(redShape, tensorTy.getElementType(), sliceEnc);
+      }
+      build($_builder, $_state, result, token, redTy, src, dep, redOp, abs, NaN);
+    }]>,
+  ];
 
   let hasVerifier = 1;
 
