@@ -1,5 +1,5 @@
-include_directories(${PROJECT_SOURCE_DIR}/plugins/DialectPlugins/DialectPlugin/include)
-include_directories(${PROJECT_BINARY_DIR}/plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_SOURCE_DIR}/examples/plugins/DialectPlugins/DialectPlugin/include)
+include_directories(${PROJECT_BINARY_DIR}/examples/plugins/DialectPlugins/DialectPlugin/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/nvidia/include)
 
 add_mlir_dialect_library(MLIRDialectPlugin
