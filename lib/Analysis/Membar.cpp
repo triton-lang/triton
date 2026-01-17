@@ -5,26 +5,99 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
 #include <deque>
+
+#define DEBUG_TYPE "tritongpu-membar-analysis"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+namespace ttg = mlir::triton::gpu;
 
 namespace mlir {
 
-AllocationSlice::AllocationSlice(Value value,
+AllocationSlice::AllocationSlice(ttg::MemDescType allocTy,
                                  Interval<size_t> allocationInterval)
-    : allocationInterval(allocationInterval) {
-  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
-  this->accessTy = accessTy;
+    : allocationInterval(allocationInterval), allocTy(allocTy),
+      subsliceOffsets(allocTy.getShape().size(), 0),
+      subsliceShape(allocTy.getShape()) {}
 
-  // Get the memdesc_subslice information if present. If no subslice is
-  // present the whole interval is accessed
-  if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
-    // We know there aren't subslices before the one because of subslice::fold
-    // Still need to check this for where a fold isn't possible (control flow)
-    // and when a subslice is carried in a loop
-    if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
-      subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
-    }
+AllocationSlice::AllocationSlice(ttg::MemDescType allocTy,
+                                 Interval<size_t> allocationInterval,
+                                 ArrayRef<int64_t> curShape)
+    : AllocationSlice(allocTy, allocationInterval) {
+  const auto shapeDiff = subsliceShape.size() - curShape.size();
+  for (auto i : llvm::seq(shapeDiff)) {
+    subsliceOffsets[i] = OffsetValue{};
+    subsliceShape[i] = 1;
   }
+  for (auto i : llvm::seq(curShape.size())) {
+    if (subsliceShape[i + shapeDiff] != curShape[i]) {
+      // If the value is already a subslice, there is some unknown offset
+      subsliceOffsets[i] = OffsetValue{};
+    }
+    subsliceShape[i + shapeDiff] = curShape[i];
+  }
+}
+
+AllocationSlice AllocationSlice::subslice(ArrayRef<int32_t> offsets,
+                                          ArrayRef<int64_t> resShape) const {
+  auto newSlice = *this;
+  if (subsliceShape.empty() || subsliceOffsets.empty())
+    return newSlice;
+
+  assert(resShape.size() <= subsliceShape.size());
+  const auto shapeDiff = subsliceShape.size() - resShape.size();
+  for (auto i : llvm::seq(shapeDiff))
+    newSlice.subsliceShape[i] = 1;
+  for (auto i : llvm::seq(resShape.size())) {
+    newSlice.subsliceShape[i + shapeDiff] = resShape[i];
+  }
+
+  assert(offsets.size() <= subsliceShape.size());
+  auto offsetDiff = subsliceShape.size() - offsets.size();
+  for (auto i : llvm::seq(offsets.size())) {
+    newSlice.subsliceOffsets[i + offsetDiff] += offsets[i];
+  }
+  return newSlice;
+}
+
+AllocationSlice AllocationSlice::index(Value indexVal,
+                                       ArrayRef<int64_t> resShape) const {
+  auto newSlice = *this;
+  if (subsliceShape.empty() || subsliceOffsets.empty())
+    return newSlice;
+
+  assert(resShape.size() < subsliceShape.size());
+  auto indexDim = subsliceShape.size() - resShape.size() - 1;
+  for (auto i : llvm::seq(indexDim))
+    assert(newSlice.subsliceShape[i] == 1);
+  newSlice.subsliceShape[indexDim] = 1;
+  for (auto i : llvm::seq(resShape.size()))
+    assert(newSlice.subsliceShape[indexDim + 1 + i] == resShape[i]);
+
+  APInt index;
+  if (matchPattern(indexVal, m_ConstantInt(&index))) {
+    newSlice.subsliceOffsets[indexDim] += index.getSExtValue();
+  } else {
+    // Reset to unknown
+    newSlice.subsliceOffsets[indexDim] = OffsetValue{};
+  }
+  return newSlice;
+}
+
+bool memDescAllocTypeMatches(Type allocType, Type otherType) {
+  auto descA = dyn_cast<ttg::MemDescType>(allocType);
+  auto descB = dyn_cast<ttg::MemDescType>(otherType);
+  if (!descA || !descB)
+    return false;
+
+  auto otherNdim = descB.getAllocShape().size();
+  auto allocShape = descA.getShape().take_back(otherNdim);
+  return allocShape == descB.getAllocShape() &&
+         descA.getElementType() == descB.getElementType() &&
+         descA.getEncoding() == descB.getEncoding();
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
@@ -33,31 +106,33 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
     return false;
 
   // If access types are unknown, assume intersection
-  if (!accessTy || !other.accessTy)
+  if (!allocTy || !other.allocTy)
     return true;
 
   // If offsets are unknown, conservatively assume overlap
   if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
     return true;
-
-  // If layouts differ, we assume intersection as we currently only work on
-  // logical elements
-  if (accessTy.getEncoding() != other.accessTy.getEncoding())
+  if (subsliceShape.empty() || other.subsliceShape.empty())
     return true;
 
-  auto shapeA = SmallVector<int64_t>(accessTy.getShape());
-  auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
-  // Chek if all subslice region dimensions have some intersection
+  // If types differ, we assume intersection as we currently only work on
+  // logical elements
+  if (!memDescAllocTypeMatches(allocTy, other.allocTy))
+    return true;
+
+  const auto &shapeA = subsliceShape;
+  const auto &shapeB = other.subsliceShape;
+  // Check if all subslice region dimensions have some intersection
   // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
   // If any dimension doesn't intersect, we are looking at disjoint subslices
   for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
-    int64_t startA = subsliceOffsets[i];
-    int64_t endA = startA + shapeA[i];
-    int64_t startB = other.subsliceOffsets[i];
-    int64_t endB = startB + shapeB[i];
+    auto startA = subsliceOffsets[i];
+    auto endA = startA + shapeA[i];
+    auto startB = other.subsliceOffsets[i];
+    auto endB = startB + shapeB[i];
 
     // Is A completely before B? Is B completely before A? If so, disjoint
-    if (endA <= startB || endB <= startA)
+    if (endA.known_leq(startB) || endB.known_leq(startA))
       return false;
   }
 
@@ -65,24 +140,35 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   return true;
 }
 
+void AllocationSlice::OffsetValue::print(raw_ostream &os) const {
+  if (isKnown())
+    os << offset_;
+  else
+    os << "unknown";
+}
+
 void AllocationSlice::print(raw_ostream &os) const {
   os << "interval=[" << allocationInterval.start() << ","
      << allocationInterval.end() << ")";
 
-  os << " offsets=[";
-  if (!subsliceOffsets.empty()) {
+  if (subsliceOffsets.empty()) {
+    os << " offsets=unknown";
+  } else {
+    os << " offsets=[";
     llvm::interleaveComma(subsliceOffsets, os);
-  } else {
-    os << "unknown";
+    os << "]";
   }
-  os << "]";
-
-  os << " shape=";
-  if (accessTy) {
-    llvm::interleave(accessTy.getShape(), os, "x");
-    os << " layout=" << accessTy.getEncoding();
+  if (subsliceShape.empty()) {
+    os << " subsliceShape=unknown";
   } else {
-    os << "? layout=unknown";
+    os << " subsliceShape=[";
+    llvm::interleaveComma(subsliceShape, os);
+    os << "]";
+  }
+  if (!allocTy) {
+    os << " allocTy=unknown";
+  } else {
+    os << " allocTy=" << allocTy;
   }
 }
 
@@ -238,9 +324,73 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
+void AllocationSliceAnalysis::update(Operation *op) {
+  if (isa<ttg::LocalAllocOp>(op)) {
+    getAllocationSlices(op->getResult(0));
+    return;
+  }
+
+  if (!isa<ttg::MemDescSubsliceOp, ttg::MemDescIndexOp>(op))
+    return;
+  auto src = op->getOperand(0);
+  std::vector<AllocationSlice> slices;
+  for (const auto &parentSlice : getAllocationSlices(src)) {
+    if (auto sliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
+      auto slice = parentSlice.subslice(sliceOp.getOffsets(),
+                                        sliceOp.getType().getShape());
+      slices.push_back(std::move(slice));
+    } else {
+      auto indexOp = cast<ttg::MemDescIndexOp>(op);
+      auto slice =
+          parentSlice.index(indexOp.getIndex(), indexOp.getType().getShape());
+      slices.push_back(std::move(slice));
+    }
+  }
+  sliceMap.emplace(op->getResult(0), std::move(slices));
+}
+
+const std::vector<AllocationSlice> &
+AllocationSliceAnalysis::getAllocationSlices(Value value) {
+  auto it = sliceMap.find(value);
+  if (it != sliceMap.end()) {
+    return it->second;
+  }
+
+  std::vector<AllocationSlice> slices;
+  if (auto alloc = value.getDefiningOp<ttg::LocalAllocOp>()) {
+    // new allocation
+    auto bufferId = allocation_->getBufferId(value);
+    allocTypeMap[bufferId] = alloc.getType();
+    assert(bufferId != Allocation::InvalidBufferId);
+    auto interval = allocation_->getAllocatedInterval(bufferId);
+    slices.emplace_back(alloc.getType(), interval);
+  } else {
+    // unknown buffer, potentially aliased
+    for (auto bufferId : allocation_->getBufferIds(value)) {
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      auto interval = allocation_->getAllocatedInterval(bufferId);
+      auto typeIt = allocTypeMap.find(bufferId);
+      if (typeIt != allocTypeMap.end()) {
+        auto bufferType = typeIt->second;
+        if (memDescAllocTypeMatches(bufferType, value.getType())) {
+          slices.emplace_back(
+              bufferType, interval,
+              cast<ttg::MemDescType>(value.getType()).getShape());
+          continue;
+        }
+      }
+      slices.emplace_back(interval);
+    }
+  }
+  return sliceMap.emplace(value, std::move(slices)).first->second;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
+  sliceAnalysis.update(op);
+
   auto containsLocalBarrier = [](Operation *op) {
     if (isa<gpu::BarrierOp>(op))
       return true;
@@ -284,16 +434,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
-
-              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadSlices[slice].insert(op);
-            }
+          for (auto slice : sliceAnalysis.getAllocationSlices(value)) {
+            if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
+              curBlockInfo.syncWriteSlices[slice].insert(op);
+            else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
+              curBlockInfo.syncReadSlices[slice].insert(op);
           }
         }
       }
@@ -347,6 +492,16 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       blockInfo->sync();
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
+    LLVM_DEBUG({
+      DBGS()
+          << "Inserting barrier due to memory region overlap in operation:\n";
+      op->dump();
+      llvm::dbgs() << "Previous Block info =\n";
+      blockInfo->dump();
+      llvm::dbgs() << "Operation Block info =\n";
+      curBlockInfo.dump();
+    });
+
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
