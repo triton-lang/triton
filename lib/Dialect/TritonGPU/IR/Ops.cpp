@@ -1056,6 +1056,11 @@ void WarpSpecializeOp::getSuccessorRegions(
     successors.push_back(RegionSuccessor::parent());
 }
 
+ValueRange WarpSpecializeOp::getSuccessorInputs(RegionSuccessor successor) {
+  // When returning to parent, the successor inputs are the op results.
+  return successor.isParent() ? getResults() : ValueRange();
+}
+
 void WarpSpecializePartitionsOp::getSuccessorRegions(
     RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
   // The parent branches to each of the partition regions, but nothing flows out
@@ -1069,6 +1074,13 @@ OperandRange
 WarpSpecializePartitionsOp::getEntrySuccessorOperands(RegionSuccessor) {
   // Pass through the explicit captures from the enclosing WarpSpecializeOp.
   return getExplicitCaptures();
+}
+
+ValueRange
+WarpSpecializePartitionsOp::getSuccessorInputs(RegionSuccessor successor) {
+  // The successor inputs are the block arguments of the partition region.
+  Region *region = successor.getSuccessor();
+  return region ? region->getArguments() : ValueRange();
 }
 
 LogicalResult WarpSpecializeOp::verify() {
