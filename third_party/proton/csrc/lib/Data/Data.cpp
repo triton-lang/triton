@@ -41,25 +41,22 @@ void Data::clear(size_t phase, bool clearUpToPhase) {
     activePhases.erase(phase);
   }
 
-  if (flushedPhase != kNoFlushedPhase &&
-      (clearUpToPhase ? (flushedPhase <= phase) : (phase <= flushedPhase))) {
-    flushedPhase = kNoFlushedPhase;
-  }
-
-  if (clearUpToPhase ? (currentPhase <= phase) : (currentPhase == phase)) {
-    currentPhasePtr = nullptr;
-  }
+  // In case the current phase is cleared, recreate its pointer.
+  // Caution: we expect users to call clear only after deactivating the
+  // profiler, so data races are not protected here.
+  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
+  activePhases.insert(currentPhase);
 }
 
-void Data::updateFlushedPhase(size_t phase) {
+void Data::updateCompletePhase(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  if (flushedPhase == kNoFlushedPhase || phase > flushedPhase)
-    flushedPhase = phase;
+  if (completePhase == kNoCompletePhase || phase > completePhase)
+    completePhase = phase;
 }
 
-bool Data::isPhaseFlushed(size_t phase) const {
+bool Data::isPhaseComplete(size_t phase) const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
+  return completePhase != kNoCompletePhase && completePhase >= phase;
 }
 
 void Data::dump(const std::string &outputFormat) {

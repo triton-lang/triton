@@ -626,7 +626,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
-        auto phase = Data::kNoFlushedPhase;
+        auto phase = Data::kNoCompletePhase;
         auto numNodes = graphExecState.metricKernelNodeIds.size();
         for (auto nodeId : graphExecState.metricKernelNodeIds) {
           auto *nodeState = graphNodeIdToState.find(nodeId);
@@ -636,7 +636,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           }
           nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
             metricNodeEntryIds[data].push_back(entry.id);
-            if (phase == Data::kNoFlushedPhase) {
+            if (phase == Data::kNoCompletePhase) {
               phase = entry.phase;
             } else if (phase != entry.phase) {
               throw std::runtime_error(

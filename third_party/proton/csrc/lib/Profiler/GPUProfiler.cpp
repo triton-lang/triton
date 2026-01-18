@@ -35,11 +35,13 @@ computeFlushRangesAndPeekPhases(
     }
 
     auto flushedPhaseIt = dataFlushedPhases.find(data);
+    // phase.second at maximum is the current phase, which cannot be a
+    // "complete" phase yet. So we flush up to phase.second - 1.
     const size_t endPhaseToFlush = phase.second - 1;
 
     size_t minPhaseToFlush = 0;
     if (flushedPhaseIt == dataFlushedPhases.end() ||
-        flushedPhaseIt->second == Data::kNoFlushedPhase) {
+        flushedPhaseIt->second == Data::kNoCompletePhase) {
       minPhaseToFlush = 0;
     } else {
       const auto flushedPhase = flushedPhaseIt->second;
@@ -248,7 +250,7 @@ void flushDataPhasesImpl(
     const size_t minPhaseToFlush = range.minPhaseToFlush;
     const size_t maxPhaseToFlush = range.maxPhaseToFlush;
     dataFlushedPhases[data] = maxPhaseToFlush;
-    data->updateFlushedPhase(maxPhaseToFlush);
+    data->updateCompletePhase(maxPhaseToFlush);
 
     if (!periodicFlushEnabled)
       continue;

@@ -418,7 +418,7 @@ data = proton.data.get_json(session_id)
 data_msgpack = proton.data.get_msgpack(session_id)
 
 # Usage 2: query the phase completion status and access data in the completed phases
-if proton.data.is_phase_flushed(session_id, phase_id):
+if proton.data.is_phase_complete(session_id, phase_id):
     data_phase = proton.data.get_json(session_id, phase_id)
     proton.data.clear(session_id, phase_id)
 ```

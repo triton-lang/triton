@@ -412,12 +412,12 @@ def test_data_api(tmp_path: pathlib.Path):
     assert json_data is not None
     msgpack_data = proton.data.get_msgpack(session_id)
     assert isinstance(msgpack_data, bytes)
-    is_flushed = proton.data.is_phase_flushed(session_id, 0)
-    assert is_flushed is False
+    is_complete = proton.data.is_phase_complete(session_id, 0)
+    assert is_complete is False
     next_phase = proton.data.advance_phase(session_id)
     assert next_phase == 1
-    is_flushed = proton.data.is_phase_flushed(session_id, 1)
-    assert is_flushed is False
+    is_complete = proton.data.is_phase_complete(session_id, 1)
+    assert is_complete is False
 
     # Even if a phase has no GPU activity records, flushing should still mark it
     # as flushed.
@@ -425,8 +425,11 @@ def test_data_api(tmp_path: pathlib.Path):
     next_phase = proton.data.advance_phase(session_id)
     assert next_phase == 2
     proton.deactivate(session_id, flushing=True)
+    assert proton.data.is_phase_complete(session_id, 1) is True
+    assert proton.data.is_phase_complete(session_id, 2) is False
+
+    # Backward-compatible alias.
     assert proton.data.is_phase_flushed(session_id, 1) is True
-    assert proton.data.is_phase_flushed(session_id, 2) is False
 
     # Test clear and clear_up_to_phase
     proton.data.clear(session_id, phase=0)
