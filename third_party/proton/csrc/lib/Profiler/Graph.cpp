@@ -164,12 +164,12 @@ bool PendingGraphPool::flushAll() {
         auto deviceIt = poolCopy.find(device);
         if (deviceIt == poolCopy.end())
           return;
-        for (auto &[phase, slot] : deviceIt->second) {
-          (void)phase;
+        for (auto &[_, slot] : deviceIt->second) {
           std::lock_guard<std::mutex> lock(slot->mutex);
           if (slot->queue == std::nullopt)
             continue;
-          emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
+          emitMetricRecords(*metricBuffer,
+                            reinterpret_cast<uint64_t *>(hostPtr),
                             *slot->queue);
         }
       },
@@ -177,8 +177,7 @@ bool PendingGraphPool::flushAll() {
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto &[device, devicePool] : poolCopy) {
-      for (auto &[phase, slot] : devicePool) {
-        (void)phase;
+      for (auto &[_, slot] : devicePool) {
         std::lock_guard<std::mutex> slotLock(slot->mutex);
         if (slot->queue == std::nullopt)
           continue;

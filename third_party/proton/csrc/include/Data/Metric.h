@@ -436,11 +436,7 @@ public:
     }
     for (auto &[device, buffer] : buffersToFlush) {
       synchronize(buffer);
-      if constexpr (std::is_invocable_v<Func, void *, uint8_t *>) {
-        callback(device, buffer.hostPtr);
-      } else {
-        callback(buffer.hostPtr);
-      }
+      callback(device, buffer.hostPtr);
     }
   }
 
