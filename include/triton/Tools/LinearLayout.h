@@ -627,7 +627,7 @@ public:
   //
   //    - identity1D(4, "i", "o") * zeros1D(2, "i", "o") => L(x) = x % 4
   //      for x in [0,8).
-  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 0]]
+  //      The output matrix is [[1, 0, 0], [0, 1, 0]]
   //
   //    - zeros1D(2, "i", "o") * identity1D(4, "i", "o") => L(x) = x / 2
   //      for x in [0,8).
