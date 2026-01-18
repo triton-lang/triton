@@ -52,11 +52,11 @@ LogicalResult lowerLdStMatrix(
   auto memLayout = toLinearLayout(memDescType);
   auto cvt = regLayout.invertAndCompose(memLayout);
   auto kBlock = StringAttr::get(loc.getContext(), "block");
-  auto maybeSublayout = cvt.quotient({kBlock});
-  if (!maybeSublayout) {
+  // ldmatrix/stmatrix does not support shared::cluster
+  if (!cvt.isTrivialOver({kBlock})) {
     return failure();
   }
-  cvt = maybeSublayout.value();
+  cvt = cvt.quotient({kBlock}).value();
   auto smemBase = smemObj.getBase();
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescType);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(memDescType);

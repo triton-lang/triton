@@ -179,11 +179,7 @@ LinearLayout zerosLike(const LinearLayout &layout) {
     }
   }
 
-  SmallVector<std::pair<StringAttr, int32_t>> outDims;
-  for (auto outDim : layout.getOutDimNames()) {
-    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
-  }
-  return LinearLayout(std::move(bases), std::move(outDims),
+  return LinearLayout(std::move(bases), layout.getOutDims(),
                       /*requireSurjective=*/false);
 }
 
@@ -290,17 +286,18 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   assert(kReg.str() == "register");
   auto kLane = StringAttr::get(kReg.getContext(), "lane");
   auto kWarp = StringAttr::get(kReg.getContext(), "warp");
-  assert(layout.getNumOutDims() == 1);
   uint32_t bits = maskSpanOffsets;
   llvm::SetVector<uint32_t> tileBases;
-  for (auto bases : llvm::make_second_range(addrLayout.getBases())) {
+  auto addrNamedBases = addrLayout.flattenOuts().getBases();
+  for (auto bases : llvm::make_second_range(addrNamedBases)) {
     for (auto basis : bases) {
       bits |= basis[0];
       tileBases.insert(basis[0]);
     }
   }
   SmallVector<size_t> front, back;
-  for (auto [idx, basis] : llvm::enumerate(layout.getBases().lookup(kReg))) {
+  auto layoutNamedBases = layout.flattenOuts().getBases();
+  for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
     if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
       front.push_back(idx);
     } else {

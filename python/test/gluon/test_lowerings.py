@@ -156,31 +156,30 @@ def _funky_reduce_layouts():
             block_bases=[],
             shape=[128, 8],
         ),
-        # NYI: Need to generalize cross-CTA convert_layouts to support LinearLayouts
-        # Basic funky layout with block bases. They fit int he lane bases
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[[1, 0], [2, 0]],
-        #    lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]],
-        #    warp_bases=[[16, 0], [32, 0]],
-        #    block_bases=[[64, 0]],
-        #    shape=[128, 4],
-        #),
-        ## Funky layout with two convert_layouts with block_bases
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[],
-        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
-        #    warp_bases=[[4, 0], [8, 0]],
-        #    block_bases=[[2, 0]],
-        #    shape=[16, 8],
-        #),
-        ## three convert_layouts
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[],
-        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
-        #    warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0], [1024, 0]],
-        #    block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
-        #    shape=[2048, 8],
-        #),
+        # Basic funky layout with block bases. They fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[[64, 0]],
+            shape=[128, 4],
+        ),
+        # Funky layout with two convert_layouts with block_bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
+            warp_bases=[[4, 0], [8, 0]],
+            block_bases=[[2, 0]],
+            shape=[16, 8],
+        ),
+        # Three convert_layouts
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
+            warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0], [1024, 0]],
+            block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
+            shape=[2048, 8],
+        ),
     ]
     for axis in [0, 1]:
         for layout in layouts:
