@@ -10,6 +10,7 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
+    is_blackwell_ultra,
     is_hip_rdna3,
     is_hip_rdna4,
     is_hip_cdna3,
@@ -3195,3 +3196,126 @@ def test_scatter_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_
     )
 
     torch.testing.assert_close(output, expected)
+
+
+# --- TMEM Load with Reduction Tests ---
+
+
+@gluon.jit
+def tmem_reduction_kernel(
+    in_ptr,
+    out_ptr,
+    red_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    RED_OP: ttgl.constexpr,
+    USE_ABS: ttgl.constexpr,
+    PROPAGATE_NAN: ttgl.constexpr,
+    num_warps: ttgl.constexpr,
+):
+    """Kernel to test TMEM load with hardware reduction."""
+    global_memory_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    global_memory_layout_1d: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+
+    # Offsets for 2D tensor
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_memory_layout))
+    offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, global_memory_layout))
+    offs_2d = offs_m[:, None] * N + offs_n[None, :]
+
+    # Load input from global memory
+    input_data = ttgl.load(in_ptr + offs_2d)
+
+    # Setup TMEM layout - blockN must match N for single reduction value per row
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1,  # packed for f32
+                                                     )
+
+    # Allocate TMEM
+    tmem = allocate_tensor_memory(
+        element_ty=in_ptr.dtype.element_ty,
+        shape=[M, N],
+        layout=tmem_layout,
+    )
+
+    # Get register layout for TMEM access
+    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
+        in_ptr.dtype.element_ty,
+        (M, N),
+        tmem_layout,
+        num_warps=num_warps,
+    )
+
+    # Store input to TMEM
+    input_data = ttgl.convert_layout(input_data, tmem_reg_layout)
+    tmem.store(input_data)
+
+    # Load from TMEM with reduction
+    if RED_OP == "min":
+        output, reduced = tmem.load_min(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+    elif RED_OP == "max":
+        output, reduced = tmem.load_max(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+
+    # Store full output
+    output = ttgl.convert_layout(output, global_memory_layout)
+    ttgl.store(out_ptr + offs_2d, output)
+
+    # Store reduced output (1D tensor of shape [M])
+    offs_1d = ttgl.arange(0, M, global_memory_layout_1d)
+    reduced = ttgl.convert_layout(reduced, global_memory_layout_1d)
+    ttgl.store(red_ptr + offs_1d, reduced)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
+@pytest.mark.parametrize("red_op", ["min", "max"])
+@pytest.mark.parametrize("use_abs", [False, True])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+@pytest.mark.parametrize(
+    "M, N, num_warps",
+    [(128, 32, 4), (128, 64, 4), (128, 128, 4), (128, 256, 4), (256, 128, 8)],
+)
+def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
+    """Test TMEM load with hardware reduction on MxN tile
+
+    Note: With M=128, only 4 warps can be used (warpsPerCTA=[4,1]) since all
+    warps must fit in the M dimension for reduction. 8 warps would require
+    M=256 (8*32=256). The N=256 case tests partial reduction combining where
+    4 hardware reductions are combined via llvm.minnum/maxnum.
+    """
+
+    # Create test input with some negative values
+    input_tensor = torch.randn(M, N, dtype=torch.float32, device="cuda")
+
+    # Inject NaN for testing if needed
+    use_nan = False if propagate_nan == tl.PropagateNan.NONE else True
+    if use_nan:
+        input_tensor[10, 5] = float("nan")
+        input_tensor[50, 15] = float("nan")
+
+    # Output tensors
+    output = torch.empty_like(input_tensor)
+    red_output = torch.empty(M, dtype=torch.float32, device="cuda")
+
+    # Run kernel
+    tmem_reduction_kernel[(1, )](
+        input_tensor,
+        output,
+        red_output,
+        M,
+        N,
+        red_op,
+        use_abs,
+        propagate_nan,
+        num_warps=num_warps,
+    )
+
+    # Verify full output matches input (tmem store/load roundtrip)
+    # Use equal_nan=True when we have NaN values in the input
+    torch.testing.assert_close(input_tensor, output, atol=0, rtol=0, equal_nan=use_nan)
+
+    # Compute expected reduction
+    ref_input = torch.abs(input_tensor) if use_abs else input_tensor
+    torch_red = torch.min if red_op == "min" else torch.max
+    expected_red = torch_red(ref_input, dim=1).values
+
+    # Verify reduction output
+    # Use equal_nan=True when testing NaN propagation
+    torch.testing.assert_close(expected_red, red_output, atol=1e-5, rtol=1e-5, equal_nan=use_nan)

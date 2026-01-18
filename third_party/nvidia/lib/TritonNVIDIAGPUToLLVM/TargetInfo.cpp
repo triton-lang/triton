@@ -146,13 +146,14 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
-                         bool isWarpSync) const {
+                         triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (isWarpSync) {
-    NVVM::SyncWarpOp::create(rewriter, loc, b.i32_val(0xffffffff));
-  } else {
-    b.barrier();
-  }
+  b.barrier(targets);
+}
+
+void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  NVVM::SyncWarpOp::create(rewriter, loc, b.i32_val(0xffffffff));
 }
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,

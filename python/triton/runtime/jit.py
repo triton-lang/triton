@@ -371,7 +371,7 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-def serialize_specialization_data(name, signature, constants, attrs, options, key):
+def serialize_specialization_data(name, signature, constants, attrs, options, key, target):
     constants = {
         key: str(value) if value.__class__.__name__ == "dtype" else {"constexpr": value.value}
         if value.__class__.__name__ == "constexpr" else {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
@@ -383,7 +383,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     obj = {
         'name': name, 'signature': signature, 'constant_keys': [list(x) for x in constants.keys()], 'constant_vals':
         list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
-        'options': options.__dict__, 'key': key
+        'options': options.__dict__, 'key': key, 'target': target.__dict__
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -617,6 +617,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         hook,
         key,
         signature,
+        target,
         device,
         constants,
         options,
@@ -632,7 +633,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
         full_name = get_full_name(self.fn)
 
-        specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key,
+                                                            target)
 
         kwargs = {
             'signature': signature,
@@ -811,6 +813,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
+        _, _, target, backend, _ = self.device_caches[device]
+        deserialized_target = deserialized_obj['target']
+        # TODO: we could support loading a kernel signature serialized on a different target however
+        # currently options are target specific so we would need to change that.
+        if target.__dict__ != deserialized_target:
+            raise RuntimeError(f"Specialization data is for {deserialized_target} but trying to preload for {target}")
 
         def _decode_constant(value):
             if tl.dtype.is_dtype(value):
@@ -837,7 +845,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        _, _, _, backend, _ = self.device_caches[device]
         options = backend.parse_options(options)
         return self._do_compile(
             key,
@@ -852,7 +859,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
         kernel_cache, _, target, backend, _ = self.device_caches[device]
 
-        if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
+        if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options, [attrs],
+                           warmup):
             return None
         src = self.ASTSource(self, signature, constexprs, attrs)
 
@@ -867,15 +875,15 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
             def finalize_compile(kernel):
                 kernel_cache[key] = kernel
-                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options,
-                                [attrs], warmup)
+                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
+                                options, [attrs], warmup)
 
             kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
-                            warmup)
+            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs, options,
+                            [attrs], warmup)
         return kernel
 
     def __call__(self, *args, **kwargs):

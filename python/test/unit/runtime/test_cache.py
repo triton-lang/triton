@@ -2,6 +2,7 @@ import expecttest
 import importlib.util
 import itertools
 import os
+import re
 import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
@@ -578,6 +579,12 @@ def test_preload(device, fresh_triton_cache) -> None:
     # test that we can't preload a mismatched kernel
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
+
+    specialization_data_unknown_target = re.sub(r'("target"\s*:\s*\{[^{}]*"backend"\s*:\s*)"(.*?)"',
+                                                r'\1"unknown_target"', specialization_data, count=1)
+
+    with pytest.raises(RuntimeError, match="Specialization data is for {'backend': 'unknown_target'"):
+        kernel_add.preload(specialization_data_unknown_target)
 
 
 def test_hooks(device, fresh_triton_cache) -> None:

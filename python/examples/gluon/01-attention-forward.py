@@ -599,31 +599,43 @@ def _compute_and_store_exp2(config, qk, p_tmem):
 
 
 @gluon.jit
-def _subtiled_qk_load(config, s_tmem):
+def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
     SIZE: gl.constexpr = s_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
     s = s_tmem.slice(0, SIZE)
     layout: gl.constexpr = get_tmem_reg_layout(gl.float32, s.shape, s.layout, config.num_warps)
     qks = ()
-    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
-        qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(layout), )
-    return _join_n(qks)
+    if use_tmem_red:
+        red_total = None
+        for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+            vals, reds = s_tmem.slice(i * SIZE, SIZE).load_max(layout)
+            red_total = reds if red_total is None else gl.maximum(red_total, reds)
+            qks = qks + (vals, )
+        return _join_n(qks), red_total
+    else:
+        for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+            qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(layout), )
+        return _join_n(qks), None
 
 
 @gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                        offs_m, m_i, l_i, STAGE: gl.constexpr):
+                        offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk = _subtiled_qk_load(config, s_tmem)
+        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
             qk = _apply_causal_mask(qk, col_limit_right)
 
-        m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
+        if use_tmem_red:
+            qk_max = gl.convert_layout(qk_max, m_i.type.layout)
+            m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
+        else:
+            m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
         alpha_tmem = _borrow_s_as_alpha(config, s_tmem)
@@ -663,7 +675,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
 @gluon.jit
 def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,  #
-                  s_chnl, corr_chnl, exp_turnstile):
+                  s_chnl, corr_chnl, exp_turnstile, use_tmem_red: gl.constexpr):
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
     sum_layout: gl.constexpr = _get_split_n_layout(config.qk_layout)
 
@@ -686,11 +698,11 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         if STAGE & 1:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, m_i, l_i, STAGE=4 - STAGE)
+                offs_m, m_i, l_i, STAGE=4 - STAGE, use_tmem_red=use_tmem_red)
         if STAGE & 2:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, m_i, l_i, STAGE=2)
+                offs_m, m_i, l_i, STAGE=2, use_tmem_red=use_tmem_red)
         l_i0, l_i1 = float2.unpack2(l_i)
         l_i = l_i0 + l_i1
 
@@ -706,17 +718,17 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
 
 
 @gluon.jit
-def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr):
+def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer())
+    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer(), use_tmem_red)
 
 
 @gluon.jit
-def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr):
+def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer())
+    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer(), use_tmem_red)
 
 
 @gluon.jit
@@ -854,7 +866,7 @@ def attention_kernel(  #
         sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
         GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
-        num_warps: gl.constexpr):
+        num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
     config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,  #
                              dtype, num_warps)
@@ -873,8 +885,8 @@ def attention_kernel(  #
     descs = (desc_q, desc_k, desc_v, desc_o)
     gl.warp_specialize([
         (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
         (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
         (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
         (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
@@ -907,7 +919,7 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale):
+def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
@@ -941,7 +953,7 @@ def attention_forward(q, k, v, causal, sm_scale):
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
         stage, torch_dtype_to_triton(q.dtype),  #
-        num_warps=4, maxnreg=128)
+        num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
 
     return o, M
 
@@ -959,15 +971,23 @@ def is_blackwell():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
+
+
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False, True])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
+
+    if use_tmem_red and not is_blackwell_ultra():
+        pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
 
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -977,7 +997,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
 
     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale)
+    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
@@ -991,9 +1011,10 @@ HEAD_DIM = [64, 128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
+use_tmem_reds = [False, True] if is_blackwell_ultra() else [False]
 
 bench_configs = []
-for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
+for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, use_tmem_reds):
     config = triton.testing.Benchmark(
         x_names=["N_CTX"],
         x_vals=N_CTX,
@@ -1002,19 +1023,20 @@ for Z, H, D, is_causal in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal):
         line_names=providers,
         styles=[("red", "-"), ("blue", "-"), ("green", "-"), ("yellow", "-")],
         ylabel="TFLOPS",
-        plot_name=f"Attention Z={Z} H={H} D={D} causal={is_causal}",
+        plot_name=f"Attention Z={Z} H={H} D={D} causal={is_causal} use_tmem_red={use_tmem_red}",
         args={
             "Z": Z,
             "H": H,
             "HEAD_DIM": D,
             "causal": is_causal,
+            "use_tmem_red": use_tmem_red,
         },
     )
     bench_configs.append(config)
 
 
 @triton.testing.perf_report(bench_configs)
-def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
+def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
     provider, dtype = provider.split("-")
     if dtype == "fp16":
         dtype = torch.float16
@@ -1034,7 +1056,7 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, provider):
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:

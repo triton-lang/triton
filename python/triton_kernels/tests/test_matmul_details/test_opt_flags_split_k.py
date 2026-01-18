@@ -6,7 +6,7 @@ import types
 import torch
 
 import triton_kernels.matmul_details.opt_flags as opt_flags
-
+from triton_kernels.tensor_details.dtype import FP16
 
 class _DummyPrecisionConfig:
     def __init__(self):
@@ -84,9 +84,9 @@ def test_make_default_opt_flags_amd_split_k_constraint(monkeypatch):
 
     precision_config = _DummyPrecisionConfig()
     flags = opt_flags.make_default_opt_flags_amd(
-        torch.float16,
-        torch.float16,
-        torch.float16,
+        FP16,
+        FP16,
+        FP16,
         precision_config,
         2,
         128,
