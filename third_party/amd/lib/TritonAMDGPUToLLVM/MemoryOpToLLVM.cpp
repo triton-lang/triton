@@ -356,6 +356,7 @@ private:
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
     auto kOffset = str_attr("offset");
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
@@ -409,10 +410,12 @@ private:
     if (elemsPerVec != ldsTransLoadParams->tileSize)
       return failure();
 
-    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+    assert(cvt.isTrivialOver({kBlock}) && "NYI");
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy) -> SmallVector<Value> {
+                         VectorType vTy,
+                         std::optional<Value> ctaId) -> SmallVector<Value> {
+      assert(!ctaId.has_value() && "NYI");
       auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       Value dsReadTr =
