@@ -54,22 +54,6 @@ def advance_phase(session: Optional[int] = 0) -> Optional[int]:
     return libproton.advance_data_phase(session)
 
 
-def is_phase_flushed(session: Optional[int] = 0, phase: int = 0) -> bool:
-    """
-    Checks if the profiling data for a given session and phase is complete.
-
-    Deprecated: use `is_phase_complete` instead.
-
-    Args:
-        session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
-        phase (int): The phase number to check. Defaults to 0.
-
-    Returns:
-        bool: True if the phase data is complete, False otherwise.
-    """
-    return is_phase_complete(session, phase)
-
-
 def is_phase_complete(session: Optional[int] = 0, phase: int = 0) -> bool:
     """
     Checks if the profiling data for a given session and phase is complete.

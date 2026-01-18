@@ -428,9 +428,6 @@ def test_data_api(tmp_path: pathlib.Path):
     assert proton.data.is_phase_complete(session_id, 1) is True
     assert proton.data.is_phase_complete(session_id, 2) is False
 
-    # Backward-compatible alias.
-    assert proton.data.is_phase_flushed(session_id, 1) is True
-
     # Test clear and clear_up_to_phase
     proton.data.clear(session_id, phase=0)
     proton.data.clear(session_id, phase=2, clear_up_to_phase=True)

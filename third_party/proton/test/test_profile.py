@@ -354,8 +354,8 @@ def test_clear_data_up_to_phase(tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_data_is_phase_flushed(tmp_path: pathlib.Path):
-    temp_path = tmp_path / "test_data_is_phase_flushed.hatchet"
+def test_data_is_phase_complete(tmp_path: pathlib.Path):
+    temp_path = tmp_path / "test_data_is_phase_complete.hatchet"
     session = proton.start(str(temp_path.with_suffix("")), context="shadow")
 
     def fn():
@@ -367,7 +367,7 @@ def test_data_is_phase_flushed(tmp_path: pathlib.Path):
     assert not proton.data.is_phase_complete(session, 0)
 
     proton.deactivate(session)
-    # likely the GPU has not flushed the data yet
+    # likely the GPU has not completed the data yet
     assert not proton.data.is_phase_complete(session, 0)
 
     proton.activate(session)
