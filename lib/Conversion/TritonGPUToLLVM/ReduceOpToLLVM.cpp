@@ -37,16 +37,6 @@ public:
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
     unsigned axis = op.getAxis();
 
-    // The lowering already supports cross-CTA reductions in principle
-    // We are only missing:
-    // - Supporting them in convert_layout for LinearLayouts
-    // - Emitting cross-CTA barriers between convert_layouts when the second
-    //   convert_layout crosses CTAs
-    // After this, we can uncomment the tests in test_reduce_funky_layout
-    if (!helper.isReduceWithinCTA()) {
-      return failure();
-    }
-
     auto *ctx = op.getContext();
 
     // Remove block as we don't currently support it
@@ -81,15 +71,18 @@ public:
     // Even more, if we do two rounds, getInterLayout will make sure that the
     // first one does not cross CTAs
     auto kAxis = *(regLl.getOutDimNames().begin() + axis);
+    auto kBlock = StringAttr::get(ctx, "block");
+    bool lastCvtCrossesCTAs = false;
     int i = 0;
     while (regLl.getOutDimSize(kAxis) != 1) {
       LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
 
       // Emit a barrier if we are reusing the shmem
       if (i > 0) {
-        sync(rewriter, loc);
+        sync(rewriter, loc, lastCvtCrossesCTAs);
       }
       accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
+      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
 
       std::tie(regLl, accs) =
           reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
@@ -106,7 +99,7 @@ public:
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
       if (regLl != outputLayout) {
         // Reuse the shmem
-        sync(rewriter, loc);
+        sync(rewriter, loc, lastCvtCrossesCTAs);
         accs =
             convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
@@ -160,9 +153,13 @@ private:
     return srcValues;
   }
 
-  void sync(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier(triton::gpu::AddrSpace::Local);
+  void sync(ConversionPatternRewriter &rewriter, Location loc,
+            bool crossCTA) const {
+    if (crossCTA) {
+      targetInfo.clusterBarrier(loc, rewriter);
+    } else {
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    }
   }
 
   void packVectorized(SmallVector<SmallVector<Value>> &accs,
