@@ -1829,7 +1829,9 @@ void init_triton_ir(py::module &&m) {
                -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
       .def("create_barrier",
-           [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
+           [](TritonOpBuilder &self) {
+             self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
+           })
       // Make a block pointer (tensor pointer in Triton IR)
       .def("create_make_block_ptr",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,

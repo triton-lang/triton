@@ -35,8 +35,8 @@ jobs:
         - {runner: 'Ubuntu 22.04 ARM64', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
         - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64'}
-        - {runner: 'MacOS X64', runs_on: 'macos-13', target-os: 'macos', arch: 'x64'}
-        - {runner: 'MacOS ARM64', runs_on: 'macos-13', target-os: 'macos', arch: 'arm64'}
+        - {runner: 'MacOS X64', runs_on: 'macos-15', target-os: 'macos', arch: 'x64'}
+        - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
 
     steps:
@@ -92,6 +92,19 @@ jobs:
         path: ${{ env.SCCACHE_DIR }}
         key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
         restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
+
+    - name: Free disk space on Ubuntu
+      if: matrix.config.target-os == 'ubuntu'
+      run: |
+        df -h
+        echo "Removing large packages"
+        sudo apt-get remove -y 'php.*'
+        sudo apt-get remove -y google-chrome-stable firefox powershell mono-devel
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        df -h
+        echo "Removing large directories"
+        df -h
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')

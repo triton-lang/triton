@@ -948,6 +948,15 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
+  LinearLayout withoutBroadcast = linearLayout;
+  for (auto inDim : linearLayout.getInDimNames()) {
+    withoutBroadcast = withoutBroadcast.removeZeroBasesAlongDim(inDim);
+  }
+  if (!withoutBroadcast.isInvertible()) {
+    return emitError()
+           << "After removing the zero bases the layout must be bijective";
+  }
+
   return success();
 }
 
@@ -3752,7 +3761,6 @@ void TritonGPUDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
-#include "triton/Dialect/TritonGPU/IR/OpsEnums.cpp.inc"
       >();
   addInterfaces<TritonInlinerInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
@@ -4081,6 +4089,7 @@ SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
   if (op->getNumResults() == 0) {
     return partitionOutputsIds;
   }
+  assert(op->hasAttr(kPartitionOutputsAttrName));
   auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
   for (auto attr : arrayAttr) {
     auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();

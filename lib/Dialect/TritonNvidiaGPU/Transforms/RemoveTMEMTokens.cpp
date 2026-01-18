@@ -18,6 +18,22 @@ void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
                        op->getResultTypes(), op->getAttrs());
   state.types.erase(std::next(state.types.begin(), resultIdx));
   OpBuilder b(op);
+
+  if (auto segmentSizes =
+          op->getAttrOfType<DenseI32ArrayAttr>("resultSegmentSizes")) {
+    // Update resultSegmentSizes attribute if it exists
+    SmallVector<int32_t> newSegmentSizes(segmentSizes.asArrayRef());
+    int pos = 0;
+    for (auto &segmentSize : newSegmentSizes) {
+      if (pos == resultIdx) {
+        segmentSize = 0;
+        break;
+      }
+      pos += segmentSize;
+    }
+    state.attributes.set("resultSegmentSizes",
+                         b.getDenseI32ArrayAttr(newSegmentSizes));
+  }
   Operation *newOp = b.create(state);
   SmallVector<Value> replacements = newOp->getResults();
   replacements.insert(std::next(replacements.begin(), resultIdx), replacement);

@@ -47,12 +47,6 @@ test-unit: all
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
 
-.PHONY: test-distributed
-test-distributed: all
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install "python/triton_kernels[tests]" -v
-	$(PYTEST) --tb=short -s python/triton_kernels/bench/distributed.py
-
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon

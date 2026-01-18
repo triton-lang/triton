@@ -92,9 +92,10 @@ def compute_offsets(
         # pid_z indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
-        tl.static_assert(X_SLICE_SIZE_DIVISIBILITY is not None or \
-                         W_SLICE_SIZE_DIVISIBILITY is not None,
-                         "At least one input must be padded!")
+        tl.static_assert(
+            X_SLICE_SIZE_DIVISIBILITY is not None or W_SLICE_SIZE_DIVISIBILITY is not None,
+            "At least one input must be padded!",
+        )
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
         off_x_k = tl.load(XSliceOffs + pid_z)
         off_w_k = tl.load(WSliceOffs + pid_z)
@@ -178,38 +179,32 @@ def matmul_launch_metadata(grid, kernel, args):
     expected_slice_sizes = args.get("X_EXPECTED_SLICE_SIZE")
     slice_sizes = args["XSliceSizes"]
     batch_size = args.get("batch_size", 1)
+    n_rows = "unknown"
+    if expected_slice_sizes is not None:
+        n_rows = f"{expected_slice_sizes}*"
+    elif slice_sizes is not None and launch_metadata_allow_sync():
+        n_rows = int(slice_sizes.float().mean())
+
+    n_tokens = None
     if slice_sizes is not None:
-        # If annotation is given, use that to generate name for profiling.
-        if expected_slice_sizes is not None:
-            n_rows = f"{expected_slice_sizes}*"
-        elif launch_metadata_allow_sync():
-            n_rows = int(slice_sizes.float().mean())
-        else:
-            n_rows = "unknown"
         if launch_metadata_allow_sync():
-            n_tokens = float(slice_sizes.sum())
-            n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
-        elif expected_slice_sizes is not None:
-            n_tokens = expected_slice_sizes * args["N_SLICES"]
-            # This may not be totally correct (e.g., we might not be using all experts)
-            # but it's better than nothing.
-            n_w_bytes = W.numel() * W.element_size()
+            n_tokens = int(slice_sizes.sum())
         else:
-            n_tokens = None
-            n_w_bytes = 0
-        # If annotation is given, use that to generate name for profiling.
-        n_rows = f"{expected_slice_sizes}*" if expected_slice_sizes is not None else n_rows
-    else:
-        n_tokens = None
-        n_w_bytes = W.numel() * W.element_size()
+            n_tokens = slice_sizes.sum()  # n_tokens can stay in gpu
+
+    K_repr = K
     if args["RAGGED_DIMENSION"] == "K":
-        K = None if n_tokens is None else int(n_tokens)
+        K = None if n_tokens is None else n_tokens
+        K_repr = K if launch_metadata_allow_sync(
+        ) else None  # make sure K_repr is string compatible as K can be on a GPU tensor
+
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
     if batch_size > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
-    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}] stg{kernel.num_stages}"
+    ret["name"] = (
+        f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K_repr)}] stg{kernel.num_stages}")
     ep_subtile = args["EPILOGUE_SUBTILE"]
     if ep_subtile is not None and ep_subtile > 1:
         ret["name"] += f" ep/{ep_subtile}"
@@ -224,6 +219,7 @@ def matmul_launch_metadata(grid, kernel, args):
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
+    n_w_bytes = W.numel() * W.element_size()
     if slice_sizes is not None:
         assert n_tokens is not None
         n_read_rows = n_tokens
@@ -236,9 +232,9 @@ def matmul_launch_metadata(grid, kernel, args):
         else:
             n_x_bytes = n_read_rows * X.shape[-1] * X.element_size()
             n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
+            n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
 
-    ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
-
+    ret["bytes"] = n_x_bytes + n_y_bytes + n_w_bytes
     return ret
 
 
