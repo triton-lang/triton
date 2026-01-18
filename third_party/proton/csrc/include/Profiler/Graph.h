@@ -116,7 +116,7 @@ private:
   MetricBuffer *metricBuffer{};
   Runtime *runtime{};
   mutable std::mutex mutex;
-  std::map<size_t, std::shared_ptr<Slot>> pool;
+  std::map<void *, std::map<size_t, std::shared_ptr<Slot>>> pool;
 };
 
 } // namespace proton

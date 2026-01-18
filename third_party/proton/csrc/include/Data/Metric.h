@@ -10,6 +10,8 @@
 #include <set>
 #include <shared_mutex>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -423,18 +425,22 @@ public:
   }
 
   template <typename Func> void flush(Func callback, bool flushAll = false) {
-    std::vector<DeviceBuffer> buffersToFlush;
+    std::vector<std::pair<void *, DeviceBuffer>> buffersToFlush;
     if (flushAll) {
       std::lock_guard<std::mutex> lock(bufferMutex);
       for (auto &[device, buffer] : deviceBuffers) {
-        buffersToFlush.push_back(buffer);
+        buffersToFlush.emplace_back(device, buffer);
       }
     } else {
-      buffersToFlush.push_back(getOrCreateBuffer());
+      buffersToFlush.emplace_back(runtime->getDevice(), getOrCreateBuffer());
     }
-    for (auto &buffer : buffersToFlush) {
+    for (auto &[device, buffer] : buffersToFlush) {
       synchronize(buffer);
-      callback(buffer.hostPtr);
+      if constexpr (std::is_invocable_v<Func, void *, uint8_t *>) {
+        callback(device, buffer.hostPtr);
+      } else {
+        callback(buffer.hostPtr);
+      }
     }
   }
 
