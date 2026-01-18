@@ -19,6 +19,7 @@ public:
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
+  void clusterBarrier(Location loc, RewriterBase &rewriter) const override;
 
   void warpSync(Location loc, RewriterBase &rewriter) const override;
 
