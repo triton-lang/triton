@@ -25,10 +25,17 @@ size_t Data::advancePhase() {
 }
 
 void Data::clear(size_t phase, bool clearUpToPhase) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-
-  if (clearUpToPhase) {
+  // No locking needed.
+  // If phase == currentPhase, we expect users to call clear right after
+  // deactivating the profiler, without any GPU events in between.
+  // If phase < currentPhase, clearing a past phase is safe without locks.
+  if (clearUpToPhase)
     phaseStore->clearUpToInclusive(phase);
+  else
+    phaseStore->clearPhase(phase);
+
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (clearUpToPhase) {
     for (auto it = activePhases.begin(); it != activePhases.end();) {
       if (*it <= phase) {
         it = activePhases.erase(it);
@@ -37,13 +44,10 @@ void Data::clear(size_t phase, bool clearUpToPhase) {
       }
     }
   } else {
-    phaseStore->clearPhase(phase);
     activePhases.erase(phase);
   }
 
   // In case the current phase is cleared, recreate its pointer.
-  // Caution: we expect users to call clear only after deactivating the
-  // profiler, so data races are not protected here.
   currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
   activePhases.insert(currentPhase);
 }
