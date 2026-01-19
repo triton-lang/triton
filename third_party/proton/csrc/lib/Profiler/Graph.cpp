@@ -81,7 +81,9 @@ void PendingGraphPool::push(
     if (inserted)
       poolIt->second = std::make_shared<Slot>();
     slot = poolIt->second;
+  }
 
+  {
     std::lock_guard<std::mutex> slotLock(slot->mutex);
     if (slot->queue == std::nullopt) {
       const auto startBufferOffset =
@@ -89,7 +91,9 @@ void PendingGraphPool::push(
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
     slot->queue->push(numNodes, dataToEntryIds);
-
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex);
     auto &remainingCapacity =
         deviceRemainingCapacity.try_emplace(device, metricBuffer->getCapacity())
             .first->second;
@@ -110,27 +114,24 @@ void PendingGraphPool::peek(size_t phase) {
       }
     }
   }
+  std::vector<std::tuple<void *, size_t, size_t>> devicePhaseNumNodes;
   for (auto &[device, slotPtr] : slots) {
     auto numNodes = size_t{0};
-    {
-      std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
-      if (slotPtr->queue == std::nullopt)
-        continue;
-      auto &queue = slotPtr->queue.value();
-      numNodes = queue.numNodes;
-      metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
-        emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
-                          queue);
-      });
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      auto deviceIt = pool.find(device);
-      if (deviceIt != pool.end()) {
-        deviceIt->second.erase(phase);
-        if (deviceIt->second.empty())
-          pool.erase(deviceIt);
-      }
+    std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
+    if (slotPtr->queue == std::nullopt)
+      continue;
+    auto &queue = slotPtr->queue.value();
+    numNodes = queue.numNodes;
+    metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
+      emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
+                        queue);
+    });
+    devicePhaseNumNodes.emplace_back(device, phase, numNodes);
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto &[device, phase, numNodes] : devicePhaseNumNodes) {
+      pool[device].erase(phase);
       deviceRemainingCapacity[device] += bytesForNodes(numNodes);
     }
   }
