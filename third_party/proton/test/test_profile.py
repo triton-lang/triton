@@ -348,8 +348,8 @@ def test_clear_data_up_to_phase(tmp_path: pathlib.Path):
 
     # Clear a range of phases.
     proton.data.clear(session, phase=phase1, clear_up_to_phase=True)
-    with pytest.raises(RuntimeError, match="has no data"):
-        _ = proton.data.get(session, phase=phase1)
+    database = proton.data.get(session, phase=phase1)
+    assert len(database[0]["children"]) == 0
 
     proton.finalize()
 
