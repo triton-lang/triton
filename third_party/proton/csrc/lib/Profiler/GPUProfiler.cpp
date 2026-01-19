@@ -11,28 +11,41 @@ namespace detail {
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
+                             PeriodicFlushTarget &periodicFlushingTarget,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName) {
   periodicFlushingEnabled = true;
-  if (modeAndOptions.size() < 2)
-    periodicFlushingFormat = "hatchet";
+  periodicFlushingFormat = "hatchet";
+  periodicFlushingTarget = PeriodicFlushTarget::Disk;
 
-  auto delimiterPos = modeAndOptions[1].find('=');
-  if (delimiterPos != std::string::npos) {
-    const std::string key = modeAndOptions[1].substr(0, delimiterPos);
-    const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
-    if (key != "format") {
+  for (size_t i = 1; i < modeAndOptions.size(); ++i) {
+    auto delimiterPos = modeAndOptions[i].find('=');
+    if (delimiterPos == std::string::npos) {
+      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                  ": unsupported option: " + modeAndOptions[i]);
+    }
+    const std::string key = modeAndOptions[i].substr(0, delimiterPos);
+    const std::string value = modeAndOptions[i].substr(delimiterPos + 1);
+    if (key == "format") {
+      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
+          value != "hatchet") {
+        throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                    ": unsupported format: " + value);
+      }
+      periodicFlushingFormat = value;
+    } else if (key == "target") {
+      if (value == "disk") {
+        periodicFlushingTarget = PeriodicFlushTarget::Disk;
+      } else if (value == "buffer") {
+        periodicFlushingTarget = PeriodicFlushTarget::Buffer;
+      } else {
+        throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                    ": unsupported target: " + value);
+      }
+    } else {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported option key: " + key);
     }
-    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
-      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
-                                  ": unsupported format: " + value);
-    }
-    periodicFlushingFormat = value;
-  } else {
-    periodicFlushingFormat = "hatchet";
   }
 }
 
@@ -49,6 +62,7 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
 
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    PeriodicFlushTarget periodicFlushingTarget,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -94,8 +108,11 @@ void flushDataPhasesImpl(
 
     for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
          startPhase++) {
-      auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
-                           periodicFlushingFormat;
+      const bool flushToBuffer =
+          (periodicFlushingTarget == PeriodicFlushTarget::Buffer);
+      auto pathWithPhase =
+          path + ".part_" + std::to_string(startPhase) + "." +
+          periodicFlushingFormat;
 
       if (periodicFlushingFormat == "hatchet" ||
           periodicFlushingFormat == "chrome_trace") {
@@ -112,7 +129,9 @@ void flushDataPhasesImpl(
           jsonStr = data->toJsonString(startPhase);
         }
 
-        if (timingEnabled) {
+        if (flushToBuffer) {
+          data->enqueueFlushedJson(startPhase, std::move(jsonStr));
+        } else if (timingEnabled) {
           const auto t0 = Clock::now();
           std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
           ofs << jsonStr;
@@ -140,7 +159,9 @@ void flushDataPhasesImpl(
           msgPack = data->toMsgPack(startPhase);
         }
 
-        if (timingEnabled) {
+        if (flushToBuffer) {
+          data->enqueueFlushedMsgPack(startPhase, std::move(msgPack));
+        } else if (timingEnabled) {
           const auto t0 = Clock::now();
           std::ofstream ofs(pathWithPhase,
                             std::ios::out | std::ios::binary | std::ios::trunc);

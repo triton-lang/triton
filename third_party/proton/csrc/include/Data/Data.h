@@ -5,9 +5,12 @@
 #include "Metric.h"
 #include "PhaseStore.h"
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <shared_mutex>
@@ -55,6 +58,8 @@ struct DataEntry {
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoFlushedPhase = std::numeric_limits<size_t>::max();
+  using FlushedJson = std::pair<size_t, std::string>;
+  using FlushedMsgPack = std::pair<size_t, std::vector<uint8_t>>;
 
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
@@ -88,6 +93,14 @@ public:
 
   /// Check if the given phase has been flushed.
   bool isPhaseFlushed(size_t phase) const;
+
+  /// Enqueue flushed payloads for in-memory draining.
+  void enqueueFlushedJson(size_t phase, std::string payload);
+  void enqueueFlushedMsgPack(size_t phase, std::vector<uint8_t> payload);
+
+  /// Dequeue flushed payloads for in-memory draining.
+  std::optional<FlushedJson> popFlushedJson();
+  std::optional<FlushedMsgPack> popFlushedMsgPack();
 
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
@@ -164,6 +177,10 @@ private:
 
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
+
+  std::mutex flushedMutex;
+  std::deque<FlushedJson> flushedJsonQueue;
+  std::deque<FlushedMsgPack> flushedMsgPackQueue;
 };
 
 typedef std::map<Data *, DataEntry> DataToEntryMap;
