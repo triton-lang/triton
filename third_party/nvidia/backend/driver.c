@@ -650,10 +650,15 @@ bool extractPointer(void *ptr, PyObject *obj) {
     return true;
   }
   PyObject *ret = PyObject_CallMethodNoArgs(obj, data_ptr_str);
-  if (!PyLong_Check(ret)) {
+  if (!ret) {
     PyErr_SetString(
         PyExc_TypeError,
         "Pointer argument must be either uint64 or have data_ptr method");
+    return false;
+  }
+  if (!PyLong_Check(ret)) {
+    PyErr_SetString(PyExc_TypeError,
+                    "data_ptr method of Pointer object must return 64-bit int");
     return false;
   }
   *dev_ptr = PyLong_AsUnsignedLongLong(ret);
