@@ -26,7 +26,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 	// CHECK: local_alloc
 	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: inval_barrier
   tt.func @inval_barrier() {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -47,7 +46,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 	// CHECK: local_alloc
 	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: barrier_expect
   tt.func @barrier_expect(%pred : i1) {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
