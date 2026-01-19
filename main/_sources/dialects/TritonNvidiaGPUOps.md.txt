@@ -729,7 +729,7 @@ Syntax:
 
 ```
 operation ::= `ttng.tmem_load` $src `` custom<Token>($dep, type($token))
-              attr-dict `:` qualified(type($src)) `->` type($result)
+              attr-dict `:` qualified(type($src)) `->` type($result) (`,` type($red)^)?
 ```
 
 This is similar to ttg.local_load except the result layout is restricted to only few possibility.
@@ -739,7 +739,50 @@ This operation takes and produces an optional token to indicate TMEM read
 on its source operand. When the tokens are present, they can
 be used to check aliasing and modref on the TMEM buffer.
 
-Traits: `VerifyTensorLayoutsTrait`
+Optional reduction modifier:
+When `redOp` is specified, the load operation additionally performs an
+element-wise reduction along the N-dimension of the input and produces a
+second result tensor `red`. For a input of shape `[M, N]`, the
+reduced result has shape `[M]`, containing one reduced value per "slice"
+of the N-dimension.
+
+Currently restricted to f32 element type.
+
+- redOp: Specifies the reduction operation (MIN or MAX) to apply along
+         the N-dimension. When set, the `red` result must be present.
+- abs:   When true, applies absolute value to each element before performing
+         the reduction. Only valid when `redOp` is specified.
+- NaN:   When true, the reduction propagates NaN values (if any input element
+         in a slice is NaN, the corresponding reduced value is NaN).
+         When false, NaN values are ignored during reduction.
+         Only valid when `redOp` is specified.
+
+Example:
+  Input in TMEM of shape[M=2, N=4]:
+    [[ 1.0, 3.0, 2.0, 4.0],
+     [-5.0, 1.0, 8.0, 2.0]]
+
+  With redOp=MAX:
+    result = [[ 1.0, 3.0, 2.0, 4.0],   // unchanged
+              [-5.0, 1.0, 8.0, 2.0]]
+    red    = [4.0, 8.0]               // max along N per row
+
+  With redOp=MIN, abs=true:
+    red    = [1.0, 1.0]               // min of |values| per row
+
+This operation lowers to hardware-accelerated reduction via the PTX
+tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.
+
+Traits: `AttrSizedResultSegments`, `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>redOp</code></td><td>::mlir::triton::nvidia_gpu::TMEMLoadReduceModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2</td></tr>
+<tr><td><code>abs</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>NaN</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
 
 #### Operands:
 
@@ -754,6 +797,7 @@ Traits: `VerifyTensorLayoutsTrait`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
 | `token` | async token type |
+| `red` | ranked tensor of floating-point or integer or ptr values |
 
 
 ### `ttng.tmem_store` (triton::nvidia_gpu::TMEMStoreOp)
