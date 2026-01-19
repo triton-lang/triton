@@ -82,7 +82,6 @@ void PendingGraphPool::push(
       poolIt->second = std::make_shared<Slot>();
     slot = poolIt->second;
   }
-
   {
     std::lock_guard<std::mutex> slotLock(slot->mutex);
     if (slot->queue == std::nullopt) {
