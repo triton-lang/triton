@@ -24,24 +24,43 @@ size_t Data::advancePhase() {
   return currentPhase;
 }
 
-void Data::clear(size_t phase) {
-  phaseStore->clearUpToInclusive(phase);
+void Data::clear(size_t phase, bool clearUpToPhase) {
+  // No locking needed.
+  // If phase == currentPhase, we expect users to call clear right after
+  // deactivating the profiler, without any GPU events in between.
+  // If phase < currentPhase, clearing a past phase is safe without locks.
+  if (clearUpToPhase)
+    phaseStore->clearUpToInclusive(phase);
+  else
+    phaseStore->clearPhase(phase);
+
   std::unique_lock<std::shared_mutex> lock(mutex);
+  if (clearUpToPhase) {
+    for (auto it = activePhases.begin(); it != activePhases.end();) {
+      if (*it <= phase) {
+        it = activePhases.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  } else {
+    activePhases.erase(phase);
+  }
+
+  // In case the current phase is cleared, recreate its pointer.
   currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
-  activePhases.clear();
-  for (phase += 1; phase <= currentPhase; phase++)
-    activePhases.insert(phase);
+  activePhases.insert(currentPhase);
 }
 
-void Data::updateFlushedPhase(size_t phase) {
+void Data::updateCompletePhase(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  if (flushedPhase == kNoFlushedPhase || phase > flushedPhase)
-    flushedPhase = phase;
+  if (completePhase == kNoCompletePhase || phase > completePhase)
+    completePhase = phase;
 }
 
-bool Data::isPhaseFlushed(size_t phase) const {
+bool Data::isPhaseComplete(size_t phase) const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
+  return completePhase != kNoCompletePhase && completePhase >= phase;
 }
 
 void Data::dump(const std::string &outputFormat) {

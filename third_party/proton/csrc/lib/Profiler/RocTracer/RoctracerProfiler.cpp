@@ -201,8 +201,9 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
-    runtime = &HipRuntime::instance();
-    metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    auto runtime = &HipRuntime::instance();
+    profiler.metricBuffer =
+        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
   }
   virtual ~RoctracerProfilerPimpl() = default;
 
@@ -387,7 +388,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-  profiler.flushDataPhases(dataFlushedPhases, dataPhases);
+  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
+                           profiler.pendingGraphPool.get());
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {

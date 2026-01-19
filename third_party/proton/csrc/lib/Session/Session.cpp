@@ -100,6 +100,11 @@ std::unique_ptr<Session> SessionManager::makeSession(
   return std::unique_ptr<Session>(session);
 }
 
+Session *SessionManager::getSessionOrThrow(size_t sessionId) {
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId].get();
+}
+
 void SessionManager::activateSession(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   activateSessionImpl(sessionId);
@@ -311,23 +316,14 @@ void SessionManager::setState(std::optional<Context> context) {
 
 size_t SessionManager::getContextDepth(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->getContextDepth();
+  return getSessionOrThrow(sessionId)->getContextDepth();
 }
 
 std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
                                                     size_t phase) {
-  // TODO: avoid duplicate code with getData()
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  auto *profiler = sessions[sessionId]->getProfiler();
-  auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
-    throw std::runtime_error(
-        "Cannot get data while the session is active. Please deactivate the "
-        "session first.");
-  }
-  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  auto *session = getSessionOrThrow(sessionId);
+  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
@@ -337,15 +333,8 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
 
 std::string SessionManager::getData(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  auto *profiler = sessions[sessionId]->getProfiler();
-  auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
-    throw std::runtime_error(
-        "Cannot get data while the session is active. Please deactivate the "
-        "session first.");
-  }
-  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  auto *session = getSessionOrThrow(sessionId);
+  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
@@ -353,29 +342,20 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   return treeData->toJsonString(phase);
 }
 
-void SessionManager::clearData(size_t sessionId, size_t phase) {
+void SessionManager::clearData(size_t sessionId, size_t phase,
+                               bool clearUpToPhase) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  auto *profiler = sessions[sessionId]->getProfiler();
-  auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
-    throw std::runtime_error(
-        "Cannot clear data while the session is active. Please deactivate the "
-        "session first.");
-  }
-  sessions[sessionId]->data->clear(phase);
+  getSessionOrThrow(sessionId)->data->clear(phase, clearUpToPhase);
 }
 
 size_t SessionManager::advanceDataPhase(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->data->advancePhase();
+  return getSessionOrThrow(sessionId)->data->advancePhase();
 }
 
-bool SessionManager::isDataPhaseFlushed(size_t sessionId, size_t phase) {
+bool SessionManager::isDataPhaseComplete(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->data->isPhaseFlushed(phase);
+  return getSessionOrThrow(sessionId)->data->isPhaseComplete(phase);
 }
 
 } // namespace proton
