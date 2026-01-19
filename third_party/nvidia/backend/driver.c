@@ -1,5 +1,6 @@
 #include "cuda.h"
 #include <dlfcn.h>
+#include <stdalign.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -668,7 +669,7 @@ bool extractPointer(void *ptr, PyObject *obj) {
                  "(cpu tensor?)");
     return false;
   }
-  return true;
+  return gpuAssert(status, __FILE__, __LINE__);
 }
 
 bool extractI8(void *ptr, PyObject *obj) {
@@ -712,7 +713,7 @@ bool extractU64(void *ptr, PyObject *obj) {
 }
 
 bool extractFP16(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   uint16_t result;
   // from https://github.com/python/pythoncapi-compat
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 &&            \
@@ -726,7 +727,7 @@ bool extractFP16(void *ptr, PyObject *obj) {
 }
 
 bool extractBF16(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   float f32 = (float)temp_double;
   uint32_t u32 = *(uint32_t *)&f32;
   *((uint16_t *)ptr) = (u32 >> 16);
@@ -734,14 +735,14 @@ bool extractBF16(void *ptr, PyObject *obj) {
 }
 
 bool extractFP32(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   float f32 = (float)temp_double;
   *((uint32_t *)ptr) = *(uint32_t *)&f32;
   return PyErr_Occurred() == NULL;
 }
 
 bool extractFP64(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   *((uint64_t *)ptr) = *(uint64_t *)&temp_double;
   return PyErr_Occurred() == NULL;
 }
@@ -749,14 +750,26 @@ bool extractFP64(void *ptr, PyObject *obj) {
 // Extract a CUtensorMap descriptor from a python object, and store it to the
 // memory location pointed by ptr.
 bool extractTmaDesc(void *ptr, PyObject *obj) {
-  CUtensorMap *tensor_map = &((PyCUtensorMapObject *)obj)->tensorMap;
-  if (tensor_map == NULL) {
+  if (sizeof(CUtensorMap *) != 8) {
+    PyErr_SetString(PyExc_SystemError,
+                    "getTmaDesc() requires 64-bit compilation");
+    return false;
+  }
+  if (Py_TYPE(obj) != &PyCUtensorMapType) {
     PyErr_Format(PyExc_TypeError,
                  "object must be of type PyCUtensorMap, got %s",
                  Py_TYPE(obj)->tp_name);
     return false;
   }
-  *((CUtensorMap *)ptr) = *tensor_map;
+  *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
+  uintptr_t align_128 = (uintptr_t)ptr & (128 - 1);
+  if (align_128 != 0) {
+    PyErr_Format(
+        PyExc_ValueError,
+        "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld",
+        align_128);
+    return false;
+  }
   return true;
 }
 
@@ -767,6 +780,7 @@ typedef bool (*ExtractorFunc)(void *ptr, PyObject *obj);
 typedef struct {
   ExtractorFunc extract;
   size_t size;
+  size_t alignment;
   const char *name[MAX_NAMES_PER_EXTRACTOR];
 } Extractor;
 
@@ -839,6 +853,7 @@ Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
                                          .name = {"fp64"}},
     [EXTRACTOR_NVTMADESC_INDEX] = (Extractor){.extract = extractTmaDesc,
                                               .size = sizeof(CUtensorMap),
+                                              .alignment = alignof(CUtensorMap),
                                               .name = {"nvTmaDesc"}},
 };
 
@@ -931,8 +946,7 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_annotations = PySequence_Fast(
       arg_annotations, "Expected arg_annotations to be a sequence or iterable");
   if (!fast_annotations) {
-    Py_DECREF(fast_annotations);
-    return false;
+    goto cleanup;
   }
   Py_ssize_t num_annotations = PySequence_Fast_GET_SIZE(fast_annotations);
   PyObject **annotations = PySequence_Fast_ITEMS(fast_annotations);
@@ -940,7 +954,6 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_args = PySequence_Fast(
       kernel_args, "Expected kernel_args to be a sequence or iterable");
   if (!fast_args) {
-    Py_DECREF(fast_args);
     goto cleanup;
   }
   PyObject **args = PySequence_Fast_ITEMS(fast_args);
@@ -968,8 +981,8 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   return true;
 
 cleanup:
-  Py_DECREF(fast_annotations);
-  Py_DECREF(fast_args);
+  Py_XDECREF(fast_annotations);
+  Py_XDECREF(fast_args);
   return false;
 }
 
@@ -1045,8 +1058,24 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
     if (extractor.extract == NULL) {
       goto cleanup;
     }
+
+    size_t alignment = extractor.alignment;
+    if (alignment != 0) {
+      // Allocate enough space on the stack to guarantee an aligned block.
+      size_t size_with_alignment = extractor.size + alignment - 1;
+      void *storage_ptr = alloca(size_with_alignment);
+      void *aligned_ptr = (void *)((((uintptr_t)storage_ptr) + alignment - 1) &
+                                   ~(alignment - 1));
+      if (aligned_ptr == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
+        goto cleanup;
+      }
+      params[params_idx] = aligned_ptr;
+    } else {
+      params[params_idx] = alloca(extractor.size);
+    }
+
     PyObject *current_arg = args_data[i];
-    params[params_idx] = alloca(extractor.size);
     if (!extractor.extract(params[params_idx++], current_arg)) {
       goto cleanup;
     }

@@ -646,7 +646,6 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
 }
 
 static PyObject *data_ptr_str = NULL;
-static PyObject *py_tdm_descriptor_type = NULL;
 
 bool extractPointer(void *ptr, PyObject *obj) {
   hipDeviceptr_t *dev_ptr = ptr;
@@ -723,7 +722,7 @@ bool extractU64(void *ptr, PyObject *obj) {
 }
 
 bool extractFP16(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   uint16_t result;
   // from https://github.com/python/pythoncapi-compat
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 &&            \
@@ -737,7 +736,7 @@ bool extractFP16(void *ptr, PyObject *obj) {
 }
 
 bool extractBF16(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   float f32 = (float)temp_double;
   uint32_t u32 = *(uint32_t *)&f32;
   *((uint16_t *)ptr) = (u32 >> 16);
@@ -745,14 +744,14 @@ bool extractBF16(void *ptr, PyObject *obj) {
 }
 
 bool extractFP32(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   float f32 = (float)temp_double;
   *((uint32_t *)ptr) = *(uint32_t *)&f32;
   return PyErr_Occurred() == NULL;
 }
 
 bool extractFP64(void *ptr, PyObject *obj) {
-  double temp_double = (double)PyFloat_AsDouble(obj);
+  double temp_double = PyFloat_AsDouble(obj);
   *((uint64_t *)ptr) = *(uint64_t *)&temp_double;
   return PyErr_Occurred() == NULL;
 }
@@ -942,8 +941,7 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_annotations = PySequence_Fast(
       arg_annotations, "Expected arg_annotations to be a sequence or iterable");
   if (!fast_annotations) {
-    Py_DECREF(fast_annotations);
-    return false;
+    goto cleanup;
   }
   Py_ssize_t num_annotations = PySequence_Fast_GET_SIZE(fast_annotations);
   PyObject **annotations = PySequence_Fast_ITEMS(fast_annotations);
@@ -951,7 +949,6 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_args = PySequence_Fast(
       kernel_args, "Expected kernel_args to be a sequence or iterable");
   if (!fast_args) {
-    Py_DECREF(fast_args);
     goto cleanup;
   }
   PyObject **args = PySequence_Fast_ITEMS(fast_args);
@@ -979,8 +976,8 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   return true;
 
 cleanup:
-  Py_DECREF(fast_annotations);
-  Py_DECREF(fast_args);
+  Py_XDECREF(fast_annotations);
+  Py_XDECREF(fast_args);
   return false;
 }
 
