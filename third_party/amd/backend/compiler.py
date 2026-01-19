@@ -195,7 +195,8 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        if not amd.supports_tdm(options.arch):
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
