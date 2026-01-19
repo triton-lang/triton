@@ -303,8 +303,11 @@ def make_default_opt_flags_nvidia(
         occupancy_target = 16 // num_warps
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
+    max_reg_per_thread = 256
     if is_persistent:
         maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
+        # Hardware limit
+        maxnreg = min(max_reg_per_thread, maxnreg)
     else:
         maxnreg = None
 
