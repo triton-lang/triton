@@ -183,6 +183,43 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
+      "pop_flushed_path_metrics",
+      [](size_t sessionId) -> pybind11::object {
+        auto result =
+            SessionManager::instance().popFlushedPathMetrics(sessionId);
+        if (!result) {
+          return pybind11::none();
+        }
+        pybind11::list metricsList;
+        for (const auto &metric : result->second) {
+          auto timeObj =
+              metric.timeNs ? pybind11::cast(*metric.timeNs) : pybind11::none();
+          auto flopsObj =
+              metric.flops ? pybind11::cast(*metric.flops) : pybind11::none();
+          metricsList.append(
+              pybind11::make_tuple(metric.path, timeObj, flopsObj));
+        }
+        return pybind11::make_tuple(result->first, metricsList);
+      },
+      pybind11::arg("sessionId"));
+  m.def(
+      "get_path_metrics",
+      [](size_t sessionId, size_t phase) -> pybind11::list {
+        auto metrics =
+            SessionManager::instance().getPathMetrics(sessionId, phase);
+        pybind11::list metricsList;
+        for (const auto &metric : metrics) {
+          auto timeObj =
+              metric.timeNs ? pybind11::cast(*metric.timeNs) : pybind11::none();
+          auto flopsObj =
+              metric.flops ? pybind11::cast(*metric.flops) : pybind11::none();
+          metricsList.append(
+              pybind11::make_tuple(metric.path, timeObj, flopsObj));
+        }
+        return metricsList;
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
+  m.def(
       "clear_data",
       [](size_t sessionId, size_t phase) {
         SessionManager::instance().clearData(sessionId, phase);

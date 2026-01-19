@@ -5,9 +5,12 @@
 #include "Metric.h"
 #include "PhaseStore.h"
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <shared_mutex>
@@ -52,6 +55,12 @@ struct DataEntry {
   }
 };
 
+struct PathMetrics {
+  std::string path;
+  std::optional<double> timeNs;
+  std::optional<double> flops;
+};
+
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoFlushedPhase = std::numeric_limits<size_t>::max();
@@ -89,11 +98,22 @@ public:
   /// Check if the given phase has been flushed.
   bool isPhaseFlushed(size_t phase) const;
 
+  /// Enqueue flushed payloads for in-memory draining.
+  void enqueueFlushedPathMetrics(size_t phase,
+                                 std::vector<PathMetrics> metrics);
+
+  /// Dequeue flushed payloads for in-memory draining.
+  std::optional<std::pair<size_t, std::vector<PathMetrics>>>
+  popFlushedPathMetrics();
+
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
 
   /// To MsgPack
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
+
+  /// To per-path metrics
+  virtual std::vector<PathMetrics> toPathMetrics(size_t phase) const = 0;
 
   /// Add an op to the data of the current phase.
   /// If `opName` is empty, just use the current context as is.
@@ -164,6 +184,10 @@ private:
 
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
+
+  std::mutex flushedMutex;
+  std::deque<std::pair<size_t, std::vector<PathMetrics>>>
+      flushedPathMetricsQueue;
 };
 
 typedef std::map<Data *, DataEntry> DataToEntryMap;

@@ -85,3 +85,31 @@ def clear(session: Optional[int] = 0, phase: int = 0) -> None:
     if flags.command_line and session != 0:
         raise ValueError("Only one session can be cleared when running from the command line.")
     libproton.clear_data(session, phase)
+
+
+def pop_flushed_path_metrics(session: Optional[int] = 0):
+    """
+    Pops one flushed per-path metrics payload from the in-memory periodic flushing buffer.
+
+    Returns:
+        Optional[Tuple[int, List[Tuple[str, Optional[float], Optional[float]]]]]
+    """
+    if session is None:
+        return None
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can be drained when running from the command line.")
+    return libproton.pop_flushed_path_metrics(session)
+
+
+def get_path_metrics(session: Optional[int] = 0, phase: int = 0):
+    """
+    Retrieves per-path metrics for a given session/phase.
+
+    Returns:
+        List[Tuple[str, Optional[float], Optional[float]]]
+    """
+    if session is None:
+        return []
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can be retrieved when running from the command line.")
+    return libproton.get_path_metrics(session, phase)

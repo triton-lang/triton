@@ -44,6 +44,23 @@ bool Data::isPhaseFlushed(size_t phase) const {
   return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
 }
 
+void Data::enqueueFlushedPathMetrics(size_t phase,
+                                     std::vector<PathMetrics> metrics) {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  flushedPathMetricsQueue.emplace_back(phase, std::move(metrics));
+}
+
+std::optional<std::pair<size_t, std::vector<PathMetrics>>>
+Data::popFlushedPathMetrics() {
+  std::lock_guard<std::mutex> lock(flushedMutex);
+  if (flushedPathMetricsQueue.empty()) {
+    return std::nullopt;
+  }
+  auto payload = std::move(flushedPathMetricsQueue.front());
+  flushedPathMetricsQueue.pop_front();
+  return payload;
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 

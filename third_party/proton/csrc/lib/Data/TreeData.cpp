@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <stdexcept>
@@ -21,6 +22,21 @@ namespace proton {
 
 namespace {
 
+double metricValueToDouble(const MetricValueType &value, bool &ok) {
+  ok = true;
+  if (std::holds_alternative<uint64_t>(value)) {
+    return static_cast<double>(std::get<uint64_t>(value));
+  }
+  if (std::holds_alternative<int64_t>(value)) {
+    return static_cast<double>(std::get<int64_t>(value));
+  }
+  if (std::holds_alternative<double>(value)) {
+    return std::get<double>(value);
+  }
+  ok = false;
+  return 0.0;
+}
+
 const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
     kDeviceTypeNames = []() {
       std::array<std::string, static_cast<size_t>(DeviceType::COUNT)> names;
@@ -32,7 +48,120 @@ const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
 
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
+struct PathListRule {
+  std::string end_prefix;
+  std::vector<std::string> contains_prefixes;
+};
+
+std::string trimToken(std::string token) {
+  auto first = token.find_first_not_of(" \t");
+  if (first == std::string::npos) {
+    return "";
+  }
+  auto last = token.find_last_not_of(" \t");
+  return token.substr(first, last - first + 1);
+}
+
+std::vector<std::string> splitTokenList(const std::string &raw, char sep) {
+  std::vector<std::string> values;
+  size_t start = 0;
+  while (start <= raw.size()) {
+    auto end = raw.find(sep, start);
+    if (end == std::string::npos) {
+      end = raw.size();
+    }
+    auto token = trimToken(raw.substr(start, end - start));
+    if (!token.empty()) {
+      values.push_back(token);
+    }
+    start = end + 1;
+  }
+  return values;
+}
+
+std::vector<PathListRule> parsePathMetricsRules(const std::string &raw) {
+  std::vector<PathListRule> values;
+  if (raw.empty()) {
+    return values;
+  }
+  for (const auto &ruleToken : splitTokenList(raw, ';')) {
+    PathListRule rule;
+    for (const auto &entry : splitTokenList(ruleToken, ',')) {
+      auto eq = entry.find('=');
+      if (eq == std::string::npos) {
+        continue;
+      }
+      auto key = trimToken(entry.substr(0, eq));
+      auto value = trimToken(entry.substr(eq + 1));
+      if (key == "end" || key == "end_prefix") {
+        rule.end_prefix = value;
+      } else if (key == "contains") {
+        rule.contains_prefixes = splitTokenList(value, '|');
+      }
+    }
+    if (!rule.end_prefix.empty()) {
+      values.push_back(std::move(rule));
+    }
+  }
+  return values;
+}
+
+struct PathMetricsRuleState {
+  std::mutex mutex;
+  std::string raw;
+  std::vector<PathListRule> parsed;
+  bool parsedReady = false;
+};
+
+PathMetricsRuleState &pathMetricsRuleState() {
+  static PathMetricsRuleState state;
+  return state;
+}
+
+const std::vector<PathListRule> &getPathMetricsRules() {
+  auto &state = pathMetricsRuleState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  if (!state.parsedReady) {
+    state.parsed = parsePathMetricsRules(state.raw);
+    state.parsedReady = true;
+  }
+  return state.parsed;
+}
+
+bool matchesSegmentPrefix(std::string_view path,
+                          const std::vector<std::string> &prefixes) {
+  if (prefixes.empty()) {
+    return true;
+  }
+  size_t start = 0;
+  while (start <= path.size()) {
+    auto end = path.find('/', start);
+    if (end == std::string_view::npos) {
+      end = path.size();
+    }
+    auto segment = path.substr(start, end - start);
+    for (const auto &prefix : prefixes) {
+      if (segment.rfind(prefix, 0) == 0) {
+        return true;
+      }
+    }
+    if (end == path.size()) {
+      break;
+    }
+    start = end + 1;
+  }
+  return false;
+}
+
 } // namespace
+
+void TreeData::setPathMetricsRules(const std::string &rules) {
+  auto &state = pathMetricsRuleState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.raw = rules;
+  state.parsedReady = false;
+  state.parsed.clear();
+}
 
 class TreeData::Tree {
 public:
@@ -149,6 +278,158 @@ private:
   // tree node id -> tree node
   std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
+
+std::vector<PathMetrics> TreeData::toPathMetrics(size_t phase) const {
+  return treePhases.withPtr(phase, [&](Tree *tree) {
+    std::vector<PathMetrics> results;
+    std::string path;
+
+    constexpr size_t rootId = 0;
+    const auto &rules = getPathMetricsRules();
+    const auto trimStepPrefix =
+        [](std::string_view inPath) -> std::string_view {
+      auto stepPos = inPath.find("/step");
+      if (stepPos != std::string_view::npos) {
+        auto stepEnd = inPath.find('/', stepPos + 1);
+        if (stepEnd == std::string_view::npos) {
+          return std::string_view();
+        }
+        return inPath.substr(stepEnd + 1);
+      }
+      if (inPath.rfind("step", 0) == 0) {
+        auto stepEnd = inPath.find('/');
+        if (stepEnd == std::string_view::npos) {
+          return std::string_view();
+        }
+        return inPath.substr(stepEnd + 1);
+      }
+      return inPath;
+    };
+    const auto computeSelfMetrics = [&](const Tree::TreeNode &node,
+                                        size_t nodeId)
+        -> std::pair<std::optional<double>, std::optional<double>> {
+      std::optional<double> selfTimeNs;
+      std::optional<double> selfFlops;
+      if (nodeId == rootId) {
+        return {selfTimeNs, selfFlops};
+      }
+      auto kernelIt = node.metrics.find(MetricKind::Kernel);
+      if (kernelIt != node.metrics.end()) {
+        auto *kernelMetric =
+            static_cast<KernelMetric *>(kernelIt->second.get());
+        auto duration =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+        selfTimeNs = static_cast<double>(duration);
+      }
+      double flopsSum = 0.0;
+      for (auto &[name, flexibleMetric] : node.flexibleMetrics) {
+        if (name.rfind("flops", 0) != 0) {
+          continue;
+        }
+        bool ok = false;
+        auto value = metricValueToDouble(flexibleMetric.getValue(0), ok);
+        if (ok) {
+          flopsSum += value;
+        }
+      }
+      if (flopsSum > 0.0) {
+        selfFlops = flopsSum;
+      }
+      return {selfTimeNs, selfFlops};
+    };
+    const auto addOptional = [](double &sum, bool &hasValue,
+                                const std::optional<double> &value) {
+      if (value) {
+        sum += *value;
+        hasValue = true;
+      }
+    };
+
+    if (rules.empty()) {
+      auto walk = [&](auto &&self, size_t nodeId) -> void {
+        auto &node = tree->getNode(nodeId);
+        auto previousPath = path;
+        if (nodeId != rootId) {
+          if (!path.empty()) {
+            path += "/";
+          }
+          path += node.name;
+        }
+
+        auto [selfTimeNs, selfFlops] = computeSelfMetrics(node, nodeId);
+
+        if (node.children.empty() && (selfTimeNs || selfFlops)) {
+          std::string_view outPath = trimStepPrefix(path);
+          if (!outPath.empty()) {
+            results.push_back({std::string(outPath), selfTimeNs, selfFlops});
+          }
+        }
+
+        for (const auto &child : node.children) {
+          self(self, child.id);
+        }
+
+        path = std::move(previousPath);
+      };
+
+      walk(walk, rootId);
+      return results;
+    }
+
+    auto walk = [&](auto &&self, size_t nodeId)
+        -> std::pair<std::optional<double>, std::optional<double>> {
+      auto &node = tree->getNode(nodeId);
+      auto previousPath = path;
+      if (nodeId != rootId) {
+        if (!path.empty()) {
+          path += "/";
+        }
+        path += node.name;
+      }
+
+      auto [selfTimeNs, selfFlops] = computeSelfMetrics(node, nodeId);
+
+      double timeSum = 0.0;
+      bool hasTime = false;
+      addOptional(timeSum, hasTime, selfTimeNs);
+      double flopsSum = 0.0;
+      bool hasFlops = false;
+      addOptional(flopsSum, hasFlops, selfFlops);
+
+      for (const auto &child : node.children) {
+        auto [childTime, childFlops] = self(self, child.id);
+        addOptional(timeSum, hasTime, childTime);
+        addOptional(flopsSum, hasFlops, childFlops);
+      }
+
+      std::optional<double> inclusiveTime =
+          hasTime ? std::make_optional(timeSum) : std::optional<double>();
+      std::optional<double> inclusiveFlops =
+          hasFlops ? std::make_optional(flopsSum) : std::optional<double>();
+
+      std::string_view outPath = trimStepPrefix(path);
+      if (!outPath.empty() && (inclusiveTime || inclusiveFlops)) {
+        for (const auto &rule : rules) {
+          if (node.name.rfind(rule.end_prefix, 0) != 0) {
+            continue;
+          }
+          if (!matchesSegmentPrefix(outPath, rule.contains_prefixes)) {
+            continue;
+          }
+          results.push_back(
+              {std::string(outPath), inclusiveTime, inclusiveFlops});
+          break;
+        }
+      }
+
+      path = std::move(previousPath);
+      return {inclusiveTime, inclusiveFlops};
+    };
+
+    walk(walk, rootId);
+    return results;
+  });
+}
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
   std::vector<json *> jsonNodes(tree->size(), nullptr);
