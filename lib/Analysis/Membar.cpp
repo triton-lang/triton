@@ -87,7 +87,7 @@ AllocationSlice AllocationSlice::index(Value indexVal,
   return newSlice;
 }
 
-bool memDescAllocTypeMatches(Type allocType, Type otherType) {
+static bool memDescAllocTypeMatches(Type allocType, Type otherType) {
   auto descA = dyn_cast<ttg::MemDescType>(allocType);
   auto descB = dyn_cast<ttg::MemDescType>(otherType);
   if (!descA || !descB)
@@ -132,7 +132,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
     auto endB = startB + shapeB[i];
 
     // Is A completely before B? Is B completely before A? If so, disjoint
-    if (endA.known_leq(startB) || endB.known_leq(startA))
+    if (endA.knownLeq(startB) || endB.knownLeq(startA))
       return false;
   }
 
@@ -142,7 +142,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
 void AllocationSlice::OffsetValue::print(raw_ostream &os) const {
   if (isKnown())
-    os << offset_;
+    os << offset;
   else
     os << "unknown";
 }
@@ -359,17 +359,17 @@ AllocationSliceAnalysis::getAllocationSlices(Value value) {
   std::vector<AllocationSlice> slices;
   if (auto alloc = value.getDefiningOp<ttg::LocalAllocOp>()) {
     // new allocation
-    auto bufferId = allocation_->getBufferId(value);
+    auto bufferId = allocation->getBufferId(value);
     allocTypeMap[bufferId] = alloc.getType();
     assert(bufferId != Allocation::InvalidBufferId);
-    auto interval = allocation_->getAllocatedInterval(bufferId);
+    auto interval = allocation->getAllocatedInterval(bufferId);
     slices.emplace_back(alloc.getType(), interval);
   } else {
     // unknown buffer, potentially aliased
-    for (auto bufferId : allocation_->getBufferIds(value)) {
+    for (auto bufferId : allocation->getBufferIds(value)) {
       if (bufferId == Allocation::InvalidBufferId)
         continue;
-      auto interval = allocation_->getAllocatedInterval(bufferId);
+      auto interval = allocation->getAllocatedInterval(bufferId);
       auto typeIt = allocTypeMap.find(bufferId);
       if (typeIt != allocTypeMap.end()) {
         auto bufferType = typeIt->second;

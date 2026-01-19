@@ -26,23 +26,23 @@ class AllocationSlice {
 public:
   // Models an offset that is possibly unknown/dynamic
   struct OffsetValue {
-    int64_t offset_;
-    OffsetValue() : offset_(-1) {}
-    OffsetValue(int64_t offset) : offset_(offset) {}
-    bool isKnown() const { return offset_ >= 0; }
-    bool known_leq(const OffsetValue &other) const {
+    int64_t offset;
+    OffsetValue() : offset(-1) {}
+    OffsetValue(int64_t offset) : offset(offset) {}
+    bool isKnown() const { return offset >= 0; }
+    bool knownLeq(const OffsetValue &other) const {
       if (!isKnown() || !other.isKnown())
         return false;
-      return offset_ <= other.offset_;
+      return offset <= other.offset;
     }
 
     void print(raw_ostream &os) const;
 
     OffsetValue &operator+=(OffsetValue rhs) {
       if (!rhs.isKnown() || !isKnown()) {
-        offset_ = -1;
+        offset = -1;
       } else {
-        offset_ += rhs.offset_;
+        offset += rhs.offset;
       }
       return *this;
     }
@@ -115,14 +115,14 @@ struct ValueHasher {
 };
 
 class AllocationSliceAnalysis {
-  Allocation *allocation_;
+  Allocation *allocation;
   // We use std::unordered_map for reference stability of the values
   std::unordered_map<Value, std::vector<AllocationSlice>, ValueHasher> sliceMap;
   DenseMap<Allocation::BufferId, triton::gpu::MemDescType> allocTypeMap;
 
 public:
-  AllocationSliceAnalysis() : allocation_(nullptr) {}
-  AllocationSliceAnalysis(Allocation *allocation) : allocation_(allocation) {}
+  AllocationSliceAnalysis() : allocation(nullptr) {}
+  AllocationSliceAnalysis(Allocation *allocation) : allocation(allocation) {}
   void update(Operation *op);
   const std::vector<AllocationSlice> &getAllocationSlices(Value value);
 };
