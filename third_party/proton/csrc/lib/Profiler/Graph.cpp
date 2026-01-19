@@ -114,7 +114,7 @@ void PendingGraphPool::peek(size_t phase) {
       }
     }
   }
-  std::vector<std::tuple<void *, size_t, size_t>> devicePhaseNumNodes;
+  std::vector<std::pair<void *, size_t>> deviceNumNodes;
   for (auto &[device, slotPtr] : slots) {
     auto numNodes = size_t{0};
     std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
@@ -126,11 +126,11 @@ void PendingGraphPool::peek(size_t phase) {
       emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                         queue);
     });
-    devicePhaseNumNodes.emplace_back(device, phase, numNodes);
+    deviceNumNodes.emplace_back(device, numNodes);
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[device, phase, numNodes] : devicePhaseNumNodes) {
+    for (auto &[device, numNodes] : deviceNumNodes) {
       pool[device].erase(phase);
       deviceRemainingCapacity[device] += bytesForNodes(numNodes);
     }
