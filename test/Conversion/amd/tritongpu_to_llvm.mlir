@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefix=GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefixes=GFX950,INTRIN
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
@@ -680,4 +680,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @func_attr() {
     tt.return
   }
+}
+
+// -----
+
+#linear = #ttg.linear<{register=[[64]], lane=[[1], [2], [4], [8], [16], [32]], warp=[], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: clampf_f32
+    tt.func public @clampf_f32(%x : tensor<128xf32, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf32, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf32, #linear>
+        // INTRIN: rocdl.fmed3
+        %0 = tt.clampf %x, %min, %max, propagateNan = none : tensor<128xf32, #linear>
+        tt.return
+    }
+
+    // CHECK-LABEL: clampf_f16
+    tt.func public @clampf_f16(%x : tensor<128xf16, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf16, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf16, #linear>
+        // INTRIN: rocdl.fmed3
+        %0 = tt.clampf %x, %min, %max, propagateNan = none : tensor<128xf16, #linear>
+        tt.return
+    }
+
+    // CHECK-LABEL: clampf_f32_propagateNan
+    tt.func public @clampf_f32_propagateNan(%x : tensor<128xf32, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf32, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf32, #linear>
+        // INTRIN: [[MED:%.*]] = rocdl.fmed3 [[X:%.*]], %{{.*}}, %{{.*}} : f32
+        %0 = tt.clampf %x, %min, %max, propagateNan = all : tensor<128xf32, #linear>
+        // INTRIN: [[ISNAN:%.*]] = llvm.fcmp "une" [[X]], [[X]] : f32
+        // INTRIN: llvm.select [[ISNAN]], [[X]], [[MED]] : i1, f32
+        tt.return
+    }
 }
