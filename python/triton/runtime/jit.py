@@ -26,8 +26,6 @@ GLUON_MODULE = "triton.experimental.gluon.language"
 
 T = TypeVar("T")
 
-_IN_FLIGHT = object()
-
 # -----------------------------------------------------------------------------
 # Dependencies Finder
 # -----------------------------------------------------------------------------
@@ -732,10 +730,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
-        if kernel is _IN_FLIGHT:
-            if warmup:
-                return None
-            kernel = None
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
@@ -875,21 +869,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
             env_vars = get_cache_invalidating_env_vars()
             cache_key = get_cache_key(src, backend, options, env_vars)
-            if kernel_cache.get(key, None) is None:
-                kernel_cache[key] = _IN_FLIGHT
 
             def async_compile():
                 return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
 
             def finalize_compile(kernel):
-                if kernel is None:
-                    kernel_cache.pop(key, None)
-                else:
-                    kernel_cache[key] = kernel
+                kernel_cache[key] = kernel
                 self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
                                 options, [attrs], warmup)
 
             kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+            kernel_cache[key] = kernel
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
