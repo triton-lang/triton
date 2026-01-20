@@ -7,12 +7,14 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.amd.gfx1250 import async_copy as gfx1250_async_copy
 from triton.experimental.gluon.language.amd.gfx1250 import mbarrier as gfx1250_mbarrier
+from triton.experimental.gluon.language.amd.gfx1250 import cluster as gfx1250_cluster
 from triton.experimental.gluon.language.extra import libdevice
 
 from triton._filecheck import filecheck_test, run_parser
@@ -587,6 +589,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def mbarrier_sync_cluster_init_kernel():
+    mbarrier.sync_cluster_init()
+
+
+def test_mbarrier_sync_cluster_init():
+    mod = run_parser(mbarrier_sync_cluster_init_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mbarrier_sync_cluster_init_kernel() attributes {noinline = false} {
+    tt.call @triton.experimental.gluon.language.nvidia.hopper.mbarrier.sync_cluster_init__() : () -> ()
+    tt.return
+  }
+  tt.func private @triton.experimental.gluon.language.nvidia.hopper.mbarrier.sync_cluster_init__() attributes {noinline = false} {
+    ttng.fence_mbarrier_init_release_cluster
+    ttng.cluster_arrive {relaxed = true}
+    ttng.cluster_wait
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
 def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
@@ -701,6 +727,44 @@ def test_tcgen05_commit():
     # CHECK: [[BARRIER:%.*]] = ttg.local_alloc
     # CHECK: ttng.tc_gen5_commit [[BARRIER]]
     blackwell.tcgen05_commit(barrier)
+
+
+@gluon.jit
+def tcgen05_commit_multicast_two_ctas_kernel():
+    cga_layout: ttgl.constexpr = [[1, 0]]
+    nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                                          cga_layout=cga_layout)
+    a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
+    b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
+    barrier = mbarrier.allocate_mbarrier(two_ctas=True)
+    blackwell.tcgen05_commit(barrier, descs=[a, b])
+
+
+def test_tcgen05_commit_multicast_two_ctas():
+    mod = run_parser(tcgen05_commit_multicast_two_ctas_kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tcgen05_commit_multicast_two_ctas_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %2 = tt.call @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %true = arith.constant true
+    ttng.tc_gen5_commit %2, %true descs %0, %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+  tt.func private @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    tt.return %0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  ^bb1:  // no predecessors
+    %1 = ub.poison : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    tt.return %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  }
+}
+""")
 
 
 @gluon.jit
@@ -1519,7 +1583,7 @@ def test_zeros():
 @filecheck_test
 @gluon.jit
 def test_barrier():
-    # CHECK: gpu.barrier
+    # CHECK: ttg.barrier
     ttgl.barrier()
 
 
@@ -1536,7 +1600,7 @@ def test_fence_async_shared():
 @filecheck_test
 @gluon.jit
 def test_barrier_cluster_single_cta():
-    # CHECK: gpu.barrier
+    # CHECK: ttg.barrier
     ttgl.barrier(cluster=True)
 
 
@@ -1551,6 +1615,26 @@ def test_cluster_barrier_multi_cta():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
+    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_wait
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def cluster_arrive_wait_ops_kernel():
+    cluster.arrive()
+    cluster.wait()
+
+
+def test_cluster_arrive_wait_ops():
+    mod = run_parser(cluster_arrive_wait_ops_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
     ttng.cluster_arrive {relaxed = false}
     ttng.cluster_wait
     tt.return
@@ -3440,6 +3524,44 @@ def amd_tdm_load_mbarrier_kernel(ptr):
     gfx1250_mbarrier.init(bar, count=1)
     ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, mbarrier=bar)
     buffer.load(layout=BLOCKED_LAYOUT)
+
+
+@gluon.jit
+def amd_cluster_barrier_arrive_kernel():
+    gfx1250_cluster.arrive()
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_cluster_barrier_arrive(target):
+    mod = run_parser(amd_cluster_barrier_arrive_kernel, *make_args(num_ctas=2), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_cluster_barrier_arrive_kernel() attributes {noinline = false} {
+    amdg.cluster_barrier_arrive
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def amd_cluster_barrier_wait_kernel():
+    gfx1250_cluster.wait()
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_cluster_barrier_wait(target):
+    mod = run_parser(amd_cluster_barrier_wait_kernel, *make_args(num_ctas=2), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_cluster_barrier_wait_kernel() attributes {noinline = false} {
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+""")
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])

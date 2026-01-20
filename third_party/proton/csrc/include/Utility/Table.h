@@ -1,5 +1,5 @@
-#ifndef PROTON_UTILITY_TABLE_H
-#define PROTON_UTILITY_TABLE_H
+#ifndef PROTON_UTILITY_TABLE_H_
+#define PROTON_UTILITY_TABLE_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -80,4 +80,4 @@ private:
 
 } // namespace proton
 
-#endif // PROTON_UTILITY_TABLE_H
+#endif // PROTON_UTILITY_TABLE_H_

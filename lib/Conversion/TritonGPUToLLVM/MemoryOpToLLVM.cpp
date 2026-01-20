@@ -344,6 +344,22 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+class BarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
+public:
+  BarrierOpConversion(const LLVMTypeConverter &converter,
+                      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::BarrierOp>(converter, benefit) {}
+  using OpAdaptor = typename triton::gpu::BarrierOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::gpu::BarrierOp>(op);
+    return success();
+  }
+};
+
 struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<LocalGatherOp> {
 public:
   LocalGatherOpConversion(LLVMTypeConverter &typeConverter,
@@ -425,26 +441,6 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
-
-class LocalBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
-public:
-  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
-                           PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter,
-                                                            benefit) {}
-  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    rewriter.replaceOpWithNewOp<mlir::gpu::BarrierOp>(op);
-
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
@@ -458,5 +454,5 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
 }

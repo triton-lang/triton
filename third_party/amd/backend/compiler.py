@@ -225,6 +225,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         amd.passes.ttgpuir.add_optimize_dot_operands(pm, options.arch)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+        amd.passes.ttgpuir.add_sink_layout_conversions(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.common.add_canonicalizer(pm)

@@ -3421,9 +3421,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_hip_cdna() or is_hip_gfx1250():
         amdgcn = pgm.asm['amdgcn']
 
-        if (M, N) == (4, 64) or (M, N) == (64, 4):
+        if is_hip_cdna() and ((M, N) == (4, 64) or (M, N) == (64, 4)):
             assert 'v_mfma_f32_4x4' in amdgcn
-        elif (M, N) == (4, 32):
+        elif is_hip_cdna() and (M, N) == (4, 32):
             if in_dtype == 'float16':
                 assert 'v_dot2c_f32_f16' in amdgcn
             elif (in_dtype == 'bfloat16') and (is_hip_cdna4() or is_hip_gfx1250()):
@@ -5745,7 +5745,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs_except_libraries):
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -5754,7 +5754,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        fresh_knobs_except_libraries.language.default_fp_fusion = enable_fp_fusion
+        fresh_knobs.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
@@ -5772,7 +5772,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("enable_reflect_ftz", [False, True])
-def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs_except_libraries):
+def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
 
     @triton.jit
     def exp2(data):
@@ -5793,7 +5793,7 @@ def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs_except_libra
 
 @pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
-def test_override_arch(arch, env_var_override, device, fresh_knobs_except_libraries):
+def test_override_arch(arch, env_var_override, device, fresh_knobs):
     if arch.startswith("sm") and not is_cuda():
         pytest.skip(f"{arch} arch only for CUDA")
     elif arch.startswith("gfx") and not is_hip():
@@ -5810,7 +5810,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs_except_librar
 
     if is_cuda():
         if env_var_override:
-            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
+            fresh_knobs.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -5820,7 +5820,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs_except_librar
         # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
         # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
         if env_var_override:
-            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
+            fresh_knobs.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -6396,7 +6396,8 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
+    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3()
+            or is_hip_rdna4()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
         pytest.skip('Not enough LDS.')
