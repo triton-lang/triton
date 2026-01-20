@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 import itertools
+import math
 from typing import List
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-import math
+from triton._C.libtriton import gluon_ir
 
 
 class DistributedLayout:
@@ -19,6 +20,9 @@ class DistributedLayout:
     @property
     def rank(self):
         raise NotImplementedError("DistributedLayout subclasses must define rank")
+
+    def get_view(self, shape: list[int], use_hw_view: bool = False) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), use_hw_view)
 
 
 @dataclass(frozen=True)
@@ -315,6 +319,9 @@ class SharedLayout:
     @property
     def type(self):
         return constexpr_type(self)
+
+    def get_view(self, shape: list[int], use_hw_view: bool = False) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), use_hw_view)
 
 
 @constexpr_function
