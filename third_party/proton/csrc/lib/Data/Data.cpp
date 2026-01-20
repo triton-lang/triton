@@ -20,7 +20,7 @@ size_t Data::advancePhase() {
   const auto nextPhase = currentPhase.load(std::memory_order_relaxed) + 1;
   currentPhasePtr = phaseStore->createPtr(nextPhase);
   activePhases.insert(nextPhase);
-  currentPhase.store(nextPhase, std::memory_order_acq_rel);
+  currentPhase.store(nextPhase, std::memory_order_release);
   return nextPhase;
 }
 
