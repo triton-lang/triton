@@ -215,6 +215,8 @@ jobs:
         -DCMAKE_RANLIB="/usr/bin/aarch64-linux-gnu-ranlib" \
         -DCMAKE_STRIP="/usr/bin/aarch64-linux-gnu-strip" \
         -DCMAKE_SYSROOT=$SYSROOT \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DMLIR_INCLUDE_TESTS=OFF \
         -DLLVM_ENABLE_TERMINFO=OFF \
         llvm-project/llvm
         ninja -C llvm-project/build install
