@@ -36,7 +36,7 @@ public:
     std::unique_lock<std::shared_mutex> lock(phasesMutex);
     std::shared_ptr<Slot> slot;
     auto it = phases.find(phase);
-    if (it != phases.end() && it->second)
+    if (it != phases.end())
       slot = it->second;
     if (!slot) // slot not exist yet
       slot = std::make_shared<Slot>();
