@@ -2379,8 +2379,10 @@ private:
   bool ftz;
 };
 
-struct ClampFOpConversion : ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion> {
-  using Base = ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion>;
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -2394,18 +2396,18 @@ struct ClampFOpConversion : ElementwiseOpConversionBase<triton::ClampFOp, ClampF
     Value x = operands[0][0];
     Value lo = operands[0][1];
     Value hi = operands[0][2];
-    
+
     Value med = ROCDL::FMed3Op::create(rewriter, loc, elemTy, x, lo, hi);
 
     // `PropagateNaN::ALL` requires us to return NaN if x is NaN. `v_med3`
     // returns the min if any operand is NaN, so we must explicitly check NaN.
     if (op.getPropagateNan() == PropagateNan::ALL) {
-      Value isNan = 
+      Value isNan =
           LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
       Value res = LLVM::SelectOp::create(rewriter, loc, isNan, x, med);
       return {res};
     }
-    
+
     return {med};
   }
 };
