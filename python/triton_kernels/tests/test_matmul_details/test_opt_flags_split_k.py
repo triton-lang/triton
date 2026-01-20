@@ -31,7 +31,7 @@ def setup_amd(monkeypatch):
         lambda *args, **kwargs: (64, 32),
     )
 
-    fake_target = types.SimpleNamespace(backend="hip")
+    fake_target = types.SimpleNamespace(backend="hip", arch=0)
     monkeypatch.setattr(
         "triton.runtime.driver.active.get_current_target",
         lambda: fake_target,
@@ -72,7 +72,7 @@ def setup_nvidia(monkeypatch):
         lambda block_m, block_n, is_persistent, precision_config, constraints: 4,
     )
 
-    fake_target = types.SimpleNamespace(backend="cuda")
+    fake_target = types.SimpleNamespace(backend="cuda", arch=100)
     monkeypatch.setattr(
         "triton.runtime.driver.active.get_current_target",
         lambda: fake_target,
