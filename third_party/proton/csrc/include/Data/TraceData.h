@@ -21,11 +21,11 @@ public:
   DataEntry addOp(size_t phase, size_t eventId,
                   const std::vector<Context> &contexts) override;
 
-  void addScopeMetrics(
+  void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
-  void addEntryMetrics(
+  void addMetrics(
       size_t phase, size_t entryId,
       const std::map<std::string, MetricValueType> &metrics) override;
 
