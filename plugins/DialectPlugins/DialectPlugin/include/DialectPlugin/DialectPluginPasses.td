@@ -4,15 +4,20 @@
 include "mlir/Pass/PassBase.td"
 
 
-def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-llvm", "mlir::ModuleOp"> {
-  let summary = "Converts PluginGPU Ops to LLVM";
-  let constructor = "mlir::triton::plugin::createConvertPluginGPUToLLVMPass(4)";
+def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-triton-gpu", "mlir::ModuleOp"> {
+  let summary = "Converts PluginGPU Ops to TritonGPU Ops";
+  let constructor = "mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(4, 32, 1)";
 
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
    let options = [
         Option<"num_warps", "num-warps",
                "int32_t", /*default*/"4",
-               "device compute capability">,
+               "Number of warps">,
+        Option<"threadsPerWarp", "threads-per-warp",
+               "int32_t", /*default*/"32",
+               "Threads per warp">,
+        Option<"numCTAs", "num-ctas",
+               "int32_t", /*default*/"1",
+               "Number of CTAs">,
     ];
 }
 

@@ -40,9 +40,9 @@ private:
                                                              const char **);
 
   using AddPassType =
-      std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
+      std::function<TritonPluginResult(mlir::PassManager *, const char *, int, int, int)>;
   using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
-                                              const char *);
+                                              const char *, int, int, int);
 
   using RegisterPassType = std::function<TritonPluginResult(const char *)>;
   using RegisterPassCType = TritonPluginResult (*)(const char *);
@@ -91,7 +91,7 @@ public:
   getCustomOpHandles(std::vector<const char *> &handles);
 
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
-                                             const char *passHandle);
+                                             const char *passHandle, int num_warps, int threadsPerWarp, int numCTAs);
 
   llvm::Expected<TritonPluginResult>
   addCustomOp(const char *customOpHandle, TritonOpBuilder &self,

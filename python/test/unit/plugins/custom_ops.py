@@ -72,7 +72,7 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     # Inject plugin pass right after loop unroll in the dynamically loaded stage source
     stage_src = stage_src.replace(
         "pm = ir.pass_manager(mod.context)",
-        "pm = ir.pass_manager(mod.context)\n    passes.plugin.plugingpu_conversion(pm, opt.num_warps)\n"
+        "pm = ir.pass_manager(mod.context)\n    passes.plugin.plugingpu_conversion(pm, opt.num_warps, 32, opt.num_ctas)\n"
     )
     # print(stage_src)
     exec(stage_src, module.__dict__)

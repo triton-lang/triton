@@ -23,8 +23,7 @@ class PluginTypeConverter : public TypeConverter {
   public:
   explicit PluginTypeConverter(MLIRContext *context,
                                                int numWarps, int threadsPerWarp,
-                                               int numCTAs,
-                                               bool enableSourceRemat){
+                                               int numCTAs){
       addConversion([](Type type) { return type; });
     }
 };
@@ -33,6 +32,8 @@ class PluginConversionTarget : public ConversionTarget {
 public:
   explicit PluginConversionTarget(MLIRContext &ctx, PluginTypeConverter &typeConverter)
       : ConversionTarget(ctx) {
+    addLegalDialect<triton::TritonDialect>();
+    addLegalDialect<triton::gpu::TritonGPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<mlir::triton::gpu::ConvertLayoutOp>();
   }
@@ -53,21 +54,16 @@ struct PluginMagicOpConversion : OpConversionPattern<mlir::triton::plugin::Magic
 
 } // namespace
 
-struct ConvertPluginGPUToLLVMPass
+struct ConvertPluginGPUToTritonGPUPass
     : public mlir::triton::plugin::impl::DialectPluginMagicOpBase<
-          ConvertPluginGPUToLLVMPass> {
-  explicit ConvertPluginGPUToLLVMPass(int32_t num_warps) {
-    this->num_warps = num_warps;
-  }
+          ConvertPluginGPUToTritonGPUPass> {
+  explicit ConvertPluginGPUToTritonGPUPass(int32_t num_warps, int32_t threadsPerWarp, int32_t numCTAs) {}
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    int numWarps = 1; //mlir::triton::gpu::lookupNumWarps(mod);
-    int threadsPerWarp = 1; // mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numCTAs = 1; //mlir::triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    PluginTypeConverter typeConverter(context, numWarps, threadsPerWarp,
-                                         numCTAs, /*enableSourceRemat=*/false);
+    PluginTypeConverter typeConverter(context, num_warps, threadsPerWarp,
+                                         numCTAs);
     PluginConversionTarget convTarget(*context, typeConverter);
     patterns.add<PluginMagicOpConversion>(typeConverter, context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -77,8 +73,8 @@ struct ConvertPluginGPUToLLVMPass
 
 namespace mlir::triton::plugin {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertPluginGPUToLLVMPass(int32_t num_warps) {
+createConvertPluginGPUToTritonGPUPass(int32_t num_warps, int32_t threadsPerWarp, int32_t numCTAs) {
 
-  return std::make_unique<ConvertPluginGPUToLLVMPass>(num_warps);
+  return std::make_unique<ConvertPluginGPUToTritonGPUPass>(num_warps, threadsPerWarp, numCTAs);
 }
 } // namespace mlir::triton::plugin

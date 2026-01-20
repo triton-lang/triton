@@ -11,6 +11,7 @@ using namespace mlir::triton::plugin;
 
 #include "DialectPlugin/DialectPluginOpsDialect.cpp.inc"
 
+
 //===----------------------------------------------------------------------===//
 // DialectPlugin dialect.
 //===----------------------------------------------------------------------===//
@@ -35,40 +36,40 @@ void DialectPluginDialect::initialize() {
 
 using namespace mlir;
 
-static void addTritonPluginPass(mlir::PassManager *pm) {
-  pm->addPass(mlir::triton::plugin::createConvertPluginGPUToLLVMPass());
+static void addTritonPluginPass(mlir::PassManager *pm, int num_warps, int threadsPerWarp, int numCTAs) {
+  pm->addPass(mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(num_warps, threadsPerWarp, numCTAs));
 }
 
-static void registerTritonPluginPass() {
-  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::triton::plugin::createConvertPluginGPUToLLVMPass();
+static void registerTritonPluginPass(int num_warps, int threadsPerWarp, int numCTAs) {
+  ::mlir::registerPass([=]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(num_warps, threadsPerWarp, numCTAs);
   });
 }
 
 static const char *ADD_PLUGIN_PASS_NAME = "plugingpu_conversion";
-static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
+static std::unordered_map<std::string, void (*)(mlir::PassManager *, int, int, int)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
-static std::unordered_map<std::string, void (*)()> registryMap = {
+static std::unordered_map<std::string, void (*)(int, int, int)> registryMap = {
     {ADD_PLUGIN_PASS_NAME, registerTritonPluginPass}};
 static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName, int num_warps, int threadsPerWarp, int numCTAs) {
   std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
-  passMap[passNameStr](pm);
+  passMap[passNameStr](pm, num_warps, threadsPerWarp, numCTAs);
   return TP_SUCCESS;
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName) {
+tritonRegisterPluginPass(const char *passName, int num_warps, int threadsPerWarp, int numCTAs) {
   std::string passNameStr(passName);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
-  registryMap[passNameStr]();
+  registryMap[passNameStr](num_warps, threadsPerWarp, numCTAs);
   return TP_SUCCESS;
 }
 
