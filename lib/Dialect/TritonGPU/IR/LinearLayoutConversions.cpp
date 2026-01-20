@@ -1066,7 +1066,9 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
-      std::swap(bases[kRow].back(), bases[kCol].back());
+      auto basisCTA1 =
+          llvm::Log2_32(encoding.getBlockN() * encoding.getColStride()) - 1;
+      std::swap(bases[kRow].back(), bases[kCol][basisCTA1]);
       ret =
           LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective());
     }

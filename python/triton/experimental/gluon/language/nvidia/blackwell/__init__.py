@@ -12,6 +12,7 @@ from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
+import triton._C.libtriton.gluon_ir as gluon_ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ..._semantic import GluonSemantic
@@ -250,6 +251,57 @@ class tensor_memory_descriptor(base_value):
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
         return ttgl.tensor(handle, ret_ty)
+
+    def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic):
+        #   red_op: MIN/MAX reduction operation
+        #   abs (bool): If True, reduce absolute values.
+        #   propagate_nan (NONE): If ALL, propagate NaN in specified reduction operation.
+        layout = _unwrap_if_constexpr(layout)
+        abs_flag = _unwrap_if_constexpr(abs)
+        propagate_nan = _unwrap_if_constexpr(propagate_nan)
+
+        ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
+        builder = _semantic.builder
+
+        result, reduced, red_layout = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_op, abs_flag,
+                                                               propagate_nan)
+
+        red_shape = [self.shape[0]]  # [M] for [M,N] input
+        red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
+
+        return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
+
+    @builtin
+    def load_min(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        """
+        Load a tensor from tensor memory with MIN reduction along the N-dimension.
+
+        Args:
+            layout (DistributedLayout): Destination layout of the tensor.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MIN reduction along the N-dimension of loaded data
+        """
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic)
+
+    @builtin
+    def load_max(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+        """
+        Load a tensor from tensor memory with MAX reduction along the N-dimension.
+
+        Args:
+            layout (DistributedLayout): Destination layout of the tensor.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MAX reduction along the N-dimension of loaded data.
+        """
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic)
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:

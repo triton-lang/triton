@@ -45,7 +45,7 @@ public:
       const auto currentPhase = data->getCurrentPhase();
       if (currentPhase == 0)
         continue;
-      data->updateFlushedPhase(currentPhase - 1);
+      data->updateCompletePhase(currentPhase - 1);
     }
     return this;
   }

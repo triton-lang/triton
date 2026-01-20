@@ -334,7 +334,11 @@ public:
 
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
-      mlir::gpu::BarrierOp::create(builder, loc);
+      mlir::triton::gpu::BarrierOp::create(
+          builder, loc,
+          triton::gpu::AddrSpace::Local | triton::gpu::AddrSpace::GlobalRead |
+              triton::gpu::AddrSpace::GlobalWrite);
+
       gpu::FinalizeOp::create(builder, loc, segment, profileMem);
     });
 

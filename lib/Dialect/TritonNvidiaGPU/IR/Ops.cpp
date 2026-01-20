@@ -931,6 +931,58 @@ LogicalResult TMEMLoadOp::verify() {
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
     return failure();
+
+  // Validate reduction-related attributes
+  auto redOp = getRedOp();
+  bool hasRed = getRed() != nullptr;
+  bool useAbs = getAbs().value_or(false);
+  bool useNaN = getNaN().value_or(false);
+
+  // redOp and red result must be consistent
+  if (redOp && !hasRed)
+    return emitOpError("redOp is set but 'red' result is not present");
+  if (hasRed && !redOp)
+    return emitOpError("'red' result is present but redOp is not set");
+
+  // abs and NaN require redOp
+  if (useAbs && !redOp)
+    return emitOpError("'abs' requires 'redOp' to be set");
+  if (useNaN && !redOp)
+    return emitOpError("'NaN' requires 'redOp' to be set");
+
+  // abs and NaN require floating-point element type
+  Type elemTy = getSrc().getType().getElementType();
+  if (useAbs && !elemTy.isF32())
+    return emitOpError("'abs' requires floating-point element type (f32)");
+  if (useNaN && !elemTy.isF32())
+    return emitOpError("'NaN' requires floating-point element type (f32)");
+
+  // Validate reduction conditions
+  if (redOp) {
+    auto regTy = getType();
+    auto memTy = getSrc().getType();
+    auto maxnreg = getContextualMaxNReg(*this);
+    auto encodingInfoOr = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+    if (failed(encodingInfoOr))
+      return emitOpError("failed to compute TMEM encoding info");
+
+    if (encodingInfoOr->unpacked)
+      return emitOpError(
+          "tmem_load reduction requires packed format (unpacked=false)");
+
+    // Verify that N dimension is in registers entirely, and is not sharded
+    // across threads. This could be relaxed in the future to only reduce the
+    // kReg bases along N then cross-warp/block reduction becomes needed.
+    auto kReg = StringAttr::get(regTy.getContext(), "register");
+    int dimM = 0, dimN = 1;
+    auto regDims = toLinearEncoding(regTy).basesPerDim(kReg);
+    if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
+        regDims[dimM] != 1) {
+      return emitOpError("tmem_load reduction with N dimension sharded across "
+                         "threads is not supported.");
+    }
+  }
+
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 

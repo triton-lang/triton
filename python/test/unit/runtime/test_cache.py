@@ -2,6 +2,7 @@ import expecttest
 import importlib.util
 import itertools
 import os
+import re
 import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
@@ -579,6 +580,12 @@ def test_preload(device, fresh_triton_cache) -> None:
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
 
+    specialization_data_unknown_target = re.sub(r'("target"\s*:\s*\{[^{}]*"backend"\s*:\s*)"(.*?)"',
+                                                r'\1"unknown_target"', specialization_data, count=1)
+
+    with pytest.raises(RuntimeError, match="Specialization data is for {'backend': 'unknown_target'"):
+        kernel_add.preload(specialization_data_unknown_target)
+
 
 def test_hooks(device, fresh_triton_cache) -> None:
 
@@ -740,18 +747,18 @@ def test_async_compile_mock(device, fresh_triton_cache):
         kernel.warmup(b, 1, grid=(1, ))
 
         # Nothing has actually compiled yet
-        assert len(kernel.device_caches[0][0]) == 0
+        assert len(kernel.device_caches[0][0]) == 4
         assert len(pool.work_queue) == 4
 
         # Duplicates are only submitted once
         kernel.warmup(a, 0, grid=(1, ))
         kernel.warmup(a, 1, grid=(1, ))
-        assert len(kernel.device_caches[0][0]) == 0
+        assert len(kernel.device_caches[0][0]) == 4
         assert len(pool.work_queue) == 4
 
         pool.run_one()
         kernel[(1, )](a, 0)
-        assert len(kernel.device_caches[0][0]) == 1
+        assert len(kernel.device_caches[0][0]) == 4
         assert a[0, 0] == 0.0
 
         pool.run_all()
@@ -774,7 +781,7 @@ def test_async_compile(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
-        assert len(kernel.device_caches[0][0]) == 0
+        assert len(kernel.device_caches[0][0]) == 4
 
         kernel[(1, )](b, 1)
         assert b[0, 0] == 1

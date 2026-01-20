@@ -26,10 +26,9 @@ def compute_block_n(n: int, arch, precision_config):
     # block_n:
     layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
-        if layout.num_warps in [4, 8]:
-            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
-            block_n = 2 * layout.num_warps * 2 * 8
-            return block_n, block_n
+        # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
+        block_n = 2 * layout.num_warps * 2 * 8
+        return block_n, block_n
     elif precision_config.max_num_imprecise_acc is None and n > 128:
         return 256, 256
     else:
@@ -96,11 +95,13 @@ def compute_num_stages(
     has_y_acc_in,
     *,
     epilogue_subtile,
+    occupancy_target,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
     weight_size = rhs_dtype.bitwidth / 8
-    if precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
+    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    if has_native_mxfp and precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
         # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
         # smem_capacity accordingly.
         # w/o this, gets the following error:
@@ -112,12 +113,16 @@ def compute_num_stages(
     stage_size = block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8) + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
-    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    smem_capacity //= occupancy_target
     if has_native_mxfp and getattr(precision_config, "b_mx_scale", None) is not None:
         if rhs_dtype == FP4:
             # 4-bit e2m1 weights are padded 2x
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
             stage_size += block_k * block_n * weight_size
+
+    if precision_config.b_mx_scale is not None:
+        # mx scales
+        stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
 
     if is_persistent:
         # Per-stage wait barrier
@@ -137,12 +142,7 @@ def compute_num_stages(
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
         if x_transpose:
             smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
-        if precision_config.b_mx_scale is not None:
-            # mx scales
-            stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
-    elif has_native_mxfp:
-        # mx scales
-        stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
+
     num_stages = min(smem_capacity // int(stage_size), 4)
     if num_stages == 0:
         num_stages = 1

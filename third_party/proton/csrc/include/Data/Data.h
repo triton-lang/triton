@@ -54,7 +54,7 @@ struct DataEntry {
 
 class Data : public ScopeInterface {
 public:
-  static constexpr size_t kNoFlushedPhase = std::numeric_limits<size_t>::max();
+  static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
 
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
@@ -81,13 +81,17 @@ public:
   void dump(const std::string &outputFormat);
 
   /// Clear all non-persistent fields in the data.
-  void clear(size_t phase);
+  /// If `clearUpToPhase` is false, clear the given phase only.
+  /// Otherwise, clear all phases up to and including the given phase.
+  void clear(size_t phase, bool clearUpToPhase = false);
 
-  /// Update the flushed phase.
-  void updateFlushedPhase(size_t phase);
+  /// Mark phases up to `phase` as complete.
+  void updateCompletePhase(size_t phase);
 
-  /// Check if the given phase has been flushed.
-  bool isPhaseFlushed(size_t phase) const;
+  /// Check if the given phase is complete (i.e., all device-side records for
+  /// this phase have been flushed to host and the phase will no longer receive
+  /// new records).
+  bool isPhaseComplete(size_t phase) const;
 
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
@@ -146,12 +150,8 @@ protected:
     return static_cast<T *>(currentPhasePtr);
   }
 
-  template <typename T> const T *currentPhasePtrAs() const {
-    return static_cast<const T *>(currentPhasePtr);
-  }
-
   std::size_t currentPhase{0};
-  std::size_t flushedPhase{kNoFlushedPhase};
+  std::size_t completePhase{kNoCompletePhase};
   std::set<size_t> activePhases{};
 
   mutable std::shared_mutex mutex;
