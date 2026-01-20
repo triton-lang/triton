@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton
 from triton_kernels import target_info
-from triton_kernels.target_info import get_cdna_version, get_rdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
 from triton_kernels.tensor import FP4, FP32, Tensor
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
@@ -298,15 +298,16 @@ def make_default_opt_flags_nvidia(
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
 
+    # Occupancy target and maxnreg (for Hopper)
     occupancy_target = 1
     if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
         occupancy_target = 16 // num_warps
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
     max_reg_per_thread = 256
-    if is_persistent:
+    is_blackwell_or_newer = cuda_capability_geq(10, 0)
+    if is_persistent and not is_blackwell_or_newer:
         maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
-        # Hardware limit
         maxnreg = min(max_reg_per_thread, maxnreg)
     else:
         maxnreg = None
