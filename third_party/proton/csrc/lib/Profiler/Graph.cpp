@@ -42,21 +42,21 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
           uint64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
           data->addMetrics(phase, entryId,
-                                {{metricName, MetricValueType{typedValue}}});
+                           {{metricName, MetricValueType{typedValue}}});
           break;
         }
         case variant_index_v<int64_t, MetricValueType>: {
           int64_t typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
           data->addMetrics(phase, entryId,
-                                {{metricName, MetricValueType{typedValue}}});
+                           {{metricName, MetricValueType{typedValue}}});
           break;
         }
         case variant_index_v<double, MetricValueType>: {
           double typedValue{};
           std::memcpy(&typedValue, &metricValue, sizeof(typedValue));
           data->addMetrics(phase, entryId,
-                                {{metricName, MetricValueType{typedValue}}});
+                           {{metricName, MetricValueType{typedValue}}});
           break;
         }
         default:

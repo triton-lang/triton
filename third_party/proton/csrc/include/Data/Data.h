@@ -96,7 +96,6 @@ public:
   /// Atomically get current and complete phases.
   PhaseInfo getPhaseInfo() const;
 
-
   /// Add an op to the data of the current phase.
   /// If `opName` is empty, just use the current context as is.
   /// Otherwise obtain the current context and append `opName` to it. Return the
@@ -123,7 +122,7 @@ public:
   /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
   addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics) = 0;
+             const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// Record a batch of named metrics for an entry.
   ///
@@ -134,14 +133,13 @@ public:
   /// The same as `addOp`, `phase` is important for asynchronous profilers.
   virtual void
   addMetrics(size_t phase, size_t entryId,
-                  const std::map<std::string, MetricValueType> &metrics) = 0;
+             const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
 
   /// To MsgPack
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
-
 
 protected:
   /// The actual implementations
