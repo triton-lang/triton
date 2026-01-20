@@ -33,13 +33,13 @@ public:
   };
 
   void *createPtr(size_t phase) override {
-    std::unique_lock<std::shared_mutex> lock(phasesMutex);
     std::shared_ptr<Slot> slot;
-    auto it = phases.find(phase);
-    if (it != phases.end())
-      slot = it->second;
-    if (!slot) // slot not exist yet
-      slot = std::make_shared<Slot>();
+    std::unique_lock<std::shared_mutex> lock(phasesMutex);
+    auto &entry = phases[phase];
+    if (!entry)
+      entry = std::make_shared<Slot>();
+    slot = entry;
+
     if (!slot->value) // slot value might not exist yet or been cleared
       slot->value = std::make_unique<T>();
     return slot->value.get();
