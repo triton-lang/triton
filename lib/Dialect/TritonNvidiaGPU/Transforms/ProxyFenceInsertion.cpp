@@ -65,7 +65,7 @@ bool ignoreOpForProxyFence(Operation *op) {
              triton::nvidia_gpu::InvalBarrierOp>(op);
 }
 
-bool filterFn(Operation *op, Operation *other) {
+bool filterFn(Operation *op, Operation *other, Allocation *allocation) {
   return ignoreOpForProxyFence(other);
 }
 

@@ -211,6 +211,9 @@ private:
     //   before cluster i.
     // • Existing barriers override or satisfy required fences, so we do not
     //   insert duplicates.
+    auto boundFilter = [allocation](Operation *a, Operation *b) {
+      return mlir::triton::AMD::membarFilter(a, b, allocation);
+    };
     for (int offset = 0; offset < numClusters; offset++) {
       for (int src = 0; src < numClusters; src++) {
         const int next = (src + 2 + offset) % numClusters;
@@ -232,8 +235,8 @@ private:
           LDBG("already synced");
           continue;
         }
-        const bool needFence = clusterInfo[src].isIntersected(
-            clusterInfo[next], mlir::triton::AMD::membarFilter);
+        const bool needFence =
+            clusterInfo[src].isIntersected(clusterInfo[next], boundFilter);
         // insert fence/barrier in front of this cluster
         LDBG("need fence?: " << needFence);
         if (needFence) {

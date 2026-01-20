@@ -14,7 +14,10 @@ class OpBuilder;
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
-using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
+using MembarFilterFn =
+    std::function<bool(Operation *, Operation *, Allocation *)>;
+/// MembarFilterFn with an allocation captured.
+using BoundMembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
@@ -101,7 +104,7 @@ struct BlockInfo {
   }
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
+  bool isIntersected(const BlockInfo &other, BoundMembarFilterFn filter) const {
     return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
                                  filter) ||
            /*WAR*/
@@ -126,7 +129,7 @@ struct BlockInfo {
 
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
-                     MembarFilterFn filter) const {
+                     BoundMembarFilterFn filter) const {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
@@ -163,7 +166,13 @@ public:
   /// analysis.
   MembarOrFenceAnalysis() = default;
   explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(filter) {}
+      : allocation(allocation) {
+    if (filter) {
+      this->filter = [filter, allocation](Operation *a, Operation *b) {
+        return filter(a, b, allocation);
+      };
+    }
+  }
 
   virtual ~MembarOrFenceAnalysis() = default;
 
@@ -199,7 +208,7 @@ protected:
                       OpBuilder *builder) = 0;
 
   Allocation *allocation = nullptr;
-  MembarFilterFn filter = nullptr;
+  BoundMembarFilterFn filter = nullptr;
 };
 
 class MembarAnalysis : public MembarOrFenceAnalysis {
