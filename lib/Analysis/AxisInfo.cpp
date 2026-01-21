@@ -364,15 +364,14 @@ private:
                           const AxisInfo &rhs, int dim) override {
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && rhs.getConstantValue() != 1) {
-      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       // If the operand is contiguous (e.g., [base, base+1, ...]), the divisibility 
-// of the entire sequence drops to 1, regardless of the base's divisibility.
-// Example: Input [4, 5, 6, 7]. Base 4 is divisible by 4.
-// If we preserve divisibility=4 and multiply by 2, we might incorrectly 
-// infer result divisibility as 8. Real result: [8, 10, 12, 14] (GCD=2).
-// Therefore, we explicitly reset input divisibility to 1 for contiguous dims 
-// to prevent over-estimating the alignment of the result.
-lhsDivisibility = 1;
+      // of the entire sequence drops to 1, regardless of the base's divisibility.
+      // Example: Input [4, 5, 6, 7]. Base 4 is divisible by 4.
+      // If we preserve divisibility=4 and multiply by 2, we might incorrectly 
+      // infer result divisibility as 8. Real result: [8, 10, 12, 14] (GCD=2).
+      // Therefore, we explicitly reset input divisibility to 1 for contiguous dims 
+      // to prevent over-estimating the alignment of the result.
+      lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
     if (rhs.getContiguity(dim) > 1 && lhs.getConstantValue() != 1) {
