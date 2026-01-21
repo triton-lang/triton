@@ -53,8 +53,10 @@ namespace {
 //   yield basePtr_new
 // }
 //
-// This lowers register consumption and reduces time spend for address
-// computation.
+// Goal of this transformation is to decrease amount of work done by vector
+// instructions(decrease number of v_add). This could save cycles in a loop, and
+// give more parallelism on architectures where MFMA and vector instrcutions
+// executed on the same hardware module.
 struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
   AdvanceBasePointer(MLIRContext *context, DataFlowSolver *solver,
@@ -132,7 +134,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     if (!stepRangeValue.has_value())
       return false;
 
-    return (int64_t)stepRangeValue.value().smax().isNegative();
+    return stepRangeValue.value().smax().isNegative();
   }
 
   static bool isNonNegative(Value advanceStep, DataFlowSolver *solver) {
@@ -140,7 +142,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     if (!stepRangeValue.has_value())
       return false;
 
-    return (int64_t)stepRangeValue.value().smax().isNonNegative();
+    return stepRangeValue.value().smax().isNonNegative();
   }
 
   // Estimates range of offset used in buffer op.
@@ -173,6 +175,13 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
     // Use limit to crop MSB from negative indexing
     constexpr uint64_t maxOffsetValue = 0xff'ff'ff'ff;
+
+    // Range analysys for block argument and step should not return values
+    // larger than maximum uint32_t
+    assert(blockArgRangeValue.umax().getLimitedValue() <= maxOffsetValue &&
+           "expect block argument to be a 32 bit value");
+    assert(stepRangeValue.umax().getLimitedValue() <= maxOffsetValue &&
+           "expect step value to be a 32 bit value");
 
     int64_t operationUncappedResultMax =
         (int64_t)(blockArgRangeValue.umax() * elemByteWidth)
