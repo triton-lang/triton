@@ -161,9 +161,8 @@ struct BarrierExpectConversion
     auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
     auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
 
-    // We use an elect predicate to tell ptxas that the operation is uniform,
-    // which results in better codegen.
-    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    auto id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     pred = b.and_(pred, adaptor.getPred());
 
     auto kBlock = StringAttr::get(op->getContext(), "block");
