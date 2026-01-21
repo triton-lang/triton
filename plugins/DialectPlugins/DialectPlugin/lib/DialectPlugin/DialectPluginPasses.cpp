@@ -11,22 +11,23 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-
+using namespace mlir::triton::plugin;
 
 namespace mlir::triton::plugin {
 #define GEN_PASS_DEF_DIALECTPLUGINMAGICOP
 #include "DialectPlugin/DialectPluginPasses.h.inc"
-} // namespace mlir::triton::plugin
+
+
+PluginTypeConverter::PluginTypeConverter(mlir::MLIRContext *context,
+                                               int numWarps, int threadsPerWarp,
+                                               int numCTAs)
+    : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp),
+      numCTAs(numCTAs) {
+  addConversion([](mlir::Type type) { return type; });
+}
+}
 
 namespace {
-class PluginTypeConverter : public TypeConverter {
-  public:
-  explicit PluginTypeConverter(MLIRContext *context,
-                                               int numWarps, int threadsPerWarp,
-                                               int numCTAs){
-      addConversion([](Type type) { return type; });
-    }
-};
 
 class PluginConversionTarget : public ConversionTarget {
 public:
@@ -45,8 +46,11 @@ struct PluginMagicOpConversion : OpConversionPattern<mlir::triton::plugin::Magic
   LogicalResult
   matchAndRewrite(mlir::triton::plugin::MagicOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     Value input = adaptor.getInput();
+    auto typeConverter = getTypeConverter<PluginTypeConverter>();
+    int numWarps = typeConverter->getNumWarps();
+    int numCTAs = typeConverter->getNumCTAs();
+    int threadsPerWarp = typeConverter->getThreadsPerWarp();
     rewriter.replaceOp(op, input);
     return success();
   }

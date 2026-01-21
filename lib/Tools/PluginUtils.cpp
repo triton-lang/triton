@@ -165,7 +165,6 @@ llvm::Expected<TritonPluginResult>
 TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle, int num_warps, int threadsPerWarp, int numCTAs) {
   if (auto Err = loadPlugin())
     return Err;
-  llvm::errs() << "num_warps 2: " << num_warps << "\n";
   return checkAPIResult(addPassAPI(pm, passHandle, num_warps, threadsPerWarp, numCTAs), passHandle);
 }
 
