@@ -10,6 +10,7 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
+    is_blackwell_ultra,
     is_hip_rdna3,
     is_hip_rdna4,
     is_hip_cdna3,
@@ -17,6 +18,7 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_hopper,
 )
+from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -406,7 +408,7 @@ def test_device_tma_store():
 
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
-               block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
+               block_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
                shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
                ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
     a_offs_m = ttgl.arange(0, M)[:, None]
@@ -444,7 +446,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
             (M, N),
             acc_layout,
             num_warps=ttgl.num_warps(),
-            cga_layout=block_layout_c.cga_layout,
+            cga_layout=cga_layout_c,
         )
         acc = acc_tmem.load(tmem_reg_layout)
     else:
@@ -714,18 +716,20 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast):
                           if bitwidth == 16 or (acc_dtype == torch.float32 and not transpose_a and transpose_b)])
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
+@pytest.mark.parametrize("instr_m", [64, 128] if is_blackwell() else [64])
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
-def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
-                           shape_n, shape_k, ctas_per_cga, two_ctas):
+def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
+                           shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
     # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
         pytest.skip("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
     if ctas_per_cga[0] == 1 and two_ctas:
-        pytest.skip("Need at least 2 CTAs along M for 2CTA mode")
+        pytest.skip("Need at least 2 CTAs for 2CTA mode")
+
     use_tcgen05 = is_blackwell()
 
     torch_dtype_map = {
@@ -739,7 +743,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     }
 
     # We'll choose a larger instr shape along N, but sure
-    instr_shape = [16, 32, 256 // bitwidth]
+    # instr_m is the instruction per warp group so we divide by 4
+    instr_shape = [instr_m // 4, 32, 256 // bitwidth]
     M = instr_shape[0] * warps[0]
     N = instr_shape[1] * warps[1]
     K = instr_shape[2]
@@ -779,6 +784,12 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         MAX_ROWS = 512
         if M * N // 128 // num_ctas > MAX_ROWS:
             N //= (M * N // 128 // num_ctas // MAX_ROWS)
+
+    total_shmem = (M + N) * K * bitwidth // 8
+    device = triton.runtime.driver.active.get_current_device()
+    MAX_SHMEM = max_shared_mem(device)
+    if total_shmem > MAX_SHMEM:
+        pytest.skip(f"Total shared memory {total_shmem} bytes exceeds the maximum allowed {MAX_SHMEM} bytes")
 
     if two_ctas and N // ctas_per_cga[1] == 512:
         # grep for [Note: numRepN > 1 and two_ctas]
@@ -848,11 +859,13 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
 
         cga_layout_a = make_2cta_cga_layout(ctas_per_cga, cta_split_a, cta_order, 0)
         cga_layout_b = make_2cta_cga_layout(ctas_per_cga_b, cta_split_b, cta_order, 1)
+        # The TMEM layout for instr_m == 128 splits along M, the one for instr_m == 64 splits along N
         cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0)
     else:
         cga_layout_a = make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
         cga_layout_b = make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
         cga_layout_c = make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+    cga_layout_c = tuple(tuple(basis) for basis in cga_layout_c)
 
     block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
                                         cga_layout=cga_layout_a)
@@ -869,15 +882,13 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, cga_layout=cga_layout_b)
     if use_tcgen05:
-        tmem_shape = (min(M // ctas_per_cga[0], 128), min(N // ctas_per_cga[1], 256))
+        tmem_shape = (instr_m, min(N // ctas_per_cga[1], 256))
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
                                         cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
         acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                                  cga_layout=cga_layout_c)
 
-    block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        cga_layout=cga_layout_c)
     torch.manual_seed(0)
 
     def cast(x, dtype):
@@ -892,7 +903,6 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         return x.view(dtype)
 
     # Sample bf16 as tf32 does not use the full range
-    device = triton.runtime.driver.active.get_current_device()
     a = cast(torch.randn((M, K), device=device, dtype=torch.float32), torch_dtype)
     b = cast(torch.randn((K, N), device=device, dtype=torch.float32), torch_dtype)
     out = torch.zeros((M, N), device=device, dtype=out_dtype)
@@ -906,7 +916,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         K,
         block_layout_a,
         block_layout_b,
-        block_layout_c,
+        cga_layout_c,
         acc_layout,
         shared_layout_a,
         shared_layout_b,
@@ -3195,3 +3205,126 @@ def test_scatter_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_
     )
 
     torch.testing.assert_close(output, expected)
+
+
+# --- TMEM Load with Reduction Tests ---
+
+
+@gluon.jit
+def tmem_reduction_kernel(
+    in_ptr,
+    out_ptr,
+    red_ptr,
+    M: ttgl.constexpr,
+    N: ttgl.constexpr,
+    RED_OP: ttgl.constexpr,
+    USE_ABS: ttgl.constexpr,
+    PROPAGATE_NAN: ttgl.constexpr,
+    num_warps: ttgl.constexpr,
+):
+    """Kernel to test TMEM load with hardware reduction."""
+    global_memory_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    global_memory_layout_1d: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+
+    # Offsets for 2D tensor
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_memory_layout))
+    offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, global_memory_layout))
+    offs_2d = offs_m[:, None] * N + offs_n[None, :]
+
+    # Load input from global memory
+    input_data = ttgl.load(in_ptr + offs_2d)
+
+    # Setup TMEM layout - blockN must match N for single reduction value per row
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1,  # packed for f32
+                                                     )
+
+    # Allocate TMEM
+    tmem = allocate_tensor_memory(
+        element_ty=in_ptr.dtype.element_ty,
+        shape=[M, N],
+        layout=tmem_layout,
+    )
+
+    # Get register layout for TMEM access
+    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
+        in_ptr.dtype.element_ty,
+        (M, N),
+        tmem_layout,
+        num_warps=num_warps,
+    )
+
+    # Store input to TMEM
+    input_data = ttgl.convert_layout(input_data, tmem_reg_layout)
+    tmem.store(input_data)
+
+    # Load from TMEM with reduction
+    if RED_OP == "min":
+        output, reduced = tmem.load_min(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+    elif RED_OP == "max":
+        output, reduced = tmem.load_max(tmem_reg_layout, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+
+    # Store full output
+    output = ttgl.convert_layout(output, global_memory_layout)
+    ttgl.store(out_ptr + offs_2d, output)
+
+    # Store reduced output (1D tensor of shape [M])
+    offs_1d = ttgl.arange(0, M, global_memory_layout_1d)
+    reduced = ttgl.convert_layout(reduced, global_memory_layout_1d)
+    ttgl.store(red_ptr + offs_1d, reduced)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
+@pytest.mark.parametrize("red_op", ["min", "max"])
+@pytest.mark.parametrize("use_abs", [False, True])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+@pytest.mark.parametrize(
+    "M, N, num_warps",
+    [(128, 32, 4), (128, 64, 4), (128, 128, 4), (128, 256, 4), (256, 128, 8)],
+)
+def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
+    """Test TMEM load with hardware reduction on MxN tile
+
+    Note: With M=128, only 4 warps can be used (warpsPerCTA=[4,1]) since all
+    warps must fit in the M dimension for reduction. 8 warps would require
+    M=256 (8*32=256). The N=256 case tests partial reduction combining where
+    4 hardware reductions are combined via llvm.minnum/maxnum.
+    """
+
+    # Create test input with some negative values
+    input_tensor = torch.randn(M, N, dtype=torch.float32, device="cuda")
+
+    # Inject NaN for testing if needed
+    use_nan = False if propagate_nan == tl.PropagateNan.NONE else True
+    if use_nan:
+        input_tensor[10, 5] = float("nan")
+        input_tensor[50, 15] = float("nan")
+
+    # Output tensors
+    output = torch.empty_like(input_tensor)
+    red_output = torch.empty(M, dtype=torch.float32, device="cuda")
+
+    # Run kernel
+    tmem_reduction_kernel[(1, )](
+        input_tensor,
+        output,
+        red_output,
+        M,
+        N,
+        red_op,
+        use_abs,
+        propagate_nan,
+        num_warps=num_warps,
+    )
+
+    # Verify full output matches input (tmem store/load roundtrip)
+    # Use equal_nan=True when we have NaN values in the input
+    torch.testing.assert_close(input_tensor, output, atol=0, rtol=0, equal_nan=use_nan)
+
+    # Compute expected reduction
+    ref_input = torch.abs(input_tensor) if use_abs else input_tensor
+    torch_red = torch.min if red_op == "min" else torch.max
+    expected_red = torch_red(ref_input, dim=1).values
+
+    # Verify reduction output
+    # Use equal_nan=True when testing NaN propagation
+    torch.testing.assert_close(expected_red, red_output, atol=1e-5, rtol=1e-5, equal_nan=use_nan)

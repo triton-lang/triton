@@ -302,6 +302,12 @@ template <typename CondT> static void check(CondT &&cond, const char *msg) {
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
+  py::enum_<ttng::TMEMLoadReduceModifier>(m, "TMEM_LOAD_REDUCE_MODIFIER",
+                                          py::module_local())
+      .value("MIN", ttng::TMEMLoadReduceModifier::MIN)
+      .value("MAX", ttng::TMEMLoadReduceModifier::MAX)
+      .export_values();
+
   py::class_<GluonOpBuilder, TritonOpBuilder>(
       m, "GluonOpBuilder", py::module_local(), py::dynamic_attr())
       .def(py::init<MLIRContext *>())
@@ -751,10 +757,41 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
              self.create<ttng::TMEMStoreOp>(memDesc, value, pred);
            })
-      .def("create_tmem_load",
-           [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
-             return self.create<ttng::TMEMLoadOp>(resultTy, memDesc);
-           })
+      .def(
+          "create_tmem_load",
+          [](GluonOpBuilder &self, Type resultTy, Value memDesc,
+             std::optional<ttng::TMEMLoadReduceModifier> redOp, bool useAbs,
+             tt::PropagateNan propagateNan) -> py::object {
+            ttng::TMEMLoadReduceModifierAttr redOpAttr = nullptr;
+            BoolAttr absAttr = nullptr;
+            BoolAttr nanAttr = nullptr;
+
+            if (redOp) {
+              redOpAttr = ttng::TMEMLoadReduceModifierAttr::get(
+                  self.getContext(), redOp.value());
+              if (useAbs)
+                absAttr = self.getBuilder().getBoolAttr(true);
+              if (propagateNan != tt::PropagateNan::NONE)
+                nanAttr = self.getBuilder().getBoolAttr(true);
+            }
+
+            auto op = self.create<ttng::TMEMLoadOp>(
+                resultTy, /*token=*/Type(), memDesc, /*dep=*/Value(), redOpAttr,
+                absAttr, nanAttr);
+
+            if (redOp) {
+              Value result = op.getResult();
+              Value red = op.getRed();
+              auto redTy = cast<RankedTensorType>(red.getType());
+              py::object redLayout = layoutToGluon(redTy.getEncoding());
+              return py::make_tuple(result, red, redLayout);
+            }
+            Value result = op.getResult();
+            return py::cast(result);
+          },
+          py::arg("resultTy"), py::arg("memDesc"),
+          py::arg("redOp") = py::none(), py::arg("useAbs") = false,
+          py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
            [](GluonOpBuilder &self, Value src, Value dst) {
              self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());
@@ -966,6 +1003,14 @@ void init_gluon_ir(py::module &&m) {
       .def("create_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           })
+      .def("create_amd_cluster_arrive",
+           [](GluonOpBuilder &self) {
+             self.create<ttag::ClusterBarrierArriveOp>();
+           })
+      .def("create_amd_cluster_wait",
+           [](GluonOpBuilder &self) {
+             self.create<ttag::ClusterBarrierWaitOp>();
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker) {

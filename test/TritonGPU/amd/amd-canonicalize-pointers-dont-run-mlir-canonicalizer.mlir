@@ -159,3 +159,24 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[dont_care_11:.*]] = tt.addptr %[[dont_care_10]], %[[dont_care_9]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
 // CHECK:           %[[dont_care_12:.*]] = tt.load %[[dont_care_11]] : tensor<1024x!tt.ptr<f32>>
 // CHECK:           tt.return %[[dont_care_8]], %[[dont_care_12]], %[[SCF_IF]]#2 : tensor<1024xf32>, tensor<1024xf32>, i32
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @make_tensor_descriptor(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %n: i32 {tt.divisibility = 16 : i32}) -> !tt.tensordesc<tensor<16xf32>> {
+    %c1_i64 = arith.constant 1 : i64
+    %c1_i32 = arith.constant 1 : i32
+    %ptr = tt.addptr %arg0, %c1_i32 : !tt.ptr<f32>, i32
+    %desc = tt.make_tensor_descriptor %ptr, [%n], [%c1_i64] : !tt.ptr<f32>, !tt.tensordesc<tensor<16xf32>>
+    tt.return %desc : !tt.tensordesc<tensor<16xf32>>
+  }
+}
+
+// CHECK-LABEL:   tt.func @make_tensor_descriptor(
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: i32 {tt.divisibility = 16 : i32}) -> !tt.tensordesc<tensor<16xf32>> {
+// CHECK:           %[[VAL_2:.*]] = arith.constant 1 : i64
+// CHECK:           %[[VAL_3:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_5:.*]] = tt.make_tensor_descriptor %[[VAL_4]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_2]]] : <f32>, <tensor<16xf32>>
+// CHECK:           tt.return %[[VAL_5]] : !tt.tensordesc<tensor<16xf32>>
+// CHECK:         }

@@ -16,8 +16,10 @@ class PhaseStoreBase {
 public:
   virtual ~PhaseStoreBase() = default;
 
-  virtual void *getOrCreatePtr(size_t phase) = 0;
+  virtual void *getPtr(size_t phase) = 0;
+  virtual void *createPtr(size_t phase) = 0;
   virtual void clearUpToInclusive(size_t phase) = 0;
+  virtual void clearPhase(size_t phase) = 0;
 };
 
 template <typename T> class PhaseStore final : public PhaseStoreBase {
@@ -30,21 +32,45 @@ public:
     std::unique_ptr<T> value;
   };
 
-  void *getOrCreatePtr(size_t phase) override {
-    auto slot = getOrCreateSlot(phase);
-    std::unique_lock<std::shared_mutex> slotLock(slot->mutex);
-    if (!slot->value) {
-      slot->value = std::make_unique<T>();
+  void *createPtr(size_t phase) override {
+    std::shared_ptr<Slot> slot;
+    {
+      std::unique_lock<std::shared_mutex> lock(phasesMutex);
+      auto &entry = phases[phase];
+      if (!entry)
+        entry = std::make_shared<Slot>();
+      slot = entry;
     }
-    return slot->value.get();
+    {
+      std::unique_lock<std::shared_mutex> slotLock(slot->mutex);
+      if (!slot->value) // slot value might not exist yet or been cleared
+        slot->value = std::make_unique<T>();
+      return slot->value.get();
+    }
   }
 
+  void *getPtr(size_t phase) override { return getSlot(phase)->value.get(); }
+
   void clearUpToInclusive(size_t phase) override {
+    clearRangeInclusive(0, phase);
+  }
+
+  void clearPhase(size_t phase) override { clearRangeInclusive(phase, phase); }
+
+  template <typename FnT> decltype(auto) withPtr(size_t phase, FnT &&fn) const {
+    auto slot = getSlot(phase);
+    std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
+    return std::forward<FnT>(fn)(slot->value.get());
+  }
+
+private:
+  void clearRangeInclusive(size_t beginPhase, size_t endPhase) {
     std::vector<std::shared_ptr<Slot>> slotsToClear;
     {
       std::shared_lock<std::shared_mutex> lock(phasesMutex);
-      for (auto it = phases.begin(); it != phases.end() && it->first <= phase;
-           ++it) {
+      auto it = phases.lower_bound(beginPhase);
+      auto endIt = phases.upper_bound(endPhase);
+      for (; it != endIt; ++it) {
         if (it->second) {
           slotsToClear.push_back(it->second);
         }
@@ -61,35 +87,9 @@ public:
     // Finally, prune the cleared phases from the map.
     {
       std::unique_lock<std::shared_mutex> lock(phasesMutex);
-      phases.erase(phases.begin(), phases.upper_bound(phase));
+      phases.erase(phases.lower_bound(beginPhase),
+                   phases.upper_bound(endPhase));
     }
-  }
-
-  template <typename FnT> decltype(auto) withPtr(size_t phase, FnT &&fn) const {
-    auto slot = getSlot(phase);
-    std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
-    if (!slot->value) {
-      throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                               " has no data.");
-    }
-    return std::forward<FnT>(fn)(slot->value.get());
-  }
-
-private:
-  std::shared_ptr<Slot> getOrCreateSlot(size_t phase) {
-    {
-      std::shared_lock<std::shared_mutex> lock(phasesMutex);
-      auto it = phases.find(phase);
-      if (it != phases.end() && it->second) {
-        return it->second;
-      }
-    }
-    std::unique_lock<std::shared_mutex> lock(phasesMutex);
-    auto &slot = phases[phase];
-    if (!slot) {
-      slot = std::make_shared<Slot>();
-    }
-    return slot;
   }
 
   std::shared_ptr<Slot> getSlot(size_t phase) const {

@@ -234,21 +234,31 @@ void MembarOrFenceAnalysis::visitTerminator(
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
+  triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                 triton::gpu::AddrSpace::Local);
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
-          triton::gpu::WarpSpecializePartitionsOp>(op)) {
-    // If the current op is a barrier, we sync previous reads and writes
+  auto containsLocalBarrier = [](Operation *op) {
+    if (isa<gpu::BarrierOp>(op))
+      return true;
+    if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
+      return true;
+    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
+      return barrier.hasLocal();
+    return false;
+  };
+
+  if (containsLocalBarrier(op)) {
+    // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
   }
 
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op->getNextNode())) {
+      !containsLocalBarrier(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);

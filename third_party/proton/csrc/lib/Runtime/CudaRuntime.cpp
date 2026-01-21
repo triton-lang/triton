@@ -25,8 +25,20 @@ void CudaRuntime::memset(void *devicePtr, uint32_t value, size_t size,
                              reinterpret_cast<CUstream>(stream));
 }
 
-void CudaRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
-  cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
+void CudaRuntime::allocateHostBuffer(uint8_t **buffer, size_t size,
+                                     bool mapped) {
+  if (mapped) {
+    cuda::memHostAlloc<true>(reinterpret_cast<void **>(buffer), size,
+                             CU_MEMHOSTALLOC_DEVICEMAP);
+  } else {
+    cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
+  }
+}
+
+void CudaRuntime::getHostDevicePointer(uint8_t *hostPtr, uint8_t **devicePtr) {
+  CUdeviceptr devicePtrV;
+  cuda::memHostGetDevicePointer<true>(&devicePtrV, hostPtr, 0);
+  *devicePtr = reinterpret_cast<uint8_t *>(devicePtrV);
 }
 
 void CudaRuntime::freeHostBuffer(uint8_t *buffer) {
