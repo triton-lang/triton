@@ -68,8 +68,7 @@ struct FenceMBarrierInitReleaseClusterOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Only one thread needs to issue the fence, just like mbarrier.init.
-    Value tid = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(tid, b.i32_val(0));
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
     PTXBuilder ptxBuilder;
     auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
@@ -96,8 +95,9 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    auto pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
@@ -126,8 +126,9 @@ struct InvalBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
     auto &barSyncOp = *ptxBuilder.create(ptx);
@@ -159,8 +160,9 @@ struct BarrierExpectConversion
     auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
     auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
 
-    auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     pred = b.and_(pred, adaptor.getPred());
 
     auto kBlock = StringAttr::get(op->getContext(), "block");
@@ -303,9 +305,11 @@ struct ArriveBarrierOpConversion
     }
     ptxAsm << ";";
 
-    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value id = getThreadId(rewriter, op.getLoc());
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    auto loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
