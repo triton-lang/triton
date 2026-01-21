@@ -2488,12 +2488,14 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
-  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();
   triton::populateMinMaxFOpToLLVMPattern(typeConverter, patterns,
                                          axisInfoAnalysis,
                                          hwNanPropagationSupported, benefit);
+  triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
+                                        axisInfoAnalysis, targetInfo, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 }
 } // namespace mlir::triton::AMD
