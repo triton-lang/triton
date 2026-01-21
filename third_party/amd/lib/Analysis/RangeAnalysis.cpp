@@ -735,14 +735,14 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
       // If we've "run the loop" #tripcount times, stop propagating.
+      bool reachedTripCount =
+          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
       // However, if trip count is 0, we still need to initialize loop-carried
       // values from the initial iter_args (so loop results equal initial
       // values).
-      bool skipPropagation =
-          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
-      bool isZeroTripCount = loop && loopTripCounts[loop] == 0;
-
-      if (skipPropagation && !isZeroTripCount)
+      bool needsZeroTripInit = loop && loopTripCounts[loop] == 0 &&
+                               argLat->getValue().isUninitialized();
+      if (reachedTripCount && !needsZeroTripInit)
         continue;
 
       ChangeResult changed;
@@ -770,9 +770,9 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      // For zero trip count loops, we initialize once but don't increment
+      // For initial iterations of zero trip count loops we do not increment
       // the visit count to avoid overcounting.
-      if (loop && changed == ChangeResult::Change && !isZeroTripCount)
+      if (loop && changed == ChangeResult::Change && !needsZeroTripInit)
         ++loopVisits[loopArgLat];
     }
   }
