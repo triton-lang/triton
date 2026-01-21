@@ -96,8 +96,9 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    auto pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
@@ -126,8 +127,9 @@ struct InvalBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
     auto &barSyncOp = *ptxBuilder.create(ptx);
