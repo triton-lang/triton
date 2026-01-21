@@ -516,7 +516,7 @@ void init_triton_llvm(py::module &&m) {
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion) {
+         bool enable_fp_fusion, bool disable_vector_combine) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -552,6 +552,17 @@ void init_triton_llvm(py::module &&m) {
         PassInstrumentationCallbacks passInstrCb;
         StandardInstrumentations standardInstr(mod->getContext(),
                                                /*DebugLogging*/ true);
+        bool enablePassInstrumentation = false;
+        if (disable_vector_combine) {
+          // VectorCombinePass::name() returns the C++ class name, not the
+          // registry name "vector-combine".
+          const StringRef kVectorCombinePassName = "VectorCombinePass";
+          passInstrCb.registerShouldRunOptionalPassCallback(
+              [kVectorCombinePassName](StringRef passName, Any) {
+                return passName != kVectorCombinePassName;
+              });
+          enablePassInstrumentation = true;
+        }
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
           auto optMap = llvm::cl::getRegisteredOptions();
           auto optIt = optMap.find("print-after-all");
@@ -560,8 +571,10 @@ void init_triton_llvm(py::module &&m) {
             *optPtr = true;
           }
           standardInstr.registerCallbacks(passInstrCb, &mam);
-          instrCbPtr = &passInstrCb;
+          enablePassInstrumentation = true;
         }
+        if (enablePassInstrumentation)
+          instrCbPtr = &passInstrCb;
 
         PipelineTuningOptions tuningOptions;
         tuningOptions.LoopUnrolling = true;
@@ -639,6 +652,7 @@ void init_triton_llvm(py::module &&m) {
       py::arg("arch") = "", py::arg("features") = "",
       py::arg("flags") = std::vector<std::string>{},
       py::arg("enable_fp_fusion") = false,
+      py::arg("disable_vector_combine") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
