@@ -2399,8 +2399,8 @@ struct ClampFOpConversion
 
     Value med = ROCDL::FMed3Op::create(rewriter, loc, elemTy, x, lo, hi);
 
-    // `PropagateNaN::ALL` requires us to return NaN if x is NaN. `v_med3`
-    // returns the min if any operand is NaN, so we must explicitly check NaN.
+    // `PropagateNaN::ALL` requires us to return NaN if x is NaN. Since `v_med3`
+    // returns the min if any operand is NaN, we must explicitly check NaN.
     if (op.getPropagateNan() == PropagateNan::ALL) {
       Value isNan =
           LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
