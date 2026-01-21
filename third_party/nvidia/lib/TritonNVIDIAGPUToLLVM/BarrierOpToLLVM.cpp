@@ -68,7 +68,8 @@ struct FenceMBarrierInitReleaseClusterOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Only one thread needs to issue the fence, just like mbarrier.init.
-    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value tid = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(tid, b.i32_val(0));
 
     PTXBuilder ptxBuilder;
     auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
@@ -305,11 +306,9 @@ struct ArriveBarrierOpConversion
     }
     ptxAsm << ";";
 
-    auto loc = op.getLoc();
-    TritonLLVMOpBuilder b(loc, rewriter);
-    // We use an elect predicate to tell ptxas that the operation is uniform,
-    // which results in better codegen.
-    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    Value id = getThreadId(rewriter, op.getLoc());
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
