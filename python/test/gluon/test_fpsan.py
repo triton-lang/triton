@@ -6,7 +6,9 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_interpreter
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_interpreter
+from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
+                                                                 tcgen05_mma)
 
 
 def _require_cuda_backend(device: str):
@@ -259,6 +261,73 @@ def test_fpsan_dot_fma_payload_semantics(device):
     out = torch.empty((B, B), device="cuda", dtype=torch.int32)
 
     # Wrap int storage as fp32 so fpsan operates on payload bits.
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, fpsan=True, num_warps=4)
+
+    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_fpsan_tcgen05_mma_payload_semantics(device):
+    _require_cuda_backend(device)
+
+    B = 64
+    BLOCK = ttgl.constexpr(B)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [ttgl.num_warps(), 1], [1, 0])
+
+        offs_m = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_n = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_k_row = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_k_col = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+
+        a_offs = offs_m * BLOCK + offs_k_col
+        b_offs = offs_k_row * BLOCK + offs_n
+        out_offs = offs_m * BLOCK + offs_n
+
+        a_tile = ttgl.load(a_ptr + a_offs)
+        b_tile = ttgl.load(b_ptr + b_offs)
+        c_tile = ttgl.load(c_ptr + out_offs)
+
+        smem_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
+        smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
+        smem_a = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK, BLOCK], smem_layout_a)
+        smem_b = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK, BLOCK], smem_layout_b)
+        smem_a.store(a_tile)
+        smem_b.store(b_tile)
+
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        acc_tmem.store(c_tile)
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+
+        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=True, pred=True, mbarriers=[bar])
+
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+
+        out = acc_tmem.load(layout)
+        ttgl.store(out_ptr + out_offs, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
     aw = triton.TensorWrapper(a, dtype=torch.float32)
     bw = triton.TensorWrapper(b, dtype=torch.float32)
     cw = triton.TensorWrapper(c, dtype=torch.float32)
