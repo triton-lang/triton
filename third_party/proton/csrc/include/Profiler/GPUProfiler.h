@@ -263,14 +263,14 @@ protected:
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope
           for (auto *data : profiler.dataSet) {
-            data->addScopeMetrics(scopeId, scalarMetrics);
-            data->addScopeMetrics(scopeId, tensorMetricsHost);
+            data->addMetrics(scopeId, scalarMetrics);
+            data->addMetrics(scopeId, tensorMetricsHost);
           }
         } else {
           // Add metrics to the current op
           for (auto [data, entry] : dataToEntry) {
-            data->addEntryMetrics(entry.phase, entry.id, scalarMetrics);
-            data->addEntryMetrics(entry.phase, entry.id, tensorMetricsHost);
+            data->addMetrics(entry.phase, entry.id, scalarMetrics);
+            data->addMetrics(entry.phase, entry.id, tensorMetricsHost);
           }
         }
       }

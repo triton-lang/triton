@@ -260,11 +260,11 @@ void InstrumentationProfiler::doAddMetrics(
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   if (dataToEntryMap.empty()) {
     for (auto *data : dataSet) {
-      data->addScopeMetrics(scopeId, scalarMetrics);
+      data->addMetrics(scopeId, scalarMetrics);
     }
   } else {
     for (auto [data, entry] : dataToEntryMap) {
-      data->addEntryMetrics(entry.phase, entry.id, scalarMetrics);
+      data->addMetrics(entry.phase, entry.id, scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the

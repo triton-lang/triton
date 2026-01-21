@@ -250,7 +250,7 @@ void flushDataPhasesImpl(
     const size_t minPhaseToFlush = range.minPhaseToFlush;
     const size_t maxPhaseToFlush = range.maxPhaseToFlush;
     dataFlushedPhases[data] = maxPhaseToFlush;
-    data->updateCompletePhase(maxPhaseToFlush);
+    data->completePhase(maxPhaseToFlush);
 
     if (!periodicFlushEnabled)
       continue;

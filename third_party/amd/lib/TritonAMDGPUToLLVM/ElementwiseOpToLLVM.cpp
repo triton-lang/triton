@@ -2378,6 +2378,39 @@ struct SqrtOpConversion
 private:
   bool ftz;
 };
+
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<triton::ClampFOp, ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(triton::ClampFOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (!(elemTy.isF16() || elemTy.isF32()))
+      return {};
+
+    Value x = operands[0][0];
+    Value lo = operands[0][1];
+    Value hi = operands[0][2];
+
+    Value med = ROCDL::FMed3Op::create(rewriter, loc, elemTy, x, lo, hi);
+
+    // `PropagateNaN::ALL` requires us to return NaN if x is NaN. Since `v_med3`
+    // returns the min if any operand is NaN, we must explicitly check NaN.
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      Value isNan =
+          LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
+      Value res = LLVM::SelectOp::create(rewriter, loc, isNan, x, med);
+      return {res};
+    }
+
+    return {med};
+  }
+};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2455,6 +2488,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   benefit.getBenefit() + 1);
   triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();

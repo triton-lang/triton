@@ -42,10 +42,10 @@ public:
     // Treat all phases up to currentPhase - 1 as flushed, even if a phase has
     // no GPU activity records (i.e., nothing to flush from device to host).
     for (auto *data : this->getDataSet()) {
-      const auto currentPhase = data->getCurrentPhase();
-      if (currentPhase == 0)
+      const auto phaseInfo = data->getPhaseInfo();
+      if (phaseInfo.current == 0)
         continue;
-      data->updateCompletePhase(currentPhase - 1);
+      data->completePhase(phaseInfo.current - 1);
     }
     return this;
   }
