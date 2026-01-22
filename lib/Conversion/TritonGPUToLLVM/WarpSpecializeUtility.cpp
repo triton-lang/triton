@@ -19,6 +19,11 @@ using namespace mlir::triton::gpu;
 void mlir::triton::convertOpTypes(Operation *op,
                                   const TypeConverter &typeConverter) {
   ImplicitLocOpBuilder b(op->getLoc(), op);
+  // WarpSpecializePartitionsOp exists in a region that must only contain a
+  // single op. This also means that we know that its operands always dominate
+  // the enclosing WarpSpecializeOp, so we can insert the casts there instead.
+  if (isa<WarpSpecializePartitionsOp>(op))
+    b.setInsertionPoint(op->getParentOp());
   SmallVector<Value> operands = llvm::to_vector(op->getOperands());
   for (Value &operand : operands) {
     Type type = typeConverter.convertType(operand.getType());
@@ -105,8 +110,9 @@ void mlir::triton::elideTrivialCaptures(LLVM::LLVMFuncOp func,
   // once, we will rely on CSE to clean them up.
   SetVector<Operation *> subgraph;
   for (WarpSpecializeOp wsOp : wsOps) {
-    llvm::BitVector toErase(wsOp.getNumOperands());
-    for (auto [i, capture] : llvm::enumerate(wsOp.getExplicitCaptures())) {
+    auto partOp = wsOp.getPartitionOp();
+    llvm::BitVector toErase(partOp.getNumOperands());
+    for (auto [i, capture] : llvm::enumerate(partOp.getExplicitCaptures())) {
       subgraph.clear();
       if (failed(findTrivialSubcomputation(func, capture, subgraph)))
         continue;
@@ -128,7 +134,7 @@ void mlir::triton::elideTrivialCaptures(LLVM::LLVMFuncOp func,
       }
     }
 
-    wsOp->eraseOperands(toErase);
+    partOp->eraseOperands(toErase);
     for (Region *region : wsOp.getPartitionRegions()) {
       region->front().eraseArguments(toErase);
     }
@@ -310,14 +316,16 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     }
 
     // Store the captures if there are any.
-    if (ws.getNumOperands()) {
+    auto partOp = ws.getPartitionOp();
+    if (partOp.getNumOperands()) {
       auto captureType = LLVM::LLVMStructType::getLiteral(
-          b.getContext(), llvm::to_vector(ws.getOperandTypes()),
+          b.getContext(), llvm::to_vector(partOp.getOperandTypes()),
           /*isPacked=*/true);
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-      for (auto [j, arg] : llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()),
-                                     ws.getOperands())) {
+      for (auto [j, arg] :
+           llvm::zip(llvm::seq<int32_t>(partOp.getNumOperands()),
+                     partOp.getOperands())) {
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, j});
         b.store(arg, ptr, /*align=*/1);

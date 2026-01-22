@@ -25,8 +25,11 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
         x = x.mT
     if x.shape[1 - mx_axis] < 32:
         pytest.skip("Not enough elements along non-mx axis")
-    layout = HopperMXValueLayout(x.shape, mx_axis, mma_version)
-    res = layout.unswizzle_data(layout.swizzle_data(x))
+    layout = HopperMXValueLayout(mx_axis - 2, mma_version)
+    shape = list(x.shape)
+    shape[-1] *= 2
+    transformation = layout.make_transformation(shape, is_fp4=False)
+    res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res == x).all()
 
 
@@ -35,8 +38,9 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
 @pytest.mark.parametrize("shape", [(256, 64), (256, 128), (256, 256)])
 def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
-    layout = HopperMXScaleLayout(x.shape, mx_axis=mx_axis, num_warps=num_warps)
-    res = layout.unswizzle_data(layout.swizzle_data(x))
+    layout = HopperMXScaleLayout(mx_axis=mx_axis - 2, num_warps=num_warps)
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res[:shape[0], :shape[1]] == x).all()
 
 
@@ -73,27 +77,30 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
-def test_upcast_mxfp4_to_bf16():
-    mx_axis = 0
-    num_warps = 4
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("mx_axis", [0, 1])
+def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
-    shape = (256, 128)
+    shape = [64, 64]
+    shape[1 - mx_axis] = 32 * num_warps
     x = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
     x_fp4_val, x_fp4_scale = downcast_to_mxfp(x, torch.uint8, axis=mx_axis)
     x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=mx_axis)
     x_fp4_val = wrap_torch_tensor(x_fp4_val, dtype=FP4)
     x_fp4_scale = wrap_torch_tensor(x_fp4_scale)
-    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout, mx_axis=mx_axis)
-    x_fp4_scale = convert_layout(x_fp4_scale, HopperMXScaleLayout, mx_axis=mx_axis, num_warps=num_warps)
+    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout(mx_axis=mx_axis - 2, mma_version=3))
+    x_fp4_scale = convert_layout(x_fp4_scale, HopperMXScaleLayout(mx_axis=mx_axis - 2, num_warps=num_warps))
     y = torch.empty_like(x_bf16)
+    scale_block = [s // 32 if i == mx_axis else s for i, s in enumerate(shape)]
+    scale_block = x_fp4_scale.storage.layout.swizzle_block_shape(scale_block)
+    value_block = [s // 2 if i == mx_axis else s for i, s in enumerate(shape)]
+    value_block = x_fp4_val.storage.layout.swizzle_block_shape(value_block)
     _upcast_mxfp4_to_bf16[(1, )](
         y, x_fp4_val.storage.data, x_fp4_scale.storage.data,  #
         x_fp4_val.storage.data.stride(0), x_fp4_val.storage.data.stride(1),  #
         x_fp4_scale.storage.data.stride(0), x_fp4_scale.storage.data.stride(1),  #
         y.stride(0), y.stride(1),  #
-        x_fp4_val.storage.data.shape[0], x_fp4_val.storage.data.shape[1],  #
-        shape[0], shape[1],  #
-        x_fp4_scale.storage.data.shape[0], x_fp4_scale.storage.data.shape[1],  #
-        mx_axis=mx_axis, num_warps=num_warps)
+        *value_block, *shape,  #
+        *scale_block, mx_axis=mx_axis, num_warps=num_warps)
     assert (y == x_bf16).all()

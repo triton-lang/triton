@@ -445,10 +445,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "strides=[");
-    for (int i = 0; i < rank; ++i) {
+    for (int i = 0; i + 1 < rank; ++i) {
       off += snprintf(err + off, sizeof(err) - off, "%llu%s",
                       (unsigned long long)stridesLL[i],
-                      (i + 1 < rank) ? ", " : "");
+                      (i + 2 < rank) ? ", " : "");
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "blockSize=[");
@@ -461,10 +461,28 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
       off += snprintf(err + off, sizeof(err) - off, "%u%s",
                       (unsigned)elementStrides[i], (i + 1 < rank) ? ", " : "");
     }
-    off += snprintf(err + off, sizeof(err) - off, "]\n");
+    off += snprintf(err + off, sizeof(err) - off, "] fill=%d\n", (int)fill);
     PyErr_SetString(PyExc_RuntimeError, err);
 
     goto cleanup;
+  }
+
+  // Follow the CUTLASS change for the driver version check
+  // https://github.com/NVIDIA/cutlass/commit/b7ecaa605dd70326900433695e11ebfec407edd2#diff-1dfcaf77b33258ff3175540718d9caff1cd471215f741ba42943ef00770e6d04
+  int driver_version = 0;
+  CUresult driver_version_result = cuDriverGetVersion(&driver_version);
+  assert(driver_version_result == CUDA_SUCCESS);
+
+  if (driver_version <= 13010) {
+    int max_byte_index = 0;
+    for (int i = 0; i < rank; ++i) {
+      int bytes_stride = i == 0 ? elemSize : stridesLL[i - 1];
+      max_byte_index += (shapeInt[i] - 1) * bytes_stride;
+    }
+    if (max_byte_index + 1 < 128 * 1024) {
+      uint64_t *desc_u64 = (uint64_t *)&desc->tensorMap;
+      desc_u64[1] &= ~(1llu << 21);
+    }
   }
 
   return (PyObject *)desc;

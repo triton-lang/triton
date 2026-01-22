@@ -152,16 +152,13 @@ public:
       llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
       llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) override;
 
-  void visitNonControlFlowArguments(
-      Operation *op, const RegionSuccessor &successor,
-      llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> argLattices,
-      unsigned firstIndex) override;
-
   LogicalResult initialize(Operation *top) override;
 
 private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
+
+  static void verifyOpIsSupported(Operation *op);
 };
 
 } // namespace mlir::triton

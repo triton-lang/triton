@@ -52,7 +52,7 @@ unsigned getElementBitWidth(RankedTensorType type);
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        SmallVector<int64_t> &shapePerCTA);
+                        ArrayRef<int64_t> shape);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
@@ -176,6 +176,17 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 // encoding propagation. Backwards propagation can be controlled via
 // propagationAction to stop the current chain or aborting signalling an error
 enum class TraversalAction { Continue, Stop, AbortWithError };
+
+/// For a given \p root value with desired layout \p rootEncoding, get the
+/// backward slice of values that would have to be recreated to produce the
+/// value of \p root with that layout (without an intervening layout
+/// conversion). The traversal stops once we reach an operand that meets one of
+/// the following:
+///   1. has the desired layout
+///   2. \p getExistingConversion returns an existing converted value
+///   3. \p propagateAction does not return Continue.
+/// The slice is returned in \p slice, and the desired layout of each value in
+/// the slice is stored in \p layouts.
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,

@@ -1725,3 +1725,77 @@ tt.func @peeled_prologue_statically_dead(
 }
 
 }
+
+// -----
+
+// Disable pipelining for loops that contain barriers.
+//   Barriers are problematic since they are not chained to any other operation.
+// COMMON-LABEL: tt.func public @barrier_in_loop_kernel
+// COMMON:  scf.for
+// COMMON:    tt.load
+// COMMON:    ttg.barrier local
+// COMMON:    tt.store
+// COMMON-NOT:  ttg.barrier local
+// COMMON:  tt.return
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @barrier_in_loop_kernel(%arg1: tensor<1024x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32},  %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    scf.for %arg4 = %c0_i32 to %arg2 step %c1024_i32  : i32 {
+      %12 = tt.load %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+      ttg.barrier local
+      tt.store %arg1, %12 : tensor<1024x!tt.ptr<f32>, #blocked>
+    } {tt.num_stages = 2 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Disable pipelining for loops that contain asserts because we should not reorder them
+// COMMON-LABEL: tt.func public @assert_in_loop_kernel
+// COMMON:  scf.for
+// COMMON:    tt.load
+// COMMON:    tt.assert
+// COMMON:    tt.store
+// COMMON-NOT:  tt.assert
+// COMMON:  tt.return
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @assert_in_loop_kernel(%arg1: tensor<1024x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32},  %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg3: i1) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    scf.for %arg4 = %c0_i32 to %arg2 step %c1024_i32  : i32 {
+      %12 = tt.load %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+      tt.assert %arg3, "some assert" : i1
+      tt.store %arg1, %12 : tensor<1024x!tt.ptr<f32>, #blocked>
+    } {tt.num_stages = 2 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Disable pipelining for loops that contain prints because we should not reorder them
+// COMMON-LABEL: tt.func public @print_in_loop_kernel
+// COMMON:  scf.for
+// COMMON:    tt.load
+// COMMON:    tt.print
+// COMMON:    tt.store
+// COMMON-NOT:  tt.print
+// COMMON:  tt.return
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @print_in_loop_kernel(%arg1: tensor<1024x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32},  %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg3: i32) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    scf.for %arg4 = %c0_i32 to %arg2 step %c1024_i32  : i32 {
+      %12 = tt.load %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+      tt.print "some print" {hex = false, isSigned = array<i32: 0>} : %arg3 : i32
+      tt.store %arg1, %12 : tensor<1024x!tt.ptr<f32>, #blocked>
+    } {tt.num_stages = 2 : i32}
+    tt.return
+  }
+}

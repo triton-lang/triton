@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -19,19 +20,22 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  size_t addOp(size_t scopeId, const std::string &name) override;
+  std::string toJsonString(size_t phase) const override;
 
-  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
+  std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
+  DataEntry addOp(const std::string &name) override;
+
+  DataEntry addOp(size_t phase, size_t contextId,
+                  const std::vector<Context> &contexts) override;
 
   void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
-  std::string toJsonString() const override;
-
-  void clear() override;
+  void
+  addMetrics(size_t phase, size_t entryId,
+             const std::map<std::string, MetricValueType> &metrics) override;
 
 protected:
   // ScopeInterface
@@ -45,16 +49,20 @@ private:
   // protected by a (shared) mutex.
   class Tree;
   json buildHatchetJson(TreeData::Tree *tree) const;
+  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
 
-  void dumpHatchet(std::ostream &os) const;
-
-  void doDump(std::ostream &os, OutputFormat outputFormat) const override;
+  // Data
+  void doDump(std::ostream &os, OutputFormat outputFormat,
+              size_t phase) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::Hatchet;
   }
 
-  std::unique_ptr<Tree> tree;
+  void dumpHatchet(std::ostream &os, size_t phase) const;
+  void dumpHatchetMsgPack(std::ostream &os, size_t phase) const;
+
+  PhaseStore<Tree> treePhases;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
 };

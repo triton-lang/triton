@@ -1,9 +1,12 @@
 #ifndef TRITONINSTRUMENT_UTILITY_H
 #define TRITONINSTRUMENT_UTILITY_H
 
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+
+#include <array>
 
 namespace mlir::triton::instrument {
 
@@ -74,15 +77,18 @@ struct AuxDataMap {
   RegionToValueMap readVisibility[numMemTypes];
   RegionToValueMap readTracking[numMemTypes];
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  RegionToValueMap aliasMatrices[numMemTypes];
   RegionToValueMap lock;
   RegionToValueMap waiting;
+  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 
 private:
-  void getBuffersAndBarriers(ModuleOp module,
-                             SmallVector<SmallVector<uint32_t>, 2> &bufValues,
-                             SmallVector<uint32_t> &barrierValues);
+  void getBuffersAndBarriers(
+      ModuleOp module,
+      SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
+      SmallVector<triton::BufferRegion> &barrierRegions);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map);
   void createInWarpSpecialize(

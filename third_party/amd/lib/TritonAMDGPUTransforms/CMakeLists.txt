@@ -7,6 +7,7 @@ add_triton_library(TritonAMDGPUTransforms
   OptimizeEpilogue.cpp
   OptimizeDotOperands.cpp
   HoistLayoutConversions.cpp
+  SinkLayoutConversions.cpp
   ReorderInstructions.cpp
   Pipeline.cpp
   ScheduleLoops.cpp
@@ -17,6 +18,7 @@ add_triton_library(TritonAMDGPUTransforms
   FoldTrueCmpIOp.cpp
   UpdateAsyncWaitCount.cpp
   Utility.cpp
+  WarpPipeliner.cpp
 
   DEPENDS
   TritonAMDGPUIR

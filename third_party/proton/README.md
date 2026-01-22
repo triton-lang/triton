@@ -396,3 +396,29 @@ Continuous sampling can allow for more runtime optimizations, but it makes it mo
 - Visible devices on AMD GPUs
 
 Environment variables such as `HIP_VISIBLE_DEVICES`, and `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. Instead, `ROCR_VISIBLE_DEVICES` is recommended to be used.
+
+## Experimental features
+
+### Get profile data in memory
+
+Proton provides APIs to get profile data without dumping to files in the `data` module. These APIs are experimental and may change in the future.
+
+```python
+import triton.profiler as proton
+
+session_id = proton.start(name="profile_name")
+...
+
+# data.get_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
+# Usage 1: flush the profile data from the device eagerly and access all data
+proton.deactivate(session_id, flushing=True) # with flushing=False, it's not guaranteed that all kernels are finished
+# Get a json dictionary
+data = proton.data.get_json(session_id)
+# Get a msgpack bytes
+data_msgpack = proton.data.get_msgpack(session_id)
+
+# Usage 2: query the phase completion status and access data in the completed phases
+if proton.data.is_phase_complete(session_id, phase_id):
+    data_phase = proton.data.get_json(session_id, phase_id)
+    proton.data.clear(session_id, phase_id)
+```

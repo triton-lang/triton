@@ -1000,11 +1000,15 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
-    std::function<TraversalAction(Operation *)> stopPropagation) {
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
+    std::function<TraversalAction(Operation *)> propagationAction) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
-                                                 layout, stopPropagation);
+                                                 layout, propagationAction);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1015,6 +1019,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1447,43 +1453,25 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
-    if (!op)
+    if (!op || !isExtOrBroadcastOp(op))
       continue;
-    if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
-      Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
-      if (!srcEncoding)
-        return;
-      LogicalResult result =
-          getRematerializableSlice(op->getOpOperand(0), srcEncoding, tempSlice,
-                                   tempLayout, abortOnForOpOrStopOn());
 
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
+    Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
+    if (!srcEncoding)
+      return;
 
-      // If we can rematerialize the rest of the ext slice we can ignore this
-      // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
-        continue;
-      }
-      // Only apply it if there is a single ext op otherwise we would have to
-      // duplicate the convert.
-      if (extOrBroadcastOp != nullptr)
-        return;
-      extOrBroadcastOp = op;
-    }
+    // If we can rematerialize the rest of the ext slice we can ignore this
+    // ext as it won't need a convert.
+    if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                           slice, layout,
+                                           abortOnForOpOrStopOn())))
+      continue;
+
+    // Only apply it if there is a single ext op otherwise we would have to
+    // duplicate the convert.
+    if (extOrBroadcastOp != nullptr)
+      return;
+    extOrBroadcastOp = op;
   }
 
   if (extOrBroadcastOp == nullptr)
@@ -1516,7 +1504,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 void LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
-  // stopping at conditionals. This subslice is used to initialize the analysis.
+  // stopping at conditionals. This subslice is used to initialize the
+  // analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
@@ -1525,17 +1514,17 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
                                       layout, abortOnForOpOrStopOn(isIfOp))))
     return;
 
-  // These are the conditional edges above which conversions should be hoisted.
-  // The value represents the `scf.if` op result and the operand represents the
-  // edge into one of the branches.
+  // These are the conditional edges above which conversions should be
+  // hoisted. The value represents the `scf.if` op result and the operand
+  // represents the edge into one of the branches.
   SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
-  // The list of `scf.if` op results in the slice that are not rematerializable.
-  // Hoisting is terminated at these values.
+  // The list of `scf.if` op results in the slice that are not
+  // rematerializable. Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // This loop recurses through the subslices of the backwards dependencies, so
-  // re-query the size of `slice`.
+  // This loop recurses through the subslices of the backwards dependencies,
+  // so re-query the size of `slice`.
   for (unsigned i = 0; i != slice.size(); ++i) {
     Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
@@ -1554,23 +1543,19 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
     OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
 
-    SetVector<Value> thenSlice, elseSlice;
-    DenseMap<Value, Attribute> thenLayout, elseLayout;
+    auto newSlice = slice;
+    auto newLayout = layout;
 
-    LogicalResult thenResult =
-        getRematerializableSlice(thenRes, rootLayout, thenSlice, thenLayout,
-                                 abortOnForOpOrStopOn(isIfOp));
-    LogicalResult elseResult =
-        getRematerializableSlice(elseRes, rootLayout, elseSlice, elseLayout,
-                                 abortOnForOpOrStopOn(isIfOp));
+    LogicalResult thenResult = getRematerializableSlice(
+        thenRes, rootLayout, newSlice, newLayout, abortOnForOpOrStopOn(isIfOp));
+    LogicalResult elseResult = getRematerializableSlice(
+        elseRes, rootLayout, newSlice, newLayout, abortOnForOpOrStopOn(isIfOp));
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
     if (succeeded(thenResult) && succeeded(elseResult)) {
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
+      slice = std::move(newSlice);
+      layout = std::move(newLayout);
       continue;
     }
 
@@ -1589,17 +1574,15 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
       continue;
     }
 
+    slice = std::move(newSlice);
+    layout = std::move(newLayout);
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
     if (succeeded(thenResult)) {
       hoistAbove.emplace_back(v, &elseRes);
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
     } else {
       hoistAbove.emplace_back(v, &thenRes);
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
     }
   }
 

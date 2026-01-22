@@ -57,10 +57,19 @@ template <bool CheckSuccess> hipError_t memFree(hipDeviceptr_t dptr);
 const std::string getHipArchName(uint64_t index);
 
 const char *getKernelNameRef(const hipFunction_t f);
+
 const char *getKernelNameRefByPtr(const void *hostFunction, hipStream_t stream);
 
 template <bool CheckSuccess>
 hipError_t memAllocHost(void **pp, size_t bytesize);
+
+template <bool CheckSuccess>
+hipError_t memHostAlloc(void **pp, size_t bytesize, unsigned int flags);
+
+template <bool CheckSuccess>
+hipError_t memHostGetDevicePointer(hipDeviceptr_t *pdptr, void *p,
+                                   unsigned int flags);
+
 template <bool CheckSuccess> hipError_t memFreeHost(void *p);
 
 } // namespace hip

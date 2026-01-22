@@ -1,27 +1,20 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "TraceDataIO/CircularLayoutParser.h"
 
-#include "Driver/GPU/CudaApi.h"
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <map>
 #include <numeric>
-#include <queue>
-#include <set>
 #include <stdexcept>
 
 namespace proton {
 
 constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024;           // 64MB
 constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
-
-thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
-    std::map<Data *, size_t>(); // Initialize the static member variable
 
 InstrumentationProfiler::~InstrumentationProfiler() {}
 
@@ -207,15 +200,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
     runtime->allocateHostBuffer(&hostBuffer, newSize);
   }
 
-  auto dataSet = getDataSet();
   const auto &functionName = functionNames[functionId];
-  if (dataScopeIdMap.empty()) {
-    for (auto &data : dataSet) {
-      auto scopeId = Scope::getNewScopeId();
-      data->addOp(scopeId, functionName);
-      dataScopeIdMap[data] = scopeId;
-    }
-  }
+  enterOp(Scope(functionName));
 
   auto config = getParserConfig(functionId, size);
   auto circularLayoutConfig =
@@ -249,35 +235,37 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               auto normalizedDuration = static_cast<double>(duration) /
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
-              for (auto *data : dataSet) {
-                auto kernelId = dataScopeIdMap[data];
-                auto scopeId = data->addOp(kernelId, contexts);
-                data->addMetric(
-                    scopeId,
-                    std::make_shared<CycleMetric>(
-                        event.first->cycle, event.second->cycle, duration,
-                        normalizedDuration, kernelId, functionName,
-                        blockTrace.blockId, blockTrace.procId, trace.uid,
-                        static_cast<uint64_t>(
-                            reinterpret_cast<uintptr_t>(device)),
-                        static_cast<uint64_t>(runtime->getDeviceType()),
-                        timeShiftCost, blockTrace.initTime,
-                        blockTrace.preFinalTime, blockTrace.postFinalTime));
+              for (auto [data, entry] : dataToEntryMap) {
+                auto kernelId = entry.id;
+                entry = data->addOp(entry.phase, kernelId, contexts);
+                entry.upsertMetric(std::make_unique<CycleMetric>(
+                    event.first->cycle, event.second->cycle, duration,
+                    normalizedDuration, kernelId, functionName,
+                    blockTrace.blockId, blockTrace.procId, trace.uid,
+                    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device)),
+                    static_cast<uint64_t>(runtime->getDeviceType()),
+                    timeShiftCost, blockTrace.initTime, blockTrace.preFinalTime,
+                    blockTrace.postFinalTime));
               }
             }
           }
         }
       });
 
-  dataScopeIdMap.clear();
+  exitOp(Scope(functionName));
 }
 
 void InstrumentationProfiler::doAddMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
-  // Currently no-op
-  for (auto *data : getDataSet()) {
-    data->addMetrics(scopeId, scalarMetrics);
+  if (dataToEntryMap.empty()) {
+    for (auto *data : dataSet) {
+      data->addMetrics(scopeId, scalarMetrics);
+    }
+  } else {
+    for (auto [data, entry] : dataToEntryMap) {
+      data->addMetrics(entry.phase, entry.id, scalarMetrics);
+    }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
   // parent Profiler

@@ -124,7 +124,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 SmallVector<int64_t> &shapePerCTA) {
+                                 ArrayRef<int64_t> shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -887,18 +887,21 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op/while op results for now.
-    if (currentValue.getDefiningOp<scf::WhileOp>())
+    // Skip propagating through for op/while op/ws op results for now.
+    // TODO: enable this based on needs.
+    auto defOp = currentValue.getDefiningOp();
+    if (isa_and_nonnull<scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
-    Value existing;
+    // If there is already an existing conversion to the target layout, we don't
+    // need to propagate to the operands.
+    // Note that this is per-use rather than per-value, so if another use fails
+    // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
-        (existing = getExistingConversion(*currentValueUse, encoding))) {
-      if (failed(updateLayout(existing, encoding)))
-        return failure();
-      currentValue = existing;
+        getExistingConversion(*currentValueUse, encoding)) {
+      continue;
     }
 
     if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
@@ -1379,18 +1382,15 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
       deadArg.push_back(yieldOperand.index());
     }
-    if (deadArg.empty())
-      return failure();
-    rewriter.modifyOpInPlace(forOp, [&]() {
-      // For simplicity we just change the dead yield operand to use the
-      // associated argument and leave the operations and argument removal to
-      // dead code elimination.
-      for (unsigned deadArgIdx : deadArg) {
-        BlockArgument arg = block.getArgument(deadArgIdx + 1);
-        yieldOp.setOperand(deadArgIdx, arg);
-      }
-    });
-    return success();
+    bool changed = false;
+    // For simplicity we just replace users of the block arg with init value and
+    // leave the operations and argument removal to dead code elimination.
+    for (unsigned deadArgIdx : deadArg) {
+      BlockArgument arg = block.getArgument(deadArgIdx + 1);
+      changed |= !arg.use_empty();
+      rewriter.replaceAllUsesWith(arg, forOp.getTiedLoopInit(arg)->get());
+    }
+    return success(changed);
   }
 };
 
@@ -1570,9 +1570,9 @@ void replaceUsesAndPropagateType(
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Propagate through `ttg.warp_specialize`.
-    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
-      for (Region *region : wsOp.getPartitionRegions())
-        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(use.getOwner())) {
+      for (Region &region : wsOp.getPartitionRegions())
+        region.getArgument(use.getOperandNumber()).setType(val.getType());
     }
 
     // Non-subview/trans ops will be replaced by `val`.
@@ -1733,10 +1733,11 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
 
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
+  auto numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (!(barrierType.getElementType().isInteger(64) &&
+        barrierType.getRank() == 1 && barrierType.getShape()[0] <= numCTAs))
+    return op->emitOpError("barrier allocation must be a descriptor of "
+                           "Nxi64 type with N <= number of CTAs");
   return success();
 }
 

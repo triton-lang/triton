@@ -3,8 +3,6 @@
 // The number in SSA symbolic names represents the number of generated async load operation at assembly level a ttg.async_copy_global_to_local will generate, which is counted by this pass.
 // For example `ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst ..` will generate two global_load_async_to_lds_b128 assembly instruction
 
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
@@ -512,6 +510,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // While before-body (2) + 5 prologue groups = 7
     // CHECK: amdg.async_wait {num_inst = 7
     ttg.async_wait {num = 6: i32}
+
+    tt.return
+  }
+
+  // CHECK-LABEL: async_wait_with_execute_regions
+  tt.func public @async_wait_with_execute_regions(
+        %memDesc1Inst: !ttg.memdesc<64x16xf16, #shared, #smem, mutable>,
+        %ptr1Inst: tensor<64x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>},
+        %memDesc2Inst: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>,
+        %ptr2Inst: tensor<128x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
+
+    scf.execute_region {
+      scf.execute_region {
+        // Emits 1 instruction
+        ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
+        ttg.async_commit_group
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      scf.execute_region {
+        // Emits 2 instructions
+        ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+        ttg.async_commit_group
+
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+
+      // Wait for both execute regions
+      // CHECK: amdg.async_wait {num_inst = 3
+      ttg.async_wait {num = 2 : i32}
+
+      // Check that we only traverse each execute region once
+      // CHECK: amdg.async_wait {num_inst = 3
+      ttg.async_wait {num = 6 : i32}
+
+      // Wait only for the second execute region
+      // CHECK: amdg.async_wait {num_inst = 2
+      ttg.async_wait {num = 1 : i32}
+
+      scf.yield
+    }
+
+    // Wait for both nested execute regions
+    // CHECK: amdg.async_wait {num_inst = 3
+    ttg.async_wait {num = 2 : i32}
 
     tt.return
   }

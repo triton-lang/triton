@@ -9,5 +9,4 @@ from .profile import (
     profile,
     DEFAULT_PROFILE_NAME,
 )
-from .data import get_data
-from . import context, specs, mode
+from . import context, specs, mode, data

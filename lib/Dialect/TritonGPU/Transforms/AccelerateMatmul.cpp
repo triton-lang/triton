@@ -40,7 +40,8 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
     versionsSupported = {2};
   } else if (computeCapability < 100) {
     versionsSupported = {3, 2};
-  } else if (computeCapability < 110) {
+  } else if (computeCapability < 120) {
+    // Exclude consumer Blackwell (sm120)
     versionsSupported = {5, 2};
   } else if (computeCapability < 130) {
     versionsSupported = {2};
@@ -550,7 +551,10 @@ public:
       return failure();
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
-    bool useTwoCTAs = canUseTwoCTAs(dotOp);
+    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
+    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
+    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
+    bool useTwoCTAs = false;
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
     }
@@ -775,7 +779,7 @@ public:
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
     auto CGALayout = getCGALayout(oldRetType.getEncoding());
-    if ((computeCapability) / 10 != 10)
+    if (computeCapability < 100 || computeCapability >= 120)
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();

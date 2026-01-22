@@ -30,7 +30,9 @@ public:
                Value cmp) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
-               bool isWarpSync = false) const override;
+               triton::gpu::AddrSpace targets) const override;
+
+  void warpSync(Location loc, RewriterBase &rewriter) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
@@ -100,6 +102,7 @@ public:
   // ttg.async_wait
   bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+  bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
 
   bool supportsMultiCTALaunch() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;

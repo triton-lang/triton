@@ -174,7 +174,8 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  auto barrierOp = gpu::BarrierOp::create(builder, loc);
+  auto barrierOp = triton::gpu::BarrierOp::create(
+      builder, loc, triton::gpu::AddrSpace::Local);
   auto schedBarrierOp = ROCDL::SchedBarrier::create(builder, loc, 0);
   return {barrierOp, schedBarrierOp};
 }
@@ -507,7 +508,7 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
 // There are multiple guards at the boundary of each cluster.
 // (1) sched.barrier : with mask0 to prevent compiler backed from reordering
 //  instructions across the boundary
-// (2) gpu.barrier : ensures asymmetric synchronization at each point
+// (2) ttg.barrier : ensures asymmetric synchronization at each point
 // (3) setprio (1->0) : in order to avoid incoming warp overtaking resource
 //  while the other warp is actively using it.
 //
@@ -604,7 +605,7 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[1]);
   // The first cluster just fits into the two cluster pingpong and cannot
-  // include wait of the local_load inserted by the gpu.barrier, using s.barrier
+  // include wait of the local_load inserted by the ttg.barrier, using s.barrier
   // instead. backend will schedule the local memory fences later in the dot0
   // cluster.
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
@@ -776,7 +777,9 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(triton::gpu::BarrierOp::create(builder, loc,
+                                             triton::gpu::AddrSpace::Local),
+              false);
   }
   // Ideally we want the memory cluster to start with
   //
@@ -814,7 +817,9 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(triton::gpu::BarrierOp::create(builder, loc,
+                                             triton::gpu::AddrSpace::Local),
+              false);
   }
   prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
@@ -897,7 +902,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
-  appendOp(dotOps[0]);
+  moveOpAndPredecessorsUpSameBlock(dotOps[0]);
 
   appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
@@ -915,7 +920,8 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   // Set barrier before starting the loop. This resolves any remaining required
   // synchronization before beginning the specialized asymmetric
   // synchronization.
-  auto preBarrier = gpu::BarrierOp::create(builder, loc);
+  auto preBarrier = triton::gpu::BarrierOp::create(
+      builder, loc, triton::gpu::AddrSpace::Local);
   preBarrier->moveBefore(forOp);
   builder.setInsertionPointAfter(preBarrier);
 

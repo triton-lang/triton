@@ -57,17 +57,17 @@ void throwIfSessionNotInitialized(
 
 void Session::activate() {
   profiler->start();
-  profiler->flush();
   profiler->registerData(data.get());
 }
 
-void Session::deactivate() {
-  profiler->flush();
+void Session::deactivate(bool flushing) {
+  if (flushing)
+    profiler->flush();
   profiler->unregisterData(data.get());
-  data->clear();
 }
 
 void Session::finalize(const std::string &outputFormat) {
+  profiler->flush();
   profiler->stop();
   data->dump(outputFormat);
 }
@@ -100,6 +100,11 @@ std::unique_ptr<Session> SessionManager::makeSession(
   return std::unique_ptr<Session>(session);
 }
 
+Session *SessionManager::getSessionOrThrow(size_t sessionId) {
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId].get();
+}
+
 void SessionManager::activateSession(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   activateSessionImpl(sessionId);
@@ -112,15 +117,15 @@ void SessionManager::activateAllSessions() {
   }
 }
 
-void SessionManager::deactivateSession(size_t sessionId) {
+void SessionManager::deactivateSession(size_t sessionId, bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
-  deActivateSessionImpl(sessionId);
+  deActivateSessionImpl(sessionId, flushing);
 }
 
-void SessionManager::deactivateAllSessions() {
+void SessionManager::deactivateAllSessions(bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : sessionActive) {
-    deActivateSessionImpl(iter.first);
+    deActivateSessionImpl(iter.first, flushing);
   }
 }
 
@@ -138,13 +143,13 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
-void SessionManager::deActivateSessionImpl(size_t sessionId) {
+void SessionManager::deActivateSessionImpl(size_t sessionId, bool flushing) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (!sessionActive[sessionId]) {
     return;
   }
   sessionActive[sessionId] = false;
-  sessions[sessionId]->deactivate();
+  sessions[sessionId]->deactivate(flushing);
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
   unregisterInterface<InstrumentationInterface>(sessionId,
@@ -157,6 +162,17 @@ void SessionManager::removeSession(size_t sessionId) {
   if (!hasSession(sessionId)) {
     return;
   }
+  // Context source can be safely cleared here but not deactivation.
+  // Context source of each session is still sort of active after deactivation,
+  // For example, if we have
+  // ```Python
+  //   proton.deactivate_session(session0)
+  //   with proton.scope("A"):
+  //     proton.activate_session(session0)
+  // ```
+  // session0 should be aware of scope "A"'s enter and exit, otherwise the
+  // context stack will be imbalanced.
+  sessions[sessionId]->contextSource->clear();
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
   sessionActive.erase(sessionId);
@@ -188,7 +204,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   if (!hasSession(sessionId)) {
     return;
   }
-  deActivateSessionImpl(sessionId);
+  deActivateSessionImpl(sessionId, /*flushing=*/true);
   sessions[sessionId]->finalize(outputFormat);
   removeSession(sessionId);
 }
@@ -197,7 +213,7 @@ void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
-    deActivateSessionImpl(sessionId);
+    deActivateSessionImpl(sessionId, /*flushing=*/true);
     session->finalize(outputFormat);
     sessionIds.push_back(sessionId);
   }
@@ -300,26 +316,46 @@ void SessionManager::setState(std::optional<Context> context) {
 
 size_t SessionManager::getContextDepth(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  return sessions[sessionId]->getContextDepth();
+  return getSessionOrThrow(sessionId)->getContextDepth();
 }
 
-std::string SessionManager::getData(size_t sessionId) {
+std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
+                                                    size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  auto *profiler = sessions[sessionId]->getProfiler();
-  auto dataSet = profiler->getDataSet();
-  if (dataSet.find(sessions[sessionId]->data.get()) != dataSet.end()) {
-    throw std::runtime_error(
-        "Cannot get data while the session is active. Please deactivate the "
-        "session first.");
-  }
-  auto *treeData = dynamic_cast<TreeData *>(sessions[sessionId]->data.get());
+  auto *session = getSessionOrThrow(sessionId);
+  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toJsonString();
+  return treeData->toMsgPack(phase);
+}
+
+std::string SessionManager::getData(size_t sessionId, size_t phase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto *session = getSessionOrThrow(sessionId);
+  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
+  if (!treeData) {
+    throw std::runtime_error(
+        "Only TreeData is supported for getData() for now");
+  }
+  return treeData->toJsonString(phase);
+}
+
+void SessionManager::clearData(size_t sessionId, size_t phase,
+                               bool clearUpToPhase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  getSessionOrThrow(sessionId)->data->clear(phase, clearUpToPhase);
+}
+
+size_t SessionManager::advanceDataPhase(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  return getSessionOrThrow(sessionId)->data->advancePhase();
+}
+
+bool SessionManager::isDataPhaseComplete(size_t sessionId, size_t phase) {
+  std::lock_guard<std::mutex> lock(mutex);
+  return getSessionOrThrow(sessionId)->data->getPhaseInfo().isComplete(phase);
 }
 
 } // namespace proton
