@@ -388,6 +388,8 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
+  if (!ptrTensor)
+    return nullptr;
   return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
                          EvictionPolicy::NORMAL);
 }
@@ -395,6 +397,8 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
+  if (!ptrTensor)
+    return {};
   return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
                         EvictionPolicy::NORMAL, false);
 }

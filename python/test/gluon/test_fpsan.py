@@ -278,6 +278,11 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
     B = 64
     BLOCK = ttgl.constexpr(B)
 
+    def allocator(size: int, alignment: int, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int32)
+
+    triton.set_allocator(allocator)
+
     @gluon.jit
     def kernel(a_ptr, b_ptr, out_ptr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [ttgl.num_warps(), 1], [1, 0])
@@ -333,6 +338,6 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
     bw = triton.TensorWrapper(b, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, outw, fpsan=False, num_warps=4)
+    kernel[(1, )](aw, bw, outw, fpsan=True, num_warps=4)
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
