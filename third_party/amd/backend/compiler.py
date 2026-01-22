@@ -240,6 +240,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
+        amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
         passes.common.add_canonicalizer(pm)
         if options.schedule_hint.lower() != "none":
             for hint in options.schedule_hint.split(","):

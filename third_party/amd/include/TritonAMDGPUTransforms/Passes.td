@@ -303,6 +303,14 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
+def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "mlir::ModuleOp"> {
+  let summary = "Convert memory operations to buffer operations";
+
+  let description = "This pass converts memory operations (e.g., tt.load/tt.store) to  amdgpu buffer operations, if possible";
+
+  // let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
 def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
   let summary = "partition and pipeline";
 
