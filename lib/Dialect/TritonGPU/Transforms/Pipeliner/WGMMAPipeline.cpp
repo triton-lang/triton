@@ -510,6 +510,12 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
+
+  // The dot result is not used by the loop yield. This could happen if it is
+  // dead, or if it is only used inside (but not yielded by) an scf::IfOp.
+  if (!iterArg)
+    return std::nullopt;
+
   // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
   if (!dotOp.getC().getType().getElementType().isF32()) {
     LDBG("Can't make dot async because the accumulator is not fp32");
