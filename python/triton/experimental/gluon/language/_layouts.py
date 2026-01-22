@@ -21,8 +21,11 @@ class DistributedLayout:
     def rank(self):
         raise NotImplementedError("DistributedLayout subclasses must define rank")
 
-    def get_view(self, shape: list[int], use_hw_view: bool = False) -> str:
-        return gluon_ir.get_layout_view(self, list(shape), use_hw_view)
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), True)
 
 
 @dataclass(frozen=True)
@@ -320,8 +323,11 @@ class SharedLayout:
     def type(self):
         return constexpr_type(self)
 
-    def get_view(self, shape: list[int], use_hw_view: bool = False) -> str:
-        return gluon_ir.get_layout_view(self, list(shape), use_hw_view)
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, list(shape), True)
 
 
 @constexpr_function

@@ -50,7 +50,10 @@ def test_get_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_ct
                 f"order = {fmt(layout.order)}}}>")
 
     layout = ttgl.BlockedLayout(size_per_thread, threads_per_warp, warps_per_cta, order)
-    assert layout.get_view(shape, use_hw_view) == ttl_cli(to_ttg_attr(layout), shape, use_hw_view)
+    if use_hw_view:
+        assert layout.format_hardware_view(shape) == ttl_cli(to_ttg_attr(layout), shape, use_hw_view=True)
+    else:
+        assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape, use_hw_view=False)
 
 
 @pytest.mark.parametrize("dim,shape", [(1, [16])])
@@ -68,7 +71,7 @@ def test_get_view_slice_layout(dim, shape, ttl_cli):
 
     parent = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
     layout = ttgl.SliceLayout(dim, parent)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize(
@@ -84,7 +87,7 @@ def test_get_view_nvmma_layout(version, warps_per_cta, instr_shape, shape, ttl_c
                 f"instrShape = {fmt(layout.instr_shape)}}}>")
 
     layout = ttgl.NVMMADistributedLayout(version, warps_per_cta, instr_shape)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize("operand_index,shape", [(0, [64, 64]), (1, [32, 128])])
@@ -102,7 +105,7 @@ def test_get_view_dot_operand_layout(operand_index, shape, ttl_cli):
 
     parent = ttgl.NVMMADistributedLayout([2, 0], [4, 1], [16, 8])
     layout = ttgl.DotOperandLayout(operand_index, parent, 2)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize(
@@ -117,7 +120,7 @@ def test_get_view_swizzled_shared_layout(vec, per_phase, max_phase, order, shape
                 f"order = {fmt(layout.order)}}}>")
 
     layout = ttgl.SwizzledSharedLayout(vec, per_phase, max_phase, order)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize("swizzle_byte_width,element_bitwidth,rank,transposed,shape", [(128, 16, 2, True, [64, 16])])
@@ -129,7 +132,7 @@ def test_get_view_nvmma_shared_layout(swizzle_byte_width, element_bitwidth, rank
                 f"elementBitWidth = {layout.element_bitwidth}}}>")
 
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width, element_bitwidth, rank, transposed)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize(
@@ -151,7 +154,7 @@ def test_get_view_distributed_linear_layout(reg_bases, lane_bases, warp_bases, b
                 f"block = {fmt_bases(layout.block_bases)}}}>")
 
     layout = ttgl.DistributedLinearLayout(reg_bases, lane_bases, warp_bases, block_bases, shape)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 @pytest.mark.parametrize(
@@ -172,22 +175,22 @@ def test_get_view_shared_linear_layout(offset_bases, block_bases, alignment, sha
         return result
 
     layout = ttgl.SharedLinearLayout(offset_bases, block_bases, alignment)
-    assert layout.get_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+    assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
 def test_get_view_padded_shared_layout():
     layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 64], [1, 0])
     with pytest.raises(ValueError, match="PaddedSharedLayout cannot be visualized"):
-        layout.get_view([16, 64])
+        layout.format_tensor_view([16, 64])
 
 
 def test_get_view_auto_layout():
     layout = ttgl.AutoLayout()
     with pytest.raises(ValueError, match="AutoLayout cannot be visualized"):
-        layout.get_view([16, 64])
+        layout.format_tensor_view([16, 64])
 
 
 def test_get_view_coalesced_layout():
     layout = ttgl.CoalescedLayout()
     with pytest.raises(ValueError, match="CoalescedLayout cannot be visualized"):
-        layout.get_view([16, 64])
+        layout.format_tensor_view([16, 64])
