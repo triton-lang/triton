@@ -158,7 +158,7 @@ struct TritonExpandDimsPattern
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
 
-    auto ctaLl = argEncoding.getCTALayout().getLinearLayout();
+    auto ctaLl = argEncoding.getCGALayout().getLinearLayout();
     auto kBlock = *ctaLl.getInDimNames().begin();
     auto *ctx = kBlock.getContext();
     auto newDim = standardOutDimNames(ctx, newRank)[newRank - 1];
@@ -169,11 +169,11 @@ struct TritonExpandDimsPattern
       std::swap(newOrder[i], newOrder[i - 1]);
     }
     ctaLl = transposeLinearLayout(ctaLl, newOrder);
-    auto retCTALayout = CTAEncodingAttr::get(ctx, std::move(ctaLl));
+    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(ctaLl));
     triton::gpu::BlockedEncodingAttr retEncoding =
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
                                               retThreadsPerWarp, retWarpsPerCTA,
-                                              retOrder, retCTALayout);
+                                              retOrder, retCGALayout);
     // convert operand to slice of return type
     Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
         getContext(), op.getAxis(), retEncoding);
@@ -315,7 +315,7 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     triton::gpu::BlockedEncodingAttr newRetEncoding =
         triton::gpu::BlockedEncodingAttr::get(
             getContext(), newRetSizePerThread, retThreadsPerWarp,
-            retWarpsPerCTA, retOrder, retEncoding.getCTALayout());
+            retWarpsPerCTA, retOrder, retEncoding.getCGALayout());
     auto newRetType = retType.cloneWithEncoding(newRetEncoding);
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
                       op, newRetType, adaptor.getOperands()),
@@ -380,7 +380,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
         return res;
       };
 
-      auto layout = defaultEnc.getCTALayout().getLinearLayout();
+      auto layout = defaultEnc.getCGALayout().getLinearLayout();
       auto kBlock = StringAttr::get(getContext(), "block");
       auto newDim = standardOutDimNames(getContext(), rank)[rank - 1];
       layout *= LinearLayout::identity1D(1, kBlock, newDim);
@@ -389,7 +389,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
           append(defaultEnc.getThreadsPerWarp(), 1),
           append(defaultEnc.getWarpsPerCTA(), 1),
           prepend(defaultEnc.getOrder(), rank - 1),
-          CTAEncodingAttr::get(getContext(), layout));
+          CGAEncodingAttr::get(getContext(), std::move(layout)));
       srcTy = srcTy.cloneWithEncoding(srcEnc);
       src = ConvertLayoutOp::create(rewriter, op.getLoc(), srcTy, src);
     }

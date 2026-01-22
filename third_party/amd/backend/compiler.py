@@ -19,12 +19,16 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch, use_async_copy):
-    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)
-            ) if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
+    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)) \
+        if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
     return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+
+
+def is_async_copy_enabled(arch):
+    return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
 @dataclass(frozen=True)
@@ -221,13 +225,14 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         amd.passes.ttgpuir.add_optimize_dot_operands(pm, options.arch)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+        amd.passes.ttgpuir.add_sink_layout_conversions(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        use_async_copy = knobs.amd.use_async_copy
+        use_async_copy = is_async_copy_enabled(options.arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
@@ -277,6 +282,8 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        amd.passes.ttgpuir.add_warp_pipeline(pm)
+        passes.ttgpuir.add_allocate_warp_groups(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -289,13 +296,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        # custom_lds_size is an experimental parameter that defines amount of LDS available
-        # for one thread block. Measured in bytes.
-        #
-        # If custom_lds_size = 0, pass will consider all LDS is available for one threads block,
-        # LDS size is determined by provided arch name.
-        custom_lds_size = 0
-        amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
+        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
@@ -313,6 +314,7 @@ class HIPBackend(BaseBackend):
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        amd.passes.ttgpuir.add_warp_specialize_to_llvm(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
@@ -376,7 +378,12 @@ class HIPBackend(BaseBackend):
         fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
         # The public kernel should be kernel 0.
         fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        # warp-specialization mutates num_warps
+        total_warps_num = options.num_warps
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        if total_num_warps is not None:
+            total_warps_num = total_num_warps
+        fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{total_warps_num*options.warp_size}")
         if "memory-bound-attention" in options.schedule_hint.split(','):
             fns[0].add_fn_attr("amdgpu-sched-strategy", "iterative-ilp")
         fns[0].add_fn_attr("uniform-work-group-size", "true")
@@ -399,7 +406,8 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        amd.set_all_fn_arg_inreg(fns[0])
+        if options.arch != "gfx1250":
+            amd.set_all_fn_arg_inreg(fns[0])
 
         if knobs.compilation.enable_asan:
             default_libdir = Path(__file__).parent / 'lib'
@@ -429,6 +437,7 @@ class HIPBackend(BaseBackend):
             amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
         # Get some metadata
+        metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1

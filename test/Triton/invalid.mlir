@@ -122,6 +122,18 @@ tt.func public @fn(%v: tensor<4x128xf64>) {
 
 // -----
 
+tt.func public @fn(%v: tensor<4x128xf32>) {
+    // expected-error @+1 {{axis out of bounds}}
+    %a = "tt.reduce" (%v) ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %add = arith.addf %arg0, %arg1 : f32
+      tt.reduce.return %add : f32
+    }) {axis = 2 : i32}  : (tensor<4x128xf32>) -> tensor<4xf32>
+    tt.return
+}
+
+// -----
+
 tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
     // expected-error @below {{op requires the same shape for all operands}}
     %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
@@ -281,10 +293,10 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #blocked2>) {
 // -----
 
 // Valid op with shared encoding.
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0]}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3]}>
-#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0], [0, 1], [0, 2]]}>
-#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1], [1, 0], [2, 0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0], CGALayout = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3], CGALayout = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0], [0, 1], [0, 2]]}>
+#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1], [1, 0], [2, 0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: !ttg.memdesc<2x4x8x16xf32, #shared, #smem>, %arg1: !ttg.memdesc<16x32xf32, #shared2, #smem>) {
@@ -418,7 +430,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{ranked reduce load only allowed for unit dimension leading dim}}
+  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
   tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16xf32>
   tt.return
 }
@@ -427,7 +439,7 @@ tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{tensor descriptor block and tensor types must match}}
+  // expected-error @below {{descriptor block and tensor element types must match}}
   tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16x16xf16>
   tt.return
 }
@@ -436,7 +448,7 @@ tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
 
 tt.func @invalid_desc_store(%arg0: !tt.tensordesc<tensor<16x16xf32>>, %arg1: tensor<32x16xf32>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{tensor descriptor block and tensor types must match}}
+  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
   tt.descriptor_store %arg0[%c, %c], %arg1 : !tt.tensordesc<tensor<16x16xf32>>, tensor<32x16xf32>
   tt.return
 }

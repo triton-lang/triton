@@ -5,22 +5,20 @@
 
 # Triton Conference 2025
 
-![Triton Registration Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+![Triton Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
 
-### Registration
+The 3rd Triton Developer Conference took place on October 21, 2025 at the Microsoft Silicon Valley Campus in Mountain View, California.
 
-The 3rd Triton conference is scheduled to take place on October 21, 2025. Click [here](https://tritonconference.eventbuilder.com/TritonDeveloperConference) to register!
+### Conference Materials
 
-### Poster Submission
+Conference recordings and materials are now available online:
 
-We invite members of the Triton community who are attending the Triton Developer Conference to present posters about their Triton-related technical work.
+- **Conference Videos:** [YouTube Playlist](https://www.youtube.com/playlist?list=PLc_vA1r0qoiQqCdWFDUDqI90oY5EjfGuO)
+- **Conference Slides:** [Google Drive Folder](https://drive.google.com/drive/folders/1KB6tD3UM1J0_eUp-F-JSlGrargLBawIr)
 
-Please submit basic information of your poster, including author information and abstract using this [form](https://forms.gle/QfgTF8o1CWNENAnA7).
-
-**Important Dates**
-- Submission: 10/1/2025
-- Author notification: 10/7/2025
-- Final version (PDF): 10/14/2025
+For previous conference materials, see:
+- [2024 Conference Materials](docs/meetups/dev_conference_2024.md)
+- [2023 Conference Materials](docs/meetups/dev-meetup-2023.md)
 
 # Triton
 
@@ -245,6 +243,8 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
 - `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 - `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
+- `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
+  constructing the active driver (i.e., `triton.runtime.driver.active`).
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.

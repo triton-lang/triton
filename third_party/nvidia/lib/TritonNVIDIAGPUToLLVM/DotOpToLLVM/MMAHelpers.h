@@ -55,7 +55,7 @@ public:
   DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv)
       : desc(desc), baseb128(baseb128), ll(std::move(llInv)) {}
 
-  static DotOpMmaSmemLoader
+  static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
         Value smemBase, ArrayRef<unsigned> instrShape, unsigned MNdim,
         int mmaVersion, bool isFp4 = false,
@@ -82,9 +82,9 @@ public:
                  mmaVersion, mmaTy);
   }
 
-  static DotOpMmaSmemLoader
+  static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, const LinearLayout &ll,
-        int bitwidth, Value smemBase, ArrayRef<unsigned> instrShapeArray,
+        int bitwidth, Value smemBase, ArrayRef<unsigned> instrShape,
         unsigned MNdim, int mmaVersion,
         std::optional<RankedTensorType> mmaTy = std::nullopt) {
     // ll is a map from two dimensions (dim0, dim1) or (row, col) into offsets
@@ -99,7 +99,6 @@ public:
     // Just needed for MMAv3
     assert(mmaTy.has_value() == (mmaVersion == 3));
     assert(MNdim < 2);
-    auto instrShape = to_vector(instrShapeArray);
     assert(instrShape.size() == 2);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -128,9 +127,10 @@ public:
       assert(maybeWarpToOffsetb128->getNumOutDims() == 2);
       bases[kWarp][0] = {0, 0};
       bases[kWarp][1] = {0, 0};
-      auto warpGroupToOffsetb128 = LinearLayout(
-          bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
-      Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
+      auto warpGroupToOffsetb128 =
+          LinearLayout(std::move(bases), warpToOffset.getOutDims(),
+                       /*requireSurjective=*/false);
+      Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
@@ -139,14 +139,21 @@ public:
     }
 
     for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
-      assert(instrSize <= ll.getInDimSize(dim) &&
-             "Instruction shape is too large for the layout");
+      if (instrSize <= ll.getInDimSize(dim))
+        continue;
+      auto inDims = ll.getInDims();
+      return mlir::emitError(loc)
+             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
+             << "] is too large for the layout with block size ["
+             << inDims[0].second << ", " << inDims[1].second << "]";
     }
 
-    auto desc = getDescriptor(ll, instrShape, bitwidth, MNdim, mmaVersion);
+    auto desc = getDescriptor(loc, ll, instrShape, bitwidth, MNdim, mmaVersion);
+    if (failed(desc))
+      return failure();
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
-    return {desc, baseb128, ll};
+    return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -157,8 +164,11 @@ public:
     assert(to_vector(ll.getOutDimNames()) ==
            llvm::to_vector(
                ArrayRef<StringAttr>{str_attr("offset"), str_attr("block")}));
-    int32_t totalOffElems = ll.apply({{dims[0], a}, {dims[1], b}})[0].second;
-    int32_t smemByteOffsetb8 = totalOffElems * desc.bitwidth / 8;
+    auto offsetBlock = ll.apply({{dims[0], a}, {dims[1], b}});
+    int32_t offsetElems = offsetBlock[0].second;
+    int32_t block = offsetBlock[1].second;
+    assert(block == 0);
+    int32_t smemByteOffsetb8 = offsetElems * desc.bitwidth / 8;
     auto currDesc = desc.descriptor;
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
@@ -182,17 +192,17 @@ private:
   Value baseb128;
   LinearLayout ll;
 
-  static MMASMEMDescriptor getDescriptor(const LinearLayout &ll,
-                                         ArrayRef<unsigned> instrShape,
-                                         int bitwidth, unsigned MNdim,
-                                         int mmaVersion) {
+  static FailureOr<MMASMEMDescriptor>
+  getDescriptor(Location loc, const LinearLayout &ll,
+                ArrayRef<unsigned> instrShape, int bitwidth, unsigned MNdim,
+                int mmaVersion) {
     // ll is a map from allocShape into offsets and blocks
     auto dims = to_vector(ll.getInDimNames());
     auto ctx = dims[0].getContext();
     auto kOffset = str_attr("offset");
 
-    // Any CTALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CTALayout = triton::gpu::CTAEncodingAttr::getDefault(ctx, 2);
+    // Any CGALayout, it's not really used within getCoreMatrixLinearLayout
+    auto CGALayout = triton::gpu::CGAEncodingAttr::get1CTALayout(ctx, 2);
 
     for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
                                          : SmallVector<bool>({false}))) {
@@ -201,7 +211,7 @@ private:
           // FIXME: getCoreMatrixLinearLayout does not accept bitwidth < 8
           auto shmemEnc = triton::gpu::NVMMASharedEncodingAttr::get(
               ctx, swizzling, transposed, std::max(8, bitwidth), fp4Padded,
-              CTALayout);
+              CGALayout);
           auto shmemTile =
               getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
           // Rename out dims to match the original layout (in case the dims were
@@ -275,9 +285,9 @@ private:
             }
           }
           // Multiply by 2 or round up to the next power of 2
-          shmemTileInv =
-              LinearLayout(bases, {{kOffset, llvm::NextPowerOf2(maxBasis)}},
-                           /*requireSurjective=*/false);
+          shmemTileInv = LinearLayout(std::move(bases),
+                                      {{kOffset, llvm::NextPowerOf2(maxBasis)}},
+                                      /*requireSurjective=*/false);
           // Add a trivial block dimension as getReps expects both layouts to
           // have the same outdims
           shmemTileInv *=
@@ -306,16 +316,16 @@ private:
             default:
               llvm_unreachable("Unsupported swizzling size.");
             }
-            return {/* .descriptor = */ desc,
-                    /* .swizzlingByteWidth = */ swizzling,
-                    /* .bitwidth = */ bitwidth,
-                    /* .transposed = */ transposed,
-                    /* .fp4Padded = */ fp4Padded};
+            return MMASMEMDescriptor{/* .descriptor = */ desc,
+                                     /* .swizzlingByteWidth = */ swizzling,
+                                     /* .bitwidth = */ bitwidth,
+                                     /* .transposed = */ transposed,
+                                     /* .fp4Padded = */ fp4Padded};
           }
         }
       }
     }
-    llvm::report_fatal_error("Failed to find a valid layout");
+    return failure();
   }
 };
 

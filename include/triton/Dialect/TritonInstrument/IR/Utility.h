@@ -1,9 +1,12 @@
 #ifndef TRITONINSTRUMENT_UTILITY_H
 #define TRITONINSTRUMENT_UTILITY_H
 
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+
+#include <array>
 
 namespace mlir::triton::instrument {
 
@@ -47,10 +50,16 @@ struct ValueType {
 struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
-    ValueType &operator[](Region *region) { return values[region]; }
-    ValueType &operator[](Operation *op) {
-      return values[getEnclosingParitionOrFunctionRegion(op)];
+    ValueType at(Region *region) {
+      if (values.find(region) == values.end()) {
+        assert(false && "Region not found in AuxDataMap");
+      }
+      return values[region];
     }
+    ValueType at(Operation *op) {
+      return at(getEnclosingParitionOrFunctionRegion(op));
+    }
+    void insert(Region *region, ValueType value) { values[region] = value; }
     bool empty() const { return values.empty(); }
 
   private:
@@ -68,15 +77,18 @@ struct AuxDataMap {
   RegionToValueMap readVisibility[numMemTypes];
   RegionToValueMap readTracking[numMemTypes];
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  RegionToValueMap aliasMatrices[numMemTypes];
   RegionToValueMap lock;
   RegionToValueMap waiting;
+  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 
 private:
-  void getBuffersAndBarriers(ModuleOp module,
-                             SmallVector<SmallVector<int32_t>, 2> &bufValues,
-                             SmallVector<int32_t> &barrierValues);
+  void getBuffersAndBarriers(
+      ModuleOp module,
+      SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
+      SmallVector<triton::BufferRegion> &barrierRegions);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map);
   void createInWarpSpecialize(

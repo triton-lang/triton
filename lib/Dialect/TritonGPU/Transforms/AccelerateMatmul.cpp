@@ -40,7 +40,8 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
     versionsSupported = {2};
   } else if (computeCapability < 100) {
     versionsSupported = {3, 2};
-  } else if (computeCapability < 110) {
+  } else if (computeCapability < 120) {
+    // Exclude consumer Blackwell (sm120)
     versionsSupported = {5, 2};
   } else if (computeCapability < 130) {
     versionsSupported = {2};
@@ -201,9 +202,9 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
-  auto CTALayout = getCTALayout(argType.getEncoding());
+  auto CGALayout = getCGALayout(argType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
-      argType.getContext(), argType.getShape(), newOrder, CTALayout,
+      argType.getContext(), argType.getShape(), newOrder, CGALayout,
       argType.getElementType(), isMMAv5Fp4Padded);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
@@ -220,13 +221,13 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
-  auto CTALayout = getCTALayout(argType.getEncoding());
+  auto CGALayout = getCGALayout(argType.getEncoding());
   // No swizzling for scale for now
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), /*swizzlingByteWidth=*/0,
       /*transposed=*/false,
       /*elementBitWidth=*/argType.getElementType().getIntOrFloatBitWidth(),
-      /*fp4Padded=*/false, CTALayout);
+      /*fp4Padded=*/false, CGALayout);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
@@ -323,7 +324,7 @@ static MMAEncodingResult createMMAEncodingForDot(DotOpInterface dotOp,
     return {nullptr, RankedTensorType(), Value(), versionMajor, versionMinor};
   }
 
-  auto CTALayout = getCTALayout(oldRetType.getEncoding());
+  auto CGALayout = getCGALayout(oldRetType.getEncoding());
   auto retShapePerCTA = getShapePerCTA(oldRetType);
   auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
                                            oldAType.getElementType(), numWarps);
@@ -332,7 +333,7 @@ static MMAEncodingResult createMMAEncodingForDot(DotOpInterface dotOp,
 
   auto mmaEnc = NvidiaMmaEncodingAttr::get(oldRetType.getContext(),
                                            versionMajor, versionMinor,
-                                           warpsPerTile, CTALayout, instrShape);
+                                           warpsPerTile, CGALayout, instrShape);
   auto newRetType = oldRetType.cloneWithEncoding(mmaEnc);
 
   auto oldAcc = dotOp->getOperand(2);
@@ -466,17 +467,17 @@ static bool canUseTwoCTAs(triton::DotOp dotOp) {
 }
 
 static DistributedEncodingTrait
-replaceCTALayout(DistributedEncodingTrait layout,
-                 const triton::gpu::CTAEncodingAttr &newCTALayout) {
+replaceCGALayout(DistributedEncodingTrait layout,
+                 const triton::gpu::CGAEncodingAttr &newCGALayout) {
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCTALayout);
+        blockedLayout.getOrder(), newCGALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
-        replaceCTALayout(sliceLayout.getParent(), newCTALayout));
+        replaceCGALayout(sliceLayout.getParent(), newCGALayout));
   } else {
     llvm::report_fatal_error("not implemented");
     return layout;
@@ -496,9 +497,9 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   auto kBlock = StringAttr::get(ctx, "block");
   auto dims = standardOutDimNames(ctx, 2);
-  auto newCTALayout =
-      CTAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
-  Attribute newLayout = replaceCTALayout(currentLayout, newCTALayout);
+  auto newCGALayout =
+      CGAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
+  Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
   rewriter.setInsertionPoint(loadOp);
   for (OpOperand &operand : loadOp->getOpOperands()) {
     auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
@@ -536,7 +537,7 @@ public:
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
+    auto CGALayout = getCGALayout(oldRetType.getEncoding());
 
     int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     if (versionMajor != 5)
@@ -550,7 +551,10 @@ public:
       return failure();
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
-    bool useTwoCTAs = canUseTwoCTAs(dotOp);
+    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
+    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
+    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
+    bool useTwoCTAs = false;
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
     }
@@ -563,7 +567,7 @@ public:
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
-    auto CTASplitNum = CTALayout.getCTASplitNum();
+    auto CTASplitNum = CGALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
@@ -576,7 +580,7 @@ public:
                          accEncoding, tensorMemorySpace,
                          /*mutableMemory=*/true);
     auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CTALayout);
+        accMemDescType, numWarps, CGALayout);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
@@ -730,8 +734,8 @@ public:
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
 
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
-          ctx, shape, opIdx, mmaWarps, blocked.getCTALayout());
-      auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
+          ctx, shape, opIdx, mmaWarps, blocked.getCGALayout());
+      auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, std::move(ll));
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return ConvertLayoutOp::create(rewriter, scale.getLoc(), newTy, scale);
     };
@@ -774,8 +778,8 @@ public:
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
-    if ((computeCapability) / 10 != 10)
+    auto CGALayout = getCGALayout(oldRetType.getEncoding());
+    if (computeCapability < 100 || computeCapability >= 120)
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();
@@ -818,7 +822,7 @@ public:
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
 
-    auto CTASplitNum = CTALayout.getCTASplitNum();
+    auto CTASplitNum = CGALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
@@ -830,7 +834,7 @@ public:
                          accEncoding, tensorMemorySpace,
                          /*mutableMemory=*/true);
     auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CTALayout);
+        accMemDescType, numWarps, CGALayout);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
@@ -853,9 +857,9 @@ public:
         tensorMemorySpace,
         /*mutableMemory=*/false);
     Attribute scaleALayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleAType, numWarps, getCTALayout(oldScaleAType.getEncoding()));
+        scaleAType, numWarps, getCGALayout(oldScaleAType.getEncoding()));
     Attribute scaleBLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleBType, numWarps, getCTALayout(oldScaleBType.getEncoding()));
+        scaleBType, numWarps, getCGALayout(oldScaleBType.getEncoding()));
     RankedTensorType newScaleAType =
         oldScaleAType.cloneWithEncoding(scaleALayout);
     RankedTensorType newScaleBType =

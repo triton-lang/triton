@@ -306,9 +306,15 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
 }
 
 std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
-  // Splits a wgmma(tensor, shmem) MxK, KxN -> MxN into
-  // along K into multiple wgmma(tensor, shmem) Mx16, 16xN -> MxN
-  // where 16 is the instruction size
+  // Splits wgmma(tensor, shmem, acc) into
+  //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
+  //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
+  // which allows for in-register pipelining of the wgmmas.
+  //
+  // Theoretically, it may be beneficial to split even further which allows more
+  // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
+  // best performance. In future this may be something we want to allow the user
+  // to tune.
   if (!isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
@@ -316,13 +322,14 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   auto a = cast<TypedValue<RankedTensorType>>(dotOp.getA());
   auto b = cast<TypedValue<ttg::MemDescType>>(dotOp.getB());
   auto origK = a.getType().getShape().back();
-  auto newK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
-                  .getInstrShape()[2];
-  auto numSplits = origK / newK;
+  auto instrK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
+                    .getInstrShape()[2];
   // Nothing to split
-  if (numSplits <= 1) {
+  if (origK <= instrK) {
     return {dotOp};
   }
+  constexpr int numSplits = 2;
+  uint32_t newK = origK / numSplits;
 
   assert(origK % newK == 0 && "origK must be divisible by newK");
   auto builder = OpBuilder(dotOp);
@@ -334,7 +341,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 
   Value useC = dotOp.getUseC();
   Value C = dotOp.getC();
-  auto numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
+  uint32_t numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
   std::vector<ttng::WarpGroupDotOp> dots;
   for (int i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
@@ -348,7 +355,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
         dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
     dots.push_back(dot);
     C = dot.getResult();
-    useC = mlir::arith::ConstantIntOp::create(builder, loc, 1, 1);
+    useC = {};
   }
   dotOp.replaceAllUsesWith(dots.back().getResult());
   dotOp.erase();
@@ -503,6 +510,12 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
+
+  // The dot result is not used by the loop yield. This could happen if it is
+  // dead, or if it is only used inside (but not yielded by) an scf::IfOp.
+  if (!iterArg)
+    return std::nullopt;
+
   // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
   if (!dotOp.getC().getType().getElementType().isF32()) {
     LDBG("Can't make dot async because the accumulator is not fp32");
@@ -588,42 +601,62 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   // Insert waits before the users of the properly async dots other than loop
   // yield.
   for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
-    // If the dot takes the LHS on registers i, we add a wait for the number
-    // of properly async dots in the loop minus one.
-    // This makes sure that the dot will wait until itself from the previous
-    // iteration has completed, as to avoid rewriting the registers.
-    if (rsDotNeedsWait(asyncDot, forOp)) {
-      OpBuilder builder(asyncDot);
-      builder.setInsertionPointAfter(asyncDot);
-      auto newWait = ttng::WarpGroupDotWaitOp::create(
-          builder, asyncDot->getLoc(), ArrayRef<Value>{},
-          properlyAsyncDots.size() - 1);
-      SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
-      threadValuesThroughWait(newWait, waitOperands);
-      continue;
-    }
-
-    SmallVector<OpOperand *> uses;
+    DenseMap<Block *, SmallVector<OpOperand *>> blockToUses;
     for (auto &use : asyncDot->getUses()) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
         continue;
       }
-      uses.push_back(&use);
+
+      auto block = use.getOwner()->getBlock();
+      blockToUses[block].push_back(&use);
     }
 
-    DenseMap<Block *, SmallVector<Value>> blockToUsers;
-    for (auto use : uses) {
-      auto block = use->getOwner()->getBlock();
-      blockToUsers[block].push_back(use->get());
-    }
+    for (auto [block, uses] : blockToUses) {
+      // Insert a wait before the first use in the block
+      std::sort(uses.begin(), uses.end(), [](OpOperand *lhs, OpOperand *rhs) {
+        Operation *lhsOp = lhs->getOwner();
+        Operation *rhsOp = rhs->getOwner();
+        return lhsOp->isBeforeInBlock(rhsOp);
+      });
 
-    for (auto [block, users] : blockToUsers) {
-      OpBuilder builder(block, block->begin());
+      // If a wgmma uses the same accumulator registers, it will be implicitly
+      // pipelined by the hardware and doesn't need a wait.
+      auto firstUse =
+          std::find_if_not(uses.begin(), uses.end(), [](OpOperand *operand) {
+            return (isa<ttng::WarpGroupDotOp>(operand->getOwner()) &&
+                    operand->getOperandNumber() == 2);
+          });
+      if (firstUse == uses.end()) {
+        continue;
+      }
+
+      OpBuilder builder((*firstUse)->getOwner());
       auto newWait = ttng::WarpGroupDotWaitOp::create(
           builder, asyncDot->getLoc(), ArrayRef<Value>{}, 0);
 
+      SmallVector<Value> users;
+      for (; firstUse != uses.end(); ++firstUse) {
+        users.push_back((*firstUse)->get());
+      }
       threadValuesThroughWait(newWait, users);
     }
+  }
+
+  for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
+    // If the dot takes the LHS on registers i, we add a wait for the number
+    // of properly async dots in the loop minus one.
+    // This makes sure that the dot will wait until itself from the previous
+    // iteration has completed, as to avoid rewriting the registers.
+    if (!rsDotNeedsWait(asyncDot, forOp))
+      continue;
+
+    OpBuilder builder(asyncDot);
+    builder.setInsertionPointAfter(asyncDot);
+    auto newWait = ttng::WarpGroupDotWaitOp::create(
+        builder, asyncDot->getLoc(), ArrayRef<Value>{},
+        properlyAsyncDots.size() - 1);
+    SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
+    threadValuesThroughWait(newWait, waitOperands);
   }
 
   // Add the wait right after the last properly-async dot.  This only needs to

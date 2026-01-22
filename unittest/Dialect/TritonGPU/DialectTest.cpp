@@ -35,9 +35,9 @@ createDistributedEncodings(MLIRContext &ctx) {
   // Define a tensor shape
   auto rank = 2;
   SmallVector<SmallVector<unsigned>> orders = {{0, 1}, {1, 0}};
-  SmallVector<triton::gpu::CTAEncodingAttr> ctaLayouts = {
-      triton::gpu::CTAEncodingAttr::getDefault(&ctx, rank),
-      triton::gpu::CTAEncodingAttr::fromSplitParams(&ctx, {4, 2}, {2, 2},
+  SmallVector<triton::gpu::CGAEncodingAttr> cgaLayouts = {
+      triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, rank),
+      triton::gpu::CGAEncodingAttr::fromSplitParams(&ctx, {4, 2}, {2, 2},
                                                     {1, 0}),
   };
   std::vector<DistributedEncodingTrait> distributedEncodings;
@@ -48,10 +48,10 @@ createDistributedEncodings(MLIRContext &ctx) {
     SmallVector<unsigned> threadsPerWarp = {4, 8};
     SmallVector<unsigned> warpsPerCTA = {2, 2};
 
-    for (auto ctaLayout : ctaLayouts) {
+    for (auto cgaLayout : cgaLayouts) {
       for (const auto &order : orders) {
         auto blockedEncoding = triton::gpu::BlockedEncodingAttr::get(
-            &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+            &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, cgaLayout);
         distributedEncodings.push_back(blockedEncoding);
         distributedEncodings.push_back(
             triton::gpu::SliceEncodingAttr::get(&ctx, 0, blockedEncoding));
@@ -69,7 +69,7 @@ createDistributedEncodings(MLIRContext &ctx) {
       auto instrShape = versionMajor == 2 ? SmallVector<unsigned>{16, 8}
                                           : SmallVector<unsigned>{16, 32, 16};
       auto mma = triton::gpu::NvidiaMmaEncodingAttr::get(
-          &ctx, versionMajor, versionMinor, warpsPerCTA, ctaLayouts[0],
+          &ctx, versionMajor, versionMinor, warpsPerCTA, cgaLayouts[0],
           instrShape);
       distributedEncodings.push_back(mma);
       // Create an opIdx=0 and opIdx=1 encoding
@@ -479,7 +479,7 @@ class AMDLayoutTest : public ::testing::Test {
 public:
   AMDLayoutTest() {
     ctx.getOrLoadDialect<TritonGPUDialect>();
-    ctaLayout = triton::gpu::CTAEncodingAttr::fromSplitParams(
+    cgaLayout = triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, ctaPerCGA, ctaSplit, ctaOrder);
     f16Ty = Float16Type::get(&ctx);
   }
@@ -494,7 +494,7 @@ protected:
   const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
   const SmallVector<unsigned> ctaSplit{1, 1, 1};
   const SmallVector<unsigned> ctaOrder{2, 1, 0};
-  triton::gpu::CTAEncodingAttr ctaLayout;
+  triton::gpu::CGAEncodingAttr cgaLayout;
   Type f16Ty;
 };
 
@@ -506,7 +506,7 @@ public:
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
         &ctx, /*version=*/2, warpsPerCTA, instrShape,
-        /*isTransposed=*/false, ctaLayout);
+        /*isTransposed=*/false, cgaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
@@ -514,7 +514,7 @@ public:
                        ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
         &ctx, /*version=*/2, warpsPerCTA, instrShape,
-        /*isTransposed=*/true, ctaLayout);
+        /*isTransposed=*/true, cgaLayout);
   }
 };
 
@@ -583,17 +583,17 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // SliceEncoding is not well-defined for CGAs
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
         auto baseEncoding = cast<LayoutEncodingTrait>(distributedEncoding);
-        auto baseCTALayout = baseEncoding.getCTALayout();
-        auto linearCTALayout = linearEncoding.getCTALayout();
-        ASSERT_EQ(baseCTALayout.getCTASplitNum(),
-                  linearCTALayout.getCTASplitNum());
-        ASSERT_EQ(baseCTALayout.getCTAsPerCGA(),
-                  linearCTALayout.getCTAsPerCGA());
+        auto baseCGALayout = baseEncoding.getCGALayout();
+        auto linearCGALayout = linearEncoding.getCGALayout();
+        ASSERT_EQ(baseCGALayout.getCTASplitNum(),
+                  linearCGALayout.getCTASplitNum());
+        ASSERT_EQ(baseCGALayout.getCTAsPerCGA(),
+                  linearCGALayout.getCTAsPerCGA());
         // If we are not using CGAs, the order is meaningless
         auto useCGA =
-            baseCTALayout.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
+            baseCGALayout.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
         if (useCGA && !is_dot_op_with_block_parent(distributedEncoding)) {
-          ASSERT_EQ(baseCTALayout.getCTAOrder(), linearCTALayout.getCTAOrder());
+          ASSERT_EQ(baseCGALayout.getCTAOrder(), linearCGALayout.getCTAOrder());
         }
       }
     }

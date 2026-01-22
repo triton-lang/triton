@@ -87,6 +87,18 @@ def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-convers
 
 }
 
+def TritonAMDGPUSinkLayoutConversions
+    : Pass<"tritonamdgpu-sink-layout-conversions", "mlir::triton::FuncOp"> {
+  let summary = "Sink layout conversions to reduce shared memory allocation";
+
+  let description = [{
+    This pass sinks layout conversions after the last dealloc but before the first use in their block.
+    This helps to avoid unnecessary shared memory allocation.
+  }];
+
+  let dependentDialects = [];
+}
+
 def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::triton::FuncOp"> {
   let summary = "Canonicalize pointers: rewrite pointers passed to load/store operation as a `<basePtr, offset>` pair.";
 
@@ -289,6 +301,16 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
            "std::string", /*default=*/"std::string{}",
            "GFX generation name of target device.">
   ];
+}
+
+def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
+  let summary = "partition and pipeline";
+
+  let description = [{
+    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
+  }];
+
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

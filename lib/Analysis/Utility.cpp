@@ -52,7 +52,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
-// (2) numCTAs > 1 but srcCTALayout == dstCTALayout
+// (2) numCTAs > 1 but srcCGALayout == dstCGALayout
 // TODO: Case with SliceLayout as srcLayout and numCTAs > 1 is to be implemented
 // in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
@@ -82,16 +82,16 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
       return true;
   }
 
-  // The above two branches make sure that it is legal to call getCTALayout of
+  // The above two branches make sure that it is legal to call getCGALayout of
   // srcLayout and dstLayout
 
-  // Case (2): Do not use dsmem when srcCTALayout == dstCTALayout
-  auto srcCTALayout = getCTALayout(srcLayout);
-  auto dstCTALayout = getCTALayout(dstLayout);
-  if (srcCTALayout == dstCTALayout)
+  // Case (2): Do not use dsmem when srcCGALayout == dstCGALayout
+  auto srcCGALayout = getCGALayout(srcLayout);
+  auto dstCGALayout = getCGALayout(dstLayout);
+  if (srcCGALayout == dstCGALayout)
     return false;
 
-  // Dsmem access is required when srcCTALayout != dstCTALayout
+  // Dsmem access is required when srcCGALayout != dstCGALayout
   return true;
 }
 
@@ -155,6 +155,40 @@ bool ReduceOpHelper::isAssociative() {
     return WalkResult::advance();
   });
   return !hasNoAssociativeOp;
+}
+
+ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
+  auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
+  srcShape = firstTy.getShape();
+  legacyEncoding = firstTy.getEncoding();
+  // Remove broadcasting in the registers
+  // We also remove it in the lowering and re-add it when we pack the results
+  auto origLayout = triton::gpu::toLinearLayout(firstTy);
+  auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
+  origLayout = removeBroadcastRegs.apply(origLayout);
+  srcEncoding = triton::gpu::LinearEncodingAttr::get(op.getContext(),
+                                                     std::move(origLayout));
+  srcElementTypes = op.getElementTypes();
+  // The codegen does not support different element/thread/warp order so
+  // we choose one a priori. We choose that of the blocked encoding.
+  // When we generalise this code to other layouts we'll probably need to
+  // get rid of all this logic and the *Stride auxiliary methods
+  // and replace them by transposes and reshapes on the LinearLayout
+  if (auto blockedEncoding =
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(legacyEncoding)) {
+    order = llvm::to_vector(blockedEncoding.getOrder());
+  } else {
+    order = srcEncoding.getOrder();
+  }
+
+  for (const auto &t : op.getInputTypes()) {
+    if (t.getShape() != srcShape) {
+      op.emitError() << "shape mismatch";
+    }
+    if (t.getEncoding() != legacyEncoding) {
+      op.emitError() << "encoding mismatch";
+    }
+  }
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
@@ -745,18 +779,15 @@ unsigned ScanLoweringHelper::getAxisElementStride() {
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
   auto encoding = getEncoding();
+  auto ll = encoding.getLinearLayout();
   auto kThread = StringAttr::get(encoding.getContext(), "lane");
-  // OOOGHHH This is nasty. We should implement this lowering via LLs natively
-  // to avoid this
-  auto threadsPerWarp = encoding.basesPerDim(kThread, /*skipBroadcast=*/false);
-  auto order = getOrder();
-  unsigned stride = 1;
-  for (unsigned dim : order) {
-    if (dim == getAxis())
-      return stride;
-    stride *= threadsPerWarp[dim];
+  const auto &bases = ll.getBases().lookup(kThread);
+  unsigned axis = getAxis();
+  for (unsigned i = 0; i < bases.size(); ++i) {
+    if (bases[i][axis] != 0)
+      return 1 << i;
   }
-  llvm_unreachable("Axis not found in order");
+  return 1;
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {

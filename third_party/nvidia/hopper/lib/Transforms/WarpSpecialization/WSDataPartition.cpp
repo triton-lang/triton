@@ -124,10 +124,11 @@ struct DataPartitionScheme {
     return dim < numPartitions || dim == DataPartitionScheme::noOpPartitionDim;
   }
 
-  unsigned flipPartitionDim(unsigned dim) const {
+  unsigned flipPartitionDim(unsigned dim, const ArrayRef<int32_t> &order,
+                            bool forward) const {
     if (dim == DataPartitionScheme::noOpPartitionDim)
       return dim;
-    return numPartitions - 1 - dim;
+    return forward ? order[dim] : llvm::find(order, dim) - order.begin();
   }
 
   bool isPartitioned(Operation *op) const {
@@ -256,8 +257,13 @@ static bool getBackwardSliceToPartition(Value v,
     partitionScheme.opPartitionDims[op] = currentDim;
 
     // Flip dim when op is trans
-    if (isa<TransOp, MemDescTransOp>(op))
-      currentDim = partitionScheme.flipPartitionDim(currentDim);
+    if (auto transOp = dyn_cast<TransOp>(op)) {
+      currentDim = partitionScheme.flipPartitionDim(currentDim,
+                                                    transOp.getOrder(), false);
+    } else if (auto memDescTransOp = dyn_cast<MemDescTransOp>(op)) {
+      currentDim = partitionScheme.flipPartitionDim(
+          currentDim, memDescTransOp.getOrder(), false);
+    }
 
     if (auto expandDimsOp = dyn_cast<ExpandDimsOp>(op)) {
       // currentDim is the dim after expansion.
@@ -274,7 +280,8 @@ static bool getBackwardSliceToPartition(Value v,
             BroadcastOp, ExpandDimsOp, MakeRangeOp, SplatOp, ConvertLayoutOp,
             triton::gpu::LocalAllocOp, LoadOp, TransOp, MemDescTransOp,
             AtomicRMWOp, triton::AddPtrOp, DescriptorLoadOp,
-            nvidia_gpu::TMEMAllocOp, nvidia_gpu::TMEMLoadOp, FpToFpOp>(op)) {
+            nvidia_gpu::TMEMAllocOp, nvidia_gpu::TMEMLoadOp, FpToFpOp, SplitOp,
+            JoinOp, ReshapeOp>(op)) {
       for (Value operand : op->getOperands())
         if (!getBackwardSliceToPartition(operand, partitionScheme, currentDim))
           return false;
@@ -358,8 +365,13 @@ static bool getForwardSliceToPartition(Value v,
   for (Operation *depOp : v.getUsers()) {
     currentDim = originalDim;
     // Flip dim when op is trans
-    if (isa<TransOp, MemDescTransOp>(depOp))
-      currentDim = partitionScheme.flipPartitionDim(currentDim);
+    if (auto transOp = dyn_cast<TransOp>(depOp)) {
+      currentDim = partitionScheme.flipPartitionDim(currentDim,
+                                                    transOp.getOrder(), true);
+    } else if (auto memDescTransOp = dyn_cast<MemDescTransOp>(depOp)) {
+      currentDim = partitionScheme.flipPartitionDim(
+          currentDim, memDescTransOp.getOrder(), true);
+    }
 
     // Check dim compatibility
     if (!partitionScheme.ops.insert(depOp)) {
@@ -698,9 +710,12 @@ static void rewriteRematerializedOps(triton::FuncOp &funcOp,
         assert(partitionScheme.opPartitionDims.contains(user) &&
                "user not partitioned");
         unsigned userDim = partitionScheme.opPartitionDims[user];
-        if (isa<TransOp, MemDescTransOp>(user)) {
-          // flip userDim for trans
-          userDim = partitionScheme.flipPartitionDim(userDim);
+        if (auto transOp = dyn_cast<TransOp>(user)) {
+          userDim = partitionScheme.flipPartitionDim(userDim,
+                                                     transOp.getOrder(), true);
+        } else if (auto memDescTransOp = dyn_cast<MemDescTransOp>(user)) {
+          userDim = partitionScheme.flipPartitionDim(
+              userDim, memDescTransOp.getOrder(), true);
         } else if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(user)) {
           // infer userDim for dot
           assert(partitionScheme.dotPartitionOperand.contains(user) &&
@@ -770,10 +785,10 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     setAsyncTaskIds(newOp, sliceTaskIds);
     mappings.map(op, newOp);
     reverseMappings.map(newOp, op);
-    // set result shape
-    if (!op->getResults().empty()) {
-      auto v = op->getResult(0);
-      auto newV = newOp->getResult(0);
+    // set result shape for all results
+    for (unsigned resultIdx = 0; resultIdx < op->getNumResults(); ++resultIdx) {
+      auto v = op->getResult(resultIdx);
+      auto newV = newOp->getResult(resultIdx);
       bool needRetype = true;
       if (dim == DataPartitionScheme::noOpPartitionDim) {
         // Just duplicate the op for noOpPartitionDim
@@ -845,7 +860,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
   if ((dim == DataPartitionScheme::noOpPartitionDim) ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ConvertLayoutOp, BroadcastOp, SplatOp, ExpandDimsOp, FpToFpOp,
-          AtomicRMWOp, LocalAllocOp>(op)) {
+          AtomicRMWOp, LocalAllocOp, SplitOp, JoinOp, ReshapeOp>(op)) {
     for (Value operand : op->getOperands())
       sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
     newOp = cloneAndSetResultType(op);
@@ -859,13 +874,13 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
+    auto CGALayout = getCGALayout(oldRetType.getEncoding());
     builder.setInsertionPoint(op);
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
     // the sliced tmem here.
     auto newDistributedEncoding =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CTALayout);
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CGALayout);
 
     // oldRetType is the desired output, we slice it and convert from the
     // compatible layout to the sliced desired output.
@@ -899,7 +914,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-      auto CTALayout = getCTALayout(srcTy.getEncoding());
+      auto CGALayout = getCGALayout(srcTy.getEncoding());
       builder.setInsertionPoint(op);
 
       // calculate new tmem type.
@@ -921,7 +936,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                                       retType.getMutableMemory());
 
       auto newDistributedEncoding =
-          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CTALayout);
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CGALayout);
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(

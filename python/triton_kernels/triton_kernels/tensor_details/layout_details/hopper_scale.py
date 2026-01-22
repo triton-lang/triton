@@ -2,24 +2,54 @@ from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-from .base import Layout
+from .base import Layout, LayoutTransformation
+
+# ------------------- Hopper MX Scale Layout -------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class HopperMXScaleLayout(Layout):
     mx_axis: int
     num_warps: int
-    leading_shape: list[int]
-    name: str = "HOPPER_SCALE"
 
-    def __init__(self, shape, mx_axis, num_warps=8) -> None:
-        if mx_axis is not None and mx_axis < 0:
-            mx_axis += len(shape)
-        assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
-        super().__init__(shape)
-        self.mx_axis = mx_axis
-        self.num_warps = num_warps
-        *self.leading_shape, self.M, self.K = shape
+    def __post_init__(self):
+        assert self.num_warps & (self.num_warps - 1) == 0, "warps_n must be a power of 2"
+
+    @property
+    def name(self):
+        return "HOPPER_SCALE"
+
+    def make_transformation(self, shape: list[int], is_fp4) -> LayoutTransformation:
+        return HopperMXScaleLayoutTransformation(shape, is_fp4, self.mx_axis, self.num_warps)
+
+    def swizzle_block_shape(self, block_shape):
+        # wrong ? this seems like a transposition
+        if self.mx_axis == -1:
+            *head, N, K = block_shape
+            assert N % 32 == 0, N
+            return [*head, N // 32, K * 32]
+        else:
+            assert self.mx_axis == -2
+            *head, K, N = block_shape
+            assert N % 32 == 0, N
+            return [*head, K * 32, N // 32]
+
+
+# ------------------- Hopper MX Scale Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class HopperMXScaleLayoutTransformation(LayoutTransformation):
+    mx_axis: int
+    num_warps: int
+
+    def __post_init__(self):
+        *leading_shape, M, K = self.shape
+        if self.mx_axis < 0:
+            object.__setattr__(self, "mx_axis", self.mx_axis + len(self.shape))
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "M", M)
+        object.__setattr__(self, "K", K)
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -62,10 +92,9 @@ class HopperMXScaleLayout(Layout):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 32, K // 32)
         data = self._maybe_mT(data)
-        return data[..., :self.M, :self.K]
-
-    def swizzle_block_shape(self, block_shape):
-        return block_shape
+        data = data[..., :self.M, :self.K]
+        data = data.contiguous()
+        return data
 
 
 @triton.jit

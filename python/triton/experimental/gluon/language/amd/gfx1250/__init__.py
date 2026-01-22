@@ -8,9 +8,11 @@ from ..cdna3 import buffer_load, buffer_store
 from . import tdm
 from . import async_copy
 from . import mbarrier
+from . import cluster
 
 __all__ = [
-    "async_copy", "tdm", "mbarrier", "wmma", "wmma_scaled", "buffer_load", "buffer_store", "get_wmma_scale_layout"
+    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "buffer_load", "buffer_store",
+    "get_wmma_scale_layout"
 ]
 
 
@@ -91,6 +93,6 @@ def get_wmma_scale_layout(dot_operand_layout, shape):
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
     mdim = parent.instr_shape[0]
-    tiles_per_warp = parent.tiles_per_warp
-    warps_per_cta = parent.warps_per_cta
-    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
+    reg_bases = parent.reg_bases
+    warp_bases = parent.warp_bases
+    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases)

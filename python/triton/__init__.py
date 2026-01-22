@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.5.0'
+__version__ = '3.6.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -44,6 +44,7 @@ __all__ = [
     "JITFunction",
     "KernelInterface",
     "language",
+    "max_shared_mem",
     "MockTensor",
     "must_use_result",
     "next_power_of_2",

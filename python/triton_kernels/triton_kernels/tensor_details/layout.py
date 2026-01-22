@@ -1,5 +1,6 @@
 from .layout_details.base import Layout
 from .layout_details.blackwell_scale import BlackwellMXScaleLayout
+from .layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .layout_details.blackwell_value import BlackwellMXValueLayout
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
@@ -15,25 +16,32 @@ __all__ = [
     "HopperMXValueLayout",
     "CDNA4MXScaleLayout",
     "StridedLayout",
+    "BlackwellActMXScaleLayout",
 ]
 
 
 def make_default_matmul_mxfp4_w_layout(mx_axis: int):
     if cuda_capability_geq(10):
-        return BlackwellMXValueLayout, dict()
+        return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
-        return HopperMXValueLayout, {"mx_axis": mx_axis}
+        return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
     else:
-        return StridedLayout, dict()
+        return StridedLayout(-2)
 
 
 def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     if is_hip_cdna4():
-        return CDNA4MXScaleLayout, dict()
+        return CDNA4MXScaleLayout()
     else:
         if cuda_capability_geq(10):
-            return BlackwellMXScaleLayout, dict()
+            return BlackwellMXScaleLayout()
         elif cuda_capability_geq(9):
-            return HopperMXScaleLayout, {"mx_axis": mx_axis, "num_warps": num_warps}
+            return HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
 
-    return StridedLayout, dict()
+    return StridedLayout(-2)
+
+
+def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
+    if cuda_capability_geq(10):
+        return BlackwellActMXScaleLayout(ragged_metadata)
+    return StridedLayout(-2)

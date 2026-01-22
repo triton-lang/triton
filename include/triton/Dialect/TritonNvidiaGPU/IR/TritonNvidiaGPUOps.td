@@ -23,6 +23,7 @@
 #define TRITONNVIDIAGPU_OPS
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
@@ -61,13 +62,29 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   }];
 }
 
+def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
+    "fence_mbarrier_init_release_cluster"> {
+  let summary = "fence mbarrier init release.cluster";
+
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
   let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
 }
 
 //
@@ -188,7 +205,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
     its current phase.
 
     This lowers a waitloop using PTX instruction
-    mbarrier.try_wait.parity.shared.b64.
+    mbarrier.try_wait.parity.shared::cta.b64.
 
     Accepts optional list of memory. If present, it is assumed that any of the
     dependencies may be accessed until the barrier completes.
@@ -273,7 +290,7 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
 }
 
 
-def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local"> {
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [AttrSizedOperandSegments]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -282,23 +299,54 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local">
     local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc`.
+
+    The operation supports two tensor modes:
+    - TILED (default): Regular tiled tensor memory access
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
+    - IM2COL: Im2col mode for convolution-friendly access patterns
+      - In IM2COL mode, 'coord' is the coordinates in the input tensor
+        - For example, for a 4D tensor (NHWC), 'coord' is [batch_idx, channel_idx, h, w]
+      - In IM2COL mode, additional `offsets` must be provided (uint16 values)
+        - For 3D tensors (NWC): 1 offset (offset_w)
+        - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
+        - For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
+        - General rule: number of offsets = coord.size() - 2
+      - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+
   }];
 
   let hasVerifier = 1;
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
+    Variadic<I16>:$offsets,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
+    UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<TTNG_TensorModeAttr, "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode
   );
 
+  let builders = [
+    // Builder for TILED mode (no offsets required, attributes default to standard values)
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
+                   "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast,
+                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
+                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"bool", "false">:$isVolatile,
+                   CArg<"triton::nvidia_gpu::TensorMode", "triton::nvidia_gpu::TensorMode::TILED">:$tensorMode), [{
+      build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
+            result, pred, multicast, cache, evict, isVolatile, tensorMode);
+    }]>
+  ];
+
   let assemblyFormat = [{
-    $desc `[` $coord `]` $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
@@ -324,6 +372,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
     $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
@@ -347,6 +396,7 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<
     $kind `,` $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
@@ -442,7 +492,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async,
-    UnitAttr:$two_ctas
+    UnitAttr:$two_ctas,
+    UnitAttr:$multicast
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -450,6 +501,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     OpBuilder<(ins "Type":$token,
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
+      CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async)>
@@ -533,7 +585,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let hasVerifier = 1;
 }
 
-def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
 
   let description = [{
@@ -542,9 +594,9 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
     operations. Upon completion of all asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
 
-    If `two_ctas` is set, then the mbarrier tracks all prior operations
-    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
-    operations initiated without `two_ctas`.
+    If `descs` are provided, the commit will be multicast across the CTA cluster
+    based on the shared layouts of those descriptors. This should be used when
+    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
 
     Note that the completion mechanisms are guaranteed to occur sequentially in
     the order the commit operations were issued. This means, for example:
@@ -565,21 +617,18 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Optional<I1>:$pred,
-    UnitAttr:$two_ctas
+    Variadic<TTG_MemDescType>:$descs
   );
 
   let assemblyFormat = [{
-    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+    $barrier (`,` $pred^)? (`descs` $descs^)? attr-dict `:`
+    qualified(type($barrier)) (`,` qualified(type($descs))^)?
   }];
 
-  let builders = [
-    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
-      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
-    }]>,
-  ];
+  let hasVerifier = 1;
 }
 
-def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
+def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
   let description = [{
@@ -589,20 +638,87 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
     This operation takes and produces an optional token to indicate TMEM read
     on its source operand. When the tokens are present, they can
     be used to check aliasing and modref on the TMEM buffer.
+
+    Optional reduction modifier:
+    When `redOp` is specified, the load operation additionally performs an
+    element-wise reduction along the N-dimension of the input and produces a
+    second result tensor `red`. For a input of shape `[M, N]`, the
+    reduced result has shape `[M]`, containing one reduced value per "slice"
+    of the N-dimension.
+
+    Currently restricted to f32 element type.
+
+    - redOp: Specifies the reduction operation (MIN or MAX) to apply along
+             the N-dimension. When set, the `red` result must be present.
+    - abs:   When true, applies absolute value to each element before performing
+             the reduction. Only valid when `redOp` is specified.
+    - NaN:   When true, the reduction propagates NaN values (if any input element
+             in a slice is NaN, the corresponding reduced value is NaN).
+             When false, NaN values are ignored during reduction.
+             Only valid when `redOp` is specified.
+
+    Example:
+      Input in TMEM of shape[M=2, N=4]:
+        [[ 1.0, 3.0, 2.0, 4.0],
+         [-5.0, 1.0, 8.0, 2.0]]
+
+      With redOp=MAX:
+        result = [[ 1.0, 3.0, 2.0, 4.0],   // unchanged
+                  [-5.0, 1.0, 8.0, 2.0]]
+        red    = [4.0, 8.0]               // max along N per row
+
+      With redOp=MIN, abs=true:
+        red    = [1.0, 1.0]               // min of |values| per row
+
+    This operation lowers to hardware-accelerated reduction via the PTX
+    tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
-    Optional<TTG_AsyncToken>:$dep
+    Optional<TTG_AsyncToken>:$dep,
+    OptionalAttr<TTNG_TMEMLoadReduceModifierEnum>:$redOp,
+    OptionalAttr<BoolAttr>:$abs,
+    OptionalAttr<BoolAttr>:$NaN
   );
   let results = (outs
     TT_Tensor:$result,
-    Optional<TTG_AsyncToken>:$token
+    Optional<TTG_AsyncToken>:$token,
+    Optional<TT_Tensor>:$red
   );
 
   let assemblyFormat = [{
     $src `` custom<Token>($dep, type($token))
-    attr-dict `:` qualified(type($src)) `->` type($result)
+    attr-dict `:` qualified(type($src)) `->` type($result) (`,` type($red)^)?
   }];
+
+  let builders = [
+    // Basic builder: result type, optional token type, src, optional dep
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep), [{
+      build($_builder, $_state, result, token, /*red=*/Type(), src, dep,
+            /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+    // Builder without token
+    OpBuilder<(ins "Type":$result, "Value":$src), [{
+      build($_builder, $_state, result, /*token=*/Type(), /*red=*/Type(), src,
+            /*dep=*/Value(), /*redOp=*/nullptr, /*abs=*/nullptr, /*NaN=*/nullptr);
+    }]>,
+    // Builder with reduction - infers red type from result type
+    OpBuilder<(ins "Type":$result, "Type":$token, "Value":$src, "Value":$dep,
+               "::mlir::triton::nvidia_gpu::TMEMLoadReduceModifierAttr":$redOp,
+               "BoolAttr":$abs, "BoolAttr":$NaN), [{
+      Type redTy;
+      if (redOp) {
+        auto tensorTy = ::mlir::cast<RankedTensorType>(result);
+        SmallVector<int64_t> redShape = {tensorTy.getShape()[0]};
+        auto parentEnc = ::mlir::cast<::mlir::triton::gpu::DistributedEncodingTrait>(
+            tensorTy.getEncoding());
+        auto sliceEnc = ::mlir::triton::gpu::SliceEncodingAttr::get(
+            $_builder.getContext(), 1, parentEnc);
+        redTy = RankedTensorType::get(redShape, tensorTy.getElementType(), sliceEnc);
+      }
+      build($_builder, $_state, result, token, redTy, src, dep, redOp, abs, NaN);
+    }]>,
+  ];
 
   let hasVerifier = 1;
 

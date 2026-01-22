@@ -30,7 +30,8 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
 
   auto partitions = cast<WarpSpecializePartitionsOp>(
       op.getPartitionOpHolder().front().front());
-  OperationState state(partitions.getLoc(), partitions.getOperationName());
+  OperationState state(partitions.getLoc(), partitions.getOperationName(),
+                       partitions.getOperands(), /*types=*/{});
   for (Region *region : partitions.getRegions())
     state.addRegion()->takeBody(*region);
 
@@ -39,7 +40,7 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
     partitionNumWarps.push_back(paddingSize);
 
     Block &body = state.addRegion()->emplaceBlock();
-    for (Value capture : op.getExplicitCaptures())
+    for (Value capture : op.getPartitionOp().getExplicitCaptures())
       body.addArgument(capture.getType(), capture.getLoc());
     OpBuilder b(op.getContext());
     b.setInsertionPointToStart(&body);
@@ -80,10 +81,46 @@ struct AllocateWarpGroups
       padToMaxWarpGroups(op, numExtraWarpGroups);
     });
 
+    int baseNumWarps = lookupNumWarps(mod);
+
+    // Compute the total number of warps required at any given time.
+    mod.walk([&](WarpSpecializeOp op) {
+      ArrayRef<int32_t> arr = op.getPartitionNumWarps();
+
+      // Allocate the start IDs such that the largest warpgroups have lower
+      // starting warp IDs.
+      // FIXME: Handle aligning warp group IDs to 4 for TMEM.
+      SmallVector<std::pair<unsigned, int32_t>> idxAndSize;
+      for (auto [i, size] : llvm::enumerate(arr))
+        idxAndSize.emplace_back(i, size);
+      llvm::sort(idxAndSize,
+                 [&](auto lhs, auto rhs) { return lhs.second > rhs.second; });
+
+      SmallVector<int32_t> startIds(arr.size());
+      int startId = baseNumWarps;
+      for (auto [i, size] : idxAndSize) {
+        startIds[i] = startId;
+        startId += size;
+      }
+      op.setWarpGroupStartIds(startIds);
+    });
+
+    Builder b(&getContext());
+    mod->setAttr("ttg.total-num-warps",
+                 b.getI32IntegerAttr(baseNumWarps + numExtraWarpGroups * 4));
+
+    bool needsRegisterOptimization = false;
+    mod.walk([&](WarpSpecializeOp op) {
+      if (op.getRequestedRegisters())
+        needsRegisterOptimization = true;
+    });
+
+    if (!needsRegisterOptimization)
+      return;
+
     // Determine the maximum number of registers per thread. This may have
     // been set by the user.
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
-    int baseNumWarps = lookupNumWarps(mod);
     int maxnreg;
     if (auto maxnregAttr =
             mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)) {
@@ -107,26 +144,10 @@ struct AllocateWarpGroups
       int numWarps;
     };
 
-    // Compute the total number of warps required at any given time.
+    // Compute register allocation for each warp specialize op.
     mod.walk([&](WarpSpecializeOp op) {
       ArrayRef<int32_t> arr = op.getPartitionNumWarps();
-
-      // Allocate the start IDs such that the largest warpgroups have lower
-      // starting warp IDs.
-      // FIXME: Handle aligning warp group IDs to 4 for TMEM.
-      SmallVector<std::pair<unsigned, int32_t>> idxAndSize;
-      for (auto [i, size] : llvm::enumerate(arr))
-        idxAndSize.emplace_back(i, size);
-      llvm::sort(idxAndSize,
-                 [&](auto lhs, auto rhs) { return lhs.second > rhs.second; });
-
-      SmallVector<int32_t> startIds(arr.size());
-      int startId = baseNumWarps;
-      for (auto [i, size] : idxAndSize) {
-        startIds[i] = startId;
-        startId += size;
-      }
-      op.setWarpGroupStartIds(startIds);
+      auto startIds = *op.getWarpGroupStartIds();
 
       // Require that an estimate has been set and that we have even warpgroups.
       auto regsAttr = op.getRequestedRegisters();
@@ -191,10 +212,6 @@ struct AllocateWarpGroups
       mod->setAttr(AttrMaxRegistersName,
                    Builder(op.getContext()).getI32IntegerAttr(maxnreg));
     });
-
-    Builder b(&getContext());
-    mod->setAttr("ttg.total-num-warps",
-                 b.getI32IntegerAttr(baseNumWarps + numExtraWarpGroups * 4));
   }
 };
 } // namespace

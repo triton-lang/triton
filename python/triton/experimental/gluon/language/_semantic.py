@@ -274,6 +274,39 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
+    def shared_gather(self, mem_desc, indices, axis):
+        _check(isinstance(indices, ttgl.tensor),
+               lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
+        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
+        _check(
+            len(indices.shape) == mem_desc.rank,
+            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
+        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
+        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
+
+        ret_ty = ttgl.distributed_type(mem_desc.dtype, indices.shape, indices.type.layout)
+        handle = self.builder.create_local_gather(ret_ty.to_ir(self.builder), mem_desc.handle, indices.handle, axis)
+        return ttgl.tensor(handle, ret_ty)
+
+    def shared_scatter(self, mem_desc, values, indices, axis):
+        _check(isinstance(indices, ttgl.tensor),
+               lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
+        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
+        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
+        _check(
+            len(indices.shape) == mem_desc.rank,
+            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
+        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
+        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
+        _check(values.shape == indices.shape,
+               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
+        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
+        _check(
+            values.dtype == mem_desc.dtype,
+            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+
+        self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
+
     def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):
             raise TypeError(
@@ -518,9 +551,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
-        assert num_partitions == len(
-            worker_num_regs
-        ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
+
+        if worker_num_regs is not None:
+            assert num_partitions == len(
+                worker_num_regs
+            ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
 
         builder = self.builder
         insert_pt = builder.get_insertion_point()
@@ -528,10 +563,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_results = generator.call_JitFunction(default_partition, default_args, kwargs={})
-        mlir_results = []
-        if default_results is not None:
-            mlir_results = flatten_values_to_ir(default_results)
+        default_result = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        mlir_results = flatten_values_to_ir([default_result])
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
 
@@ -539,13 +572,15 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         worker_args = [flatten_values_to_ir(args) for _, args in workers]
         mlir_args = sum(worker_args, [])
         builder.restore_insertion_point(insert_pt)
-        ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
+        ws_op = builder.create_warp_specialize(result_types, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
-        ws_op.set_requested_registers(worker_num_regs)
+
+        if worker_num_regs is not None:
+            ws_op.set_requested_registers(worker_num_regs)
 
         # Emit the partition regions.
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
-        partitions_op = builder.create_warp_specialize_partitions(num_partitions)
+        partitions_op = builder.create_warp_specialize_partitions(mlir_args, num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
         arg_it = 0
         for i, (func, args) in enumerate(workers):
@@ -560,9 +595,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
-        if default_results is None:
-            return
-        return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+        return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
     def num_ctas(self):
         return ttgl.constexpr(self.builder.options.num_ctas)

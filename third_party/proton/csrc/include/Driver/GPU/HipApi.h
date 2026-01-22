@@ -8,6 +8,13 @@ namespace proton {
 
 namespace hip {
 
+template <bool CheckSuccess>
+hipError_t launchKernel(hipFunction_t f, unsigned int gridDimX,
+                        unsigned int gridDimY, unsigned int gridDimZ,
+                        unsigned int blockDimX, unsigned int blockDimY,
+                        unsigned int blockDimZ, unsigned int sharedMemBytes,
+                        hipStream_t stream, void **kernelParams, void **extra);
+
 template <bool CheckSuccess> hipError_t ctxGetDevice(hipDevice_t *device);
 
 template <bool CheckSuccess> hipError_t deviceSynchronize();
@@ -32,17 +39,37 @@ hipError_t streamCreateWithPriority(hipStream_t *pStream, unsigned int flags,
 
 template <bool CheckSuccess> hipError_t streamSynchronize(hipStream_t stream);
 
+template <bool CheckSuccess> hipError_t streamDestroy(hipStream_t stream);
+
 template <bool CheckSuccess>
 hipError_t memcpyDToHAsync(void *dst, hipDeviceptr_t src, size_t count,
                            hipStream_t stream);
 
+template <bool CheckSuccess>
+hipError_t memsetD32Async(hipDeviceptr_t dst, int value, size_t count,
+                          hipStream_t stream);
+
+template <bool CheckSuccess>
+hipError_t memAlloc(hipDeviceptr_t *dptr, size_t bytesize);
+
+template <bool CheckSuccess> hipError_t memFree(hipDeviceptr_t dptr);
+
 const std::string getHipArchName(uint64_t index);
 
 const char *getKernelNameRef(const hipFunction_t f);
+
 const char *getKernelNameRefByPtr(const void *hostFunction, hipStream_t stream);
 
 template <bool CheckSuccess>
 hipError_t memAllocHost(void **pp, size_t bytesize);
+
+template <bool CheckSuccess>
+hipError_t memHostAlloc(void **pp, size_t bytesize, unsigned int flags);
+
+template <bool CheckSuccess>
+hipError_t memHostGetDevicePointer(hipDeviceptr_t *pdptr, void *p,
+                                   unsigned int flags);
+
 template <bool CheckSuccess> hipError_t memFreeHost(void *p);
 
 } // namespace hip

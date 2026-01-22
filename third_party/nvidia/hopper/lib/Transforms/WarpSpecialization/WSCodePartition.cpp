@@ -540,14 +540,16 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
       triton::gpu::SharedMemorySpaceAttr::get(funcOp.getContext());
   Location loc = funcOp.getLoc();
   auto context = funcOp.getContext();
-  auto barrierCTALayout = ttg::CTAEncodingAttr::getDefault(context, 1);
+  auto numCTAs = triton::gpu::lookupNumCTAs(funcOp);
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
   auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-      context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType = ttg::MemDescType::get(
-      {distance, 1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
-      /*mutableMemory=*/true);
+      context, 1, 1, 1, {0}, barrierCGALayout);
+  Type barrierMemDescType =
+      ttg::MemDescType::get({distance, numCTAs}, builder.getI64Type(),
+                            barrierEncoding, sharedMemorySpace,
+                            /*mutableMemory=*/true);
   Type singleBarrierMemDescType =
-      ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+      ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = mlir::triton::gpu::LocalAllocOp::create(
       builder, loc, barrierMemDescType, Value());
@@ -751,7 +753,7 @@ DenseMap<Channel *, Value> createBuffer(
                    dyn_cast<RankedTensorType>(srcValue.getType())) {
       // Get basic information from tensorType
       auto order = ttg::getOrderForMemory(tensorType);
-      auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+      auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
       auto elemType = tensorType.getElementType();
 
       // Get shape, layout and type of a slice
@@ -773,7 +775,7 @@ DenseMap<Channel *, Value> createBuffer(
       Attribute sharedLayout;
       if (requireMMASharedEncoding) {
         sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-            context, sliceShape, order, CTALayout, elemType,
+            context, sliceShape, order, CGALayout, elemType,
             /*fp4Padded*/ false);
       } else if (auto tmaLoad = dyn_cast<tt::DescriptorLoadOp>(srcOp)) {
         sharedLayout = ttng::getEncodingFromDescriptor(
@@ -782,7 +784,7 @@ DenseMap<Channel *, Value> createBuffer(
         // Create an unswizzled layout for now.
         // TODO: optimize it based on the consumer.
         sharedLayout = ttg::SwizzledSharedEncodingAttr::get(context, 1, 1, 1,
-                                                            order, CTALayout);
+                                                            order, CGALayout);
       }
 
       // Get shape, layout and type of the complete buffer

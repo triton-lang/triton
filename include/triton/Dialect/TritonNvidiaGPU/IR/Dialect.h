@@ -42,6 +42,8 @@ namespace mlir::triton::nvidia_gpu::impl {
 LogicalResult verifyMMAv5Op(Operation *op);
 } // namespace mlir::triton::nvidia_gpu::impl
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.h.inc"
+
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 
@@ -130,12 +132,12 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 
 gpu::DistributedEncodingTrait
 getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CTAEncodingAttr ctaLayout);
+                            gpu::CGAEncodingAttr cgaLayout);
 
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps,
-                                gpu::CTAEncodingAttr ctaLayout);
+                                gpu::CGAEncodingAttr cgaLayout);
 
 } // namespace mlir::triton::nvidia_gpu
 

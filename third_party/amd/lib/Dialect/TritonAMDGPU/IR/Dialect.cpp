@@ -28,6 +28,7 @@
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -39,6 +40,7 @@
 // clang-format on
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
@@ -374,8 +376,10 @@ LogicalResult InThreadTransposeOp::verify() {
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
   auto dstLinearLayout = triton::gpu::toLinearLayout(dstTy);
   if (dstLinearLayout != expectedLinearLayout) {
-    return emitOpError("Expect output layout to be transposed per thread: " +
-                       expectedLinearLayout.toString());
+    return emitOpError(
+        "Expect output layout to be transposed per thread: " +
+        expectedLinearLayout.toString() +
+        "\nGot following dst layout: " + dstLinearLayout.toString());
   }
   return success();
 }
@@ -390,10 +394,17 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   std::swap(newRegOrder[rank - 2], newRegOrder[rank - 1]);
 
   // Make in-register transposed tile
+  SmallVector<unsigned> sizePerThread{srcEncoding.getSizePerThread()};
+  // Trim sizePerThread to tensor shape,
+  // to ensure deduced layout does not refer to elements outside of tensor
+  for (int i = 0; i < rank; ++i) {
+    sizePerThread[i] =
+        std::min(sizePerThread[i], static_cast<unsigned>(shape[i]));
+  }
   auto ctx = srcEncoding.getContext();
   auto regDimName = StringAttr::get(ctx, "register");
-  auto inThreadTransposedTile = identityStandardND(
-      regDimName, srcEncoding.getSizePerThread(), newRegOrder);
+  auto inThreadTransposedTile =
+      identityStandardND(regDimName, sizePerThread, newRegOrder);
   // make sure basis in same order as in srcLayout
   SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
   inThreadTransposedTile = inThreadTransposedTile.transposeOuts(outDimNames);
@@ -401,9 +412,13 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   // Copy original bases, and replace register tile with transposed one
   LinearLayout::BasesT bases = srcLL.getBases();
   auto &regBase = *bases.find(regDimName);
-  int regsTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
-  for (int i = 0; i < regsTransposed; ++i)
-    regBase.second[i] = inThreadTransposedTile.getBasis(regDimName, i);
+  int regBasesTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
+  for (int baseIdx = 0; baseIdx < regBasesTransposed; ++baseIdx)
+    regBase.second[baseIdx] =
+        inThreadTransposedTile.getBasis(regDimName, baseIdx);
+  int regBasesInTile = llvm::Log2_32(product(srcEncoding.getSizePerThread()));
+  for (int baseIdx = regBasesTransposed; baseIdx < regBasesInTile; ++baseIdx)
+    llvm::for_each(regBase.second[baseIdx], [](int32_t &val) { val = 0; });
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
@@ -718,6 +733,16 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   return success();
 }
 
+// -- AsyncCopyLocalToGlobalOp --
+LogicalResult AsyncCopyLocalToGlobalOp::verify() {
+  // Verify the source is local memory (shared memory)
+  auto srcTy = getSrc().getType();
+  if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
+    return emitOpError("source must be in shared memory");
+
+  return success();
+}
+
 LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getSrc().getType();
@@ -773,6 +798,89 @@ LogicalResult ArriveBarrierOp::verify() {
 LogicalResult AsyncCopyMbarrierArriveOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
     return failure();
+  return success();
+}
+
+// -- TDMPrefetchOp --
+// This op optionally returns the prefetch offsets (testing-only). When
+// `returnOffsets` is absent, it produces no results. When present, it yields an
+// int64 tensor of the prefetch addresses relative to the tensor base. The
+// tensor shape is:
+//   [num_programs, block_shape[:-1], block_shape[-1] / elements_per_prefetch]
+// i.e., the last dimension is scaled by how many elements fit in one 256-byte
+// prefetch. Values are the byte offsets added to the base pointer for each
+// prefetch instruction.
+LogicalResult TDMPrefetchOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  TDMPrefetchOp::Adaptor ad(operands, attributes, properties, regions);
+
+  // If returnOffsets is not set the op will not return any results
+  if (!ad.getReturnOffsets().has_value()) {
+    return success();
+  }
+
+  auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
+  auto blockType = descType.getBlockType();
+  auto blockShape = blockType.getShape();
+  auto elementType = blockType.getElementType();
+
+  // Lookup the module to get the number of threads per warp, number of warps
+  // and number of CTAs
+  ModuleOp mod;
+  for (auto operand : operands) {
+    if (auto op = operand.getDefiningOp()) {
+      mod = op->getParentOfType<ModuleOp>();
+      break;
+    } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+      auto parentOp = blockArg.getOwner()->getParentOp();
+      if (parentOp) {
+        mod = parentOp->getParentOfType<ModuleOp>();
+        break;
+      }
+    }
+  }
+  assert(mod);
+
+  auto threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numWarps = triton::gpu::lookupNumWarps(mod);
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto enc = triton::gpu::getDefaultBlockedEncoding(
+      context, scaledBlockShape, numWarps, threadsPerWarp, numCTAs);
+  IntegerType i64Type = IntegerType::get(context, 64);
+  auto tensorTy = RankedTensorType::get(scaledBlockShape, i64Type, enc);
+
+  inferredReturnTypes.push_back(tensorTy);
+
+  return success();
+}
+
+// -- ClusterBarrierSignalOp --
+LogicalResult ClusterBarrierArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterBarrierWaitOp --
+LogicalResult ClusterBarrierWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
   return success();
 }
 

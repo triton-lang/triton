@@ -224,7 +224,7 @@ def test_line_info_env(monkeypatch, status: str):
 
 
 @pytest.mark.parametrize("status", ["ttir", ""])
-def test_line_info_ir_source(monkeypatch, status, tmp_path):
+def test_line_info_ir_source(monkeypatch, status, tmp_path, fresh_triton_cache):
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:

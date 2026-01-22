@@ -52,6 +52,7 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+def L2Cache : Resource<"::mlir::triton::amd::L2Cache">;
 
 //===----------------------------------------------------------------------===//
 // ExtractSliceOp
@@ -305,6 +306,9 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       the first elements of each row in bytes. Compiler tries to obtain the `stride`
       when it converts to the buffer ops because it is important for optimizing
       the cache memory access.
+      Contiguity is the maximum number of elements that can be loaded in a single vector
+      with the given layout and mask.
+      This allows to use buffer_load even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
@@ -312,7 +316,8 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
-      Optional<TT_Tensor>:$other
+      Optional<TT_Tensor>:$other,
+      DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
     let results = (outs TT_Tensor:$result);
 
@@ -480,6 +485,9 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       the first elements of each row in bytes. Compiler tries to obtain the `stride`
       when it converts to the buffer ops because it is important for optimizing
       the cache memory access.
+      Contiguity is the maximum number of elements that can be loaded in a single vector
+      with the given layout and mask.
+      This allows to use buffer_store even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
       TT_Tensor:$value,
@@ -487,7 +495,8 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
-      Optional<TT_BoolTensor>:$mask
+      Optional<TT_BoolTensor>:$mask,
+      DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
 
     let assemblyFormat = [{
@@ -604,7 +613,7 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
 
   let arguments = (ins
     RankedTensorOf<[I8]>:$input,
-    RankedTensorOf<[BF16]>:$scale,
+    RankedTensorOf<[BF16, I8]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
@@ -636,7 +645,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
-    RankedTensorOf<[BF16]>:$scale);
+    RankedTensorOf<[BF16, I8]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
   let assemblyFormat = [{
@@ -644,6 +653,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 }
+
 //===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
@@ -710,6 +720,44 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
 }
 
 //===----------------------------------------------------------------------===//
+// AsyncCopyLocalToGlobalOp
+//===----------------------------------------------------------------------===//
+
+def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
+  OptionalTypesMatchWith<"infer mask type from dst type",
+                 "dst", "mask", "getI1SameShape($_self)">,
+]> {
+  let summary = "copy data from local memory to global memory asynchronously";
+
+  let hasVerifier = 1;
+  let description = [{
+    This operation copies data from local memory to global memory asynchronously.
+    This is analogue to tt.store except the data are copied from local memory pointed
+    to by the memory descriptor instead of a distributed tensor.
+    Contiguity is the maximum number of elements that can be stored in a single vector with
+    the given layout and mask.
+    This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
+    Optional<I1Tensor>:$mask,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    DefaultValuedAttr<I32Attr, "1">:$contiguity
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $src `,` $dst (`mask` $mask^)?
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    attr-dict `:` qualified(type($src)) `->` type($dst)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // AsyncTDMCopyGlobalToLocalOp
 //===----------------------------------------------------------------------===//
 
@@ -755,7 +803,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 // AsyncTDMCopyLocalToGlobalOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global"> {
+def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global", [AttrSizedOperandSegments]> {
   let summary = "Copy data based on descriptor from local memory to global memory asynchronously";
 
   let description = [{
@@ -764,17 +812,20 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global">
     local memory pointed by `src` instead of a distributed tensor. The copy
     destination depends on the global memory pointed to by `desc`. This
     operation does not support shared memory padding or swizzling.
+    The operation can also take an optional 64bit LDS barrier address, in which case
+    it sends an "LDS atomic arrive" to signal its completion.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_MemDescType>:$barrier
   );
 
   let assemblyFormat = [{
-    $desc `[` $indices `]` `from` $src
-    attr-dict `:` qualified(type($src)) `->` qualified(type($desc))
+    $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
   let hasVerifier = 1;
@@ -795,6 +846,46 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
   let results = (outs TTG_AsyncToken:$retToken);
   let assemblyFormat = "$asyncToken attr-dict";
 }
+
+//===----------------------------------------------------------------------===//
+// TDMPrefetchOp
+//===----------------------------------------------------------------------===//
+
+def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
+    MemoryEffects<[MemWrite<L2Cache>]>,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
+  let summary = "Prefetch data based on a TDM descriptor from global memory to L2.";
+
+  let description = [{
+    This operation prefetches data from global memory to L2. It is analogous to the AsyncTDMCopyGlobalToLocalOp,
+    but it does not copy the data to local memory and instead only prefetches the data into the L2 cache.
+    Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+    However, they are dropped by the hardware in case the virtual address translation is not already cached at CU level.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    I1:$pred,
+    BoolAttr:$speculative,
+    // Optional attribute (intended for testing) that, when set, causes the prefetch operation to return the computed offsets.
+    // This should not be used in production code and is only for validation or debugging purposes.
+    OptionalAttr<UnitAttr>:$returnOffsets
+  );
+
+  // Optional result type in case returnOffsets is set, see inferReturnTypes for more details (testing only).
+  let results = (outs Optional<TT_Tensor>:$maybeOffsets);
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` `,` $pred `,` `speculative` `=` $speculative
+    (`returnOffsets` $returnOffsets^)?
+    attr-dict `:` qualified(type($desc))
+    (`->` type($maybeOffsets)^)?
+  }];
+}
+
+
 
 //===----------------------------------------------------------------------===//
 // AsyncWait
@@ -892,7 +983,7 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier"> {
     Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
     of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
     zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
-    of the mbarrier object prior to the "arrive" operation.
+    parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive" operation.
 
     Example:
 
@@ -931,6 +1022,36 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive"> {
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ClusterBarrierSignalOp
+//===----------------------------------------------------------------------===//
+
+def ClusterBarrierArriveOp : TT_AMDGPU_Op<"cluster_barrier_arrive"> {
+  let summary = "Arrive at a cluster barrier";
+  let description = [{
+    Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.
+
+    See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
+  }];
+  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// ClusterBarrierWaitOp
+//===----------------------------------------------------------------------===//
+
+def ClusterBarrierWaitOp : TT_AMDGPU_Op<"cluster_barrier_wait"> {
+  let summary = "Wait on a cluster barrier";
+  let description = [{
+    Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
+    Arrive and wait operations must come in pairs. Waiting before arriving or arriving
+    more than once without a corresponding wait will result in undefined behavior.
+  }];
+  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
 }
 
 #endif

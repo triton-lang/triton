@@ -238,49 +238,141 @@ void init_triton_nvidia(py::module &&m) {
              self.matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr,
                          C_ptr, dtype);
            })
-      .def("gemm", [](CublasLtInstance &self, py::object &A, py::object &B,
-                      py::object &C, py::object &D, float alpha, float beta) {
+      .def("gemm",
+           [](CublasLtInstance &self, py::object &A, py::object &B,
+              py::object &C, py::object &D, float alpha, float beta) {
+             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+             auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+             auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+
+             auto A_shape = A.attr("shape").cast<std::vector<int>>();
+             auto B_shape = B.attr("shape").cast<std::vector<int>>();
+             auto C_shape = C.attr("shape").cast<std::vector<int>>();
+             auto D_shape = D.attr("shape").cast<std::vector<int>>();
+
+             auto A_dtype =
+                 A.attr("dtype").attr("__str__")().cast<std::string>();
+             auto B_dtype =
+                 B.attr("dtype").attr("__str__")().cast<std::string>();
+             auto C_dtype =
+                 C.attr("dtype").attr("__str__")().cast<std::string>();
+             auto D_dtype =
+                 D.attr("dtype").attr("__str__")().cast<std::string>();
+
+             checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
+                                    D_shape);
+             if (C_dtype != "torch.float16") {
+               throw std::runtime_error("C dtype must be float16, got " +
+                                        C_dtype);
+             }
+             if (C_shape != D_shape) {
+               throw std::runtime_error("C and D shapes must match");
+             }
+
+             std::string dtype_str =
+                 A_dtype.substr(A_dtype.find_last_of('.') + 1);
+             cudaDataType_t dtype;
+             if (dtype_str == "float8_e4m3fn") {
+               dtype = CUDA_R_8F_E4M3;
+             } else if (dtype_str == "float16") {
+               dtype = CUDA_R_16F;
+             } else if (dtype_str == "float32") {
+               dtype = CUDA_R_32F;
+             } else if (dtype_str == "bfloat16") {
+               dtype = CUDA_R_16BF;
+             } else {
+               throw std::runtime_error(
+                   "Unsupported dtype for cublasLt.gemm: " + dtype_str);
+             }
+
+             self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
+                       D_ptr, dtype, alpha, beta);
+           })
+      .def("block_scaled_matmul_mxfp8",
+           [](CublasLtInstance &self, py::object &A, py::object &B,
+              py::object &output, py::object &scale_A, py::object &scale_B) {
+             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+             auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
+             auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
+             auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
+
+             auto A_shape = A.attr("shape").cast<std::vector<int>>();
+             auto B_shape = B.attr("shape").cast<std::vector<int>>();
+
+             auto A_dtype =
+                 A.attr("dtype").attr("__str__")().cast<std::string>();
+             auto B_dtype =
+                 B.attr("dtype").attr("__str__")().cast<std::string>();
+             auto output_dtype =
+                 output.attr("dtype").attr("__str__")().cast<std::string>();
+
+             // Only support MXFP8: FP8 E4M3 inputs, FP16 output
+             if (A_dtype != "torch.float8_e4m3fn" ||
+                 B_dtype != "torch.float8_e4m3fn") {
+               throw std::runtime_error(
+                   "block_scaled_matmul_mxfp8 only supports float8_e4m3fn "
+                   "inputs (MXFP8)");
+             }
+
+             if (output_dtype != "torch.float16") {
+               throw std::runtime_error(
+                   "block_scaled_matmul_mxfp8 output must be float16, got " +
+                   output_dtype);
+             }
+
+             int K = A_shape[1];
+
+             self.block_scaled_matmul_mxfp8(A_shape[0], B_shape[0], K, A_ptr,
+                                            B_ptr, output_ptr, scale_A_ptr,
+                                            scale_B_ptr);
+           })
+      .def("block_scaled_matmul_nvfp4", [](CublasLtInstance &self,
+                                           py::object &A, py::object &B,
+                                           py::object &output,
+                                           py::object &scale_A,
+                                           py::object &scale_B) {
         auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
         auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-        auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
-        auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+        auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
+        auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
+        auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
 
         auto A_shape = A.attr("shape").cast<std::vector<int>>();
         auto B_shape = B.attr("shape").cast<std::vector<int>>();
-        auto C_shape = C.attr("shape").cast<std::vector<int>>();
-        auto D_shape = D.attr("shape").cast<std::vector<int>>();
 
         auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
         auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
-        auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
-        auto D_dtype = D.attr("dtype").attr("__str__")().cast<std::string>();
+        auto output_dtype =
+            output.attr("dtype").attr("__str__")().cast<std::string>();
 
-        checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
-                               D_shape);
-        if (C_dtype != "torch.float16") {
-          throw std::runtime_error("C dtype must be float16, got " + C_dtype);
-        }
-        if (C_shape != D_shape) {
-          throw std::runtime_error("C and D shapes must match");
-        }
-
-        std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
-        cudaDataType_t dtype;
-        if (dtype_str == "float8_e4m3fn") {
-          dtype = CUDA_R_8F_E4M3;
-        } else if (dtype_str == "float16") {
-          dtype = CUDA_R_16F;
-        } else if (dtype_str == "float32") {
-          dtype = CUDA_R_32F;
-        } else if (dtype_str == "bfloat16") {
-          dtype = CUDA_R_16BF;
-        } else {
-          throw std::runtime_error("Unsupported dtype for cublasLt.gemm: " +
-                                   dtype_str);
+        // NVFP4: uint8 packed FP4 inputs (2 elements per byte), FP8 E4M3
+        // scales, FP16 output
+        if (A_dtype != "torch.uint8" || B_dtype != "torch.uint8") {
+          throw std::runtime_error("block_scaled_matmul_nvfp4 only supports "
+                                   "uint8 packed FP4 inputs (NVFP4), got A=" +
+                                   A_dtype + ", B=" + B_dtype);
         }
 
-        self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
-                  D_ptr, dtype, alpha, beta);
+        if (output_dtype != "torch.float16") {
+          throw std::runtime_error(
+              "block_scaled_matmul_nvfp4 output must be float16, got " +
+              output_dtype);
+        }
+
+        // For packed FP4, shape[1] is in bytes, but K dimension should be in
+        // elements So K = A_shape[1] * 2 (2 elements per byte)
+        int K = A_shape[1] * 2;
+        if (B_shape[1] * 2 != K) {
+          throw std::runtime_error("K dimensions must match. A has " +
+                                   std::to_string(K) + " elements, B has " +
+                                   std::to_string(B_shape[1] * 2) +
+                                   " elements");
+        }
+
+        self.block_scaled_matmul_nvfp4(A_shape[0], B_shape[0], K, A_ptr, B_ptr,
+                                       output_ptr, scale_A_ptr, scale_B_ptr);
       });
 
   m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {

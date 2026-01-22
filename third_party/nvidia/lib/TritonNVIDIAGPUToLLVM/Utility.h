@@ -1,6 +1,8 @@
 #ifndef TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_UTILITY_H
 
+#include <cstdint>
+
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -42,8 +44,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, RewriterBase &rewriter);
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
+Value createElectPredicate(Location loc, OpBuilder &rewriter);
+Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter);
 
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
@@ -55,6 +57,12 @@ LogicalResult lowerLdStMatrix(
     Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
     Type llvmElemTy, ConversionPatternRewriter &rewriter,
     const mlir::triton::NVIDIA::TargetInfo &targetInfo);
+
+// Given a broadcast mask and the number of CTAs, create a mask of ones
+// where for ctaId, it sets as 1's the positions that are in the same broadcast
+// group
+Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                             uint16_t broadcastBits);
 } // namespace NVIDIA
 } // namespace LLVM
 

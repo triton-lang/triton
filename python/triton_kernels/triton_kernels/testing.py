@@ -7,7 +7,6 @@ import torch
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE
-from triton_kernels.tensor_details import layout
 import itertools
 from dataclasses import replace
 
@@ -289,7 +288,7 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
-                       squeeze_batch_dim, hbm_swizzling=False, is_mx_rowmajor=False):
+                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
     # allocate buffer
     buffer_shape = ((n_slices, ) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
@@ -302,7 +301,8 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
         slice_sizes = make_slice_sizes(n_slices, shape[ragged_dim], device=device)
         ragged_metadata = make_ragged_tensor_metadata(slice_sizes, shape[ragged_dim])
     if ragged_padding:
-        buffer, ragged_metadata = pad_ragged_tensor(buffer, ragged_metadata, hbm_swizzling, ragged_dim == 1)
+        buffer, ragged_metadata = pad_ragged_tensor(buffer, ragged_metadata, value_hbm_swizzling is not None
+                                                    or scale_hbm_swizzling is not None, ragged_dim == 1)
     # handle transpose
     if transpose:
         buffer = buffer.mT.contiguous().mT
@@ -316,14 +316,14 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
         else:
             buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else buffer_dtype)
+        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None)
         scales = wrap_torch_tensor(scales)
-        if dtype.is_mxfloat4 and hbm_swizzling and not is_mx_rowmajor:
+        if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout
-            buffer_layout, buffer_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mxfp_dim)
-            buffer = convert_layout(buffer, buffer_layout, **buffer_layout_opts)
-            # convert scales to swizzled hbm layout
-            scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-                mx_axis=mxfp_dim, num_warps=8)
-            scales = convert_layout(scales, scale_layout, **scale_layout_opts)
+            buffer = convert_layout(buffer, value_hbm_swizzling)
+        if scale_hbm_swizzling is not None:
+            # hack to avoid circular dependency
+            if callable(scale_hbm_swizzling):
+                scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata)
+            scales = convert_layout(scales, scale_hbm_swizzling)
     return buffer, scales, ragged_metadata

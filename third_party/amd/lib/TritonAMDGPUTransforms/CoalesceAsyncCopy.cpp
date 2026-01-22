@@ -101,10 +101,15 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-            rewriter, regToSharedLayout, threadsPerWarp, loadContig)) {
+    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
+                                      dstTy.getAllocShape(), loadContig)) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
+    // Check if we support load contig because canLoadDirectToLds can change it
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(loadContig * elemBitWidth))
+      return rewriter.notifyMatchFailure(copyOp,
+                                         "unable to find supported vector size "
+                                         "based on src and dst encodings");
 
     if (isa<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
       // For swizzled layouts we apply the swizzling during lowering so we only
@@ -117,7 +122,7 @@ struct CoalesceAsyncCopyWrites
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           blockedEnc.getOrder(), numWarps, threadsPerWarp,
-          blockedEnc.getCTALayout());
+          blockedEnc.getCGALayout());
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
@@ -176,7 +181,7 @@ struct CoalesceAsyncCopyWrites
           triton::standardOutDimNames(ctx, rank));
 
       newRegLayout = triton::gpu::combineCtaCgaWithShape(
-          newRegLayout, blockedEnc.getCTALayout(), srcTy.getShape());
+          newRegLayout, blockedEnc.getCGALayout(), srcTy.getShape());
 
       auto newRegToShared = newRegLayout.invertAndCompose(sharedLayout);
       if (newRegToShared.getNumConsecutiveInOut() < loadContig) {
@@ -185,7 +190,7 @@ struct CoalesceAsyncCopyWrites
                     "component of the padded encoding");
       }
 
-      newDistEnc = ttg::LinearEncodingAttr::get(ctx, newRegLayout);
+      newDistEnc = ttg::LinearEncodingAttr::get(ctx, std::move(newRegLayout));
     } else {
       assert(false && "Unsupported layout");
     }

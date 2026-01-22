@@ -917,6 +917,56 @@ tt.func @two_different_ws() {
   tt.return
 }
 
+// expected-remark @below {{default_partition_outside_alloc_interference}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @default_partition_outside_alloc_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
+  ttg.warp_specialize(%0)
+  default {
+    // Ensure that we do not reuse the memory for %0 even though we are done
+    // with it in this partition.
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(4) {
+    "use"(%arg0) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{partition_outside_alloc_interference}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @partition_outside_alloc_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
+  ttg.warp_specialize(%0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(2) {
+    "use"(%arg0) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  }
+  partition1(%arg1: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(2) {
+    "use"(%arg1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    // Ensure that we do not reuse the memory for %0 even though we are done
+    // with it in this partition.
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+  tt.return
+}
+
 // expected-remark @below {{ptr_allocation_datalayout}}
 // expected-remark @below {{size = 8}}
 tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
@@ -941,18 +991,18 @@ tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
 // expected-remark @below {{nvmma_alignment}}
 // expected-remark @below {{size = 1088}}
 tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
-  // expected-remark @below {{offset = 0, size = 128}}
-  %fp4 = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_FP4PADDED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 256}}
+  %fp4 = ttg.local_alloc : () -> !ttg.memdesc<1x128xi8, #NVMMA_SHARED_FP4PADDED, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 0, size = 64}}
   %a = ttg.local_alloc : () -> !ttg.memdesc<32xf16, #A_SHARED_1D, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 128, size = 64}}
   %b = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_0, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 256, size = 64}}
-  %c = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_32, #ttg.shared_memory, mutable>
+  %c = ttg.local_alloc : () -> !ttg.memdesc<4x16xi8, #NVMMA_SHARED_32, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 512, size = 64}}
-  %d = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_64, #ttg.shared_memory, mutable>
+  %d = ttg.local_alloc : () -> !ttg.memdesc<2x32xi8, #NVMMA_SHARED_64, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 1024, size = 64}}
-  %e = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_128, #ttg.shared_memory, mutable>
+  %e = ttg.local_alloc : () -> !ttg.memdesc<1x64xi8, #NVMMA_SHARED_128, #ttg.shared_memory, mutable>
 
   ttg.local_dealloc %a : !ttg.memdesc<32xf16, #A_SHARED_1D, #ttg.shared_memory, mutable>
   tt.return

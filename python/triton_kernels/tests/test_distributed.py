@@ -6,11 +6,10 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, symm_mem_pool
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, SymmetricMemoryPool
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.matmul import matmul
-from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
 
@@ -139,11 +138,12 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
 
 
 def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
-                              y_indx=None):
+                              symm_mem_pool, y_indx=None):
     rank = dist.get_rank()
     expt_map = expt_assignment.expt_map[rank, :]
     # active global logits (sparse)
-    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, y_indx=y_indx)
+    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, y_indx=y_indx,
+                           symm_mem_pool=symm_mem_pool)
     # expert histogram, dispatch/combine indx
     active_indx = l_global_active.indx
     expt_sizes = l_global_active.mask_metadata.col_sum
@@ -152,12 +152,12 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     # ragged tensor metadata
     x_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
     # convert x from dp-local to expert-sorted, ep-local
-    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx)
+    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx, symm_mem_pool)
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_map)
     # matrix multiply
     y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, a_ragged_metadata=y_ep_local_metadata)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
-    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
+    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx, symm_mem_pool)
     # weighted average of the output token from experts
     y_dp_local = y_dp_local.view(-1, n_expts_act, y_dp_local.shape[-1])
     z_dp_local, _ = reduce(y_dp_local, dim=1)
@@ -197,17 +197,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         y_indx=y_indx_global,
     )
 
-    def run_mixture():
-        return mixture_of_expt_epsharded(
-            x_dp_local,
-            l_dp_local,
-            w_ep_local,
-            b_ep_local,
-            expt_assignment,
-            n_expts_act,
-            y_indx=y_indx_global,
-        )
-
+    symm_mem_pool = SymmetricMemoryPool()
     symm_mem_pool.initialize_matmul(
         n_tokens_global=n_tokens_global,
         d_input=d_model,
@@ -219,7 +209,20 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         group=dist.group.WORLD,
         device=dev,
     )
-    y_dp_local_tri = run_mixture()
+
+    def run_moe():
+        return mixture_of_expt_epsharded(
+            x_dp_local,
+            l_dp_local,
+            w_ep_local,
+            b_ep_local,
+            expt_assignment,
+            n_expts_act,
+            y_indx=y_indx_global,
+            symm_mem_pool=symm_mem_pool,
+        )
+
+    y_dp_local_tri = run_moe()
     y_global_tri = torch.empty_like(y_global_ref)
 
     # Validate warmup run.
@@ -231,11 +234,12 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
         with torch.cuda.graph(g):
-            y_dp_local_tri_graph = run_mixture()
+            y_dp_local_tri_graph = run_moe()
 
     g.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri_graph)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+    symm_mem_pool.release()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
@@ -243,8 +247,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
 def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act, affinity_mode):
-    if is_hip():
-        pytest.skip("Distributed test is not supported on AMD GPU")
     if n_tokens < distributed_launcher.world_size:
         raise ValueError("n_tokens must be >= number of gpus")
     if n_tokens % distributed_launcher.world_size != 0:

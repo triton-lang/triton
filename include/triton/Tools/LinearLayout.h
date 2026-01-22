@@ -582,7 +582,7 @@ public:
     auto value = std::move(it->second);
     bases.erase(it);
     bases.insert({newDim, std::move(value)});
-    return LinearLayout(bases, getOutDims(),
+    return LinearLayout(std::move(bases), getOutDims(),
                         /*requireSurjective=*/isSurjective());
   }
 
@@ -627,11 +627,11 @@ public:
   //
   //    - identity1D(4, "i", "o") * zeros1D(2, "i", "o") => L(x) = x % 4
   //      for x in [0,8).
-  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 0]]
+  //      The output matrix is [[1, 0, 0], [0, 1, 0]]
   //
   //    - zeros1D(2, "i", "o") * identity1D(4, "i", "o") => L(x) = x / 2
   //      for x in [0,8).
-  //      The output matrix is [[0, 0, 0], [0, 1, 0], [0, 0, 1]]
+  //      The output matrix is [[0, 1, 0], [0, 0, 1]]
 
   //    - identity1D(4, "i", "o1") * identity1D(8, "i", "o2") =>
   //      L(x) = (x % 4, x / 4) for x in [0,32).

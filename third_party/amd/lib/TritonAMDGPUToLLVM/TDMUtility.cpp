@@ -1,6 +1,11 @@
 #include "TDMUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include <optional>
+
+// Include shared C-compatible TDM utilities
+#include "../../backend/include/TDMCommon.h"
 
 namespace mlir::LLVM::AMD {
 namespace {
@@ -53,30 +58,16 @@ decodeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return {srcPtr, tensorShape, tensorStride};
 }
 
+// C++ wrapper for the shared tdmGetWarpDistribution function
 SmallVector<int> getWarpDistribution(ArrayRef<int64_t> blockShape,
                                      int numWarps) {
-  SmallVector<int> warps(blockShape.size(), 1);
-  int remainingWarps = numWarps;
-
-  // Distribute warps across dimensions, starting from the first dimension
-  for (size_t i = 0; i < blockShape.size() && remainingWarps > 1; ++i) {
-    // Try to assign as many warps as possible to this dimension
-    // without exceeding the block shape
-    while (remainingWarps > 1 && warps[i] * 2 <= blockShape[i]) {
-      warps[i] *= 2;
-      remainingWarps /= 2;
-    }
-  }
-
-  // If there are still remaining warps, assign them to the last dimension
-  // This ensures we use all available warps
-  if (remainingWarps > 1) {
-    warps[blockShape.size() - 1] *= remainingWarps;
-  }
+  int numDims = blockShape.size();
+  SmallVector<int> warps(numDims);
+  tdmGetWarpDistribution(blockShape.data(), numDims, numWarps, warps.data());
 
   // Verify the distribution is valid
   int totalWarps = 1;
-  for (size_t i = 0; i < warps.size(); ++i) {
+  for (int i = 0; i < numDims; ++i) {
     totalWarps *= warps[i];
     assert(blockShape[i] % warps[i] == 0 &&
            "Block shape must be divisible by warp distribution");
@@ -225,13 +216,11 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 
   // Distribute block among warps
-  if (numDims >= 2) {
-    auto warps = getWarpDistribution(blockShape, numWarps);
-    blockShape[0] = ceil(blockShape[0], int64_t(warps[0]));
-    blockShape[1] = ceil(blockShape[1], int64_t(warps[1]));
-  } else {
-    // For 1D case, all warps work on the single dimension
-    blockShape[0] = ceil(blockShape[0], int64_t(numWarps));
+  {
+    int64_t blkShapePerWarp[5];
+    tdmGetAdjustedBlockShape(blockShape.data(), numDims, numWarps,
+                             &blkShapePerWarp[0]);
+    blockShape.assign(blkShapePerWarp, blkShapePerWarp + blockShape.size());
   }
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
@@ -245,17 +234,48 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   group0[3] = b.trunc(i32_ty, b.lshr(globalAddr, v32));
   group0[3] = b.or_(group0[3], b.i32_val(1 << 31));
 
-  // group1 (256 bits / 8 dwords) effective bit encoding:
-  // [15:0]:    multicast mask
-  // [17:16]:   data size - log2(element size in bytes)
-  // [20]:      enable padding
-  // [24:22]:   pad interval - log2(pad interval in dwords) - 1
-  // [31:25]:   pad amount - pad amount in dwords - 1
-  // [79:48]:   tensor shape dim inner
-  // [111:80]:  tensor shape dim outer
-  // [127:112]: block shape dim inner
-  // [143:128]: block shape dim outer
-  // [207:160]: tensor stride dim outer (we only use 32 bits)
+  /* group1 bit-field definition:
+
+    NOTE that in this chart
+    - {tensor|tile}-dim0 for means innermost dimension.
+    - stride-dim0 refers to the stride of the 2nd innermost dimension.
+      FIXME: Is the stride for innermost dimension always 1, and hence no
+      need to set in the descriptor
+
+    ================================================================
+     dword | dword     | bit-size | field
+           | -bit-ofst |
+     ------------------------------------------------
+      0      0          16         multicast mask
+             16         2          data size - log2(element size in bytes)
+             18         1          atomic barrier enable
+             19         1          iterate enable
+             20         1          pad enable
+             22         3          pad interval
+                                   (log2(pad interval in dwords) - 1)
+             25         7          pad amount - pad amount in dwords - 1
+                                   (pad amount in dwords - 1)
+     ---------------------------------------------------------
+     1       0          16         atomic barrier address
+             16         16         tensor_dim0 (low-16-bit)
+     --------------------------------------------------------
+     2       0           16        tensor_dim0 (high-16-bit)
+             16          16        tensor_dim1 (low-16-bit)
+     ----------------------------------------------------------
+     3       0           16        tensor_dim1 (high-16-bit)
+             16          16        tile_dim0
+     -------------------------------------------------------
+     4       0           16        tile_dim1
+             16          16        tile_dim2
+     -------------------------------------------------------
+     5       0           32        tensor_dim0_stride(low-32-bit)
+     -------------------------------------------------------
+     6       0           16        tensor_dim0_stride(high-16-bit)
+            16           16        tensor_dim1_stride(low-16-bit)
+     -------------------------------------------------------------
+     7       0           32        tensor_dim1_stride(high-16-bit)
+     ================================================================
+  */
   SmallVector<Value> group1(8, b.i32_val(0));
   int32_t dataSize = log2(elementSizeInBytes);
   unsigned dwordSize = 32;
@@ -328,11 +348,19 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     }
   }
 
-  // group3 (128 bits / 4 dwords) effective bit encoding:
-  // [47:0]:    tensor_dim3_stride (4th dimension from the end)
-  // [79:48]:   tensor_dim4 (5th dimension from the end)
-  // [95:80]:   tile_dim4
-  // [127:96]:  reserved
+  /* group3 bit-field definition
+    ================================================================
+     dword | dword     | bit-size | field
+           | -bit-ofst |
+     ---------------------------------------------------------------
+         0           0          32 tensor_dim3_stride LSB-32
+         1           0          16 tensor_dim3_stride MSB-16
+                    16          16 tensor_dim4 LSB-16
+         2          00          16 tensor_dim4 MSB-16
+                    16          16 tile_dim4
+         3           0          32 reserved
+    ================================================================
+  */
   SmallVector<Value> group3(4, b.i32_val(0));
   if (numDims >= 4) {
 
@@ -365,7 +393,8 @@ void fillTDMDescriptor(
     unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
-    SmallVector<Value> offset, Value dstPtr, Value pred, Value barrierPtr) {
+    SmallVector<Value> offset, Value dstPtr, Value pred, Value multicastMask,
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
 
@@ -407,6 +436,19 @@ void fillTDMDescriptor(
     globalOffset[i] = b.mul(b.i32_val(blockShapePerWarp), warpCoord[i]);
     offset[i] = b.add(offset[i], globalOffset[i]);
   }
+
+  // We need to adjust the outer strides based on our CTAId and the block layout
+  auto kBlock = str_attr("block");
+  auto cgaOffsets =
+      applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
+  // Apply CTA offsets to the base pointer
+  // Compute the global address offset: sum(ctaOffsets[i] * tensorStride[i])
+  Value cgaBaseOffset = b.i32_val(0);
+  for (size_t i = 0; i < numDims; ++i) {
+    Value dimOffset = b.mul(cgaOffsets[i].second, tensorStride[i]);
+    cgaBaseOffset = b.add(cgaBaseOffset, dimOffset);
+  }
+  srcPtr = b.gep(globalPtrTy, elementType, srcPtr, cgaBaseOffset);
 
   // Calculate the full global address offset based on all dimensions
   Value baseOffset = b.i32_val(0);
@@ -453,6 +495,8 @@ void fillTDMDescriptor(
   group0[3] =
       b.or_(group0[3], b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
 
+  if (multicastMask)
+    group1[0] = b.or_(group1[0], multicastMask);
   // Update groups with adjusted tensor shapes
   group1[1] = b.shl(tensorShape[numDims - 1], b.i32_val(16));
   group1[2] = b.lshr(tensorShape[numDims - 1], b.i32_val(16));
@@ -501,7 +545,9 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
                       int numWarps, unsigned padInterval, unsigned padAmount,
                       ArrayRef<Value> offset, Value dstPtr, Value pred,
-                      Type elementType, Value barrierPtr, bool isLoad) {
+                      Value multicastMask, Type elementType, Value barrierPtr,
+                      bool isLoad, const triton::LinearLayout &cgaLayout,
+                      Value ctaId) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   assert(blockShape.size() <= 5);
@@ -514,10 +560,10 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      SmallVector<int64_t>(blockShape), numWarps, padInterval,
-                      padAmount, group0Vec, group1Vec, std::ref(group2Vec),
-                      std::ref(group3Vec), SmallVector<Value>(offset), dstPtr,
-                      pred, barrierPtr);
+                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      group0Vec, group1Vec, std::ref(group2Vec),
+                      std::ref(group3Vec), to_vector(offset), dstPtr, pred,
+                      multicastMask, barrierPtr, cgaLayout, ctaId);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -535,10 +581,10 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      SmallVector<int64_t>(blockShape), numWarps, padInterval,
-                      padAmount, group0Vec, group1Vec, std::nullopt,
-                      std::nullopt, SmallVector<Value>(offset), dstPtr, pred,
-                      barrierPtr);
+                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      group0Vec, group1Vec, std::nullopt, std::nullopt,
+                      to_vector(offset), dstPtr, pred, multicastMask,
+                      barrierPtr, cgaLayout, ctaId);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -548,6 +594,149 @@ void emitTDMOperation(RewriterBase &rewriter, Location loc,
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
                                     {group0, group1, b.i32_val(0)});
   }
+}
+
+SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
+                                   ArrayRef<Value> desc,
+                                   ArrayRef<int64_t> blockShape, int numLanes,
+                                   int numWarps, int numCTAs,
+                                   ArrayRef<Value> offset, Value pred,
+                                   Type elementType, Value laneId, Value warpId,
+                                   Value ctaId, bool isSpeculative) {
+  // TDM prefetch uses the same syntax as a regular load. Each lane can prefetch
+  // a different address; hardware aligns to a 256-byte boundary and makes that
+  // 256-byte region available in L2. We distribute the nD tile (blockShape)
+  // across CTAs, warps, and lanes so the whole tile is covered by prefetches.
+  // Speculative prefetches may go out-of-bounds; non-speculative prefetches
+  // need bounds checks. We currently only guard based on the whole tensor
+  // extent, so some prefetched chunks might never be used if masking trims
+  // inner dimensions. To add inner-dimension bounds checks we would need to
+  // expose the CTA offsets from the tensor descriptor, which is currenlty
+  // directly applied to the base pointer.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  int numDims = blockShape.size();
+  Type globalPtrTy = ptr_ty(loc.getContext(), 1);
+
+  // Decode TDM descriptor to get the base pointer, shape, and strides
+  auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+  auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.begin() + 12);
+  std::optional<SmallVector<Value>> group2Vec;
+  std::optional<SmallVector<Value>> group3Vec;
+  if (numDims > 2) {
+    group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
+    group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
+  }
+  auto [basePtr, tensorShape, tensorStride, decodedBlockShape] =
+      mlir::LLVM::AMD::decodeTDMDescriptorFull(
+          rewriter, loc, group0Vec, group1Vec,
+          group2Vec.has_value()
+              ? std::optional<ArrayRef<Value>>(group2Vec.value())
+              : std::nullopt,
+          group3Vec.has_value()
+              ? std::optional<ArrayRef<Value>>(group3Vec.value())
+              : std::nullopt,
+          numDims);
+
+  auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
+    Value ret = b.i64_val(0);
+    for (auto [index, stride] : llvm::zip(indices, strides)) {
+      ret = b.add(ret, b.mul(b.zext(i64_ty, index), b.zext(i64_ty, stride)));
+    }
+    return ret;
+  };
+
+  // Apply the passed offsets to the base pointer.
+  Value tileOffset = dot64(offset, tensorStride);
+  auto tilePtr = b.gep(globalPtrTy, elementType, basePtr, tileOffset);
+
+  // Calculate the total tensor size for bounds checking.
+  Value linearTensorSize =
+      b.mul(b.zext(i64_ty, tensorShape[0]), b.zext(i64_ty, tensorStride[0]));
+
+  // Calculate maximum allowed offset from tilePtr before going out of bounds
+  Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
+
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto blockedEnc = triton::gpu::getDefaultBlockedEncoding(
+      loc.getContext(), scaledBlockShape, numWarps, numLanes, numCTAs);
+  auto ll = triton::gpu::toLinearLayout(scaledBlockShape, blockedEnc);
+
+  auto kRegister = rewriter.getStringAttr("register");
+  auto kLane = rewriter.getStringAttr("lane");
+  auto kWarp = rewriter.getStringAttr("warp");
+  auto kBlock = rewriter.getStringAttr("block");
+
+  // Adjust the inner stride (always 1) to the number of elements per prefetch
+  auto scaledStride = tensorStride;
+  scaledStride.back() = b.i32_val(elemPerPrefetch);
+
+  auto baseIndices = applyLinearLayout(loc, rewriter, ll,
+                                       {{kRegister, b.i32_val(0)},
+                                        {kLane, laneId},
+                                        {kWarp, warpId},
+                                        {kBlock, ctaId}});
+  // Iterate over each register and emit a prefetch intrinsic
+  SmallVector<Value> offsets(ll.getInDimSize(kRegister));
+  for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
+    auto regIndices =
+        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+    // XOR the base indices with the register specific indices
+    SmallVector<std::pair<StringAttr, Value>> indices;
+    for (auto [base, regIdx] : llvm::zip(baseIndices, regIndices)) {
+      assert(base.first == regIdx.first);
+      Value combined = b.xor_(base.second, b.i32_val(regIdx.second));
+      indices.emplace_back(base.first, combined);
+    }
+
+    // Compute the local offset from tile ptr for this prefetch based on the
+    // computed indices
+    Value localOffset =
+        dot64(to_vector(make_second_range(indices)), scaledStride);
+    auto prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
+
+    // Mask the prefetch if the offset is out of bounds
+    Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
+    // Only predicate based in inBounds for non-speculative prefetches.
+    Value combinedPred = isSpeculative ? pred : b.and_(pred, inBounds);
+
+    // Predicate and emit prefetch
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterPrefetch =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,
+                           afterPrefetch);
+
+    rewriter.setInsertionPointToStart(prefetchBlock);
+    int cache_scope = 8; // (8) = L2 scope
+    int speculative = isSpeculative;
+    int llvmTemporalHint = cache_scope | speculative;
+    Value scope = LLVM::ConstantOp::create(
+        rewriter, loc, i32_ty, rewriter.getI32IntegerAttr(llvmTemporalHint));
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, scope});
+
+    rewriter.setInsertionPointToEnd(prefetchBlock);
+    LLVM::BrOp::create(rewriter, loc, afterPrefetch);
+    rewriter.setInsertionPointToStart(afterPrefetch);
+
+    // We return the offsets for unit testing
+    offsets[reg] =
+        b.select(combinedPred, b.add(localOffset, tileOffset), b.i64_val(0));
+  }
+  return offsets;
 }
 
 } // namespace mlir::LLVM::AMD

@@ -72,9 +72,9 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
         rank = len(self.size_per_thread)
-        object.__setattr__(self, "cga_layout", self.cga_layout)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
         assert len(self.order) == rank
@@ -284,8 +284,7 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
-
-        object.__setattr__(self, "cga_layout", self.cga_layout)
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(
@@ -324,14 +323,17 @@ def _get_shape_per_cta(shape, cga_layout):
         return shape
     shape_per_cta = list(shape)
     rank = len(cga_layout[0])
-    cga_shape = [1] * rank
+    cga_shape = [0] * rank
     for basis in cga_layout:
         assert len(basis) == rank
         for i in range(rank):
             cga_shape[i] = max(cga_shape[i], basis[i])
-    # The shape is the largest stride * 2
+    # The shape is the largest stride * 2, or 1 if the stride was always zero
     for i in range(rank):
-        cga_shape[i] *= 2
+        if cga_shape[i] == 0:
+            cga_shape[i] = 1
+        else:
+            cga_shape[i] *= 2
     for dim in range(rank):
         assert shape_per_cta[dim] % cga_shape[dim] == 0, f"Shape {shape} is not divisible by CGA layout {cga_layout}"
         shape_per_cta[dim] //= cga_shape[dim]
@@ -374,6 +376,10 @@ class NVMMASharedLayout(SharedLayout):
 
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
+
+        if self.fp4_padded:
+            assert self.swizzle_byte_width == 128, "fp4_padded only supports 128 byte swizzling"
+            assert self.element_bitwidth == 8, "fp4_padded is only supported for element_bitwidth=8"
 
     def _to_ir(self, builder):
         return builder.get_nvmma_shared_layout(
@@ -456,8 +462,7 @@ class SwizzledSharedLayout(SharedLayout):
         super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
         super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-
-        object.__setattr__(self, "cga_layout", self.cga_layout)
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
     def _to_ir(self, builder):
         return builder.get_swizzled_shared_layout(

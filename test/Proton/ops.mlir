@@ -20,24 +20,24 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: protongpu_ops
   tt.func @protongpu_ops() {
     // CHECK: ttg.local_alloc
-    // CHECK-NEXT: proton_gpu.global_scratch_alloc
+    // CHECK-NEXT: ttg.global_scratch_alloc
     // CHECK-NEXT: proton_gpu.initialize
     // CHECK-NEXT: proton_gpu.segment_alloc
     // CHECK-NEXT: proton_gpu.init_ctx
     // CHECK-NEXT: proton_gpu.read_counter
     // CHECK-NEXT: proton_gpu.circular_store start
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier
     // CHECK-NEXT: proton_gpu.save_ctx
     // CHECK-NEXT: proton_gpu.finalize
     // CHECK-NEXT: tt.return
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i32>
+    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 384 : i32} : !tt.ptr<i32>
     proton_gpu.initialize %1 : !tt.ptr<i32>
     %seg = proton_gpu.segment_alloc %0 : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> !proton_gpu.segment<256, #shared, warp>
     proton_gpu.init_ctx %1 : !tt.ptr<i32>
     %3 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %seg, %3 {scopeId = 0 : i32} : !proton_gpu.segment<256, #shared, warp>, i32
-    gpu.barrier
+    ttg.barrier global_read|global_write|local
     proton_gpu.save_ctx %seg, %1: !proton_gpu.segment<256, #shared, warp>, !tt.ptr<i32>
     proton_gpu.finalize %seg, %1 : !proton_gpu.segment<256, #shared, warp>, !tt.ptr<i32>
     tt.return

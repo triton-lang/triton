@@ -5,6 +5,8 @@ add_triton_library(TritonAMDGPUToLLVM
     BufferOpsEmitter.cpp
     TensorPtrOpsToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
+    ConvertWarpPipeline.cpp
+    ConvertWarpSpecializeToLLVM.cpp
     MemoryOpToLLVM.cpp
     MaskedOpsToLLVM.cpp
     DotOpToLLVM/FMA.cpp
@@ -12,6 +14,7 @@ add_triton_library(TritonAMDGPUToLLVM
     DotOpToLLVM/WMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    FuncOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     GCNAsmFormat.cpp
     TritonGPUToLLVM.cpp
@@ -19,8 +22,6 @@ add_triton_library(TritonAMDGPUToLLVM
     Utility.cpp
     TargetInfo.cpp
     TargetUtils.cpp
-    OptimizeLDSUsage.cpp
-    OptimizeLDSUtility.cpp
     SPMDOpToLLVM.cpp
     SchedInstructions.cpp
     UpcastMXFPToLLVM.cpp
@@ -29,12 +30,14 @@ add_triton_library(TritonAMDGPUToLLVM
     ScalarizePackedFOps.cpp
     TDMUtility.cpp
     BarrierOpToLLVM.cpp
+    WarpIdOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
     LLVMIRIncGen
 
     LINK_LIBS PUBLIC
+    MLIRReconcileUnrealizedCasts
     TritonGPUToLLVM
     TritonAMDGPUIR
     LLVMCore

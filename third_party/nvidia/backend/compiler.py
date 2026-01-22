@@ -146,6 +146,10 @@ class CUDAOptions:
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+    @property
+    def enable_iisan(self):
+        return "iisan" in self.instrumentation_mode
+
 
 class CUDABackend(BaseBackend):
     instrumentation = None
@@ -171,8 +175,9 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
+        if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
             opts["debug"] = True
+            opts["sanitize_overflow"] = False
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
@@ -351,7 +356,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
-        if knobs.compilation.instrumentation_mode == "consan":
+        if "consan" in options.instrumentation_mode:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
@@ -486,9 +491,12 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
+            # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
+            reg_alloc = ['--regAllocOptLevel=2']
+
             ptxas_cmd = [
-                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
-                '-o', fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *reg_alloc, *ptx_extra_options, f'--gpu-name={arch}',
+                fsrc.name, '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)

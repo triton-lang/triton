@@ -43,7 +43,11 @@ def is_ampere_or_newer():
 
 
 def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
 def is_hopper_or_newer():
@@ -78,12 +82,12 @@ def is_hip_cdna4():
     return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
-def is_hip_gfx11():
+def is_hip_rdna3():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
 
 
-def is_hip_gfx12():
+def is_hip_rdna4():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
 
