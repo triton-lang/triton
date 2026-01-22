@@ -170,7 +170,7 @@ class MemoryUnit:
         return off
 
     @gluon.jit
-    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=1):
         axis_off = self._compute_axis_offset(idx, sub_idx)
         num_subtile: ttgl.constexpr = 2 if self.sub_axis is not None else 1
         smem = self.smem.index(buf * num_subtile + sub_idx)
@@ -403,11 +403,11 @@ class GlobalScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
@@ -568,6 +568,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -577,7 +579,7 @@ class GlobalScaledAttentionProgram:
 
             self.async_wait(2)  # ............................................. iter i
             v = self.shared_load_v(buf=a)
-            self.issue_global_load_k(i + 3, buf=b, pred=i != end - 3)  # ...... iter i+3
+            self.issue_global_load_k(i + 3, buf=b, pred=pred)  # ...... iter i+3
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
             m = ttgl.max(qk, 1)  # ............................................ iter i+1
@@ -741,7 +743,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k_scale, zero)  # ....................... iter i+1
             self.async_wait(4)  # ............................................. iter i+1
@@ -1074,19 +1077,19 @@ class BlockScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_k_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_k_scale(self, idx, buf=0, pred=1):
         self.k_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
-    def issue_global_load_v_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_v_scale(self, idx, buf=0, pred=1):
         self.v_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
@@ -1329,7 +1332,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -1517,7 +1521,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k0_scale, zero)  # ...................... iter i+1
             self.async_wait(5)  # ............................................. iter i+1

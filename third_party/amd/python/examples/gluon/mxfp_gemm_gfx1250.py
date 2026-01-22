@@ -280,7 +280,7 @@ class MXFPGEMMPipelinedProgram:
                                         a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
 
     @gluon.jit
-    def issue_loads(self, load_idx, pred=True):
+    def issue_loads(self, load_idx, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_K = cfg.NUM_SUBTILES[2]
         BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
@@ -361,7 +361,9 @@ class MXFPGEMMPipelinedProgram:
         loop_ub = gl.cdiv(K, cfg.BLOCK_K)
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         for i in range(0, loop_ub):
-            load_idx = self.issue_loads(load_idx, pred=(i < epilogue_lb))
+            pred = i - epilogue_lb
+            pred = (pred >> 31) & 1
+            load_idx = self.issue_loads(load_idx, pred=pred)
 
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * self.cfg.NUM_LOADS_IN_BATCH)
 
@@ -554,7 +556,7 @@ class MXFPGEMMSliceNKProgram:
         return b, scale_b
 
     @gluon.jit
-    def issue_load_a(self, load_idx, a_buffer, a_scale_buffer, pred=True):
+    def issue_load_a(self, load_idx, a_buffer, a_scale_buffer, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
@@ -574,7 +576,7 @@ class MXFPGEMMSliceNKProgram:
         return load_idx + 1
 
     @gluon.jit
-    def issue_load_b(self, load_idx, b_buffer, b_scale_buffer, pred=True):
+    def issue_load_b(self, load_idx, b_buffer, b_scale_buffer, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_N: gl.constexpr = cfg.NUM_SUBTILES[1]
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
@@ -644,7 +646,8 @@ class MXFPGEMMSliceNKProgram:
         loop_ub = gl.cdiv(K, cfg.BLOCK_K)
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         for i in range(0, loop_ub):
-            pred = (i < epilogue_lb)
+            pred = i - epilogue_lb
+            pred = (pred >> 31) & 1
 
             # iter i + 1
             load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer0, self.a_scale_buffer0, pred=pred)
