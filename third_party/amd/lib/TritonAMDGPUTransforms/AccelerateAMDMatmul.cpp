@@ -337,8 +337,8 @@ selectMatrixCoreOperandTypes(tt::DotOp dot,
 
 OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
                                             tt::DotOp dot, int version) {
-  Type f16 = rewriter.getF16Type();
   Type f32 = rewriter.getF32Type();
+  Type f16 = rewriter.getF16Type();
   Type bf16 = rewriter.getBF16Type();
   Type i8 = rewriter.getIntegerType(8);
   Type i32 = rewriter.getIntegerType(32);
@@ -362,6 +362,14 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
         {fp8e4nv, fp8e5, f32, f32},
         {fp8e5, fp8e4nv, f32, f32},
         {fp8e5, fp8e5, f32, f32},
+        // clang-format on
+    });
+  }
+  if (version == 3) {
+    Type f64 = rewriter.getF64Type();
+    applicableTypes.append({
+        // clang-format off
+        {f64, f64, f64, f64},
         // clang-format on
     });
   }
