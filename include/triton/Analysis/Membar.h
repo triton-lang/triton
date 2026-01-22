@@ -2,10 +2,13 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include <map>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 
 namespace mlir {
 
@@ -19,15 +22,56 @@ using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
 // logical view on it (layout, subslice offsets and shape for the access)
-struct AllocationSlice {
+class AllocationSlice {
 public:
-  // Create allocation slice from a value, collecting subslice offsets
-  AllocationSlice(Value value, Interval<size_t> allocationInterval);
+  // Models an offset that is possibly unknown/dynamic
+  struct OffsetValue {
+    int64_t offset;
+    OffsetValue() : offset(-1) {}
+    OffsetValue(int64_t offset) : offset(offset) {}
+    bool isKnown() const { return offset >= 0; }
+    bool knownLeq(const OffsetValue &other) const {
+      if (!isKnown() || !other.isKnown())
+        return false;
+      return offset <= other.offset;
+    }
+
+    void print(raw_ostream &os) const;
+
+    OffsetValue &operator+=(OffsetValue rhs) {
+      if (!rhs.isKnown() || !isKnown()) {
+        offset = -1;
+      } else {
+        offset += rhs.offset;
+      }
+      return *this;
+    }
+    friend OffsetValue operator+(OffsetValue lhs, OffsetValue rhs) {
+      lhs += rhs;
+      return lhs;
+    }
+    friend raw_ostream &operator<<(raw_ostream &os, const OffsetValue &arg) {
+      arg.print(os);
+      return os;
+    }
+  };
+
+  // Create allocation slice from a new allocation
+  AllocationSlice(triton::gpu::MemDescType allocTy,
+                  Interval<size_t> allocationInterval);
+  // Create allocation slice from an unknown value, collecting subslice offsets
+  AllocationSlice(triton::gpu::MemDescType allocTy,
+                  Interval<size_t> allocationInterval,
+                  ArrayRef<int64_t> curShape);
 
   // Builder for accesses that represent accesses to the whole
   // allocation (scratch buffers, ArriveBarrierOp, ..)
   AllocationSlice(Interval<size_t> interval)
-      : allocationInterval(interval), accessTy(nullptr) {}
+      : allocationInterval(interval), allocTy(nullptr) {}
+
+  AllocationSlice subslice(ArrayRef<int32_t> offsets,
+                           ArrayRef<int64_t> resShape) const;
+  AllocationSlice index(Value index, ArrayRef<int64_t> resShape) const;
 
   bool operator<(const AllocationSlice &other) const {
     return asTuple() < other.asTuple();
@@ -45,16 +89,42 @@ public:
   void print(raw_ostream &os) const;
 
 private:
-  std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>>
+  std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>,
+             llvm::ArrayRef<int64_t>>
   asTuple() const {
-    return {allocationInterval, accessTy.getAsOpaquePointer(), subsliceOffsets};
+    llvm::ArrayRef<int64_t> offsetData(
+        reinterpret_cast<const int64_t *>(subsliceOffsets.data()),
+        subsliceOffsets.size());
+    return {allocationInterval, allocTy.getAsOpaquePointer(), subsliceShape,
+            offsetData};
   }
-  // Offsets from subslice. Empty when offsets are unknown
-  SmallVector<int64_t> subsliceOffsets;
+  // Offsets of subslice. Empty when offsets are unknown.
+  SmallVector<OffsetValue> subsliceOffsets;
+  // Shape of the current slice
+  SmallVector<int64_t> subsliceShape;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
-  // Type of the memory descriptor for this access
-  triton::gpu::MemDescType accessTy;
+  // Type of the original allocation, before any slicing
+  triton::gpu::MemDescType allocTy;
+};
+
+struct ValueHasher {
+  size_t operator()(mlir::Value v) const {
+    return std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(v.getImpl()));
+  }
+};
+
+class AllocationSliceAnalysis {
+  Allocation *allocation;
+  // We use std::unordered_map for reference stability of the values
+  std::unordered_map<Value, std::vector<AllocationSlice>, ValueHasher> sliceMap;
+  DenseMap<Allocation::BufferId, triton::gpu::MemDescType> allocTypeMap;
+
+public:
+  AllocationSliceAnalysis() : allocation(nullptr) {}
+  AllocationSliceAnalysis(Allocation *allocation) : allocation(allocation) {}
+  void update(Operation *op);
+  const std::vector<AllocationSlice> &getAllocationSlices(Value value);
 };
 
 struct BlockInfo {
@@ -206,7 +276,7 @@ class MembarAnalysis : public MembarOrFenceAnalysis {
 public:
   MembarAnalysis() = default;
   explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+      : MembarOrFenceAnalysis(allocation, filter), sliceAnalysis(allocation) {}
 
   ~MembarAnalysis() override = default;
 
@@ -217,6 +287,8 @@ private:
                       OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
+
+  AllocationSliceAnalysis sliceAnalysis;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions

@@ -77,7 +77,7 @@ class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 public:
   ProxyFenceAnalysis() = default;
   explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+      : MembarOrFenceAnalysis(allocation, filter), sliceAnalysis(allocation) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
@@ -86,6 +86,8 @@ private:
                       OpBuilder *builder) override;
 
   void insertFence(Operation *operation, OpBuilder *builder);
+
+  AllocationSliceAnalysis sliceAnalysis;
 };
 
 void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
@@ -96,6 +98,8 @@ void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
 void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                 FuncBlockInfoMapT *funcBlockInfoMap,
                                 OpBuilder *builder) {
+  sliceAnalysis.update(op);
+
   if (isa<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
     // If the current op is a fence, we clear previous reads and writes
     blockInfo->sync();
@@ -120,24 +124,18 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              // TODO: handle proxy read cases. Those are currently handled in
-              // FenceInsertionPass where it can generate better placement for
-              // the fence. But we should support a safe fallback here.
-              auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
-
-              if (isAsyncProxyWrite(op)) {
-                if (value == getSmemDest(op)) {
-                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
-                }
-              } else if (isa<MemoryEffects::Write>(
-                             effectInstance.getEffect())) {
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadSlices[slice].insert(op);
+          for (auto slice : sliceAnalysis.getAllocationSlices(value)) {
+            // TODO: handle proxy read cases. Those are currently handled in
+            // FenceInsertionPass where it can generate better placement for
+            // the fence. But we should support a safe fallback here.
+            if (isAsyncProxyWrite(op)) {
+              if (value == getSmemDest(op)) {
+                proxyBlockInfo.syncWriteSlices[slice].insert(op);
               }
+            } else if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
+              curBlockInfo.syncWriteSlices[slice].insert(op);
+            } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
+              curBlockInfo.syncReadSlices[slice].insert(op);
             }
           }
         }

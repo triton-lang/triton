@@ -1232,3 +1232,76 @@ module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#smem = #ttg.shared_memory
+
+// Test that constant memdesc_index results in non-intersecting memory regions
+
+module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: memdesc_index_constant
+  tt.func @memdesc_index_constant() {
+    // CHECK-NOT: ttg.barrier local
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0>: tensor<1xi64, #blocked>
+
+    // CHECK: local_alloc
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: local_store
+    // CHECK-NOT: ttg.barrier local
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    %alloc0 = ttg.memdesc_index %alloc[%c0] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %alloc1 = ttg.memdesc_index %alloc[%c1] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_store %cst, %alloc0 : tensor<1xi64, #blocked> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_store %cst, %alloc1 : tensor<1xi64, #blocked> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+
+    ttg.local_store %cst, %alloc0 : tensor<1xi64, #blocked> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_store %cst, %alloc1 : tensor<1xi64, #blocked> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#smem = #ttg.shared_memory
+
+// Test that dynamic memdesc_index doesn't block slice analysis
+
+module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: memdesc_index_subslice
+  tt.func @memdesc_index_subslice(%arg0 : i32) {
+    // CHECK-NOT: ttg.barrier local
+    %cst32 = arith.constant dense<0>: tensor<32xi64, #blocked>
+    %cst16 = arith.constant dense<0>: tensor<16xi64, #blocked>
+
+    // CHECK: local_alloc
+    // CHECK-NEXT: memdesc_index
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: memdesc_subslice
+    // CHECK-NEXT: memdesc_subslice
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: local_store
+    // CHECK-NEXT: local_store
+    // CHECK-NOT: ttg.barrier local
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x32xi64, #shared, #smem, mutable>
+    %alloc0 = ttg.memdesc_index %alloc[%arg0] : !ttg.memdesc<2x32xi64, #shared, #smem, mutable> -> !ttg.memdesc<32xi64, #shared, #smem, mutable>
+
+    ttg.local_store %cst32, %alloc0 : tensor<32xi64, #blocked> -> !ttg.memdesc<32xi64, #shared, #smem, mutable>
+    %alloc00 = ttg.memdesc_subslice %alloc0[0] : !ttg.memdesc<32xi64, #shared, #smem, mutable> -> !ttg.memdesc<16xi64, #shared, #smem, mutable>
+    %alloc01 = ttg.memdesc_subslice %alloc0[16] : !ttg.memdesc<32xi64, #shared, #smem, mutable> -> !ttg.memdesc<16xi64, #shared, #smem, mutable>
+
+    ttg.local_store %cst16, %alloc00 : tensor<16xi64, #blocked> -> !ttg.memdesc<16xi64, #shared, #smem, mutable>
+    ttg.local_store %cst16, %alloc01 : tensor<16xi64, #blocked> -> !ttg.memdesc<16xi64, #shared, #smem, mutable>
+
+    tt.return
+  }
+}

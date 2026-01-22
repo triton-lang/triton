@@ -53,20 +53,18 @@ namespace {
 
 // construct a virtual block from each pipeline cluster
 // block contains its buffer R/W information.
-static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
+static BlockInfo
+buildBlockInfoFromBlock(Block *block, AllocationSliceAnalysis &sliceAnalysis) {
   BlockInfo info; // running fact for this block
   for (Operation &opRef : *block) {
     Operation *op = &opRef;
+    sliceAnalysis.update(op);
     if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
       SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
       mei.getEffects(effs);
       for (auto &eff : effs) {
         if (Value v = eff.getValue()) {
-          for (auto bufId : allocation->getBufferIds(v)) {
-            if (bufId == Allocation::InvalidBufferId)
-              continue;
-            auto interval = allocation->getAllocatedInterval(bufId);
-            auto slice = AllocationSlice(v, interval);
+          for (auto slice : sliceAnalysis.getAllocationSlices(v)) {
             if (isa<MemoryEffects::Write>(eff.getEffect()))
               info.syncWriteSlices[slice].insert(op);
             else if (isa<MemoryEffects::Read>(eff.getEffect()))
@@ -186,8 +184,14 @@ private:
     }
 
     SmallVector<BlockInfo> clusterInfo;
+    // Prime the slice analysis
+    AllocationSliceAnalysis sliceAnalysis(allocation);
+    for (auto &op : *forOp->getBlock()) {
+      sliceAnalysis.update(&op);
+    }
+
     for (auto cb : clusterBlocks)
-      clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
+      clusterInfo.push_back(buildBlockInfoFromBlock(cb, sliceAnalysis));
     int numClusters = clusterInfo.size();
     LDBG("total clusters : " << numClusters);
 
