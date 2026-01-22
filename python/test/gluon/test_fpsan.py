@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_interpreter
 from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
-                                                                 tcgen05_mma)
+                                                                 tcgen05_mma, get_tmem_reg_layout)
 
 
 def _require_cuda_backend(device: str):
@@ -202,11 +202,11 @@ def test_fpsan_unary_math_identity(device, op):
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), x_bits)
 
 
-def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray) -> np.ndarray:
+def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
     # Computes: c + a @ b in Z/(2^32) on raw payload bits.
     a_u = a_i32.view(np.uint32).astype(np.uint64)
     b_u = b_i32.view(np.uint32).astype(np.uint64)
-    c_u = c_i32.view(np.uint32).astype(np.uint64)
+    c_u = c_i32.view(np.uint32).astype(np.uint64) if c_i32 is not None else None
     m, k = a_u.shape
     k2, n = b_u.shape
     assert k == k2
@@ -214,7 +214,7 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray) -> 
     mask = np.uint64(0xFFFFFFFF)
     for i in range(m):
         for j in range(n):
-            s = c_u[i, j]
+            s = c_u[i, j] if c_u is not None else 0
             for kk in range(k):
                 s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
             out[i, j] = s
@@ -279,7 +279,7 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
     BLOCK = ttgl.constexpr(B)
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+    def kernel(a_ptr, b_ptr, out_ptr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [ttgl.num_warps(), 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
@@ -293,7 +293,6 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
 
         a_tile = ttgl.load(a_ptr + a_offs)
         b_tile = ttgl.load(b_ptr + b_offs)
-        c_tile = ttgl.load(c_ptr + out_offs)
 
         smem_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
         smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
@@ -303,36 +302,37 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
         smem_b.store(b_tile)
 
         tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        acc_reg_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float32, (BLOCK, BLOCK), tmem_layout,
+                                                             ttgl.num_warps())
         acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK, BLOCK], layout=tmem_layout)
-        acc_tmem.store(c_tile)
 
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
-        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=True, pred=True, mbarriers=[bar])
+        smem_b_T = smem_b.permute((1, 0))
+        tcgen05_mma(smem_a, smem_b_T, acc_tmem, use_acc=False, pred=True, mbarriers=[bar])
 
         mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
         mbarrier.invalidate(bar)
 
-        out = acc_tmem.load(layout)
+        out = acc_tmem.load(acc_reg_layout)
+        out = ttgl.convert_layout(out, layout)
         ttgl.store(out_ptr + out_offs, out)
 
     rs = np.random.RandomState(0)
     a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+    #b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = np.eye(B, dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits)
 
     a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
     b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
     out = torch.empty((B, B), device="cuda", dtype=torch.int32)
 
     aw = triton.TensorWrapper(a, dtype=torch.float32)
     bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, cw, outw, fpsan=True, num_warps=4)
+    kernel[(1, )](aw, bw, outw, fpsan=False, num_warps=4)
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)

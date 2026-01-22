@@ -179,6 +179,12 @@ class CUDABackend(BaseBackend):
         if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
+        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "fpsan":
+            opts["sanitize_overflow"] = False
+            opts["fpsan"] = False
+        if opts.get("fpsan", False) and not opts.get("instrumentation_mode"):
+            opts["instrumentation_mode"] = "fpsan"
+            opts["fpsan"] = False
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
@@ -318,6 +324,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -337,6 +345,9 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
+        if options.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()

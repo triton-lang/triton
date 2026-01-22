@@ -447,63 +447,6 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
-    if _semantic.builder.options.fpsan:
-        if mbarriers is None:
-            assert mbarrier_preds is None
-            mbarriers = []
-            mbarrier_preds = []
-        else:
-            assert mbarrier_preds is None or len(mbarrier_preds) == len(mbarriers)
-            if mbarrier_preds is None:
-                mbarrier_preds = [True] * len(mbarriers)
-
-        rank = len(acc.shape)
-        # TODO: This will break in the WS kernel
-        num_warps = _semantic.builder.options.num_warps
-        if rank == 2:
-            reg_layout = ttgl.BlockedLayout(
-                size_per_thread=[1, 1],
-                threads_per_warp=[32, 1],
-                warps_per_cta=[num_warps, 1],
-                order=[1, 0],
-            )
-        else:
-            assert rank == 3, f"tcgen05_mma fpsan only supports rank-2/3, got shape={acc.shape}"
-            reg_layout = ttgl.BlockedLayout(
-                size_per_thread=[1, 1, 1],
-                threads_per_warp=[1, 32, 1],
-                warps_per_cta=[1, num_warps, 1],
-                order=[2, 1, 0],
-            )
-
-        def _load_operand(op):
-            if isinstance(op, tensor_memory_descriptor) or isinstance(op, ttgl.shared_memory_descriptor):
-                return op.load(reg_layout, _semantic=_semantic)
-            if isinstance(op, ttgl.tensor):
-                return ttgl.convert_layout(op, reg_layout, _semantic=_semantic)
-            assert False, f"unsupported operand type for tcgen05_mma fpsan: {type(op)}"
-
-        a_reg = _load_operand(a)
-        b_reg = _load_operand(b)
-        acc_reg = acc.load(reg_layout, _semantic=_semantic)
-
-        lhs_layout = ttgl.DotOperandLayout(parent=reg_layout, operand_index=0, k_width=0)
-        rhs_layout = ttgl.DotOperandLayout(parent=reg_layout, operand_index=1, k_width=0)
-        a_dot = ttgl.convert_layout(a_reg, lhs_layout, _semantic=_semantic)
-        b_dot = ttgl.convert_layout(b_reg, rhs_layout, _semantic=_semantic)
-
-        zero = ttgl.full(acc.shape, 0, acc.dtype, layout=reg_layout, _semantic=_semantic)
-        acc_init = ttgl.where(use_acc, acc_reg, zero, _semantic=_semantic)
-        out = _semantic.dot(a_dot, b_dot, acc_init, input_precision=None, max_num_imprecise_acc=None,
-                            out_dtype=acc_reg.dtype)
-        out = ttgl.where(pred, out, acc_reg, _semantic=_semantic)
-        acc.store(out, pred=pred, _semantic=_semantic)
-
-        for bar, bar_pred in zip(mbarriers, mbarrier_preds):
-            bar_pred = _semantic.to_tensor(bar_pred)
-            mbarrier.arrive(bar, pred=_semantic.logical_and(pred, bar_pred), _semantic=_semantic)
-        return
-
     if mbarriers is None:
         assert mbarrier_preds is None
         mbarriers = []
