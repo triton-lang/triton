@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+import torch
+from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 
 
@@ -194,3 +196,15 @@ def test_get_view_coalesced_layout():
     layout = ttgl.CoalescedLayout()
     with pytest.raises(ValueError, match="CoalescedLayout cannot be visualized"):
         layout.format_tensor_view([16, 64])
+
+
+def test_get_view_kernel():
+    @gluon.jit
+    def kernel(ptr, BLOCK: ttgl.constexpr, layout: ttgl.constexpr):
+        off = ttgl.arange(0, BLOCK, layout=layout)
+        tensor = ttgl.load(ptr + off)
+        ttgl.static_print("tensor view:\n", tensor.type.layout.format_tensor_view(tensor.shape))
+
+    layout = ttgl.BlockedLayout([4], [32], [4], [0])
+    x = torch.randn(512, device="cuda")
+    kernel[(1,)](x, 512, layout)
