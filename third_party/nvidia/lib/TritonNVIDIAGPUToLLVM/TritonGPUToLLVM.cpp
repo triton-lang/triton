@@ -260,12 +260,13 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
           before) &&
       isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
           after))
+    return true;
 
-    //  We can't have a warp get ahead when we have a chain of mbarrier wait so
-    //  we need a barrier in between two WaitBarrierOp.
-    if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
-        isa<triton::nvidia_gpu::WaitBarrierOp>(after))
-      return false;
+  //  We can't have a warp get ahead when we have a chain of mbarrier wait so
+  //  we need a barrier in between two WaitBarrierOp.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp>(after))
+    return false;
 
   // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
   // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
