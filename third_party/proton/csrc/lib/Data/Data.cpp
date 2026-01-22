@@ -11,37 +11,58 @@ namespace proton {
 
 void Data::initPhaseStore(PhaseStoreBase &store) {
   phaseStore = &store;
-  currentPhasePtr = phaseStore->getOrCreatePtr(0);
+  currentPhasePtr = phaseStore->createPtr(0);
   activePhases.insert(0);
 }
 
 size_t Data::advancePhase() {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  const auto nextPhase = currentPhase + 1;
-  currentPhasePtr = phaseStore->getOrCreatePtr(nextPhase);
+  const auto nextPhase = currentPhase.load(std::memory_order_relaxed) + 1;
+  currentPhasePtr = phaseStore->createPtr(nextPhase);
   activePhases.insert(nextPhase);
-  currentPhase = nextPhase;
-  return currentPhase;
+  currentPhase.store(nextPhase, std::memory_order_release);
+  return nextPhase;
 }
 
-void Data::clear(size_t phase) {
-  phaseStore->clearUpToInclusive(phase);
+void Data::clear(size_t phase, bool clearUpToPhase) {
+  // No locking needed.
+  // If phase == currentPhase, we expect users to call clear right after
+  // deactivating the profiler, without any GPU events in between.
+  // If phase < currentPhase, clearing a past phase is safe without locks.
+  if (clearUpToPhase)
+    phaseStore->clearUpToInclusive(phase);
+  else
+    phaseStore->clearPhase(phase);
+
   std::unique_lock<std::shared_mutex> lock(mutex);
-  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
-  activePhases.clear();
-  for (phase += 1; phase <= currentPhase; phase++)
-    activePhases.insert(phase);
+  if (clearUpToPhase) {
+    for (auto it = activePhases.begin(); it != activePhases.end();) {
+      if (*it <= phase) {
+        it = activePhases.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  } else {
+    activePhases.erase(phase);
+  }
+
+  // In case the current phase is cleared, recreate its pointer.
+  const auto phaseToRecreate = currentPhase.load(std::memory_order_relaxed);
+  currentPhasePtr = phaseStore->createPtr(phaseToRecreate);
+  activePhases.insert(phaseToRecreate);
 }
 
-void Data::updateFlushedPhase(size_t phase) {
+void Data::completePhase(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  if (flushedPhase == kNoFlushedPhase || phase > flushedPhase)
-    flushedPhase = phase;
+  if (completeUpToPhase == kNoCompletePhase || phase > completeUpToPhase)
+    completeUpToPhase = phase;
 }
 
-bool Data::isPhaseFlushed(size_t phase) const {
+Data::PhaseInfo Data::getPhaseInfo() const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return flushedPhase != kNoFlushedPhase && flushedPhase >= phase;
+  return PhaseInfo{currentPhase.load(std::memory_order_relaxed),
+                   completeUpToPhase};
 }
 
 void Data::dump(const std::string &outputFormat) {
@@ -56,7 +77,9 @@ void Data::dump(const std::string &outputFormat) {
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
-      auto suffix = currentPhase == 0 ? "" : ".part_" + std::to_string(phase);
+      auto suffix = currentPhase.load(std::memory_order_relaxed) == 0
+                        ? ""
+                        : ".part_" + std::to_string(phase);
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =

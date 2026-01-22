@@ -442,7 +442,14 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   SmallVector<int64_t> shapeA = op.shapeA;
   SmallVector<int64_t> shapeB = op.shapeB;
+  // In A * B = C
+  // For M=64 twoCTAs, B and C have the same split and A has a split half of C
+  // along M.
   SmallVector<unsigned> aOperandShape = {mmaSizeM, mmaSizeK};
+  // For M=128 twoCTAs, A and C have the same split and B has a split half of C
+  // along N.
+  SmallVector<unsigned> bOperandShape = {mmaSizeK,
+                                         mmaSizeN / (twoCTAs ? 2 : 1)};
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
@@ -464,13 +471,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
 
   auto isFp4b = op.numBitsPerElementB == 4;
-  // [Instr shape twoCTAs]
-  // To compute a output tile of [mmaSizeM, mmaSizeN] in 2CTA mode, we load
-  // an A of size 2 * mmaSizeM x K and a B of size K x mmaSizeN.
-  // Now, since B is split amongs 2 CTAs along N, we need to divide by 2.
-  auto bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
-      1, 5, isFp4b);
+  auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
+                                           bOperandShape, 1, 5, isFp4b);
   if (failed(bLoader)) {
     return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
                                 "operand B in shared memory ")
@@ -491,9 +493,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        MemDescOperand a =
-            aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
-        Value b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
+        MemDescOperand a = aLoader->memLoad(
+            m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
+        Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
+                                    rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
@@ -555,11 +558,13 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
                           int k) {
-    // To understand this multiplication by 2, see the comment
-    // [Instr shape twoCTAs]
+    // mmaSizeM/N is the per-cta size M/N, while the 2CTA instruction expects
+    // the 2CTA size mmaSize is always 64 / 128 so we double it for 2CTA
+    auto mmaSizeM = twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM;
+    auto mmaSizeN = desc.mmaSizeN;
+    assert(desc.mmaSizeM == 64 || desc.mmaSizeM == 128);
     Value instDescriptor = createInstDescriptor(
-        rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
-        desc.mmaSizeN, desc.transA, desc.transB);
+        rewriter, op, mmaSizeM, mmaSizeN, desc.transA, desc.transB);
     createGen5MMA(rewriter, loc, op, a, b, accAddress, pred, instDescriptor,
                   useInitAcc, desc.aInTmem, twoCTAs);
   };

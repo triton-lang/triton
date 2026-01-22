@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefix=GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefixes=GFX950,COMMON
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
@@ -680,4 +680,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @func_attr() {
     tt.return
   }
+}
+
+// -----
+
+#linear = #ttg.linear<{register=[[64]], lane=[[1], [2], [4], [8], [16], [32]], warp=[], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // COMMON-LABEL: clampf_f32
+    tt.func public @clampf_f32(%x : tensor<128xf32, #linear>, %ptr : tensor<128x!tt.ptr<f32>, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf32, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf32, #linear>
+        // COMMON: rocdl.fmed3
+        %0 = tt.clampf %x, %min, %max, propagateNan = none : tensor<128xf32, #linear>
+        // COMMON-NOT: llvm.select
+        tt.store %ptr, %0 : tensor<128x!tt.ptr<f32>, #linear>
+        tt.return
+    }
+
+    // COMMON-LABEL: clampf_f16
+    tt.func public @clampf_f16(%x : tensor<128xf16, #linear>, %ptr : tensor<128x!tt.ptr<f16>, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf16, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf16, #linear>
+        // COMMON: rocdl.fmed3
+        %0 = tt.clampf %x, %min, %max, propagateNan = none : tensor<128xf16, #linear>
+        // COMMON-NOT: llvm.select
+        tt.store %ptr, %0 : tensor<128x!tt.ptr<f16>, #linear>
+        tt.return
+    }
+
+    // COMMON-LABEL: clampf_f32_propagateNan
+    tt.func public @clampf_f32_propagateNan(%x : tensor<128xf32, #linear>, %ptr : tensor<128x!tt.ptr<f32>, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xf32, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xf32, #linear>
+        // COMMON: [[MED:%.*]] = rocdl.fmed3 [[X:%.*]], %{{.*}}, %{{.*}} : f32
+        %0 = tt.clampf %x, %min, %max, propagateNan = all : tensor<128xf32, #linear>
+        // COMMON: [[ISNAN:%.*]] = llvm.fcmp "une" [[X]], [[X]] : f32
+        // COMMON: llvm.select [[ISNAN]], [[X]], [[MED]] : i1, f32
+        tt.store %ptr, %0 : tensor<128x!tt.ptr<f32>, #linear>
+        tt.return
+    }
+
+    // COMMON-LABEL: clampf_bf16
+    tt.func public @clampf_bf16(%x : tensor<128xbf16, #linear>, %ptr : tensor<128x!tt.ptr<bf16>, #linear>) {
+        %min = arith.constant dense<-1.00000e+00> : tensor<128xbf16, #linear>
+        %max = arith.constant dense<1.000000e+00> : tensor<128xbf16, #linear>
+        // COMMON-NOT: rodcl.fmed3
+        // COMMON: llvm.intr.maxnum
+        // COMMON: llvm.intr.minnum
+        %0 = tt.clampf %x, %min, %max, propagateNan = none : tensor<128xbf16, #linear>
+        tt.store %ptr, %0 : tensor<128x!tt.ptr<bf16>, #linear>
+        tt.return
+    }
 }

@@ -72,6 +72,7 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                       symbol2, k2, kBase2)
 
   Builder b(context);
+  auto f64T = b.getF64Type();
   auto f32T = b.getF32Type();
   auto f16T = b.getF16Type();
   auto bf16T = b.getBF16Type();
@@ -83,6 +84,10 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
   auto ocpBf8T = b.getType<Float8E5M2Type>();
 
   wmmaMap = {
+      // f64 inputs
+      TRITON_WMMA_v(3, 16, 16, f64T, f64T, 64, f64T,
+                    "llvm.amdgcn.wmma.f64.16x16x4.f64", 4, 1),
+
       // f32 inputs
       // wmma_f32_16x16x4_f32
       TRITON_WMMA_v(3, 16, 16, f32T, f32T, 32, f32T,
@@ -154,6 +159,8 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                     "llvm.amdgcn.wmma.i32.16x16x16.iu8", 16, 16),
       TRITON_WMMA_v(2, 16, 16, i8T, i8T, 8, i32T,
                     "llvm.amdgcn.wmma.i32.16x16x16.iu8", 16, 8),
+      TRITON_WMMA_v(3, 16, 16, i8T, i8T, 8, i32T,
+                    "llvm.amdgcn.wmma.i32.16x16x64.iu8", 64, 32),
 
       // iu4 inputs
       // wmma_i32_16x16x16_iu4

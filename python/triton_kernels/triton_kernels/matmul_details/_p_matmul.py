@@ -1,5 +1,6 @@
 # isort: off
 # fmt: off
+import collections
 import torch
 import triton
 import triton.language as tl
@@ -636,16 +637,21 @@ def _p_matmul(
     if pYPtrs is not None:
         all_writes_issued.fn(*all_writes_issued.captured)
 
+
 _per_device_alloc_fns = {}
+
+
 def get_per_device_per_stream_alloc_fn(device):
     if device not in _per_device_alloc_fns:
-        _per_stream_tensors = {}
-        def alloc_fn(size: int, alignment: int, stream):
+        _per_stream_tensors = collections.defaultdict(list)
+
+        def alloc_fn(size: int, alignment: int, stream: int):
             assert alignment == 128
-            if stream not in _per_stream_tensors or _per_stream_tensors[stream].numel() < size:
-                _per_stream_tensors[stream] = torch.empty(size, device=device, dtype=torch.int8)
-                _per_stream_tensors[stream].__hibernate__ = {"type": "ignore"}
-            return _per_stream_tensors[stream]
+            tensors = _per_stream_tensors[stream]
+            if not tensors or tensors[-1].numel() < size:
+                tensors.append(torch.empty(size, device=device, dtype=torch.int8))
+                tensors[-1].__hibernate__ = {"type": "ignore"}
+            return tensors[-1]
 
         _per_device_alloc_fns[device] = alloc_fn
     return _per_device_alloc_fns[device]
