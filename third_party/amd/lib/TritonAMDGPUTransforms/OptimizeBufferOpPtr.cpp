@@ -183,17 +183,27 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     assert(stepRangeValue.umax().getLimitedValue() <= maxOffsetValue &&
            "expect step value to be a 32 bit value");
 
-    int64_t operationUncappedResultMax =
-        (int64_t)(blockArgRangeValue.umax() * elemByteWidth)
-            .getLimitedValue(maxOffsetValue) +
-        (int64_t)(stepRangeValue.umax() * elemByteWidth)
-            .getLimitedValue(maxOffsetValue);
-    int64_t operationUncappedResultMin =
-        (int64_t)(blockArgRangeValue.umin() * elemByteWidth)
-            .getLimitedValue(maxOffsetValue) +
-        (int64_t)(stepRangeValue.umin() * elemByteWidth)
-            .getLimitedValue(maxOffsetValue);
+    // Offset value for current iteration is a sum of block argument (offset
+    // from previous iteration) and step (increment of offset).
+    // These values are measured in number of elements.
+    // Offset in buffer instruction is measured in bytes instead of elements.
+    // In order to convert offset in elements to offset in
+    // bytest compiler left shifts offset. This shift is emulated by
+    // multiplication with "elemByteWidth". Potentially this could lead to
+    // overflow of 32 bit value, but it should happen only if step or offset is
+    // a negative number, i.e. we can discard most significant bits.
+    auto elemsToBytes = [maxOffsetValue, elemByteWidth](const llvm::APInt &x) {
+      return (x * elemByteWidth).getLimitedValue(maxOffsetValue);
+    };
+    uint32_t blockArgInBytesMax = elemsToBytes(blockArgRangeValue.umax());
+    uint32_t blockArgInBytesMin = elemsToBytes(blockArgRangeValue.umin());
+    uint32_t stepArgInBytesMax = elemsToBytes(stepRangeValue.umax());
+    uint32_t stepArgInBytesMin = elemsToBytes(stepRangeValue.umin());
 
+    int64_t operationUncappedResultMax =
+        (int64_t)blockArgInBytesMax + stepArgInBytesMax;
+    int64_t operationUncappedResultMin =
+        (int64_t)blockArgInBytesMin + stepArgInBytesMin;
     return {{operationUncappedResultMin, operationUncappedResultMax}};
   }
 
