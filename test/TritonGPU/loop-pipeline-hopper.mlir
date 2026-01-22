@@ -187,7 +187,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   scf.if
-    // CHECK:     ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+    // CHECK:     ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32, warpGroupLocal}
     // CHECK:     arith.mulf
     // CHECK:     scf.yield
     // CHECK:   scf.yield
@@ -857,7 +857,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   scf.if
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32, warpGroupLocal}
     // CHECK:   } else {
     // CHECK-NOT: ttng.warp_group_dot_wait
     // CHECK:   scf.yield
