@@ -44,8 +44,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, RewriterBase &rewriter);
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
+Value createElectPredicate(Location loc, OpBuilder &rewriter);
+Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter);
 
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
