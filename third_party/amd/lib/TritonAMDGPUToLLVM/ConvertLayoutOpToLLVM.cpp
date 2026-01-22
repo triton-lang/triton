@@ -302,14 +302,14 @@ public:
     auto loc = b.loc;
     auto &rewriter = *b.builder;
     std::string intrinsic = "llvm.amdgcn.perm";
-    int encodedIndeces = 0;
+    int encodedIndices = 0;
     for (int i = 0; i < shuffleIds.size(); ++i) {
       assert(shuffleIds[i] >= 0 && shuffleIds[i] < 8);
-      encodedIndeces += shuffleIds[i] << (i * 8);
+      encodedIndices += shuffleIds[i] << (i * 8);
     }
-    auto encodedIndecesVal = b.int_val(32, encodedIndeces);
+    auto encodedIndicesVal = b.int_val(32, encodedIndices);
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {i32_ty},
-                                           {v1, v2, encodedIndecesVal})
+                                           {v1, v2, encodedIndicesVal})
         .getResult(0);
   }
 
@@ -317,8 +317,8 @@ public:
     return l.regIdx * regBytes + l.byteIdx;
   }
 
-  static bool mergablePairs(const std::array<ByteLocation, 2> &p1,
-                            const std::array<ByteLocation, 2> &p2) {
+  static bool mergeablePairs(const std::array<ByteLocation, 2> &p1,
+                             const std::array<ByteLocation, 2> &p2) {
     for (int i = 0; i < 2; ++i)
       if (p1[i].regIdx != p2[0].regIdx && p1[i].regIdx != p2[1].regIdx)
         return false;
@@ -364,9 +364,8 @@ public:
   // Unpacks input values and packs them in int32 values, like they will be
   // stored in actual registers
   static std::vector<Value>
-  repackInputToRegisters(ConvertLayoutOp op, OpAdaptor adaptor,
+  repackInputToRegisters(Location loc, OpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter) {
-    auto loc = op.getLoc();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     auto numRegs = inVals.size() / regBytes;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -388,7 +387,7 @@ public:
     auto numRegs = srcRegs.size();
     for (int i = 0; i < numRegs; ++i) {
       assert(!dstRegs[i]);
-      bool needBytePermute = dstRegContents[i][0].byteIdx != 0;
+      bool needBytePermute = false;
       bool multipleDeps = false;
       int singleRegSrcIdx = dstRegContents[i][0].regIdx;
       for (int byteIdx = 0; byteIdx < regBytes; ++byteIdx) {
@@ -456,12 +455,6 @@ public:
     int numRegs = dstRegs.size();
     int numBytes = numRegs * regBytes;
     BytePairInfo info;
-    // combine pairs of src registers from low and high parts of each dst
-    // register merge pairs of tmp registers into one operations use tmp
-    // registers to combine final results
-    // Map src byte location to pair, holding this byte
-    // each byte is associated with only one pair,
-    // and could be identified by it's index in input: regIdx*regBytes + byteIdx
     info.srcByteToPairMap.resize(numBytes, -1);
     for (int i = 0; i < numRegs; ++i) {
       if (dstRegs[i])
@@ -495,8 +488,8 @@ public:
             pairInfo.srcByteToPairMap[getLinearByteLoc({srcRegNo, byteIdx})];
         if (candidateSecondPair < 0)
           continue;
-        if (mergablePairs(pairInfo.pairCombinations[candidateSecondPair],
-                          pairInfo.pairCombinations[i]) &&
+        if (mergeablePairs(pairInfo.pairCombinations[candidateSecondPair],
+                           pairInfo.pairCombinations[i]) &&
             !pairInfo.pairMerged[candidateSecondPair]) {
           std::array<ByteLocation, 4> quad;
           llvm::copy(pairInfo.pairCombinations[candidateSecondPair],
@@ -610,6 +603,48 @@ public:
     }
   }
 
+  // Algorithm overview
+  //
+  // 1. For each dst register, combine bytes from src register in pairs
+  // according contents of low and high bytes of destination register.
+  // 2. Combine these pairs of bytes into quads, so one quad is formed from only
+  // two src registers
+  // 3. Use these byte quads to generate each destination register.
+  //
+  // Stage 1 and 2 will be materialize in a layer of temporary registers
+  // containing halves of dst register. Since we generated halves for every dst
+  // register, we can make them out of tmp registers with one v_perm.
+  //
+  // Example
+  //
+  // src0 = [0, 1, 2, 3]
+  // src1 = [4, 5, 6, 7]
+  // src2 = [8, 9, 10, 11]
+  // src3 = [12, 13, 14, 15]
+  //
+  // dst1 = (src0, byte0), (src1, byte1), (src2, byte2), (src3, byte3)
+  // dst2 = (src0, byte1), (src1, byte0), (src2, byte3), (src3, byte2)
+  //
+  // dst1 expected value = [0, 5, 10, 15]
+  // dst2 expected value = [0, 4, 11, 14]
+  //
+  // Pairs are
+  //   (src0, byte0)+(src1, byte1), (src2, byte2)+(src3, byte3),
+  //   (src0, byte1)+(src1, byte0), (src2, byte3)+(src3, byte2)
+  //
+  // Quads are (src0, byte0)+(src1, byte1)+(src0, byte1)+(src1, byte0),
+  //           (src2, byte2)+(src3, byte3)+(src2, byte3)+(src3, byte2)
+  //
+  // These quads will be materialized in two v_perm instructions:
+  // tmp1 = v_perm src0, src1 // combines bytes 0 and 1 from both sources
+  //       tmp1 = [0, 5, 1, 4]
+  // tmp2 = v_perm src2, src3 // combines bytes 2 and 3 from both sources
+  //       tmp2 = [10, 15, 11, 14]
+  // Then we can combine these temporary registers into dst:
+  // dst1 = v_perm tmp1, tmp2 // combines bytes 0 and 1 from sources
+  //       dst1 = [0, 5, 10, 15]
+  // dst2 = v_perm tmp1, tmp2 // combines bytes 2 and 3 from sources
+  //       dst2 = [0, 4, 11, 14]
   static void processFourWayDependencies(
       const std::vector<Value> &srcRegs, std::vector<Value> &dstRegs,
       llvm::ArrayRef<std::array<ByteLocation, regBytes>> dstRegContents,
@@ -655,29 +690,30 @@ public:
     auto ctx = rewriter.getContext();
     auto fullLayout = getFullLayout(conversion, ctx);
     constexpr int regBytes = 4;
+    // Non-trivial "in register" layout_conversion permutes at least 4 values.
     assert(numValues % regBytes == 0);
     int numRegs = numValues / regBytes;
-    // mapping for dst register bytes to source bytes
+    // Mapping for dst register bytes to source bytes
     auto dstRegContents = generateDstRegContents(fullLayout);
-    std::vector<Value> srcRegs = repackInputToRegisters(op, adaptor, rewriter);
+    std::vector<Value> srcRegs = repackInputToRegisters(loc, adaptor, rewriter);
     TritonLLVMOpBuilder b(loc, rewriter);
 
     std::vector<Value> dstRegs(numRegs);
 
-    // process dst registers that depend only on one src register
+    // Process dst registers that depend only on one src register
     processOneWayDependencies(srcRegs, dstRegs, dstRegContents, b);
-    // process dst registers that depend on two src registers
+    // Process dst registers that depend on two src registers
     processTwoWayDependencies(srcRegs, dstRegs, dstRegContents, b);
-    // process dst registers that depend on four src registers
+    // Process dst registers that depend on four src registers
     processFourWayDependencies(srcRegs, dstRegs, dstRegContents, b);
 
-    // all destination registers should be materialized at this point
+    // All destination registers should be materialized at this point
     assert(std::all_of(dstRegs.begin(), dstRegs.end(),
                        [](Value v) { return bool(v); }));
 
     auto llvmElemType =
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
-    // pack dst values to structure and finalize conversion
+    // Pack dst values to structure and finalize conversion
     Value result =
         repackRegisterValuesInStructure(dstRegs, op, llvmElemType, rewriter);
     rewriter.replaceOp(op, result);

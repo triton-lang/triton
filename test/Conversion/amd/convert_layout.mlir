@@ -87,3 +87,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Case of in-thread convert with a small tensor with only 2 values per thread
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: no_op_small_convert_layout
+  tt.func @no_op_small_convert_layout(%arg0: tensor<16x8xi8, #blocked>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear>) {
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #blocked> -> tensor<16x8xi8, #linear>
+    tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear>
+    tt.return
+  }
+}
