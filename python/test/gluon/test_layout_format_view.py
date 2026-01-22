@@ -43,7 +43,7 @@ def fmt_bases(bases):
      ([1, 4], [4, 8], [4, 1], [1, 0], [16, 32], True),  # use_hw_view
      ],
 )
-def test_get_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_cta, order, shape, use_hw_view, ttl_cli):
+def test_format_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_cta, order, shape, use_hw_view, ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.blocked<{{sizePerThread = {fmt(layout.size_per_thread)}, "
@@ -59,7 +59,7 @@ def test_get_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_ct
 
 
 @pytest.mark.parametrize("dim,shape", [(1, [16])])
-def test_get_view_slice_layout(dim, shape, ttl_cli):
+def test_format_view_slice_layout(dim, shape, ttl_cli):
 
     def blocked_to_ttg_attr(layout):
         return (f"#ttg.blocked<{{sizePerThread = {fmt(layout.size_per_thread)}, "
@@ -80,7 +80,7 @@ def test_get_view_slice_layout(dim, shape, ttl_cli):
     "version,warps_per_cta,instr_shape,shape",
     [([2, 0], [4, 1], [16, 8], [64, 64])],
 )
-def test_get_view_nvmma_layout(version, warps_per_cta, instr_shape, shape, ttl_cli):
+def test_format_view_nvmma_layout(version, warps_per_cta, instr_shape, shape, ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.nvidia_mma<{{versionMajor = {layout.version[0]}, "
@@ -93,7 +93,7 @@ def test_get_view_nvmma_layout(version, warps_per_cta, instr_shape, shape, ttl_c
 
 
 @pytest.mark.parametrize("operand_index,shape", [(0, [64, 64]), (1, [32, 128])])
-def test_get_view_dot_operand_layout(operand_index, shape, ttl_cli):
+def test_format_view_dot_operand_layout(operand_index, shape, ttl_cli):
 
     def nvmma_to_ttg_attr(layout):
         return (f"#ttg.nvidia_mma<{{versionMajor = {layout.version[0]}, "
@@ -114,7 +114,7 @@ def test_get_view_dot_operand_layout(operand_index, shape, ttl_cli):
     "vec,per_phase,max_phase,order,shape",
     [(8, 4, 2, [1, 0], [16, 16])],
 )
-def test_get_view_swizzled_shared_layout(vec, per_phase, max_phase, order, shape, ttl_cli):
+def test_format_view_swizzled_shared_layout(vec, per_phase, max_phase, order, shape, ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.swizzled_shared<{{vec = {layout.vec}, "
@@ -126,7 +126,7 @@ def test_get_view_swizzled_shared_layout(vec, per_phase, max_phase, order, shape
 
 
 @pytest.mark.parametrize("swizzle_byte_width,element_bitwidth,rank,transposed,shape", [(128, 16, 2, True, [64, 16])])
-def test_get_view_nvmma_shared_layout(swizzle_byte_width, element_bitwidth, rank, transposed, shape, ttl_cli):
+def test_format_view_nvmma_shared_layout(swizzle_byte_width, element_bitwidth, rank, transposed, shape, ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.nvmma_shared<{{swizzlingByteWidth = {layout.swizzle_byte_width}, "
@@ -147,7 +147,7 @@ def test_get_view_nvmma_shared_layout(swizzle_byte_width, element_bitwidth, rank
          [128, 16]),
     ],
 )
-def test_get_view_distributed_linear_layout(reg_bases, lane_bases, warp_bases, block_bases, shape, ttl_cli):
+def test_format_view_distributed_linear_layout(reg_bases, lane_bases, warp_bases, block_bases, shape, ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.linear<{{register = {fmt_bases(layout.reg_bases)}, "
@@ -167,7 +167,7 @@ def test_get_view_distributed_linear_layout(reg_bases, lane_bases, warp_bases, b
          16, [16, 16]),
     ],
 )
-def test_get_view_shared_linear_layout(offset_bases, block_bases, alignment, shape, ttl_cli):
+def test_format_view_shared_linear_layout(offset_bases, block_bases, alignment, shape, ttl_cli):
 
     def to_ttg_attr(layout):
         result = f"#ttg.shared_linear<{{offset = {fmt_bases(layout.offset_bases)}"
@@ -180,25 +180,25 @@ def test_get_view_shared_linear_layout(offset_bases, block_bases, alignment, sha
     assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
 
 
-def test_get_view_padded_shared_layout():
+def test_format_view_padded_shared_layout():
     layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 64], [1, 0])
     with pytest.raises(ValueError, match="PaddedSharedLayout cannot be visualized"):
         layout.format_tensor_view([16, 64])
 
 
-def test_get_view_auto_layout():
+def test_format_view_auto_layout():
     layout = ttgl.AutoLayout()
     with pytest.raises(ValueError, match="AutoLayout cannot be visualized"):
         layout.format_tensor_view([16, 64])
 
 
-def test_get_view_coalesced_layout():
+def test_format_view_coalesced_layout():
     layout = ttgl.CoalescedLayout()
     with pytest.raises(ValueError, match="CoalescedLayout cannot be visualized"):
         layout.format_tensor_view([16, 64])
 
 
-def test_get_view_kernel():
+def test_format_view_kernel():
     @gluon.jit
     def kernel(ptr, BLOCK: ttgl.constexpr, layout: ttgl.constexpr):
         off = ttgl.arange(0, BLOCK, layout=layout)
