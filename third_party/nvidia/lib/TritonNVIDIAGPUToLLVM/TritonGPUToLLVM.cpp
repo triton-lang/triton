@@ -254,8 +254,6 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             Allocation *allocation) {
-bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
-                            Allocation *allocation) {
   // These mbarrier ops are single threaded, so are always synchronized wrt.
   // each other.
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
