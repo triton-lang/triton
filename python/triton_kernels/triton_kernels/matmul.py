@@ -404,8 +404,10 @@ def matmul(a, b, bias,
     if ragged_dimension == "M":
         grid_m = a_ragged_metadata.n_blocks(a_ragged_metadata.n_slices, M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
-    max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
-    grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
+    grid = batch_size * grid_m * grid_n * opt_flags.split_k
+    if opt_flags.is_persistent:
+        available_sms = target_info.num_sms() - opt_flags.idle_sms
+        grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
     has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))

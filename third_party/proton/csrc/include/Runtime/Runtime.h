@@ -25,7 +25,10 @@ public:
   virtual void memset(void *devicePtr, uint32_t value, size_t size,
                       void *stream) = 0;
 
-  virtual void allocateHostBuffer(uint8_t **buffer, size_t size) = 0;
+  virtual void allocateHostBuffer(uint8_t **buffer, size_t size,
+                                  bool mapped = false) = 0;
+
+  virtual void getHostDevicePointer(uint8_t *hostPtr, uint8_t **devicePtr) = 0;
 
   virtual void freeHostBuffer(uint8_t *buffer) = 0;
 

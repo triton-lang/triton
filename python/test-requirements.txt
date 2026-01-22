@@ -6,5 +6,6 @@ pytest-forked
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
+pandas<3.0
 expecttest
 msgpack

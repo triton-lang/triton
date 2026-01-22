@@ -327,3 +327,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK{LITERAL}: #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [0, 2], [1, 0]]}, instrShape = [16, 16, 64]}>
+// CHECK-LABEL: wmma_dot_i8_i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_i8_i32(
+      %arg0: tensor<64x128x!tt.ptr<i8>, #op0>,
+      %arg1: tensor<128x128x!tt.ptr<i8>, #op1>,
+      %arg2: tensor<64x128x!tt.ptr<i32>, #blocked>
+      ) {
+    %a = tt.load %arg0 : tensor<64x128x!tt.ptr<i8>, #op0>
+    %b = tt.load %arg1 : tensor<128x128x!tt.ptr<i8>, #op1>
+    %c = arith.constant dense<0> : tensor<64x128xi32, #blocked>
+
+    %res = tt.dot %a, %b, %c : tensor<64x128xi8, #op0> * tensor<128x128xi8, #op1> -> tensor<64x128xi32, #blocked>
+    tt.store %arg2, %res : tensor<64x128x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [0, 2], [1, 0]]}, instrShape = [16, 16, 4]}>
+// CHECK-LABEL: wmma_dot_i8_i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_i8_i32(
+      %arg0: tensor<64x128x!tt.ptr<f64>, #op0>,
+      %arg1: tensor<128x128x!tt.ptr<f64>, #op1>,
+      %arg2: tensor<64x128x!tt.ptr<f64>, #blocked>
+      ) {
+    %a = tt.load %arg0 : tensor<64x128x!tt.ptr<f64>, #op0>
+    %b = tt.load %arg1 : tensor<128x128x!tt.ptr<f64>, #op1>
+    %c = arith.constant dense<0.000> : tensor<64x128xf64, #blocked>
+
+    %res = tt.dot %a, %b, %c : tensor<64x128xf64, #op0> * tensor<128x128xf64, #op1> -> tensor<64x128xf64, #blocked>
+    tt.store %arg2, %res : tensor<64x128x!tt.ptr<f64>, #blocked>
+    tt.return
+  }
+}
