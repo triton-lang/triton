@@ -222,7 +222,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                               AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
-  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings, UnitAttr:$warpGroupLocal);
   let results = (outs Variadic<TTG_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
@@ -230,6 +230,10 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
     `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
+
+    The `warpGroupLocal` attribute specifies that we only wait for the local
+    warp group, and if num_warps > 4 then shared memory inputs may still be in
+    use by other warp groups.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
