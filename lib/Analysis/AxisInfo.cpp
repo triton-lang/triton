@@ -364,7 +364,11 @@ private:
                           const AxisInfo &rhs, int dim) override {
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && rhs.getConstantValue() != 1) {
-      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
+      // If the operand is contiguous, the divisibility of the
+      // sequence drops to 1.
+      // Example: [4, 5, 6, 7] (base 4 divisible by 4).
+      // Multiplying by 2 yields [8, 10, 12, 14] (GCD=2).
+      // Preserving divisibility=4 implies result align 8 (unsafe).
       lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
