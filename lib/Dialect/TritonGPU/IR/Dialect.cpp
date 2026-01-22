@@ -648,9 +648,10 @@ static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
   return success();
 }
 
-std::optional<LinearLayout>
-parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
-                  ArrayRef<std::string> inDimNames) {
+std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
+                                              AsmParser &parser,
+                                              ArrayRef<std::string> inDimNames,
+                                              int serializedRank = 0) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
@@ -703,10 +704,16 @@ parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
     }
   }
 
-  // To implement this we'd need to serialise the rank as well.
-  // We can do this if we ever need it
-  if (rank == 0) {
+  if (rank == 0 && serializedRank == 0) {
     parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+    return {};
+  }
+
+  if (rank == 0) {
+    rank = serializedRank;
+  } else if (serializedRank != 0 && serializedRank != rank) {
+    parser.emitError(parser.getCurrentLocation(),
+                     "Serialized rank and rank deduced from LL need to match");
     return {};
   }
 
@@ -729,8 +736,19 @@ parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
 //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
 //   warp = [[16, 0], [32, 0]],
 //   block = []}>
-static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
-  printer << join(ll.getBases(), ", ", [](const auto &base) {
+static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll,
+                              bool skipEmptyBases = false) {
+  auto bases = ll.getBases();
+  if (skipEmptyBases) {
+    decltype(bases) filtered;
+    for (auto &kv : bases)
+      if (!kv.second.empty())
+        filtered.insert(kv);
+    bases = std::move(filtered);
+  }
+
+  // Printing code unchanged (just prints `bases` instead of `ll.getBases()`).
+  printer << join(bases, ", ", [](const auto &base) {
     return base.first.str() + " = " + "[" +
            join(base.second, ", ",
                 [](const std::vector<int32_t> &vec) {
@@ -928,6 +946,15 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
              << "In a distributed layout, each base must move in at most one "
                 "dimension.";
     }
+  }
+
+  LinearLayout withoutBroadcast = linearLayout;
+  for (auto inDim : linearLayout.getInDimNames()) {
+    withoutBroadcast = withoutBroadcast.removeZeroBasesAlongDim(inDim);
+  }
+  if (!withoutBroadcast.isInvertible()) {
+    return emitError()
+           << "After removing the zero bases the layout must be bijective";
   }
 
   return success();
@@ -1364,9 +1391,6 @@ LogicalResult AMDMfmaEncodingAttr::verify(
 //===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
-bool AMDWmmaEncodingAttr::hasUnitTilesPerWarp() const {
-  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
-}
 
 Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -1378,28 +1402,27 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned version = 0;
+  unsigned rank = 2;
   bool isTransposed = false;
-  SmallVector<unsigned> warpsPerCTA;
-  SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
   Attribute cgaAttr = nullptr;
+  Attribute warpLayAttr = nullptr;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
       if (parseUInt(parser, attr, version, "version").failed())
         return {};
     }
+    if (attr.getName() == "rank") {
+      if (parseUInt(parser, attr, rank, "rank").failed())
+        return {};
+    }
+    if (attr.getName() == "ctaLayout") {
+      warpLayAttr = attr.getValue();
+      continue;
+    }
     if (attr.getName() == "isTranspose") {
       if (parseBool(parser, attr, isTransposed, "isTranspose").failed())
-        return {};
-    }
-    if (attr.getName() == "warpsPerCTA") {
-      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
-        return {};
-    }
-    if (attr.getName() == "tilesPerWarp") {
-      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
-              .failed())
         return {};
     }
     if (attr.getName() == "CGALayout") {
@@ -1414,30 +1437,54 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
+  if (!warpLayAttr) {
+    return {};
+  }
+
+  auto dictWarpLay = llvm::dyn_cast<DictionaryAttr>(warpLayAttr);
+  if (!dictWarpLay) {
+    parser.emitError(parser.getNameLoc(),
+                     "expected dictionary value for 'ctaLayout'");
+    return {};
+  }
+
+  // Enable optional parsing of register dimension, since it's almost always
+  // size 1 dim.
+  auto ctx = parser.getContext();
+  LinearLayout ctaLL;
+  std::vector<std::string> inDimNames;
+  auto kReg = StringAttr::get(ctx, "register");
+  Attribute value = dictWarpLay.get(kReg);
+  if (!value) {
+    ctaLL = parseLinearLayout(dictWarpLay, parser, {"warp"}, rank).value();
+    auto outDims = standardOutDimNames(ctx, rank);
+    auto regsLL = LinearLayout::identity1D(1, kReg, outDims[rank - 1]);
+    ctaLL = regsLL * ctaLL;
+  } else {
+    ctaLL = parseLinearLayout(dictWarpLay, parser, {"register", "warp"}, rank)
+                .value();
+  }
+
   std::optional<CGAEncodingAttr> CGALayout =
-      parseCGAAttr(parser, cgaAttr, /*rank=*/warpsPerCTA.size());
+      parseCGAAttr(parser, cgaAttr, /*rank=*/rank);
   if (!CGALayout.has_value())
     return {};
 
-  if (tilesPerWarp.empty())
-    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
-
-  return parser.getChecked<AMDWmmaEncodingAttr>(
-      parser.getContext(), version, isTransposed, warpsPerCTA, tilesPerWarp,
-      *CGALayout, instrShape);
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
+                                                std::move(ctaLL), isTransposed,
+                                                *CGALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "version = " << getVersion()
-          << ", isTranspose = " << getIsTransposed() //
-          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+          << ", isTranspose = " << getIsTransposed() << ", ctaLayout = {";
+
+  printLinearLayout(printer, getCtaLayout(), /*skipEmptyBases*/ true);
+
+  printer << "}";
 
   maybePrintCGALayout(getContext(), printer, getCGALayout());
-
-  auto tilesPerWarp = getTilesPerWarp();
-  if (!hasUnitTilesPerWarp())
-    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
 
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
@@ -1445,11 +1492,11 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult AMDWmmaEncodingAttr::verify(
-    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
-    bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    llvm::ArrayRef<unsigned int> tilesPerWarp, CGAEncodingAttr cgaLayout,
-    llvm::ArrayRef<unsigned> instrShape) {
+LogicalResult
+AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned version, LinearLayout ctaLayout,
+                            bool isTransposed, CGAEncodingAttr cgaLayout,
+                            llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
 
@@ -1502,7 +1549,7 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           unsigned dim, DistributedEncodingTrait parent) {
-  unsigned rank = ::getCGALayout(parent).getRank();
+  unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
   if (rank <= 1)
     return emitError() << "parent layout must have at least rank >= 2";
   if (dim >= rank) {
@@ -2313,41 +2360,6 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getRepOrder() const {
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
-}
-
-SmallVector<int64_t>
-AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
-                                      int opIdx) const {
-  auto mnkDim = getInstrShape();
-  SmallVector<int64_t, 2> operandTileShape{opIdx == 0 ? mnkDim[0] : kDim,
-                                           opIdx == 0 ? kDim : mnkDim[1]};
-
-  assert(operandTileShape.size() == 2);
-  auto warpsPerCTA = getWarpsPerCTA();
-  auto tilesPerWarp = getTilesPerWarp();
-
-  auto rank = operandShape.size();
-  assert(rank == 2 || rank == 3);
-  int numRepBatch =
-      rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
-  if (opIdx == 0)
-    return {
-        numRepBatch,
-        std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
-                                  warpsPerCTA[rank - 2])) *
-            tilesPerWarp[rank - 2],
-        std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
-  else {
-    assert(opIdx == 1);
-    return {
-        numRepBatch,
-        std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] /
-                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
-                                  warpsPerCTA[rank - 1])) *
-            tilesPerWarp[rank - 1]};
-  }
 }
 
 SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
@@ -3749,7 +3761,6 @@ void TritonGPUDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
-#include "triton/Dialect/TritonGPU/IR/OpsEnums.cpp.inc"
       >();
   addInterfaces<TritonInlinerInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
@@ -3964,7 +3975,10 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
 }
 
 int triton::gpu::lookupNumCTAs(Operation *op) {
-  auto mod = op->getParentOfType<ModuleOp>();
+  auto mod = dyn_cast<ModuleOp>(op);
+  if (!mod)
+    mod = op->getParentOfType<ModuleOp>();
+
   if (!mod) {
     op->emitOpError(
         "is not contained within a module, cannot lookup number of CTAs");
@@ -4075,6 +4089,7 @@ SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
   if (op->getNumResults() == 0) {
     return partitionOutputsIds;
   }
+  assert(op->hasAttr(kPartitionOutputsAttrName));
   auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
   for (auto attr : arrayAttr) {
     auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();

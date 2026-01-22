@@ -107,6 +107,13 @@ public:
                       function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 
+// Descriptor gather and scatter have restrictions on the tile sizes.
+LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                    ShapedType resultType,
+                                    ShapedType indicesType);
+LogicalResult verifyDescriptorLoadStoreOp(Operation *op, TensorDescType desc,
+                                          ShapedType tensor);
+
 } // namespace triton
 } // namespace mlir
 

@@ -12,27 +12,20 @@
 #include "roctracer/roctracer_hip.h"
 #include "roctracer/roctracer_roctx.h"
 
-#include <cstdlib>
-#include <deque>
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <tuple>
 #include <unordered_map>
-
-#include <cxxabi.h>
-#include <unistd.h>
+#include <vector>
 
 namespace proton {
 
 template <>
 thread_local GPUProfiler<RoctracerProfiler>::ThreadState
     GPUProfiler<RoctracerProfiler>::threadState(RoctracerProfiler::instance());
-
-template <>
-thread_local std::deque<size_t>
-    GPUProfiler<RoctracerProfiler>::Correlation::externIdQueue{};
 
 namespace {
 
@@ -75,14 +68,14 @@ private:
   int deviceOffset = 0x7fffffff;
 };
 
-std::shared_ptr<Metric>
+std::unique_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
-  std::shared_ptr<Metric> metric;
+  std::unique_ptr<Metric> metric;
   switch (activity->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
     if (activity->begin_ns < activity->end_ns) {
-      metric = std::make_shared<KernelMetric>(
+      metric = std::make_unique<KernelMetric>(
           static_cast<uint64_t>(activity->begin_ns),
           static_cast<uint64_t>(activity->end_ns), 1,
           static_cast<uint64_t>(
@@ -103,19 +96,23 @@ void processActivityKernel(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    size_t externId, std::set<Data *> &dataSet,
-    const roctracer_record_t *activity, bool isGraph,
-    RoctracerProfiler::ExternIdState &state) {
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t externId,
+    const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
+  bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
+  auto &state = externIdToState[externId];
   if (!isGraph) {
-    for (auto *data : dataSet) {
+    for (auto [data, entry] : state.dataToEntry) {
       if (auto metric = convertActivityToMetric(activity)) {
-        if (state.isApiExternId) {
-          data->addOpAndMetric(externId, activity->kernel_name, metric);
+        if (state.isMissingName) {
+          auto childEntry = data->addOp(entry.phase, entry.id,
+                                        {Context(activity->kernel_name)});
+          childEntry.upsertMetric(std::move(metric));
         } else {
-          data->addMetric(externId, metric);
+          entry.upsertMetric(std::move(metric));
         }
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   } else {
@@ -127,9 +124,12 @@ void processActivityKernel(
     // 2. GraphExec -> Graph
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
-    for (auto *data : dataSet) {
+    for (auto [data, entry] : state.dataToEntry) {
       if (auto metric = convertActivityToMetric(activity)) {
-        data->addOpAndMetric(externId, activity->kernel_name, metric);
+        auto childEntry = data->addOp(entry.phase, entry.id,
+                                      {Context(activity->kernel_name)});
+        childEntry.upsertMetric(std::move(metric));
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   }
@@ -147,14 +147,13 @@ void processActivity(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    size_t parentId, std::set<Data *> &dataSet,
-    const roctracer_record_t *record, bool isGraph,
-    RoctracerProfiler::ExternIdState &state) {
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t parentId,
+    const roctracer_record_t *record) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
     processActivityKernel(corrIdToExternId, externIdToState, corrIdToIsHipGraph,
-                          parentId, dataSet, record, isGraph, state);
+                          dataPhases, parentId, record);
     break;
   }
   default:
@@ -202,8 +201,9 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
-    runtime = &HipRuntime::instance();
-    metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    auto runtime = &HipRuntime::instance();
+    profiler.metricBuffer =
+        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
   }
   virtual ~RoctracerProfilerPimpl() = default;
 
@@ -214,8 +214,6 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   static void apiCallback(uint32_t domain, uint32_t cid,
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
-
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
       corrIdToIsHipGraph;
@@ -250,7 +248,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         static_cast<const hip_api_data_t *>(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      threadState.enterOp();
+      // TODO: Get kernel name from hip_api_data_t
+      threadState.enterOp(Scope(""));
+      auto &dataToEntry = threadState.dataToEntry;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -271,7 +271,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
                  "graph is created."
               << std::endl;
       }
-      profiler.correlation.correlate(data->correlation_id, numInstances);
+      auto &scope = threadState.scopeStack.back();
+      auto isMissingName = scope.name.empty();
+      profiler.correlation.correlate(data->correlation_id, scope.scopeId,
+                                     numInstances, isMissingName, dataToEntry);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       switch (cid) {
       case HIP_API_ID_hipStreamBeginCapture: {
@@ -354,14 +357,15 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
   auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
       profiler.pImpl.get());
-  auto dataSet = profiler.getDataSet();
   auto &correlation = profiler.correlation;
 
+  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
       reinterpret_cast<const roctracer_record_t *>(end);
   uint64_t maxCorrelationId = 0;
+  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
 
   while (record != endRecord) {
     // Log latest completed correlation id.  Used to ensure we have flushed all
@@ -375,11 +379,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     if (hasCorrelation) {
       // Track correlation ids from the same stream and erase those <
       // correlationId
-      bool isGraph = pImpl->corrIdToIsHipGraph.contain(record->correlation_id);
-      auto &state = correlation.externIdToState[externId];
       processActivity(correlation.corrIdToExternId, correlation.externIdToState,
-                      pImpl->corrIdToIsHipGraph, externId, dataSet, record,
-                      isGraph, state);
+                      pImpl->corrIdToIsHipGraph, dataPhases, externId, record);
     } else {
       correlation.corrIdToExternId.erase(record->correlation_id);
       pImpl->corrIdToIsHipGraph.erase(record->correlation_id);
@@ -387,6 +388,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
+  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
+                           profiler.pendingGraphPool.get());
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
@@ -398,7 +401,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
                                         nullptr);
   // Activity Records
   roctracer_properties_t properties{0};
-  properties.buffer_size = BufferSize;
+  const auto envBufferSize =
+      getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
+  properties.buffer_size = envBufferSize;
   properties.buffer_callback_fun = activityCallback;
   roctracer::openPool<true>(&properties);
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
@@ -434,7 +439,11 @@ RoctracerProfiler::~RoctracerProfiler() = default;
 void RoctracerProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
-  if (!mode.empty()) {
+  if (proton::toLower(mode) == "periodic_flushing") {
+    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
+                                    periodicFlushingFormat, modeAndOptions,
+                                    "RoctracerProfiler");
+  } else if (!mode.empty()) {
     throw std::invalid_argument(
         "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
   }

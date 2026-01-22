@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
   // CHECK-LABEL: cluster_load_b128
   tt.func public @cluster_load_b128(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.id.x : i32
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-7 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(85 : i32) : i32
@@ -82,6 +82,26 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-COUNT-2: llvm.amdgcn.cluster.load.b128
     // CHECK-NOT: llvm.amdgcn.cluster.load
     %6 = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Check that scalar loads works without emitting cluster load
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: scalar_load_gfx1250
+  tt.func public @scalar_load_gfx1250(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    // Scalar load should produce a regular llvm.load, not a cluster load
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<1> -> vector<1xi16>
+    %1 = tt.load %arg1 : !tt.ptr<i16>
+    %2 = amdg.buffer_load %arg2[%0] : tensor<128xi32, #blocked>
+    %3 = arith.extsi %1 : i16 to i32
+    %4 = tt.splat %3 : i32 -> tensor<128xi32, #blocked>
+    %5 = arith.ori %4, %2 : tensor<128xi32, #blocked>
+    amdg.buffer_store %5, %arg0[%0] : tensor<128xi32, #blocked>
     tt.return
   }
 }

@@ -5,9 +5,9 @@
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: no_conversion
   llvm.func @no_conversion() {
-    // CHECK: nvvm.barrier0
+    // CHECK: ttg.barrier local|global_read|global_write
     %0 = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-    gpu.barrier
+    ttg.barrier local|global_read|global_write
     llvm.return
   }
 }
@@ -125,7 +125,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     // CHECK-DAG: %[[PID:.*]] = llvm.trunc %15 : i64 to i32
     // CHECK-DAG: %[[SIZE:.*]] = llvm.mlir.constant(384 : i32)
     // CHECK-DAG: %{{.*}} = llvm.mul %[[PID]], %[[SIZE]] : i32
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     llvm.return
   }
 }
@@ -162,7 +162,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: ^bb2:
   // CHECK: llvm.return
   llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
-    %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %0 = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     proton_gpu.initialize %0 : !tt.ptr<i32>
     llvm.return
   }
@@ -207,7 +207,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp>
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
     llvm.return

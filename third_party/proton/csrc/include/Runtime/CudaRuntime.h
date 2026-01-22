@@ -18,7 +18,8 @@ public:
                     void **kernelParams, void **extra) override;
   void memset(void *devicePtr, uint32_t value, size_t size,
               void *stream) override;
-  void allocateHostBuffer(uint8_t **buffer, size_t size) override;
+  void allocateHostBuffer(uint8_t **buffer, size_t size, bool mapped) override;
+  void getHostDevicePointer(uint8_t *hostPtr, uint8_t **devicePtr) override;
   void freeHostBuffer(uint8_t *buffer) override;
   void allocateDeviceBuffer(uint8_t **buffer, size_t size) override;
   void freeDeviceBuffer(uint8_t *buffer) override;

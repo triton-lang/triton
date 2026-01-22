@@ -134,7 +134,7 @@ class InterpreterOptions:
     arch: Optional[str] = None
     supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str, ...] = ()
-    default_dot_input_precision: str = "tf32x3"
+    default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str, ...] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
@@ -887,7 +887,7 @@ def _patch_lang_tensor(tensor, scope: _LangPatchScope):
         res_ty = tl.core.block_type(self.dtype, block_shape)
         return tl.core.tensor(handle, res_ty)
 
-    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data))
+    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data.squeeze()))
     scope.set_attr(tensor, "__bool__", lambda self: _get_bool(self))
     scope.set_attr(tensor, "__repr__", lambda self: repr(self.handle.data))
     scope.set_attr(tensor, "__str__", lambda self: str(self.handle.data))

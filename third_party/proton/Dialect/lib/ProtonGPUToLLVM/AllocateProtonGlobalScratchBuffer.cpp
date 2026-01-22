@@ -24,7 +24,9 @@ struct AllocateProtonGlobalScratchBufferPass
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
 
-    funcOps[0].walk([&](proton::gpu::GlobalScratchAllocOp op) {
+    funcOps[0].walk([&](triton::gpu::GlobalScratchAllocOp op) {
+      if (op.getBackend() != "proton")
+        return;
       int offset = llvm::alignTo(cumulativeMemorySize,
                                  proton::gpu::getBytesPerClockEntry());
       op->setAttr("offset",

@@ -33,6 +33,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton::gpu;
@@ -201,12 +203,38 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
-template <typename TOp>
-LogicalResult verifyTMAEncoding(TOp *op, Value desc, Attribute enc) {
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterArriveOp --
+LogicalResult ClusterArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterWaitOp --
+LogicalResult ClusterWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- TMA operation verifiers --
+static LogicalResult verifyTMAEncoding(Operation *op,
+                                       TypedValue<TensorDescType> desc,
+                                       Attribute enc) {
   auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
-  auto descTy = cast<TensorDescType>(desc.getType());
+  auto descTy = desc.getType();
   auto descEnc = dyn_cast_if_present<NVMMASharedEncodingAttr>(
       descTy.getBlockType().getEncoding());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
@@ -214,68 +242,140 @@ LogicalResult verifyTMAEncoding(TOp *op, Value desc, Attribute enc) {
   if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
       descEnc.getSwizzlingByteWidth() != nvmma.getSwizzlingByteWidth() ||
       descEnc.getElementBitWidth() != nvmma.getElementBitWidth() ||
-      descEnc.getFp4Padded() != nvmma.getFp4Padded())
-    return op->emitOpError("TMA descriptor layout must match shared layout");
+      descEnc.getFp4Padded() != nvmma.getFp4Padded()) {
+    return op->emitOpError("TMA descriptor layout must match shared layout, "
+                           "but got descriptor layout ")
+           << descEnc << " and shared memory layout " << nvmma;
+  }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
   return success();
 }
 
+static LogicalResult verifyAsyncTMALoadOp(Operation *op,
+                                          TypedValue<TensorDescType> desc,
+                                          TypedValue<MemDescType> barrier,
+                                          MemDescType resultType) {
+  if (failed(verifyBarrierType(op, barrier.getType())))
+    return failure();
+  if (!resultType.getMutableMemory())
+    return op->emitOpError("cannot store into immutable memory");
+  if (failed(verifyTMAEncoding(op, desc, resultType.getEncoding())))
+    return failure();
+  return success();
+}
+
+static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
+                                           TypedValue<TensorDescType> desc,
+                                           MemDescType srcType) {
+  Attribute srcEnc = srcType.getEncoding();
+  // `cp.async.bulk.tensor` to global memory and `cp.reduce.async.bulk.tensor`
+  // do not support fp4_padded operands.
+  if (isFp4Padded(srcEnc))
+    return op->emitOpError("does not support fp4_padded operands");
+  return verifyTMAEncoding(op, desc, srcEnc);
+}
+
+static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
+                                          TypedValue<TensorDescType> desc,
+                                          TensorMode tensorMode) {
+  unsigned blockRank = desc.getType().getBlockType().getRank();
+
+  if (tensorMode == TensorMode::IM2COL) {
+    // For IM2COL mode, coordinates are for the full tensor (3D-5D)
+    // not the 2D block shape
+    if (coords.size() < 3)
+      return op->emitOpError(
+                 "IM2COL mode requires at least 3D coordinates, but got ")
+             << coords.size() << "D";
+    if (coords.size() > 5)
+      return op->emitOpError(
+                 "IM2COL mode supports at most 5D coordinates, but got ")
+             << coords.size() << "D";
+  } else {
+    // For TILED mode, coordinates must match the block rank
+    if (coords.size() != blockRank) {
+      return op->emitOpError("expected ")
+             << blockRank << " coordinates, but got " << coords.size();
+    }
+    if (coords.size() < 1 || coords.size() > 5)
+      return op->emitOpError("must have between 1 and 5 coordinates");
+  }
+  return success();
+}
+
+static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
+                                   ValueRange coords, ValueRange offsets) {
+  if (tensorMode == TensorMode::IM2COL) {
+    if (offsets.empty())
+      return op->emitOpError("IM2COL mode requires offsets to be provided");
+
+    // For IM2COL mode, the number of offsets should be coord.size() - 2
+    // 4D tensors (4 coords) need 2 offsets, 5D tensors (5 coords) need 3
+    // offsets
+    size_t expectedOffsets = coords.size() - 2;
+    if (offsets.size() != expectedOffsets) {
+      return op->emitOpError("IM2COL mode with ")
+             << coords.size() << "D coordinates requires " << expectedOffsets
+             << " offsets, but got " << offsets.size();
+    }
+  } else {
+    // TILED mode should not have offsets
+    if (!offsets.empty())
+      return op->emitOpError("TILED mode does not support offsets");
+  }
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
-  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+  if (failed(
+          verifyAsyncTMACoords(*this, getCoord(), getDesc(), getTensorMode())))
     return failure();
-  if (getCoord().size() < 1 || getCoord().size() > 5)
-    return emitOpError("TMA copies must have between 1 and 5 coordinates");
   auto resultType = getResult().getType();
-  if (!resultType.getMutableMemory())
-    return emitOpError("Cannot store into immutable memory");
-  return verifyTMAEncoding(this, getDesc(), resultType.getEncoding());
+  if (failed(
+          verifyDescriptorLoadStoreOp(*this, getDesc().getType(), resultType)))
+    return failure();
+  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
+                                  getResult().getType())))
+    return failure();
+  if (failed(verifyTMAMode(*this, getTensorMode(), getCoord(), getOffsets())))
+    return failure();
+  return success();
 }
 
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
-  return verifyTMAEncoding(this, getDesc(), getSrc().getType().getEncoding());
+  // Store ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
+                                  TensorMode::TILED)))
+    return failure();
+  MemDescType srcType = getSrc().getType();
+  if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
+    return failure();
+  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
 }
 
-static LogicalResult verifyGatherScatterOp(Operation *op,
-                                           RankedTensorType blockType,
-                                           MemDescType smemType,
-                                           RankedTensorType indicesType) {
-  // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
-  if (blockType.getRank() != 2)
-    return op->emitOpError("descriptor block must be 2D, but got ")
-           << blockType;
-  if (blockType.getShape()[0] != 1)
-    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
-           << blockType;
-
-  // Re-use the result verifier from the functional API
-  auto resultType =
-      RankedTensorType::get(smemType.getShape(), smemType.getElementType());
-  if (failed(DescriptorGatherOp::verifyResultType(op, resultType, indicesType)))
+// -- AsyncTMAReduceOp --
+LogicalResult AsyncTMAReduceOp::verify() {
+  // Reduce ops only support TILED mode
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
+                                  TensorMode::TILED)))
     return failure();
-
-  if (resultType.getShape()[1] != blockType.getShape()[1])
-    return op->emitOpError("result tensor number of columns must match block (")
-           << blockType.getShape()[1] << "), but got " << resultType;
-  if (resultType.getElementType() != blockType.getElementType())
-    return op->emitOpError("result tensor element type must match block (")
-           << blockType.getElementType() << "), but got " << resultType;
-
-  return success();
+  MemDescType srcType = getSrc().getType();
+  if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
+    return failure();
+  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
 }
 
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
-  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+  auto resultType = getResult().getType();
+  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(), resultType)))
     return failure();
-
-  triton::gpu::MemDescType resultType = getResult().getType();
-  if (!resultType.getMutableMemory())
-    return emitOpError("cannot store into immutable memory");
-  if (failed(verifyTMAEncoding(this, getDesc(), resultType.getEncoding())))
-    return failure();
+  // `tile::gather4` does not support fp4_padded operands.
+  if (isFp4Padded(getResult().getType().getEncoding()))
+    return emitOpError("does not support fp4_padded operands");
   return verifyGatherScatterOp(*this,
                                getDesc().getType().getSignlessBlockType(),
                                resultType, getXOffsets().getType());
@@ -284,7 +384,7 @@ LogicalResult AsyncTMAGatherOp::verify() {
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
   auto srcType = getSrc().getType();
-  if (failed(verifyTMAEncoding(this, getDesc(), srcType.getEncoding())))
+  if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
   return verifyGatherScatterOp(*this,
                                getDesc().getType().getSignlessBlockType(),
@@ -579,17 +679,27 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds, bool isAsync) {
+                        Value pred, bool twoCtas, bool multicast,
+                        ValueRange barriers, ValueRange barrierPreds,
+                        bool isAsync) {
   if (!barriers.empty()) {
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        twoCtas ? builder.getUnitAttr() : UnitAttr(),
+        multicast ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
+
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  auto numDescs = getDescs().size();
+  if (numDescs > 2)
+    return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  return success();
+}
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
@@ -821,6 +931,58 @@ LogicalResult TMEMLoadOp::verify() {
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
     return failure();
+
+  // Validate reduction-related attributes
+  auto redOp = getRedOp();
+  bool hasRed = getRed() != nullptr;
+  bool useAbs = getAbs().value_or(false);
+  bool useNaN = getNaN().value_or(false);
+
+  // redOp and red result must be consistent
+  if (redOp && !hasRed)
+    return emitOpError("redOp is set but 'red' result is not present");
+  if (hasRed && !redOp)
+    return emitOpError("'red' result is present but redOp is not set");
+
+  // abs and NaN require redOp
+  if (useAbs && !redOp)
+    return emitOpError("'abs' requires 'redOp' to be set");
+  if (useNaN && !redOp)
+    return emitOpError("'NaN' requires 'redOp' to be set");
+
+  // abs and NaN require floating-point element type
+  Type elemTy = getSrc().getType().getElementType();
+  if (useAbs && !elemTy.isF32())
+    return emitOpError("'abs' requires floating-point element type (f32)");
+  if (useNaN && !elemTy.isF32())
+    return emitOpError("'NaN' requires floating-point element type (f32)");
+
+  // Validate reduction conditions
+  if (redOp) {
+    auto regTy = getType();
+    auto memTy = getSrc().getType();
+    auto maxnreg = getContextualMaxNReg(*this);
+    auto encodingInfoOr = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+    if (failed(encodingInfoOr))
+      return emitOpError("failed to compute TMEM encoding info");
+
+    if (encodingInfoOr->unpacked)
+      return emitOpError(
+          "tmem_load reduction requires packed format (unpacked=false)");
+
+    // Verify that N dimension is in registers entirely, and is not sharded
+    // across threads. This could be relaxed in the future to only reduce the
+    // kReg bases along N then cross-warp/block reduction becomes needed.
+    auto kReg = StringAttr::get(regTy.getContext(), "register");
+    int dimM = 0, dimN = 1;
+    auto regDims = toLinearEncoding(regTy).basesPerDim(kReg);
+    if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
+        regDims[dimM] != 1) {
+      return emitOpError("tmem_load reduction with N dimension sharded across "
+                         "threads is not supported.");
+    }
+  }
+
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 

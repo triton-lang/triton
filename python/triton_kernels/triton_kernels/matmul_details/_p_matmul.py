@@ -1,5 +1,6 @@
 # isort: off
 # fmt: off
+import collections
 import torch
 import triton
 import triton.language as tl
@@ -102,6 +103,7 @@ def _p_matmul(
              UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             FLATTEN_LOOPS: tl.constexpr = True,
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -155,7 +157,7 @@ def _p_matmul(
     else:
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
-        tl.static_assert(SWIZZLE_MX_SCALE is None)
+        tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
     if is_x_microscaled:
         x_type: tl.constexpr = get_dtype(X)
         tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
@@ -206,7 +208,12 @@ def _p_matmul(
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
-    for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=True):
+    for block_id in tl.range(
+        tl.program_id(0), num_blocks, NUM_SMS,
+        flatten=FLATTEN_LOOPS,
+        disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+        warp_specialize=True,
+    ):
 
         pid_z, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
 
@@ -636,16 +643,21 @@ def _p_matmul(
     if pYPtrs is not None:
         all_writes_issued.fn(*all_writes_issued.captured)
 
+
 _per_device_alloc_fns = {}
+
+
 def get_per_device_per_stream_alloc_fn(device):
     if device not in _per_device_alloc_fns:
-        _per_stream_tensors = {}
-        def alloc_fn(size: int, alignment: int, stream):
+        _per_stream_tensors = collections.defaultdict(list)
+
+        def alloc_fn(size: int, alignment: int, stream: int):
             assert alignment == 128
-            if stream not in _per_stream_tensors or _per_stream_tensors[stream].numel() < size:
-                _per_stream_tensors[stream] = torch.empty(size, device=device, dtype=torch.int8)
-                _per_stream_tensors[stream].__hibernate__ = {"type": "ignore"}
-            return _per_stream_tensors[stream]
+            tensors = _per_stream_tensors[stream]
+            if not tensors or tensors[-1].numel() < size:
+                tensors.append(torch.empty(size, device=device, dtype=torch.int8))
+                tensors[-1].__hibernate__ = {"type": "ignore"}
+            return tensors[-1]
 
         _per_device_alloc_fns[device] = alloc_fn
     return _per_device_alloc_fns[device]

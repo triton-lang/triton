@@ -887,20 +887,21 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op/while op results for now.
+    // Skip propagating through for op/while op/ws op results for now.
     // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>() ||
-        currentValue.getDefiningOp<scf::WhileOp>())
+    auto defOp = currentValue.getDefiningOp();
+    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
-    Value existing;
+    // If there is already an existing conversion to the target layout, we don't
+    // need to propagate to the operands.
+    // Note that this is per-use rather than per-value, so if another use fails
+    // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
-        (existing = getExistingConversion(*currentValueUse, encoding))) {
-      if (failed(updateLayout(existing, encoding)))
-        return failure();
-      currentValue = existing;
+        getExistingConversion(*currentValueUse, encoding)) {
+      continue;
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
@@ -1356,18 +1357,15 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
       deadArg.push_back(yieldOperand.index());
     }
-    if (deadArg.empty())
-      return failure();
-    rewriter.modifyOpInPlace(forOp, [&]() {
-      // For simplicity we just change the dead yield operand to use the
-      // associated argument and leave the operations and argument removal to
-      // dead code elimination.
-      for (unsigned deadArgIdx : deadArg) {
-        BlockArgument arg = block.getArgument(deadArgIdx + 1);
-        yieldOp.setOperand(deadArgIdx, arg);
-      }
-    });
-    return success();
+    bool changed = false;
+    // For simplicity we just replace users of the block arg with init value and
+    // leave the operations and argument removal to dead code elimination.
+    for (unsigned deadArgIdx : deadArg) {
+      BlockArgument arg = block.getArgument(deadArgIdx + 1);
+      changed |= !arg.use_empty();
+      rewriter.replaceAllUsesWith(arg, forOp.getTiedLoopInit(arg)->get());
+    }
+    return success(changed);
   }
 };
 
@@ -1547,9 +1545,9 @@ void replaceUsesAndPropagateType(
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Propagate through `ttg.warp_specialize`.
-    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
-      for (Region *region : wsOp.getPartitionRegions())
-        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(use.getOwner())) {
+      for (Region &region : wsOp.getPartitionRegions())
+        region.getArgument(use.getOperandNumber()).setType(val.getType());
     }
 
     // Non-subview/trans ops will be replaced by `val`.

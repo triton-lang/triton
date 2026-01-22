@@ -105,9 +105,17 @@ bool isOperandPipelineable(Value v, scf::ForOp forOp) {
                                                        isPipelineable);
 }
 
-void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
+void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
+                unsigned defaultNumStages) {
   bool isAsync = true;
   auto forOp = mmaOp->getParentOfType<scf::ForOp>();
+  if (!forOp)
+    return;
+
+  unsigned numStages = getNumStagesOrDefault(forOp, defaultNumStages);
+  if (numStages <= 1)
+    return;
+
   if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
           mmaOp.getOperation())) {
     if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
@@ -353,7 +361,8 @@ void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
                        ArefValue arefVal,
-                       const DenseSet<MMAv5OpInterface> &mmav5Ops) {
+                       const DenseSet<MMAv5OpInterface> &mmav5Ops,
+                       unsigned defaultNumStages) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -400,7 +409,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
     for (auto mmav5 : mmav5Ops) {
-      setIsAsync(mmav5);
+      setIsAsync(mmav5, defaultNumStages);
     }
   }
 
@@ -470,7 +479,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
-      arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar);
+      arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar,
+                                                    Value(), ValueRange{});
       break;
     case AsyncOp::TMALoad:
       // nothing to do, the arrive is done by HW
@@ -599,7 +609,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
-  using OpRewritePattern::OpRewritePattern;
+  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages)
+      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages) {}
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -616,7 +627,7 @@ public:
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
-        rewritePutEnterOp(user, rewriter, aref, mmav5Ops);
+        rewritePutEnterOp(user, rewriter, aref, mmav5Ops, defaultNumStages);
       } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
         rewriteGetEnterOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
@@ -645,6 +656,9 @@ public:
 
     return success();
   }
+
+private:
+  unsigned defaultNumStages;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -930,7 +944,7 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context);
+    patterns.add<LowerArefCreate>(context, numStages);
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
     config.enableFolding(false);

@@ -174,8 +174,13 @@ struct ConvertLayoutOpSwizzlingConversion
     auto noPaddingOffset = [](Value v) { return v; };
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (i > 0) {
+        if (isWarpSync) {
+          targetInfo.warpSync(loc, rewriter);
+        } else {
+          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        }
+      }
 
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
@@ -193,7 +198,11 @@ struct ConvertLayoutOpSwizzlingConversion
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (isWarpSync) {
+        targetInfo.warpSync(loc, rewriter);
+      } else {
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      }
       // Load
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans
