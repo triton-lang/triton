@@ -43,7 +43,8 @@ def fmt_bases(bases):
      ([1, 4], [4, 8], [4, 1], [1, 0], [16, 32], True),  # use_hw_view
      ],
 )
-def test_format_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_cta, order, shape, use_hw_view, ttl_cli):
+def test_format_view_blocked_layout(size_per_thread, threads_per_warp, warps_per_cta, order, shape, use_hw_view,
+                                    ttl_cli):
 
     def to_ttg_attr(layout):
         return (f"#ttg.blocked<{{sizePerThread = {fmt(layout.size_per_thread)}, "
@@ -199,6 +200,7 @@ def test_format_view_coalesced_layout():
 
 
 def test_format_view_kernel():
+
     @gluon.jit
     def kernel(ptr, BLOCK: ttgl.constexpr, layout: ttgl.constexpr):
         off = ttgl.arange(0, BLOCK, layout=layout)
@@ -207,4 +209,4 @@ def test_format_view_kernel():
 
     layout = ttgl.BlockedLayout([4], [32], [4], [0])
     x = torch.randn(512, device="cuda")
-    kernel[(1,)](x, 512, layout)
+    kernel[(1, )](x, 512, layout)
