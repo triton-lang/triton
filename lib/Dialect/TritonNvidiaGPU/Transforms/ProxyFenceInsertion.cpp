@@ -155,7 +155,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
-    if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
+    if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
       blockInfo->sync();
