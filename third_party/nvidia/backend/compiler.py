@@ -326,6 +326,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.gluon.add_infer_coalesced_encodings(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -348,6 +349,7 @@ class CUDABackend(BaseBackend):
 
         if options.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.gluon.add_infer_coalesced_encodings(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
