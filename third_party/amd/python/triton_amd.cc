@@ -495,10 +495,6 @@ void init_triton_amd(py::module &&m) {
     return mlir::triton::AMD::TargetInfo(arch).supportsTDM();
   });
 
-  m.def("supports_tdm", [](const std::string &arch) {
-    return mlir::triton::AMD::TargetInfo(arch).supportsTDM();
-  });
-
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {

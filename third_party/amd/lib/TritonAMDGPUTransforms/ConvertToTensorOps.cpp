@@ -66,8 +66,7 @@ public:
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = LocalAllocOp::create(rewriter, loc, memDescType);
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
-    // amdgpu::GlobalTDMPrefetch::create(rewriter,
-    //     loc, op.getDesc(), op.getIndices(), pred, waveId, cgaLayout);
+
     amdgpu::AsyncTDMCopyGlobalToLocalOp::create(rewriter, loc, op.getDesc(),
                                                 op.getIndices(), alloc, pred);
     amdgpu::AsyncTDMWait::create(rewriter, loc, ArrayRef<Value>{}, 0);
@@ -120,7 +119,6 @@ struct TritonAMDGPUConvertToTensorOps
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    // TODO: add the conversion passes
     patterns.add<TensorLoadLowering, TensorStoreLowering>(context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
