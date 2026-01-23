@@ -488,7 +488,7 @@ void fillTDMDescriptor(
 
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
-  group0[0] = b.zext(i32_ty, pred);
+  group0[0] = pred;
   group0[1] = ldsAddr;
   group0[2] = b.trunc(i32_ty, globalAddr);
   group0[3] = b.and_(group0[3], b.i32_val(1 << 31));

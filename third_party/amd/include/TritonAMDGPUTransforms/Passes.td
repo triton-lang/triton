@@ -303,6 +303,16 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
+def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "mlir::ModuleOp"> {
+  let summary = "Lower descriptor load/store to TDM load/stores";
+
+  let description = [{
+    This pass converts descriptor load/store into TDM load/stores; it also allocates LDS space;
+    descriptor-load is converted to TDM-load into LDS, and descriptor-store is converted to
+    TDM-store from LDS.
+  }];
+}
+
 def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
   let summary = "partition and pipeline";
 

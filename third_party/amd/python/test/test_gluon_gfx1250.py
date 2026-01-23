@@ -2397,12 +2397,12 @@ def test_tdm_load_pred():
         b_offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, reg_layout))
         b_ptrs = b_ptr + b_offs_m[:, None] * 64 + b_offs_n[None, :]
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=False)
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=0)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         tile1 = smem.load(reg_layout)
         ttgl.store(b_ptrs, tile1)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=True)
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=1)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         tile2 = smem.load(reg_layout)
         ttgl.store(b_ptrs + 32, tile2)
