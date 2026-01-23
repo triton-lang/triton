@@ -8,16 +8,24 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
+#include <algorithm>
+#include <numeric>
 #include <optional>
+#include <vector>
 
 namespace mlir {
 namespace triton {
@@ -26,6 +34,9 @@ namespace instrument {
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+constexpr StringRef kFpsanScratchAttr = "tritoninstrument.fpsan_scratch";
+constexpr bool kUseLoopDotEmulation = true;
 
 #define GEN_PASS_DEF_TRITONINSTRUMENTFPSANITIZER
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
@@ -62,6 +73,150 @@ unsigned getIntBitwidth(Type ty) {
   return elem.getWidth();
 }
 
+Type getTypeWithElement(Type ty, Type elemTy) {
+  if (auto ranked = dyn_cast<RankedTensorType>(ty))
+    return RankedTensorType::get(ranked.getShape(), elemTy,
+                                 ranked.getEncoding());
+  if (auto vec = dyn_cast<VectorType>(ty))
+    return VectorType::get(vec.getShape(), elemTy, vec.getScalableDims());
+  if (auto shaped = dyn_cast<ShapedType>(ty))
+    return shaped.clone(elemTy);
+  return elemTy;
+}
+
+SmallVector<unsigned> insertOrderAtEnd(ArrayRef<unsigned> order,
+                                       unsigned axis) {
+  SmallVector<unsigned> newOrder;
+  newOrder.reserve(order.size() + 1);
+  for (unsigned dim : order)
+    newOrder.push_back(dim < axis ? dim : dim + 1);
+  newOrder.push_back(axis);
+  return newOrder;
+}
+
+ttg::CGAEncodingAttr expandCGAEncoding(ttg::CGAEncodingAttr enc,
+                                       unsigned axis) {
+  auto perCGA = llvm::to_vector(enc.getCTAsPerCGA());
+  auto splitNum = llvm::to_vector(enc.getCTASplitNum());
+  auto order = llvm::to_vector(enc.getCTAOrder());
+  perCGA.insert(perCGA.begin() + axis, 1);
+  splitNum.insert(splitNum.begin() + axis, 1);
+  auto newOrder = insertOrderAtEnd(order, axis);
+  return ttg::CGAEncodingAttr::fromSplitParams(enc.getContext(), perCGA,
+                                               splitNum, newOrder);
+}
+
+ttg::BlockedEncodingAttr expandBlockedEncoding(ttg::BlockedEncodingAttr enc,
+                                               ArrayRef<int64_t> shape,
+                                               unsigned axis) {
+  auto sizePerThread = llvm::to_vector(enc.getSizePerThread());
+  auto threadsPerWarp = llvm::to_vector(enc.getThreadsPerWarp());
+  auto warpsPerCTA = llvm::to_vector(enc.getWarpsPerCTA());
+  sizePerThread.insert(sizePerThread.begin() + axis, 1);
+  threadsPerWarp.insert(threadsPerWarp.begin() + axis, 1);
+  warpsPerCTA.insert(warpsPerCTA.begin() + axis, 1);
+  auto order = insertOrderAtEnd(enc.getOrder(), axis);
+  auto cga = expandCGAEncoding(enc.getCGALayout(), axis);
+  return ttg::BlockedEncodingAttr::get(enc.getContext(), sizePerThread,
+                                       threadsPerWarp, warpsPerCTA, order, cga);
+}
+
+ttg::BlockedEncodingAttr
+inferCoalescedBlockedEncoding(Operation *op, RankedTensorType tensorType,
+                              triton::ModuleAxisInfoAnalysis &axisInfo) {
+  auto fallback = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
+  int numWarps = ttg::lookupNumWarps(op);
+  int threadsPerWarp =
+      ttg::TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+  int numCTAs = ttg::lookupNumCTAs(op);
+  auto cgaLayout = ttg::CGAEncodingAttr::get1CTALayout(op->getContext(),
+                                                       tensorType.getRank());
+  auto shapePerCTA =
+      ttg::getShapePerCTA(cgaLayout.getCTASplitNum(), tensorType.getShape());
+  auto ptr = getMemAccessPtr(op);
+  if (!ptr || !axisInfo.getAxisInfo(ptr))
+    return fallback;
+  if (ptr.getDefiningOp()) {
+    for (Operation *use : mlir::getSlice(op)) {
+      Value val = getMemAccessPtr(use);
+      if (!val)
+        continue;
+      if (!axisInfo.getAxisInfo(val))
+        return fallback;
+    }
+  }
+  return ttg::buildCoalescedEncoding(op->getContext(), axisInfo, op, numWarps,
+                                     threadsPerWarp, cgaLayout, shapePerCTA);
+}
+
+Value loadScratchMemoryOptimized(PatternRewriter &rewriter, Location loc,
+                                 Value alloc, RankedTensorType tensorType,
+                                 triton::ModuleAxisInfoAnalysis *axisInfo) {
+  Value scratchVal = createLoadScratchMemory(rewriter, loc, alloc, tensorType);
+  if (auto loadOp = scratchVal.getDefiningOp<tt::LoadOp>()) {
+    loadOp->setAttr(kFpsanScratchAttr, UnitAttr::get(rewriter.getContext()));
+  }
+  if (!scratchVal || !axisInfo)
+    return scratchVal;
+  if (!isa<ttg::BlockedEncodingAttr>(tensorType.getEncoding()))
+    return scratchVal;
+  auto loadOp = scratchVal.getDefiningOp<tt::LoadOp>();
+  if (!loadOp)
+    return scratchVal;
+  auto optLayout = inferCoalescedBlockedEncoding(loadOp, tensorType, *axisInfo);
+  if (optLayout == tensorType.getEncoding())
+    return scratchVal;
+  rewriter.eraseOp(loadOp);
+  auto optType = RankedTensorType::get(tensorType.getShape(),
+                                       tensorType.getElementType(), optLayout);
+  scratchVal = createLoadScratchMemory(rewriter, loc, alloc, optType);
+  if (auto newLoad = scratchVal.getDefiningOp<tt::LoadOp>()) {
+    newLoad->setAttr(kFpsanScratchAttr, UnitAttr::get(rewriter.getContext()));
+  }
+  return scratchVal;
+}
+
+Operation *storeScratchMemoryOptimized(
+    PatternRewriter &rewriter, Location loc, Value alloc, Value tensor,
+    RankedTensorType tensorType, triton::ModuleAxisInfoAnalysis *axisInfo) {
+  Operation *storeOp =
+      createStoreScratchMemory(rewriter, loc, alloc, tensor, tensorType);
+  if (storeOp) {
+    storeOp->setAttr(kFpsanScratchAttr, UnitAttr::get(rewriter.getContext()));
+  }
+  if (!storeOp || !axisInfo)
+    return storeOp;
+  if (!isa<ttg::BlockedEncodingAttr>(tensorType.getEncoding()))
+    return storeOp;
+  auto optLayout =
+      inferCoalescedBlockedEncoding(storeOp, tensorType, *axisInfo);
+  if (optLayout == tensorType.getEncoding())
+    return storeOp;
+  rewriter.eraseOp(storeOp);
+  auto optType = RankedTensorType::get(tensorType.getShape(),
+                                       tensorType.getElementType(), optLayout);
+  Value src = tensor;
+  if (src.getType() != optType) {
+    src = ttg::ConvertLayoutOp::create(rewriter, loc, optType, src).getResult();
+  }
+  storeOp = createStoreScratchMemory(rewriter, loc, alloc, src, optType);
+  if (storeOp) {
+    storeOp->setAttr(kFpsanScratchAttr, UnitAttr::get(rewriter.getContext()));
+  }
+  return storeOp;
+}
+
+Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
+                         Type targetTy) {
+  if (v.getType() == targetTy)
+    return v;
+  unsigned srcWidth = getIntBitwidth(v.getType());
+  unsigned dstWidth = getIntBitwidth(targetTy);
+  if (dstWidth > srcWidth)
+    return arith::ExtUIOp::create(rewriter, loc, targetTy, v);
+  return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+}
+
 int64_t getNumElements(ArrayRef<int64_t> shape) {
   int64_t num = 1;
   for (int64_t dim : shape)
@@ -91,6 +246,66 @@ Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Value like,
   auto intTy = cast<IntegerType>(ty);
   return arith::ConstantOp::create(rewriter, loc,
                                    rewriter.getIntegerAttr(intTy, value));
+}
+
+Value reduceAdd(PatternRewriter &rewriter, Location loc, Value tensor,
+                int axis) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  auto tensorTy = cast<RankedTensorType>(tensor.getType());
+  auto reduceOp =
+      tt::ReduceOp::create(rewriter, loc, std::vector<Value>{tensor}, axis);
+  auto &block = reduceOp.getRegion().emplaceBlock();
+  block.addArguments({tensorTy.getElementType(), tensorTy.getElementType()},
+                     {loc, loc});
+  rewriter.setInsertionPointToStart(&block);
+  Value sum = arith::AddIOp::create(rewriter, loc, block.getArgument(0),
+                                    block.getArgument(1));
+  tt::ReduceReturnOp::create(rewriter, loc, sum);
+  return reduceOp->getResult(0);
+}
+
+Value emulateDotLoop(PatternRewriter &rewriter, Location loc, Value aI,
+                     Value bI, Value accInitI, int64_t m, int64_t k, int64_t n,
+                     ttg::BlockedEncodingAttr accLayout) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  auto accTy = cast<RankedTensorType>(accInitI.getType());
+  auto accElemTy = accTy.getElementType();
+  auto idxTy = rewriter.getI32Type();
+  auto aIdxTy = RankedTensorType::get({m, 1}, idxTy, accLayout);
+  auto bIdxTy = RankedTensorType::get({1, n}, idxTy, accLayout);
+  auto aSliceTy = RankedTensorType::get({m, 1}, accElemTy, accLayout);
+  auto bSliceTy = RankedTensorType::get({1, n}, accElemTy, accLayout);
+  auto fullTy = RankedTensorType::get({m, n}, accElemTy, accLayout);
+
+  Value zero =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(0));
+  Value upper =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(k));
+  Value step =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(1));
+  auto forOp = scf::ForOp::create(rewriter, loc, zero, upper, step, accInitI);
+  rewriter.setInsertionPointToStart(forOp.getBody());
+  Value iv = forOp.getInductionVar();
+  Value kI32 =
+      arith::IndexCastOp::create(rewriter, loc, rewriter.getI32Type(), iv);
+
+  Value aIdx = tt::SplatOp::create(rewriter, loc, aIdxTy, kI32);
+  Value bIdx = tt::SplatOp::create(rewriter, loc, bIdxTy, kI32);
+  Value aSlice = tt::GatherOp::create(rewriter, loc, aSliceTy, aI, aIdx,
+                                      rewriter.getI32IntegerAttr(1), UnitAttr())
+                     .getResult();
+  Value bSlice = tt::GatherOp::create(rewriter, loc, bSliceTy, bI, bIdx,
+                                      rewriter.getI32IntegerAttr(0), UnitAttr())
+                     .getResult();
+  Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aSlice);
+  Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bSlice);
+  Value mul = arith::MulIOp::create(rewriter, loc, aFull, bFull);
+  Value acc = forOp.getRegionIterArgs()[0];
+  Value next = arith::AddIOp::create(rewriter, loc, acc, mul);
+  scf::YieldOp::create(rewriter, loc, next);
+
+  rewriter.setInsertionPointAfter(forOp);
+  return forOp.getResult(0);
 }
 
 Value fpsanPow2ModInv(PatternRewriter &rewriter, Location loc, Value input) {
@@ -186,7 +401,7 @@ public:
   }
 
   static ttg::BlockedEncodingAttr
-  getDefaultScratchEncoding(PatternRewriter &rewriter,
+  getDefaultBlockedEncoding(PatternRewriter &rewriter,
                             ArrayRef<int64_t> shape) {
     int numWarps =
         ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
@@ -195,6 +410,24 @@ public:
         ttg::lookupNumCTAs(rewriter.getInsertionBlock()->getParentOp());
     return ttg::getDefaultBlockedEncoding(rewriter.getContext(), shape,
                                           numWarps, threadsPerWarp, numCTAs);
+  }
+
+  static ttg::BlockedEncodingAttr
+  getOptimizedBlockedEncoding(PatternRewriter &rewriter,
+                              ArrayRef<int64_t> shape, Type elemType) {
+    auto base = getDefaultBlockedEncoding(rewriter, shape);
+    SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
+    SmallVector<unsigned> sizePerThread(shape.size(), 1);
+    unsigned elemBits = elemType.getIntOrFloatBitWidth();
+    unsigned maxElems = std::max(128u / elemBits, 1u);
+    if (!order.empty()) {
+      unsigned dim = order.front();
+      sizePerThread[dim] =
+          static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
+    }
+    return ttg::BlockedEncodingAttr::get(
+        rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
+        base.getWarpsPerCTA(), order, base.getCGALayout());
   }
 
   std::optional<ScratchInfo>
@@ -238,15 +471,20 @@ public:
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&scope->front());
       auto loc = alloc.getLoc();
-      auto layout = getDefaultScratchEncoding(rewriter, memTy.getShape());
+      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                                memTy.getElementType());
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
       int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
+      int64_t alignment = std::max<int64_t>(elSize, 16);
       int64_t sizeInBytes = getNumElements(memTy.getShape()) * elSize;
       auto ptrTy = triton::getPointerType(memTy.getElementType());
-      Value ptr = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
-                                                    sizeInBytes, elSize);
+      auto allocOp = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
+                                                       sizeInBytes, alignment);
+      allocOp->setDiscardableAttr("tt.divisibility",
+                                  rewriter.getI64IntegerAttr(alignment));
+      Value ptr = allocOp.getResult();
 
       if (Value src = alloc.getSrc()) {
         if (!isValueDefinedInRegion(src, scope))
@@ -259,7 +497,8 @@ public:
                      .getResult();
         }
         if (init) {
-          if (!createStoreScratchMemory(rewriter, loc, ptr, init, tensorTy))
+          if (!storeScratchMemoryOptimized(rewriter, loc, ptr, init, tensorTy,
+                                           nullptr))
             return std::nullopt;
         }
       }
@@ -296,7 +535,8 @@ public:
           rewriter, loc, rewriter.getI32Type(), offsetVal, strideVal);
       auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
                                       baseInfo->ptr, offsetEls);
-      auto layout = getDefaultScratchEncoding(rewriter, memTy.getShape());
+      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                                memTy.getElementType());
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -339,7 +579,8 @@ public:
                                           idx, strideVal);
       auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
                                       baseInfo->ptr, offset);
-      auto layout = getDefaultScratchEncoding(rewriter, memTy.getShape());
+      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                                memTy.getElementType());
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -366,7 +607,8 @@ public:
         ptr = tt::BitcastOp::create(rewriter, loc, ptrTy, ptr);
       }
 
-      auto layout = getDefaultScratchEncoding(rewriter, memTy.getShape());
+      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                                memTy.getElementType());
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -515,6 +757,11 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     auto aI = bitcastToInt(rewriter, loc, op.getA());
     auto bI = bitcastToInt(rewriter, loc, op.getB());
     auto cI = bitcastToInt(rewriter, loc, op.getC());
+    auto accElem = cast<IntegerType>(getElementType(cI.getType()));
+    aI = castIntValueToType(rewriter, loc, aI,
+                            getTypeWithElement(aI.getType(), accElem));
+    bI = castIntValueToType(rewriter, loc, bI,
+                            getTypeWithElement(bI.getType(), accElem));
     auto dotI =
         tt::DotOp::create(rewriter, loc, aI, bI, cI, op.getInputPrecision(),
                           op.getMaxNumImpreciseAcc());
@@ -525,8 +772,9 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
 };
 
 struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
-  TMEMLoadPattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
+  TMEMLoadPattern(MLIRContext *ctx, TmemScratchManager *scratch,
+                  triton::ModuleAxisInfoAnalysis *axisInfo)
+      : OpRewritePattern(ctx), scratch(scratch), axisInfo(axisInfo) {}
 
   LogicalResult matchAndRewrite(ttng::TMEMLoadOp op,
                                 PatternRewriter &rewriter) const override {
@@ -539,8 +787,8 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     Value result;
     if (resultTy.getEncoding()) {
-      Value scratchVal =
-          createLoadScratchMemory(rewriter, loc, info->ptr, info->tensorType);
+      Value scratchVal = loadScratchMemoryOptimized(rewriter, loc, info->ptr,
+                                                    info->tensorType, axisInfo);
       if (!scratchVal)
         return failure();
       if (scratchVal.getType() != resultTy) {
@@ -569,11 +817,13 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
 
 private:
   TmemScratchManager *scratch;
+  triton::ModuleAxisInfoAnalysis *axisInfo;
 };
 
 struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
-  TMEMStorePattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
+  TMEMStorePattern(MLIRContext *ctx, TmemScratchManager *scratch,
+                   triton::ModuleAxisInfoAnalysis *axisInfo)
+      : OpRewritePattern(ctx), scratch(scratch), axisInfo(axisInfo) {}
 
   LogicalResult matchAndRewrite(ttng::TMEMStoreOp op,
                                 PatternRewriter &rewriter) const override {
@@ -590,8 +840,8 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
         src = ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, src)
                   .getResult();
       }
-      if (!createStoreScratchMemory(rewriter, loc, info->ptr, src,
-                                    info->tensorType))
+      if (!storeScratchMemoryOptimized(rewriter, loc, info->ptr, src,
+                                       info->tensorType, axisInfo))
         return failure();
     } else {
       if (srcTy.getRank() != 2)
@@ -613,11 +863,13 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
 
 private:
   TmemScratchManager *scratch;
+  triton::ModuleAxisInfoAnalysis *axisInfo;
 };
 
 struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
-  TMEMCopyPattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
+  TMEMCopyPattern(MLIRContext *ctx, TmemScratchManager *scratch,
+                  triton::ModuleAxisInfoAnalysis *axisInfo)
+      : OpRewritePattern(ctx), scratch(scratch), axisInfo(axisInfo) {}
 
   LogicalResult matchAndRewrite(ttng::TMEMCopyOp op,
                                 PatternRewriter &rewriter) const override {
@@ -639,8 +891,8 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
           ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, srcReg)
               .getResult();
     }
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg,
-                                  info->tensorType))
+    if (!storeScratchMemoryOptimized(rewriter, loc, info->ptr, srcReg,
+                                     info->tensorType, axisInfo))
       return failure();
 
     if (Value barrier = op.getBarrier()) {
@@ -652,6 +904,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
 
 private:
   TmemScratchManager *scratch;
+  triton::ModuleAxisInfoAnalysis *axisInfo;
 };
 
 struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
@@ -666,8 +919,9 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
 };
 
 struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
-  TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
+  TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch,
+                   triton::ModuleAxisInfoAnalysis *axisInfo)
+      : OpRewritePattern(ctx), scratch(scratch), axisInfo(axisInfo) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAOp op,
                                 PatternRewriter &rewriter) const override {
@@ -686,7 +940,6 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
       return failure();
 
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
 
     bool aIsTmem = isa<ttng::TensorMemorySpaceAttr>(aMemTy.getMemorySpace());
     bool bIsTmem = isa<ttng::TensorMemorySpaceAttr>(bMemTy.getMemorySpace());
@@ -695,73 +948,168 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         (bIsTmem && bMemTy.getRank() != 2) || dMemTy.getRank() != 2)
       return failure();
 
-    Value accReg =
-        createLoadScratchMemory(rewriter, loc, dInfo->ptr, dInfo->tensorType);
+    Value accReg = loadScratchMemoryOptimized(rewriter, loc, dInfo->ptr,
+                                              dInfo->tensorType, nullptr);
     if (!accReg)
       return failure();
 
-    auto accLayout = dInfo->tensorType.getEncoding();
+    auto aShape = aMemTy.getShape();
+    auto bShape = bMemTy.getShape();
+    if (aShape.size() != 2 || bShape.size() != 2)
+      return failure();
+    if (aShape[1] != bShape[0])
+      return failure();
+    int64_t m = aShape[0];
+    int64_t k = aShape[1];
+    int64_t n = bShape[1];
 
-    Value aReg;
+    auto accLayout =
+        dyn_cast<ttg::BlockedEncodingAttr>(dInfo->tensorType.getEncoding());
+    if (!accLayout)
+      return failure();
+
+    std::optional<ScratchInfo> aInfo;
     if (aIsTmem) {
-      auto aInfo = scratch->getOrCreate(op.getA(), rewriter, scope);
+      aInfo = scratch->getOrCreate(op.getA(), rewriter, scope);
       if (!aInfo)
         return failure();
-      aReg =
-          createLoadScratchMemory(rewriter, loc, aInfo->ptr, aInfo->tensorType);
+    }
+    Value aReg;
+    auto aLayout =
+        aIsTmem
+            ? cast<ttg::BlockedEncodingAttr>(aInfo->tensorType.getEncoding())
+            : TmemScratchManager::getOptimizedBlockedEncoding(
+                  rewriter, aMemTy.getShape(), aMemTy.getElementType());
+    auto aRegTy = RankedTensorType::get(aMemTy.getShape(),
+                                        aMemTy.getElementType(), aLayout);
+    if (aIsTmem) {
+      aReg = loadScratchMemoryOptimized(rewriter, loc, aInfo->ptr,
+                                        aInfo->tensorType, nullptr);
       if (!aReg)
         return failure();
+      if (aReg.getType() != aRegTy) {
+        aReg = ttg::ConvertLayoutOp::create(rewriter, loc, aRegTy, aReg)
+                   .getResult();
+      }
     } else {
-      auto regTy = RankedTensorType::get(aMemTy.getShape(),
-                                         aMemTy.getElementType(), accLayout);
-      aReg = ttg::LocalLoadOp::create(rewriter, loc, regTy, op.getA(), Value())
+      aReg = ttg::LocalLoadOp::create(rewriter, loc, aRegTy, op.getA(), Value())
                  .getResult();
     }
 
-    Value bReg;
+    std::optional<ScratchInfo> bInfo;
     if (bIsTmem) {
-      auto bInfo = scratch->getOrCreate(op.getB(), rewriter, scope);
+      bInfo = scratch->getOrCreate(op.getB(), rewriter, scope);
       if (!bInfo)
         return failure();
-      bReg =
-          createLoadScratchMemory(rewriter, loc, bInfo->ptr, bInfo->tensorType);
+    }
+    Value bReg;
+    auto bLayout =
+        bIsTmem
+            ? cast<ttg::BlockedEncodingAttr>(bInfo->tensorType.getEncoding())
+            : TmemScratchManager::getOptimizedBlockedEncoding(
+                  rewriter, bMemTy.getShape(), bMemTy.getElementType());
+    auto bRegTy = RankedTensorType::get(bMemTy.getShape(),
+                                        bMemTy.getElementType(), bLayout);
+    if (bIsTmem) {
+      bReg = loadScratchMemoryOptimized(rewriter, loc, bInfo->ptr,
+                                        bInfo->tensorType, nullptr);
       if (!bReg)
         return failure();
+      if (bReg.getType() != bRegTy) {
+        bReg = ttg::ConvertLayoutOp::create(rewriter, loc, bRegTy, bReg)
+                   .getResult();
+      }
     } else {
-      auto regTy = RankedTensorType::get(bMemTy.getShape(),
-                                         bMemTy.getElementType(), accLayout);
-      bReg = ttg::LocalLoadOp::create(rewriter, loc, regTy, op.getB(), Value())
+      bReg = ttg::LocalLoadOp::create(rewriter, loc, bRegTy, op.getB(), Value())
                  .getResult();
     }
 
     Value accI = bitcastToInt(rewriter, loc, accReg);
-    Value zeroI = getIntConstantLike(rewriter, loc, accI, 0);
-    Value zeroF = bitcastToFloat(rewriter, loc, zeroI, accReg.getType());
-    Value accInit =
-        arith::SelectOp::create(rewriter, loc, op.getUseD(), accReg, zeroF);
-    auto aDotEnc = ttg::DotOperandEncodingAttr::get(ctx, 0, accLayout,
-                                                    aMemTy.getElementType());
-    auto bDotEnc = ttg::DotOperandEncodingAttr::get(ctx, 1, accLayout,
-                                                    bMemTy.getElementType());
-    auto aDotTy = RankedTensorType::get(aMemTy.getShape(),
-                                        aMemTy.getElementType(), aDotEnc);
-    auto bDotTy = RankedTensorType::get(bMemTy.getShape(),
-                                        bMemTy.getElementType(), bDotEnc);
-    Value aDot =
-        ttg::ConvertLayoutOp::create(rewriter, loc, aDotTy, aReg).getResult();
-    Value bDot =
-        ttg::ConvertLayoutOp::create(rewriter, loc, bDotTy, bReg).getResult();
+    auto accElem = cast<IntegerType>(getElementType(accI.getType()));
+    Value sum;
+    if (kUseLoopDotEmulation) {
+      Value aI = bitcastToInt(rewriter, loc, aReg);
+      Value bI = bitcastToInt(rewriter, loc, bReg);
+      aI = castIntValueToType(rewriter, loc, aI,
+                              getTypeWithElement(aI.getType(), accElem));
+      bI = castIntValueToType(rewriter, loc, bI,
+                              getTypeWithElement(bI.getType(), accElem));
+      Value zero = getIntConstantLike(rewriter, loc, accI, 0);
+      sum = emulateDotLoop(rewriter, loc, aI, bI, zero, m, k, n, accLayout);
+    } else {
+      auto fullShape = SmallVector<int64_t>{m, k, n};
+      auto fullEnc = expandBlockedEncoding(accLayout, fullShape, /*axis=*/1);
+      auto *ctx = rewriter.getContext();
+      auto aSliceEnc = ttg::SliceEncodingAttr::get(ctx, /*dim=*/2, fullEnc);
+      auto bSliceEnc = ttg::SliceEncodingAttr::get(ctx, /*dim=*/0, fullEnc);
 
-    Value aDotI = bitcastToInt(rewriter, loc, aDot);
-    Value bDotI = bitcastToInt(rewriter, loc, bDot);
-    Value accInitI = bitcastToInt(rewriter, loc, accInit);
-    auto dotI = tt::DotOp::create(rewriter, loc, accInitI.getType(), aDotI,
-                                  bDotI, accInitI, tt::InputPrecision::IEEE, 0);
-    Value dotF = bitcastToFloat(rewriter, loc, dotI, accReg.getType());
-    Value out =
-        arith::SelectOp::create(rewriter, loc, op.getPred(), dotF, accReg);
-    if (!createStoreScratchMemory(rewriter, loc, dInfo->ptr, out,
-                                  dInfo->tensorType))
+      auto aSliceTy = RankedTensorType::get(aMemTy.getShape(),
+                                            aMemTy.getElementType(), aSliceEnc);
+      Value aSlice = aReg;
+      if (aSlice.getType() != aSliceTy) {
+        aSlice = ttg::ConvertLayoutOp::create(rewriter, loc, aSliceTy, aSlice)
+                     .getResult();
+      }
+      Value aI = bitcastToInt(rewriter, loc, aSlice);
+
+      auto bSliceTy = RankedTensorType::get(bMemTy.getShape(),
+                                            bMemTy.getElementType(), bSliceEnc);
+      Value bSlice = bReg;
+      if (bSlice.getType() != bSliceTy) {
+        bSlice = ttg::ConvertLayoutOp::create(rewriter, loc, bSliceTy, bSlice)
+                     .getResult();
+      }
+      Value bI = bitcastToInt(rewriter, loc, bSlice);
+
+      aI = castIntValueToType(rewriter, loc, aI,
+                              getTypeWithElement(aI.getType(), accElem));
+      bI = castIntValueToType(rewriter, loc, bI,
+                              getTypeWithElement(bI.getType(), accElem));
+
+      auto elemTy = accElem;
+      auto aExpTy = RankedTensorType::get({m, k, 1}, elemTy, fullEnc);
+      auto bExpTy = RankedTensorType::get({1, k, n}, elemTy, fullEnc);
+      auto fullTy = RankedTensorType::get({m, k, n}, elemTy, fullEnc);
+
+      Value aExp =
+          tt::ExpandDimsOp::create(rewriter, loc, aExpTy, aI, 2).getResult();
+      Value bExp =
+          tt::ExpandDimsOp::create(rewriter, loc, bExpTy, bI, 0).getResult();
+      Value aFull =
+          tt::BroadcastOp::create(rewriter, loc, fullTy, aExp).getResult();
+      Value bFull =
+          tt::BroadcastOp::create(rewriter, loc, fullTy, bExp).getResult();
+      Value mul = arith::MulIOp::create(rewriter, loc, aFull, bFull);
+      sum = reduceAdd(rewriter, loc, mul, /*axis=*/1);
+      auto sumTy = RankedTensorType::get({m, n}, elemTy, accLayout);
+      if (sum.getType() != sumTy) {
+        sum =
+            ttg::ConvertLayoutOp::create(rewriter, loc, sumTy, sum).getResult();
+      }
+    }
+    Value useDInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseD());
+    Value useDMask =
+        tt::SplatOp::create(rewriter, loc, accI.getType(), useDInt);
+    Value accInitI = arith::MulIOp::create(rewriter, loc, accI, useDMask);
+    Value outI = arith::AddIOp::create(rewriter, loc, sum, accInitI);
+
+    Value predInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
+    Value predMask =
+        tt::SplatOp::create(rewriter, loc, accI.getType(), predInt);
+    Value oneI = getIntConstantLike(rewriter, loc, accI, 1);
+    Value predInv = arith::SubIOp::create(rewriter, loc, oneI, predMask);
+    Value outMasked = arith::MulIOp::create(rewriter, loc, outI, predMask);
+    Value accMasked = arith::MulIOp::create(rewriter, loc, accI, predInv);
+    Value outSelI = arith::AddIOp::create(rewriter, loc, outMasked, accMasked);
+    Value out = bitcastToFloat(rewriter, loc, outSelI, accReg.getType());
+    if (out.getType() != dInfo->tensorType) {
+      out = ttg::ConvertLayoutOp::create(rewriter, loc, dInfo->tensorType, out)
+                .getResult();
+    }
+    if (!storeScratchMemoryOptimized(rewriter, loc, dInfo->ptr, out,
+                                     dInfo->tensorType, nullptr))
       return failure();
 
     if (!op.getBarriers().empty()) {
@@ -790,12 +1138,14 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
 private:
   TmemScratchManager *scratch;
+  triton::ModuleAxisInfoAnalysis *axisInfo;
 };
 
 struct TCGen5MMAScaledPattern
     : public OpRewritePattern<ttng::TCGen5MMAScaledOp> {
-  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
+  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch,
+                         triton::ModuleAxisInfoAnalysis *axisInfo)
+      : OpRewritePattern(ctx), scratch(scratch), axisInfo(axisInfo) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
@@ -814,7 +1164,6 @@ struct TCGen5MMAScaledPattern
       return failure();
 
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
 
     bool aIsTmem = isa<ttng::TensorMemorySpaceAttr>(aMemTy.getMemorySpace());
     bool bIsTmem = isa<ttng::TensorMemorySpaceAttr>(bMemTy.getMemorySpace());
@@ -823,73 +1172,168 @@ struct TCGen5MMAScaledPattern
         (bIsTmem && bMemTy.getRank() != 2) || dMemTy.getRank() != 2)
       return failure();
 
-    Value accReg =
-        createLoadScratchMemory(rewriter, loc, dInfo->ptr, dInfo->tensorType);
+    Value accReg = loadScratchMemoryOptimized(rewriter, loc, dInfo->ptr,
+                                              dInfo->tensorType, nullptr);
     if (!accReg)
       return failure();
 
-    auto accLayout = dInfo->tensorType.getEncoding();
+    auto aShape = aMemTy.getShape();
+    auto bShape = bMemTy.getShape();
+    if (aShape.size() != 2 || bShape.size() != 2)
+      return failure();
+    if (aShape[1] != bShape[0])
+      return failure();
+    int64_t m = aShape[0];
+    int64_t k = aShape[1];
+    int64_t n = bShape[1];
 
-    Value aReg;
+    auto accLayout =
+        dyn_cast<ttg::BlockedEncodingAttr>(dInfo->tensorType.getEncoding());
+    if (!accLayout)
+      return failure();
+
+    std::optional<ScratchInfo> aInfo;
     if (aIsTmem) {
-      auto aInfo = scratch->getOrCreate(op.getA(), rewriter, scope);
+      aInfo = scratch->getOrCreate(op.getA(), rewriter, scope);
       if (!aInfo)
         return failure();
-      aReg =
-          createLoadScratchMemory(rewriter, loc, aInfo->ptr, aInfo->tensorType);
+    }
+    Value aReg;
+    auto aLayout =
+        aIsTmem
+            ? cast<ttg::BlockedEncodingAttr>(aInfo->tensorType.getEncoding())
+            : TmemScratchManager::getOptimizedBlockedEncoding(
+                  rewriter, aMemTy.getShape(), aMemTy.getElementType());
+    auto aRegTy = RankedTensorType::get(aMemTy.getShape(),
+                                        aMemTy.getElementType(), aLayout);
+    if (aIsTmem) {
+      aReg = loadScratchMemoryOptimized(rewriter, loc, aInfo->ptr,
+                                        aInfo->tensorType, nullptr);
       if (!aReg)
         return failure();
+      if (aReg.getType() != aRegTy) {
+        aReg = ttg::ConvertLayoutOp::create(rewriter, loc, aRegTy, aReg)
+                   .getResult();
+      }
     } else {
-      auto regTy = RankedTensorType::get(aMemTy.getShape(),
-                                         aMemTy.getElementType(), accLayout);
-      aReg = ttg::LocalLoadOp::create(rewriter, loc, regTy, op.getA(), Value())
+      aReg = ttg::LocalLoadOp::create(rewriter, loc, aRegTy, op.getA(), Value())
                  .getResult();
     }
 
-    Value bReg;
+    std::optional<ScratchInfo> bInfo;
     if (bIsTmem) {
-      auto bInfo = scratch->getOrCreate(op.getB(), rewriter, scope);
+      bInfo = scratch->getOrCreate(op.getB(), rewriter, scope);
       if (!bInfo)
         return failure();
-      bReg =
-          createLoadScratchMemory(rewriter, loc, bInfo->ptr, bInfo->tensorType);
+    }
+    Value bReg;
+    auto bLayout =
+        bIsTmem
+            ? cast<ttg::BlockedEncodingAttr>(bInfo->tensorType.getEncoding())
+            : TmemScratchManager::getOptimizedBlockedEncoding(
+                  rewriter, bMemTy.getShape(), bMemTy.getElementType());
+    auto bRegTy = RankedTensorType::get(bMemTy.getShape(),
+                                        bMemTy.getElementType(), bLayout);
+    if (bIsTmem) {
+      bReg = loadScratchMemoryOptimized(rewriter, loc, bInfo->ptr,
+                                        bInfo->tensorType, nullptr);
       if (!bReg)
         return failure();
+      if (bReg.getType() != bRegTy) {
+        bReg = ttg::ConvertLayoutOp::create(rewriter, loc, bRegTy, bReg)
+                   .getResult();
+      }
     } else {
-      auto regTy = RankedTensorType::get(bMemTy.getShape(),
-                                         bMemTy.getElementType(), accLayout);
-      bReg = ttg::LocalLoadOp::create(rewriter, loc, regTy, op.getB(), Value())
+      bReg = ttg::LocalLoadOp::create(rewriter, loc, bRegTy, op.getB(), Value())
                  .getResult();
     }
 
     Value accI = bitcastToInt(rewriter, loc, accReg);
-    Value zeroI = getIntConstantLike(rewriter, loc, accI, 0);
-    Value zeroF = bitcastToFloat(rewriter, loc, zeroI, accReg.getType());
-    Value accInit =
-        arith::SelectOp::create(rewriter, loc, op.getUseD(), accReg, zeroF);
-    auto aDotEnc = ttg::DotOperandEncodingAttr::get(ctx, 0, accLayout,
-                                                    aMemTy.getElementType());
-    auto bDotEnc = ttg::DotOperandEncodingAttr::get(ctx, 1, accLayout,
-                                                    bMemTy.getElementType());
-    auto aDotTy = RankedTensorType::get(aMemTy.getShape(),
-                                        aMemTy.getElementType(), aDotEnc);
-    auto bDotTy = RankedTensorType::get(bMemTy.getShape(),
-                                        bMemTy.getElementType(), bDotEnc);
-    Value aDot =
-        ttg::ConvertLayoutOp::create(rewriter, loc, aDotTy, aReg).getResult();
-    Value bDot =
-        ttg::ConvertLayoutOp::create(rewriter, loc, bDotTy, bReg).getResult();
+    auto accElem = cast<IntegerType>(getElementType(accI.getType()));
+    Value sum;
+    if (kUseLoopDotEmulation) {
+      Value aI = bitcastToInt(rewriter, loc, aReg);
+      Value bI = bitcastToInt(rewriter, loc, bReg);
+      aI = castIntValueToType(rewriter, loc, aI,
+                              getTypeWithElement(aI.getType(), accElem));
+      bI = castIntValueToType(rewriter, loc, bI,
+                              getTypeWithElement(bI.getType(), accElem));
+      Value zero = getIntConstantLike(rewriter, loc, accI, 0);
+      sum = emulateDotLoop(rewriter, loc, aI, bI, zero, m, k, n, accLayout);
+    } else {
+      auto fullShape = SmallVector<int64_t>{m, k, n};
+      auto fullEnc = expandBlockedEncoding(accLayout, fullShape, /*axis=*/1);
+      auto *ctx = rewriter.getContext();
+      auto aSliceEnc = ttg::SliceEncodingAttr::get(ctx, /*dim=*/2, fullEnc);
+      auto bSliceEnc = ttg::SliceEncodingAttr::get(ctx, /*dim=*/0, fullEnc);
 
-    Value aDotI = bitcastToInt(rewriter, loc, aDot);
-    Value bDotI = bitcastToInt(rewriter, loc, bDot);
-    Value accInitI = bitcastToInt(rewriter, loc, accInit);
-    auto dotI = tt::DotOp::create(rewriter, loc, accInitI.getType(), aDotI,
-                                  bDotI, accInitI, tt::InputPrecision::IEEE, 0);
-    Value dotF = bitcastToFloat(rewriter, loc, dotI, accReg.getType());
-    Value out =
-        arith::SelectOp::create(rewriter, loc, op.getPred(), dotF, accReg);
-    if (!createStoreScratchMemory(rewriter, loc, dInfo->ptr, out,
-                                  dInfo->tensorType))
+      auto aSliceTy = RankedTensorType::get(aMemTy.getShape(),
+                                            aMemTy.getElementType(), aSliceEnc);
+      Value aSlice = aReg;
+      if (aSlice.getType() != aSliceTy) {
+        aSlice = ttg::ConvertLayoutOp::create(rewriter, loc, aSliceTy, aSlice)
+                     .getResult();
+      }
+      Value aI = bitcastToInt(rewriter, loc, aSlice);
+
+      auto bSliceTy = RankedTensorType::get(bMemTy.getShape(),
+                                            bMemTy.getElementType(), bSliceEnc);
+      Value bSlice = bReg;
+      if (bSlice.getType() != bSliceTy) {
+        bSlice = ttg::ConvertLayoutOp::create(rewriter, loc, bSliceTy, bSlice)
+                     .getResult();
+      }
+      Value bI = bitcastToInt(rewriter, loc, bSlice);
+
+      aI = castIntValueToType(rewriter, loc, aI,
+                              getTypeWithElement(aI.getType(), accElem));
+      bI = castIntValueToType(rewriter, loc, bI,
+                              getTypeWithElement(bI.getType(), accElem));
+
+      auto elemTy = accElem;
+      auto aExpTy = RankedTensorType::get({m, k, 1}, elemTy, fullEnc);
+      auto bExpTy = RankedTensorType::get({1, k, n}, elemTy, fullEnc);
+      auto fullTy = RankedTensorType::get({m, k, n}, elemTy, fullEnc);
+
+      Value aExp =
+          tt::ExpandDimsOp::create(rewriter, loc, aExpTy, aI, 2).getResult();
+      Value bExp =
+          tt::ExpandDimsOp::create(rewriter, loc, bExpTy, bI, 0).getResult();
+      Value aFull =
+          tt::BroadcastOp::create(rewriter, loc, fullTy, aExp).getResult();
+      Value bFull =
+          tt::BroadcastOp::create(rewriter, loc, fullTy, bExp).getResult();
+      Value mul = arith::MulIOp::create(rewriter, loc, aFull, bFull);
+      sum = reduceAdd(rewriter, loc, mul, /*axis=*/1);
+      auto sumTy = RankedTensorType::get({m, n}, elemTy, accLayout);
+      if (sum.getType() != sumTy) {
+        sum =
+            ttg::ConvertLayoutOp::create(rewriter, loc, sumTy, sum).getResult();
+      }
+    }
+    Value useDInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseD());
+    Value useDMask =
+        tt::SplatOp::create(rewriter, loc, accI.getType(), useDInt);
+    Value accInitI = arith::MulIOp::create(rewriter, loc, accI, useDMask);
+    Value outI = arith::AddIOp::create(rewriter, loc, sum, accInitI);
+
+    Value predInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
+    Value predMask =
+        tt::SplatOp::create(rewriter, loc, accI.getType(), predInt);
+    Value oneI = getIntConstantLike(rewriter, loc, accI, 1);
+    Value predInv = arith::SubIOp::create(rewriter, loc, oneI, predMask);
+    Value outMasked = arith::MulIOp::create(rewriter, loc, outI, predMask);
+    Value accMasked = arith::MulIOp::create(rewriter, loc, accI, predInv);
+    Value outSelI = arith::AddIOp::create(rewriter, loc, outMasked, accMasked);
+    Value out = bitcastToFloat(rewriter, loc, outSelI, accReg.getType());
+    if (out.getType() != dInfo->tensorType) {
+      out = ttg::ConvertLayoutOp::create(rewriter, loc, dInfo->tensorType, out)
+                .getResult();
+    }
+    if (!storeScratchMemoryOptimized(rewriter, loc, dInfo->ptr, out,
+                                     dInfo->tensorType, nullptr))
       return failure();
 
     if (!op.getBarriers().empty()) {
@@ -918,6 +1362,7 @@ struct TCGen5MMAScaledPattern
 
 private:
   TmemScratchManager *scratch;
+  triton::ModuleAxisInfoAnalysis *axisInfo;
 };
 
 template <typename OpTy>
@@ -935,6 +1380,10 @@ struct IdentityPattern : public OpRewritePattern<OpTy> {
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::gluon::GluonDialect>();
+  }
+
   void runOnOperation() override {
     TmemScratchManager scratch;
     RewritePatternSet patterns(&getContext());
@@ -951,11 +1400,42 @@ public:
                  IdentityPattern<tt::PreciseSqrtOp>>(&getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
-                                                           &scratch);
+                                                           &scratch, nullptr);
     patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
+    }
+
+    auto moduleOp = getOperation();
+    triton::ModuleAxisInfoAnalysis axisInfo(moduleOp);
+    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+    SmallVector<std::pair<Operation *, Attribute>> layoutFixups;
+    moduleOp.walk([&](Operation *op) {
+      if (!op->hasAttr(kFpsanScratchAttr))
+        return;
+      Value ptr = getMemAccessPtr(op);
+      if (!ptr)
+        return;
+      auto tensorType = dyn_cast<RankedTensorType>(ptr.getType());
+      if (!tensorType || !isa<PointerType>(tensorType.getElementType()))
+        return;
+      int numWarps = ttg::lookupNumWarps(op);
+      auto cgaLayout = ttg::getCGALayout(tensorType.getEncoding());
+      auto shapePerCTA = ttg::getShapePerCTA(tensorType);
+      auto layout =
+          ttg::buildCoalescedEncoding(&getContext(), axisInfo, op, numWarps,
+                                      threadsPerWarp, cgaLayout, shapePerCTA);
+      if (layout == tensorType.getEncoding())
+        return;
+      layoutFixups.emplace_back(op, layout);
+    });
+    for (auto &entry : layoutFixups) {
+      Operation *op = entry.first;
+      if (!op || !op->getParentOp())
+        continue;
+      Operation *newOp = convertDistributedOpEncoding(entry.second, op);
+      newOp->removeAttr(kFpsanScratchAttr);
     }
 
     auto onlyUsedByWarpSpecialize = [](Value value) -> bool {
