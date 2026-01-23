@@ -35,6 +35,7 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<triton::TritonDialect>();
     addLegalDialect<triton::gpu::TritonGPUDialect>();
+    addLegalDialect<arith::ArithDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<mlir::triton::gpu::ConvertLayoutOp>();
   }
@@ -51,7 +52,31 @@ struct PluginMagicOpConversion : OpConversionPattern<mlir::triton::plugin::Magic
     int numWarps = typeConverter->getNumWarps();
     int numCTAs = typeConverter->getNumCTAs();
     int threadsPerWarp = typeConverter->getThreadsPerWarp();
-    rewriter.replaceOp(op, input);
+    int numElements = cast<RankedTensorType>(input.getType()).getShape()[0];
+
+
+    int numElementPerThread = numElements / (numWarps * threadsPerWarp);
+    // Increment all elements of the float RankedTensorType input by 1.0 (assume f32)
+    auto loc = op.getLoc();
+    auto inputTy = cast<RankedTensorType>(input.getType());
+    auto inputElementTy = inputTy.getElementType();
+
+    SmallVector<Attribute> oneValues;
+    oneValues.reserve(inputTy.getNumElements());
+    for (int i = 0; i < inputTy.getNumElements(); ++i) {
+      oneValues.push_back(FloatAttr::get(inputElementTy, numElements));
+    }
+    auto oneAttr = DenseElementsAttr::get(inputTy, oneValues);
+    Value oneTensor = arith::ConstantOp::create(rewriter, loc, inputTy, oneAttr);
+
+    // Perform elementwise addition
+    Value incremented = arith::AddFOp::create(rewriter, loc, input, oneTensor);
+
+    llvm::errs() << "numElements: " << numElements << "\n";
+    llvm::errs() << "numWarps: " << numWarps << "\n";
+    llvm::errs() << "numElementPerThread: " << numElementPerThread << "\n";
+    llvm::errs() << "totalThreads: " << (numWarps * threadsPerWarp) << "\n";
+    rewriter.replaceOp(op, incremented);
     return success();
   }
 };
@@ -69,6 +94,7 @@ struct ConvertPluginGPUToTritonGPUPass
     PluginTypeConverter typeConverter(context, num_warps, threadsPerWarp,
                                          numCTAs);
     PluginConversionTarget convTarget(*context, typeConverter);
+
     patterns.add<PluginMagicOpConversion>(typeConverter, context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

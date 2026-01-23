@@ -8,6 +8,8 @@ def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-triton-gpu", "mlir::Module
   let summary = "Converts PluginGPU Ops to TritonGPU Ops";
   let constructor = "mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(4, 32, 1)";
 
+   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                            "mlir::triton::plugin::DialectPluginDialect"];
    let options = [
         Option<"num_warps", "num-warps",
                "int32_t", /*default*/"4",
