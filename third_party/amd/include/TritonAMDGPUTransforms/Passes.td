@@ -99,6 +99,18 @@ def TritonAMDGPUSinkLayoutConversions
   let dependentDialects = [];
 }
 
+def TritonAMDGPUPrepareIfCombining
+    : Pass<"tritonamdgpu-prepare-if-combining", "mlir::triton::FuncOp"> {
+  let summary = "Move ops between scf.if pairs to enable combining";
+
+  let description = [{
+    Moves operations out from between scf.if pairs that share the same
+    condition, enabling canonicalization to combine them.
+  }];
+
+  let dependentDialects = [];
+}
+
 def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::triton::FuncOp"> {
   let summary = "Canonicalize pointers: rewrite pointers passed to load/store operation as a `<basePtr, offset>` pair.";
 
