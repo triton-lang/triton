@@ -31,7 +31,7 @@
     * Some features are bleeding edge, useful to only a handful of users (but they’re needed for cutting edge models.)
     * Some features are experimental, developed and maintained on a fork.
     * In both cases, developers are expected to do fork and maintain until accepted (large burden to keep in sync with head.). This is a big problem with customers that use a pinned version, external fork, of Triton for production (upstream not obligated to fix breakages to your fork.)
-    * Model/kernel/hardware specific passes (e.g. for warp specialization. Allow for experimenting without recompiling Triton.  How to move it from my fork back upstream? (Same as above)
+    * Model/kernel/hardware specific passes (e.g. for warp specialization. Allow for experimenting without recompiling Triton.  How to move it from my fork back upstream?) (Same as above)
     * Giving LLMs/autotuners access to passes, knobs without recompiling Triton.
   * Overview of existing pass pipeline
     * Transformation passes - (within the same IR)
