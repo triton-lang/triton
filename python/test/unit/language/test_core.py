@@ -6742,3 +6742,39 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+def test_extern_elementwise_linking(device, tmp_path):
+    # Create a minimal LLVM IR module providing a simple elementwise function.
+    lib_ll = r"""
+; ModuleID = 'mylib'
+source_filename = "mylib.ll"
+define float @tt_test_add1(float %x) {
+entry:
+  %y = fadd float %x, 1.000000e+00
+  ret float %y
+}
+"""
+    lib_path = tmp_path / "mylib.ll"
+    lib_path.write_text(lib_ll)
+
+    # TODO: this is a hack, need to fix it or the  cache will be broken.
+    from triton.language.core import extern as _extern
+
+    @_extern
+    def add1(x, _semantic=None):
+        sig = {(tl.float32, ): ("tt_test_add1", tl.float32)}
+        return tl.extern_elementwise("mylib", str(lib_path), [x], sig, True, _semantic=_semantic)
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr):
+        offs = tl.arange(0, 32)
+        x = tl.load(x_ptr + offs)
+        y = add1(x)
+        tl.store(y_ptr + offs, y)
+
+    n = 32
+    x = torch.arange(n, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y)
+    assert torch.allclose(y, x + 1, rtol=0, atol=0)

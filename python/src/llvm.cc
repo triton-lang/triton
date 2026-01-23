@@ -1,6 +1,7 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
@@ -34,6 +35,7 @@
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <set>
 #include <stdexcept>
 
 namespace py = pybind11;
@@ -770,6 +772,37 @@ void init_triton_llvm(py::module &&m) {
       }
     }
   });
+
+  // Common utility: detect unresolved extern deps in an LLVM module
+  m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {
+    // Special-case global_smem (NVIDIA), ignore if present
+    for (const auto &g : dstMod->globals()) {
+      if (g.hasExternalLinkage() && g.getName() != "global_smem") {
+        return true;
+      }
+    }
+    for (const auto &f : *dstMod) {
+      if (f.hasExternalLinkage() && !f.hasExactDefinition() &&
+          !f.isIntrinsic()) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  // Common utility: collect unique lib paths referenced by
+  // tt.extern_elementwise
+  m.def("collect_extern_elementwise_libpaths",
+        [](mlir::ModuleOp mod) -> std::vector<std::string> {
+          std::set<std::string> uniquePaths;
+          mod.walk([&](mlir::triton::ExternElementwiseOp externOp) {
+            llvm::StringRef libpath = externOp.getLibpath();
+            if (!libpath.empty())
+              uniquePaths.insert(libpath.str());
+          });
+          return std::vector<std::string>(uniquePaths.begin(),
+                                          uniquePaths.end());
+        });
 }
 
 void triton_stacktrace_signal_handler(void *) {

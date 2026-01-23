@@ -292,6 +292,8 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         mod = src
+        # collect potential external library paths.
+        extern_elementwise_lib_paths = set(llvm.collect_extern_elementwise_libpaths(mod))
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -415,12 +417,14 @@ class HIPBackend(BaseBackend):
                 str(default_libdir / 'asanrtl.bc'),
                 str(default_libdir / "ocml.bc"),
                 str(default_libdir / "ockl.bc")
-            ]
+            ] + list(extern_elementwise_lib_paths)
             llvm.link_extern_libs(llvm_mod, paths)
-        elif options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
-            if len(paths) > 0:
-                llvm.link_extern_libs(llvm_mod, paths)
+        else:
+            paths = set(extern_elementwise_lib_paths)
+            if options.extern_libs:
+                paths.update(path for (name, path) in options.extern_libs)
+            if llvm.has_extern_deps(llvm_mod) and paths:
+                llvm.link_extern_libs(llvm_mod, list(paths))
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 

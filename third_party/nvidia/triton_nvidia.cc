@@ -374,20 +374,4 @@ void init_triton_nvidia(py::module &&m) {
         self.block_scaled_matmul_nvfp4(A_shape[0], B_shape[0], K, A_ptr, B_ptr,
                                        output_ptr, scale_A_ptr, scale_B_ptr);
       });
-
-  m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {
-    // `global_smem` is special cased in Triton, so we ignore it here.
-    for (const auto &g : dstMod->globals()) {
-      if (g.hasExternalLinkage() && g.getName() != "global_smem") {
-        return true;
-      }
-    }
-    for (const auto &f : *dstMod) {
-      if (f.hasExternalLinkage() && !f.hasExactDefinition() &&
-          !f.isIntrinsic()) {
-        return true;
-      }
-    }
-    return false;
-  });
 }

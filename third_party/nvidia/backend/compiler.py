@@ -345,6 +345,8 @@ class CUDABackend(BaseBackend):
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src
+        # collect potential external library paths.
+        extern_elementwise_lib_paths = set(llvm.collect_extern_elementwise_libpaths(mod))
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -415,9 +417,11 @@ class CUDABackend(BaseBackend):
         if options.enable_reflect_ftz:
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
-        if options.extern_libs and nvidia.has_extern_deps(llvm_mod):
-            paths = [path for (name, path) in options.extern_libs]
-            llvm.link_extern_libs(llvm_mod, paths)
+        paths = set(extern_elementwise_lib_paths)
+        if options.extern_libs:
+            paths.update(path for (name, path) in options.extern_libs)
+        if llvm.has_extern_deps(llvm_mod) and paths:
+            llvm.link_extern_libs(llvm_mod, list(paths))
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
 
