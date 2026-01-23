@@ -659,21 +659,20 @@ DataEntry TreeData::addOp(const std::string &name) {
     contexts.emplace_back(name);
   auto contextId = currentTree->addNode(contexts);
   auto &node = currentTree->getNode(contextId);
-  return DataEntry(contextId, currentPhase, node.metrics);
+  return DataEntry(contextId, currentPhase.load(std::memory_order_relaxed),
+                   node.metrics);
 }
 
 DataEntry TreeData::addOp(size_t phase, size_t contextId,
                           const std::vector<Context> &contexts) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *tree = (phase == currentPhase)
-                   ? currentPhasePtrAs<Tree>()
-                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
+  auto lock = lockIfCurrentPhase(phase);
+  auto *tree = phasePtrAs<Tree>(phase);
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
   return DataEntry(newContextId, phase, node.metrics);
 }
 
-void TreeData::addScopeMetrics(
+void TreeData::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *currentTree = currentPhasePtrAs<Tree>();
@@ -684,13 +683,11 @@ void TreeData::addScopeMetrics(
   }
 }
 
-void TreeData::addEntryMetrics(
+void TreeData::addMetrics(
     size_t phase, size_t contextId,
     const std::map<std::string, MetricValueType> &metrics) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *tree = (phase == currentPhase)
-                   ? currentPhasePtrAs<Tree>()
-                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
+  auto lock = lockIfCurrentPhase(phase);
+  auto *tree = phasePtrAs<Tree>(phase);
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
                                FlexibleMetric(metricName, metricValue));

@@ -251,4 +251,31 @@ tt.func @non_async_wait_token_from_else(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<
   tt.return
 }
 
+// CHECK-LABEL: missing_barrier_reused_allocation
+tt.func @missing_barrier_reused_allocation(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %alloc1 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+
+  %slice1_0 = ttg.memdesc_index %alloc1[%c0_i32] : !ttg.memdesc<2x128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %async1 = amdg.buffer_load_to_local %A[%offset] into %slice1_0 : <f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %token1 = ttg.async_commit_group tokens %async1
+  %wait1 = amdg.async_wait %token1 {num_inst = 0 : i32}
+  // CHECK: ttg.barrier local
+  // CHECK: ttg.local_load
+  %local_load = ttg.local_load %slice1_0 token %wait1 {ttg.amdg.syncedViaAsyncWait = true} : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #AL>
+  ttg.local_dealloc %alloc1 : !ttg.memdesc<2x128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %alloc2 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %slice2_0 = ttg.memdesc_index %alloc2[%c0_i32] : !ttg.memdesc<2x128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // op2: Async load into alloc2 (overlapping with the dealloc'd alloc1 that is still being local_load'd from)
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: amdg.buffer_load_to_local
+  %async2 = amdg.buffer_load_to_local %B[%offset] into %slice2_0 : <f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %token2 = ttg.async_commit_group tokens %async2
+  %wait2 = amdg.async_wait %token2 {num_inst = 0 : i32}
+  // CHECK: ttg.barrier local
+  tt.return
+}
+
 }

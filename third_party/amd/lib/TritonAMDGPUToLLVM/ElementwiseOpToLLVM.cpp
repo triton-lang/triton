@@ -465,15 +465,12 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
-  StringRef intrinsic = "llvm.is.fpclass";
-  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
   Location loc = builder.loc;
   OpBuilder &rewriter = *builder.builder;
-  Value nanBits = builder.i32_val(3);
 
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
-                                         ValueRange{v, nanBits})
-      ->getResult(0);
+  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
+  IntegerAttr controlBits = rewriter.getIntegerAttr(i32_ty, 0b11);
+  return LLVM::IsFPClass::create(rewriter, loc, i1_ty, v, controlBits);
 }
 
 // Downcast from Fp32, FP16 or BFloat16 to FP8 formats in saturation and
