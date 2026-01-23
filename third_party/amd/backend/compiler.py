@@ -281,6 +281,7 @@ class HIPBackend(BaseBackend):
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
+        amd.passes.ttgpuir.add_gluon_in_thread_transpose(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)

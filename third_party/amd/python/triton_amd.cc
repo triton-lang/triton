@@ -117,6 +117,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());
   });
+  ADD_PASS_WRAPPER_0("add_gluon_in_thread_transpose",
+                     mlir::createTritonAMDGPUGluonInThreadTranspose);
   ADD_PASS_WRAPPER_1(
       "add_warp_specialize_to_llvm",
       mlir::triton::AMD::createTritonAMDGPUConvertWarpSpecializeToLLVMPass,

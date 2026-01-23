@@ -335,4 +335,14 @@ def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUGluonInThreadTranspose: Pass<"tritonamdgpu-gluon-in-thread-transpose", "mlir::ModuleOp"> {
+  let summary = "In-thread transpose optimization for Gluon frontend";
+
+  let description = [{
+    This pass performs in-thread transpose optimization specifically for the Gluon frontend.
+  }];
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif
