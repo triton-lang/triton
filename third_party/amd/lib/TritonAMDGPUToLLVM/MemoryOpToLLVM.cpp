@@ -490,7 +490,9 @@ public:
     IntegerAttr zero = rewriter.getI32IntegerAttr(0);
     bool localBarrier = op.hasLocal();
     bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
-    if (localBarrier || globalBarrier) {
+    if (globalBarrier)
+      return failure();
+    if (localBarrier) {
       amdgpu::MemoryCounterWaitOp::create(
           rewriter, op->getLoc(),
           /* load= */ op.hasGlobalRead() ? zero : nullptr,
