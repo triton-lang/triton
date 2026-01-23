@@ -332,6 +332,7 @@ selectMatrixCoreOperandTypes(tt::DotOp dot,
       optTypes = types;
     }
   }
+
   return optTypes;
 }
 
@@ -362,6 +363,13 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
         {fp8e4nv, fp8e5, f32, f32},
         {fp8e5, fp8e4nv, f32, f32},
         {fp8e5, fp8e5, f32, f32},
+        // clang-format on
+    });
+  }
+  if (version == 3) {
+    applicableTypes.append({
+        // clang-format off
+        {f32, f32, f32, f32},
         // clang-format on
     });
   }
@@ -1584,7 +1592,11 @@ public:
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
     // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
-    auto kWidth = wmmaVersion == 3 ? 8 : kBase;
+    auto kWidth = kBase;
+    if (wmmaVersion == 3) {
+      kWidth = std::min(8u, kBase);
+    }
+
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
