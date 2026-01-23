@@ -10,6 +10,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/PrintPasses.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
@@ -308,6 +309,14 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
       *optPtr = true;
     }
+  } else if (triton::tools::getStrEnv("LLVM_IR_ENABLE_DUMP") ==
+             "print-changed") {
+    auto optIt = options.find("print-changed");
+    if (optIt != options.end()) {
+      auto optPtr =
+          static_cast<llvm::cl::opt<llvm::ChangePrinter> *>(optIt->second);
+      *optPtr = llvm::ChangePrinter::Verbose;
+    }
   }
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
@@ -558,6 +567,17 @@ void init_triton_llvm(py::module &&m) {
           if (optIt != optMap.end()) {
             auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
             *optPtr = true;
+          }
+          standardInstr.registerCallbacks(passInstrCb, &mam);
+          instrCbPtr = &passInstrCb;
+        } else if (mlir::triton::tools::getStrEnv("LLVM_IR_ENABLE_DUMP") ==
+                   "print-changed") {
+          auto optMap = llvm::cl::getRegisteredOptions();
+          auto optIt = optMap.find("print-changed");
+          if (optIt != optMap.end()) {
+            auto optPtr = static_cast<llvm::cl::opt<llvm::ChangePrinter> *>(
+                optIt->second);
+            *optPtr = llvm::ChangePrinter::Verbose;
           }
           standardInstr.registerCallbacks(passInstrCb, &mam);
           instrCbPtr = &passInstrCb;

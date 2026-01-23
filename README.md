@@ -180,7 +180,9 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`.
 - `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
-- `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `LLVM_IR_ENABLE_DUMP` dumps LLVM IR during compilation. Set to `1` to dump IR
+  after every pass (print-after-all), or set to `print-changed` to only dump IR
+  when a pass modifies it (less verbose).
 - `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
   at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
   `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
