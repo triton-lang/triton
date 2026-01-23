@@ -103,6 +103,7 @@ def _p_matmul(
              UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             FLATTEN_LOOPS: tl.constexpr = True,
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -207,7 +208,12 @@ def _p_matmul(
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
-    for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=True):
+    for block_id in tl.range(
+        tl.program_id(0), num_blocks, NUM_SMS,
+        flatten=FLATTEN_LOOPS,
+        disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+        warp_specialize=True,
+    ):
 
         pid_z, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
 

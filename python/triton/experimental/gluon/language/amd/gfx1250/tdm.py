@@ -129,14 +129,14 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred: bool = True, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
+        pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
