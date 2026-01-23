@@ -7,14 +7,14 @@
 * Update on triton-shared (Haishan Zhu and Nhat Nguyen, Meta)
   * Haishan and Nhat work on MTIA's Triton compiler.
   * triton-shared is a subset of dialects and compiler passes that perform architecture agnostic lowerings of Triton dialects.
-  * Microsoft Maya team maintained it but is stopping now. They're currently working on passing the reigns to the Meta MTIA team.
+  * Microsoft Maya team maintained it but is stopping now. They're currently working on passing the reins to the Meta MTIA team.
   * Contributors were confused with Microsoft's post, but rest assured, triton-shared is still alive and will continue to thrive with Meta's maintenance and hosting (update coming soon to triton-language slack channel).
   * Questions? Reach out to Haishan or Nhat on slack.
   * Landed enhancments over the last year
     * Standardized handling of Triton pointer type
-      * Lower pointer types and ops to MLIR's PtrDialece
+      * Lower pointer types and ops to MLIR's PtrDialect
     * Widened pointer analysis coverage
-      * Lowering of `tt.atomic_rmw` to `tts.atomic_rwm` (for atomics) - supports atomic operations on structured memory regions.
+      * Lowering of `tt.atomic_raw` to `tts.atomic_ram` (for atomics) - supports atomic operations on structured memory regions.
       * Added control-flow support - detects control-flow and correctly generates correct pointer arithmetic.
         * Q> Ettiore, Intel: Do you rely on compiler being able to convert `scf.if` into `select` operation?
         * A> Yes. But in complicated cases, `scf.if` will still be there.
@@ -23,7 +23,7 @@
   * Q> Why is there a triton-shared repo?
   * A> Lots of analysis that don't apply to GPUs, e.g. lowerings that benefit non-GPU architectures (memory/arithmetic ops).  Gives us a place to put it because its not useful for GPU-oriented triton.
   * Q> How about contributing this to MLIR repo? Maybe to linalg?
-  * A> Take it off-line.
+  * A> Will discuss it off-line.
 * Triton Extensions, Plugins and Custom Ops (Corbin Robeck and Puyan Lotfi, Meta, Thomas Raoux, OpenAI and Simon Waters, kernelize.ai)
   * Background
     * OSS Triton priorities aligned with OpenAI’s internal use cases. Does utility justify upstream maintenance is cost?
@@ -99,7 +99,7 @@
     * A> Corbin, Meta, Linear layouts.  Add another linear layout to meet you custom layout.
   * Q> Example in repo?
     * A> No, But we’ve done some experiment to combine two linear layouts.
-    * A> Puyan, Meta, At least one use case we’ve thought of.231
+    * A> Puyan, Meta, At least one use case we’ve thought of.
 
 # Minutes
 * Recording link [here](https://youtu.be/JnFFwBB6Dhk)
