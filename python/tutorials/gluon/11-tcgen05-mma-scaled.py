@@ -1332,8 +1332,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
         # Pipeline the store by waiting for the previous store to complete.
         tma.store_wait(0)
         acc_smem.store(acc)
-        # Barrier-fence pattern makes smem store visible to the TMA unit
-        gl.barrier()
         fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [epilogue_pid_m * BLOCK_M, epilogue_pid_n * BLOCK_N], acc_smem)
 

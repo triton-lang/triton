@@ -262,14 +262,18 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
           after))
     return true;
 
+  //  We can't have a warp get ahead when we have a chain of mbarrier wait so
+  //  we need a barrier in between two WaitBarrierOp.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp>(after))
+    return false;
+
   // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
   // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
   // valid for them to happen in different order on different threads, therefore
   // we don't need a barrier between those operations.
-  // The only limitation is that all waiters must finish before anything can
-  // arrive on the barrier for the next stage, as this would initiate a phase
-  // transition on the barrier and cause the waiter to hang.
-  if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+  if (isa<triton::nvidia_gpu::WaitBarrierOp,
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
           triton::nvidia_gpu::AsyncTMAGatherOp,
           triton::nvidia_gpu::BarrierExpectOp>(before) &&
       isa<triton::nvidia_gpu::WaitBarrierOp,
@@ -282,7 +286,8 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
   // therefore any thread can access the memory after the barrier even if some
   // threads haven't reached the mbarrier wait.
   if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-          triton::nvidia_gpu::AsyncTMAGatherOp>(before) &&
+          triton::nvidia_gpu::AsyncTMAGatherOp,
+          triton::nvidia_gpu::WaitBarrierOp>(before) &&
       !isa<triton::nvidia_gpu::InvalBarrierOp>(after))
     return true;
 
