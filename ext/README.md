@@ -1,11 +1,11 @@
-# Triton TTIR and TTGIR Out of Tree Plugin Passes
+# Triton Extensions and Out of Tree Plugin Passes
 
 ## Overview
 Triton’s existing pass pipelines are assembled in the various extended compiler.py files that live in Triton’s backends. Currently when we want to insert
 passes either for downstream optimizations, custom ops, or instrumentation it is required for the compiler.py file itself to be modified and all of Triton to be
 recompiled.
 
-In order to allow for more downstream configurability we have implemented a custom MLIR level (TTIR and TTGIR) pass plugin and configuration system that allows for either
+In order to allow for more downstream configurability we have implemented a custom MLIR level (TTIR and TTGIR) extension and pass plugin configuration system that allows for either
 overriding the compiler.py pipeline entirely or inserting passes and custom ops through a compiler pipeline hook. Example use cases include:
 - Custom ops and lowering passes
 - Custom optimization passes
