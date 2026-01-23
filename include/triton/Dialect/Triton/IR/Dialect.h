@@ -111,7 +111,8 @@ public:
 LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
                                     ShapedType resultType,
                                     ShapedType indicesType);
-LogicalResult verifyDescriptorLoadStoreOp(Operation *op, TensorDescType desc,
+LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
+                                          TensorDescInterface desc,
                                           ShapedType tensor);
 
 } // namespace triton
