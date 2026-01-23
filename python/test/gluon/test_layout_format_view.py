@@ -4,8 +4,11 @@ from pathlib import Path
 import pytest
 
 import torch
+import triton
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
+
+THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
 @pytest.fixture
@@ -207,6 +210,6 @@ def test_format_view_kernel():
         tensor = ttgl.load(ptr + off)
         ttgl.static_print("tensor view:\n", tensor.type.layout.format_tensor_view(tensor.shape))
 
-    layout = ttgl.BlockedLayout([4], [32], [4], [0])
+    layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
     x = torch.randn(512, device="cuda")
     kernel[(1, )](x, 512, layout)
