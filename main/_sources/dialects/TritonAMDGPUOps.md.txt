@@ -140,7 +140,7 @@ Interfaces: `InferTypeOpInterface`
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `indices` | variadic of 32-bit signless integer |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `pred` | 1-bit signless integer |
+| `pred` | 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:

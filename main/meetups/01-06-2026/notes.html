@@ -1,0 +1,315 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agenda: &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Agenda:</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/meetups/01-06-2026/notes.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="agenda">
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading">¶</a></h1>
+<ul class="simple">
+<li><p>Update on triton-shared (Haishan Zhu and Nhat Nguyen, Meta)</p></li>
+<li><p>Update on the plugin system infrastructure - what’s upstream today and roadmap  (Corbin Robeck and Puyan Lotfi, Meta)</p></li>
+<li><p>Standing up a repo with useful plugins (testing, deployment, etc). (Simon Waters, kernelize.ai)</p></li>
+</ul>
+</section>
+<section id="minutes">
+<h1>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading">¶</a></h1>
+<ul>
+<li><p>Update on triton-shared (Haishan Zhu and Nhat Nguyen, Meta)</p>
+<ul class="simple">
+<li><p>Haishan and Nhat work on MTIA’s Triton compiler.</p></li>
+<li><p>triton-shared is a subset of dialects and compiler passes that perform architecture agnostic lowerings of Triton dialects.</p></li>
+<li><p>Microsoft Maya team maintained it but is stopping now. They’re currently working on passing the reins to the Meta MTIA team.</p></li>
+<li><p>Contributors were confused with Microsoft’s post, but rest assured, triton-shared is still alive and will continue to thrive with Meta’s maintenance and hosting (update coming soon to triton-language slack channel).</p></li>
+<li><p>Questions? Reach out to Haishan or Nhat on slack.</p></li>
+<li><p>Landed enhancments over the last year</p>
+<ul>
+<li><p>Standardized handling of Triton pointer type</p>
+<ul>
+<li><p>Lower pointer types and ops to MLIR’s PtrDialect</p></li>
+</ul>
+</li>
+<li><p>Widened pointer analysis coverage</p>
+<ul>
+<li><p>Lowering of <code class="docutils literal notranslate"><span class="pre">tt.atomic_raw</span></code> to <code class="docutils literal notranslate"><span class="pre">tts.atomic_ram</span></code> (for atomics) - supports atomic operations on structured memory regions.</p></li>
+<li><p>Added control-flow support - detects control-flow and correctly generates correct pointer arithmetic.</p>
+<ul>
+<li><p>Q&gt; Ettiore, Intel: Do you rely on compiler being able to convert <code class="docutils literal notranslate"><span class="pre">scf.if</span></code> into <code class="docutils literal notranslate"><span class="pre">select</span></code> operation?</p></li>
+<li><p>A&gt; Yes. But in complicated cases, <code class="docutils literal notranslate"><span class="pre">scf.if</span></code> will still be there.</p></li>
+</ul>
+</li>
+<li><p>More agressive constant folding for <code class="docutils literal notranslate"><span class="pre">tts</span></code> ops.</p></li>
+</ul>
+</li>
+<li><p>Added <code class="docutils literal notranslate"><span class="pre">TensorDescriptor</span></code> support (add <code class="docutils literal notranslate"><span class="pre">TensorDescriptorToPointerPass</span></code> pass to your compilation pipeline)</p></li>
+</ul>
+</li>
+<li><p>Q&gt; Why is there a triton-shared repo?</p></li>
+<li><p>A&gt; Lots of analysis that don’t apply to GPUs, e.g. lowerings that benefit non-GPU architectures (memory/arithmetic ops).  Gives us a place to put it because its not useful for GPU-oriented triton.</p></li>
+<li><p>Q&gt; How about contributing this to MLIR repo? Maybe to linalg?</p></li>
+<li><p>A&gt; Will discuss it off-line.</p></li>
+</ul>
+</li>
+<li><p>Triton Extensions, Plugins and Custom Ops (Corbin Robeck and Puyan Lotfi, Meta, Thomas Raoux, OpenAI and Simon Waters, kernelize.ai)</p>
+<ul>
+<li><p>Background</p>
+<ul class="simple">
+<li><p>OSS Triton priorities aligned with OpenAI’s internal use cases. Does utility justify upstream maintenance is cost?</p></li>
+</ul>
+</li>
+<li><p>Use cases:</p>
+<ul class="simple">
+<li><p>Some features are bleeding edge, useful to only a handful of users (but they’re needed for cutting edge models.)</p></li>
+<li><p>Some features are experimental, developed and maintained on a fork.</p></li>
+<li><p>In both cases, developers are expected to do fork and maintain until accepted (large burden to keep in sync with head.). This is a big problem with customers that use a pinned version, external fork, of Triton for production (upstream not obligated to fix breakages to your fork.)</p></li>
+<li><p>Model/kernel/hardware specific passes (e.g. for warp specialization. Allow for experimenting without recompiling Triton.  How to move it from my fork back upstream?) (Same as above)</p></li>
+<li><p>Giving LLMs/autotuners access to passes, knobs without recompiling Triton.</p></li>
+</ul>
+</li>
+<li><p>Overview of existing pass pipeline</p>
+<ul class="simple">
+<li><p>Transformation passes - (within the same IR)</p></li>
+<li><p>Conversion passes - (rewrite from one IR to another. e.g. TTGIR-&gt;LLVM)</p></li>
+<li><p>Current, new passes require recompiling Triton compiler (slow, cumbersome to iterate!)</p></li>
+</ul>
+</li>
+<li><p>New Plugin Framework</p>
+<ul class="simple">
+<li><p>New API</p></li>
+<li><p>Enforces layerings</p></li>
+<li><p>Full featured: dialects, custom operations</p></li>
+<li><p>Don’t need to work on a fork!  Don’t need to recompile compiler to experiment.</p></li>
+<li><p>See https://github.com/triton-lang/triton/tree/main/plugins for examples.</p></li>
+</ul>
+</li>
+<li><p>Concept: overrideable pipeline</p>
+<ol class="arabic simple">
+<li><p>Hooks: embedded in backend compiler.py (allows Python to insert the plugin to compiler) Overrides passes in add_stages table.</p></li>
+<li><p>Native code: invoked by hook.</p></li>
+</ol>
+<ul class="simple">
+<li><p>Kernel or library provides hint to invoke pass by setting hook.</p></li>
+<li><p>Inspect_stages hook will override TTIR entry in stages table, invoking wrapper before rest of TTIR pass setup.</p></li>
+<li><p>Examples:</p>
+<ul>
+<li><p>Override existing passes</p></li>
+<li><p>Run custom out of tree passes</p></li>
+<li><p>Run custom ops, dialects, lowering passes</p></li>
+<li><p>Import entire out-of-tree backend (at runtime!)</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Plugin interface</p>
+<ul class="simple">
+<li><p>Uses PyBind names.</p></li>
+<li><p>See demo for how to register plugin with API</p></li>
+<li><p>See demo for creating a transformation pass (e.g. like invoking pass after a loop unrolled.)</p></li>
+</ul>
+</li>
+<li><p>Custom dialects</p>
+<ul class="simple">
+<li><p>New operations!</p></li>
+<li><p>Registered similarly to passes.</p></li>
+</ul>
+</li>
+<li><p>Custom out-of-tree targets (in progress)</p>
+<ul class="simple">
+<li><p>Alternate path for loading backends (backend is something like AMD, Nvidia, etc.)</p></li>
+<li><p>Current backends are loaded with macros.</p></li>
+<li><p>New way, load from external shared object, don’t need to statically link in with Triton at compile time.</p></li>
+</ul>
+</li>
+<li><p>Custom DSL Ops (in progress)</p>
+<ul class="simple">
+<li><p>Higher level</p></li>
+<li><p>Top level DSL ops, at the Python level.</p></li>
+<li><p>Triton rewrites it to dialects it understands and lowers and can run it.</p></li>
+<li><p>Use case: proton instrumentation passes could be rewritten to use it (may not decide to go this route.). Create sanitizers that complement existing performance tooling.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Triton-ext Repository (Simon Waters, kernelize.ai)</p>
+<ul class="simple">
+<li><p>Overview</p>
+<ul>
+<li><p>Public location to check in our out-of-tree passes</p></li>
+<li><p>Backends, dialects, language extensions, passes, etc.</p></li>
+<li><p>Expecting lots of folks to need common passes and infrastructure.</p></li>
+<li><p>Triton-distributed interested in adding their stuff</p></li>
+</ul>
+</li>
+<li><p>Example: LoopSplit pass in triton-ext repository</p>
+<ul>
+<li><p>Why we did it.  FlashAttention called inner loop twice for causal case (why not a single loop and have it split it automatically.).  Get 5% perf improvement by doing automatic splitting (if original loop written with causal branch). Helps if user has causal branches and doesn’t realize they can make it more efficient this way.</p></li>
+<li><p>Passes only (implementation still in flux)</p></li>
+<li><p>Definition: splits a loop into two loops based on a condition (and can optimize out the condition in both loops later.)</p></li>
+<li><p>Triton-ext provides a database of passes, linked to libTritonExtPassInfra.so.</p></li>
+<li><p>Simplified boilerplate code to point to API entry points, Only need to set 2 values: extension name and class and its registered.</p></li>
+<li><p>Note: Simon wrote this version of LoopSplit before CUDA tileIR wrote theirs. (About 1 year ago).</p></li>
+<li><p>Demo LoopSplit pass.  Not a lot of overhead to create it.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Questions</p>
+<ul class="simple">
+<li><p>Q&gt; Ettiore, Intel.  We’ve got generic TTIR passes that modify X that could have been upstream of or added to this plugin infrastructure.</p>
+<ul>
+<li><p>A&gt; Use this as a proving ground for passes to be upstreamed.  LoopSplit was a prototype.</p></li>
+</ul>
+</li>
+<li><p>Q&gt; Ettiore, Intel. You could have landed this in regular triton repo to start with.</p>
+<ul>
+<li><p>A&gt; Yes. Absolutely.  Use this as a route to get your plugin vetted before merging upstream.</p></li>
+<li><p>A&gt; Corbin, Meta. Lots of passes we depend on for auto tuning but not useful for more broadly. Maybe a 5% chance it work (very kernel specific things we want to be available to the auto tuner.). But other folks might make use of them too.</p></li>
+<li><p>A&gt; Corbin. Meta.  Hard to get enough data to prove utility without it existing in the first place.</p></li>
+</ul>
+</li>
+<li><p>Q&gt; Two types of plugins: generic and specific (maybe to a particular architecture).  Don’t mix them.</p>
+<ul>
+<li><p>A&gt; Yea. We’ve got a backend directory to put arch specific passes.</p></li>
+<li><p>A&gt; Corbin, Meta. Exposing pass heuristics you want to tune dynamically (without recompiling). Development velocity speed up by being able to dynamically modify the pipeline.</p></li>
+<li><p>A&gt; Simon, kernelize.ai, Shared repo will facilitate collaboration. Make it easier to add new things and collaborate with the community.</p></li>
+<li><p>A&gt; Puyan, Meta, You don’t need to create a plugin before you go into triton core. This is a lighter weight to try things out. E.g. a concurrency sanitizer</p></li>
+</ul>
+</li>
+<li><p>Q&gt; Ettiore, Intel, What if your transformation pass in your pipeline relies on different layouts? Different systolic array vs MMA and you want a custom layout.</p>
+<ul>
+<li><p>A&gt; Corbin, Meta, Linear layouts.  Add another linear layout to meet you custom layout.</p></li>
+</ul>
+</li>
+<li><p>Q&gt; Example in repo?</p>
+<ul>
+<li><p>A&gt; No, But we’ve done some experiment to combine two linear layouts.</p></li>
+<li><p>A&gt; Puyan, Meta, At least one use case we’ve thought of.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="id1">
+<h1>Minutes<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<ul class="simple">
+<li><p>Recording link <a class="reference external" href="https://youtu.be/JnFFwBB6Dhk">here</a></p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
