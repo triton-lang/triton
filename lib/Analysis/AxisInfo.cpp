@@ -327,7 +327,7 @@ private:
       if (lhs.getContiguity(dim) == rhs.getContiguity(dim))
         return gcd(lhsDivisibility, rhsDivisibility);
     }
-    // AxisInfo::divisibility is defined on the *first element* of a contiguity
+    // Divisibility is defined on the *first element* of a contiguity
     // group. When an operand has contiguity larger than the result contiguity,
     // the "first element of a result group" can fall inside an operand's
     // contiguity group, so we must clamp the operand divisibility accordingly
