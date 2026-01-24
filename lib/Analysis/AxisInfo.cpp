@@ -298,6 +298,8 @@ private:
     // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
     // lhs + rhs = k * d_lhs + p * d_rhs = (k * k' + p * p') * gcd(d_lhs, d_rhs)
+    int64_t elemSize = 1;
+    auto lhsDivisibility = lhs.getDivisibility(dim);
     auto rhsDivisibility = rhs.getDivisibility(dim);
     if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
       //  %ptr = addptr %lhs, %rhs
@@ -312,11 +314,35 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisibility of 16 bytes
-      auto elemSize = std::max<int64_t>(
+      elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
-    return gcd(lhs.getDivisibility(dim), rhsDivisibility);
+    if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
+      // For subtraction, when both operands have the same contiguity, the
+      // in-group offsets cancel out:
+      //   (base_lhs + t) - (base_rhs + t) = base_lhs - base_rhs.
+      // In this case we can preserve the gcd divisibility without needing to
+      // clamp based on the result contiguity.
+      if (lhs.getContiguity(dim) == rhs.getContiguity(dim))
+        return gcd(lhsDivisibility, rhsDivisibility);
+    }
+    // AxisInfo::divisibility is defined on the *first element* of a contiguity
+    // group. When an operand has contiguity larger than the result contiguity,
+    // the "first element of a result group" can fall inside an operand's
+    // contiguity group, so we must clamp the operand divisibility accordingly
+    // (otherwise we can overestimate alignment).
+    auto resContiguity = getContiguity(op, lhs, rhs, dim);
+    auto clampDivisibility = [&](int64_t contiguity, int64_t div) {
+      if (resContiguity >= contiguity)
+        return div;
+      return gcd(div, multiplyDivisor(resContiguity, elemSize));
+    };
+    lhsDivisibility =
+        clampDivisibility(lhs.getContiguity(dim), lhsDivisibility);
+    rhsDivisibility =
+        clampDivisibility(rhs.getContiguity(dim), rhsDivisibility);
+    return gcd(lhsDivisibility, rhsDivisibility);
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
