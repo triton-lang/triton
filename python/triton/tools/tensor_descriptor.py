@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any
-from triton._utils import validate_block_shape
+from triton._utils import validate_block_shape, canonicalize_dtype
 
 
 @dataclass
@@ -10,6 +10,7 @@ class TensorDescriptor:
     strides: List[int]
     block_shape: List[int]
     padding: str = "zero"
+    round_f32_to_tf32: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -30,7 +31,10 @@ class TensorDescriptor:
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
         if self.padding == "nan":
             assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
+        if self.round_f32_to_tf32:
+            dtype_name = canonicalize_dtype(self.base.dtype)
+            assert dtype_name == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], padding="zero"):
-        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding)
+    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False):
+        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding, round_f32_to_tf32)
