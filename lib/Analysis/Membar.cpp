@@ -10,8 +10,9 @@
 namespace mlir {
 
 AllocationSlice::AllocationSlice(Value value,
-                                 Interval<size_t> allocationInterval)
-    : allocationInterval(allocationInterval) {
+                                 Interval<size_t> allocationInterval,
+                                 Allocation::BufferId bufferId)
+    : allocationInterval(allocationInterval), bufferId(bufferId) {
   auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
   this->accessTy = accessTy;
 
@@ -68,6 +69,9 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 void AllocationSlice::print(raw_ostream &os) const {
   os << "interval=[" << allocationInterval.start() << ","
      << allocationInterval.end() << ")";
+
+  if (bufferId != Allocation::InvalidBufferId)
+    os << " buffer=" << bufferId;
 
   os << " offsets=[";
   if (!subsliceOffsets.empty()) {
@@ -287,7 +291,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
+              auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);

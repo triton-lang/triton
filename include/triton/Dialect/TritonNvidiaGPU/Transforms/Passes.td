@@ -82,6 +82,27 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
+def TritonGPUClusterBarrierInsertion : Pass<"triton-nvidia-gpu-cluster-barrier-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert cluster barriers for distributed shared memory reuse";
+
+  let description = [{
+    This pass inserts cluster barriers (cluster_arrive + cluster_wait) between
+    operations that touch distributed shared memory when the ttgir memory allocs
+    were different but the Allocation pass made them alias.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 

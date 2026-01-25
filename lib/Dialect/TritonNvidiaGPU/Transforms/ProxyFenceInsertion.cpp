@@ -65,7 +65,8 @@ bool ignoreOpForProxyFence(Operation *op) {
              triton::nvidia_gpu::InvalBarrierOp>(op);
 }
 
-bool filterFn(Operation *op, Operation *other, Allocation *allocation) {
+bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
+              bool /*otherIsRead*/, Allocation *allocation) {
   return ignoreOpForProxyFence(other);
 }
 
@@ -126,7 +127,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
+              auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {

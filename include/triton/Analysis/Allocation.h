@@ -134,6 +134,16 @@ public:
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
   }
 
+  /// Returns if the given buffer is a scratch buffer.
+  bool isScratchBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Scratch;
+  }
+
+  /// Returns if the given buffer is an explicit buffer.
+  bool isExplicitBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Explicit;
+  }
+
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 
