@@ -286,27 +286,28 @@ private:
                         int dim) override {
     if (isa<arith::SubIOp>(op)) {
       // Case 1: If contiguity(lhs) > 1 and contiguity(rhs) > 1,
-      // x - y = [base_x + t] - [base_y + t] = base_x - base_y for any t > 0,
-      // where t is an intra contiguous block offset, so contiguity is 1.
+      // x_t - y_t = (base_x + t) - (base_y + t) = base_x - base_y for any
+      // 0 <= t < min(contig_x, contig_y), so contiguity is 1.
       // Case 2: If contiguity(lhs) > 1 and contiguity(rhs) == 1,
-      // x - y = [base_x + t] - [base_y] = base_x - base_y + t for any t > 0,
+      // x_t - y = (base_x + t) - base_y = base_x - base_y + t for any
+      // 0 <= t < contig_x,
       // the contiguity depends on the constancy of rhs.
       // Case 3: If contiguity(lhs) == 1 and contiguity(rhs) > 1,
-      // x - y = [base_x] - [base_y + t] = base_x -
-      // base_y - t for any t > 0, the result is decreasing within the
-      // contiguous block, so contiguity is 1.
-      // Case 4: If contiguity(lhs) == 1 and
-      // contiguity(rhs) == 1 x - y = [base_x]
-      // - [base_y] = base_x - base_y, contiguity is 1
+      // x - y_t = base_x - (base_y + t) = base_x - base_y - t for any
+      // 0 <= t < contig_y. The result is decreasing within the contiguous
+      // block, so contiguity is 1.
+      // Case 4: If contiguity(lhs) == 1 and contiguity(rhs) == 1,
+      // x - y = base_x - base_y, so contiguity is 1.
       return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
     }
     // For AddIOp and AddPtrOp
     // Case 1: If contiguity(lhs) > 1 and contiguity(rhs) > 1,
-    // x + y = [base_x + t] + [base_y + t] = base_x + base_y + 2t for any t > 0,
+    // x_t + y_t = (base_x + t) + (base_y + t) = base_x + base_y + 2t for any
+    // 0 <= t < min(contig_x, contig_y),
     // so contiguity is 1.
     // Case 2: If contiguity(lhs) > 1 and contiguity(rhs) == 1,
-    // x + y = [base_x + t] + [base_y] = base_x + base_y + t for any t > 0, so
-    // contiguity depends on constancy of rhs.
+    // x_t + y = (base_x + t) + base_y = base_x + base_y + t for any
+    // 0 <= t < contig_x, so contiguity depends on constancy of rhs.
     // Case 3: If contiguity(lhs) == 1 and contiguity(rhs) > 1,
     // It's symmetric to case B.
     // Case 4: If contiguity(lhs) == 1 and contiguity(rhs) == 1,
@@ -339,10 +340,12 @@ private:
     }
     if (lhs.getContiguity(dim) > 1 && rhs.getContiguity(dim) > 1) {
       // If both operands are contiguous, the in-group offsets are:
-      // For subtraction:
-      //   (base_lhs + t) + (base_rhs + t) = base_lhs + base_rhs + 2t.
+      // Let lhs_t = base_lhs + t and rhs_t = base_rhs + t for any
+      // 0 <= t < min(contig_lhs, contig_rhs).
       // For addition:
-      //   (base_lhs + t) - (base_rhs + t) = base_lhs - base_rhs
+      //   lhs_t + rhs_t = base_lhs + base_rhs + 2t
+      // For subtraction:
+      //   lhs_t - rhs_t = base_lhs - base_rhs
       if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
         if (lhs.getContiguity(dim) == rhs.getContiguity(dim))
           return gcd(lhsDivisibility, rhsDivisibility);
