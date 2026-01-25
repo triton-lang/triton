@@ -286,27 +286,25 @@ private:
                         int dim) override {
     if (isa<arith::SubIOp>(op)) {
       // A: If contiguity(lhs) > 1 and contiguity(rhs) > 1
-      // x - y = [base_x + t] - [base_y + t] = base_x - base_y for any t > 0, where t is an
-      // intra contiguous block offset, so contiguity is 1
-      // B: If contiguity(lhs) > 1 and contiguity(rhs) == 1
-      // x - y = [base_x + t] - [base_y] = base_x - base_y + t for any t > 0, the contiguity depends
-      // on the constancy of rhs
-      // C: If contiguity(lhs) == 1 and contiguity(rhs) > 1
-      // x - y = [base_x] - [base_y + t] = base_x - base_y - t for any t > 0, the result is decreasing
-      // within the contiguous block, so contiguity is 1
-      // D: If contiguity(lhs) == 1 and contiguity(rhs) == 1
-      // x - y = [base_x] - [base_y] = base_x - base_y, contiguity is 1
+      // x - y = [base_x + t] - [base_y + t] = base_x - base_y for any t > 0,
+      // where t is an intra contiguous block offset, so contiguity is 1 B: If
+      // contiguity(lhs) > 1 and contiguity(rhs) == 1 x - y = [base_x + t] -
+      // [base_y] = base_x - base_y + t for any t > 0, the contiguity depends on
+      // the constancy of rhs C: If contiguity(lhs) == 1 and contiguity(rhs) > 1
+      // x - y = [base_x] - [base_y + t] = base_x - base_y - t for any t > 0,
+      // the result is decreasing within the contiguous block, so contiguity is
+      // 1 D: If contiguity(lhs) == 1 and contiguity(rhs) == 1 x - y = [base_x]
+      // - [base_y] = base_x - base_y, contiguity is 1
       return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
     }
     // For AddIOp and AddPtrOp
     // A: If contiguity(lhs) > 1 and contiguity(rhs) > 1
-    // x + y = [base_x + t] + [base_y + t] = base_x + base_y + 2t for any t > 0, so contiguity is 1
-    // B: If contiguity(lhs) > 1 and contiguity(rhs) == 1
-    // x + y = [base_x + t] + [base_y] = base_x + base_y + t for any t > 0, so contiguity depends on constancy of rhs
-    // C: If contiguity(lhs) == 1 and contiguity(rhs) > 1
-    // It's symmetric to case B
-    // D: If contiguity(lhs) == 1 and contiguity(rhs) == 1
-    // It's trivial that contiguity is 1
+    // x + y = [base_x + t] + [base_y + t] = base_x + base_y + 2t for any t > 0,
+    // so contiguity is 1 B: If contiguity(lhs) > 1 and contiguity(rhs) == 1 x +
+    // y = [base_x + t] + [base_y] = base_x + base_y + t for any t > 0, so
+    // contiguity depends on constancy of rhs C: If contiguity(lhs) == 1 and
+    // contiguity(rhs) > 1 It's symmetric to case B D: If contiguity(lhs) == 1
+    // and contiguity(rhs) == 1 It's trivial that contiguity is 1
     return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
                     gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
   }
