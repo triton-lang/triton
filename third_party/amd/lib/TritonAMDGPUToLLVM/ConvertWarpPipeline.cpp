@@ -66,7 +66,7 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
             if (bufId == Allocation::InvalidBufferId)
               continue;
             auto interval = allocation->getAllocatedInterval(bufId);
-            auto slice = AllocationSlice(v, interval);
+            auto slice = AllocationSlice(v, interval, bufId);
             if (isa<MemoryEffects::Write>(eff.getEffect()))
               info.syncWriteSlices[slice].insert(op);
             else if (isa<MemoryEffects::Read>(eff.getEffect()))
