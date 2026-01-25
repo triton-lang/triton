@@ -343,12 +343,15 @@ private:
       //   (base_lhs + t) + (base_rhs + t) = base_lhs + base_rhs + 2t.
       // For addition:
       //   (base_lhs + t) - (base_rhs + t) = base_lhs - base_rhs
-      if ((lhsDivisibility % 2 == 0 && rhsDivisibility % 2 == 0) ||
-          (lhsDivisibility % 2 == 1 && rhsDivisibility % 2 == 1)) {
-        // Both even or both odd -> result divisible by 2
+      if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
+        if (lhs.getContiguity(dim) == rhs.getContiguity(dim))
+          return gcd(lhsDivisibility, rhsDivisibility);
+      }
+      if ((lhsDivisibility % 2 == 0 && rhsDivisibility % 2 == 0)) {
+        // Both even -> result divisible by 2.
         return 2;
       } else {
-        // One even, one odd -> result divisible by 1
+        // At least one is odd -> the "lower bound" of divisibility is 1.
         return 1;
       }
     } else {
@@ -358,17 +361,13 @@ private:
       // contiguity, the "first element of a result group" can fall inside an
       // operand's contiguity group, so we must clamp the operand divisibility
       // accordingly (otherwise we can overestimate alignment).
-      auto resContiguity = getContiguity(op, lhs, rhs, dim);
-      auto clampDivisibility = [&](int64_t contiguity, int64_t div) {
-        if (resContiguity >= contiguity)
-          return div;
-        return gcd(div, multiplyDivisor(resContiguity, elemSize));
-      };
-      lhsDivisibility =
-          clampDivisibility(lhs.getContiguity(dim), lhsDivisibility);
-      rhsDivisibility =
-          clampDivisibility(rhs.getContiguity(dim), rhsDivisibility);
-      return gcd(lhsDivisibility, rhsDivisibility);
+      if (lhs.getContiguity(dim) > 1 || rhs.getContiguity(dim) > 1) {
+        auto resContiguity = getContiguity(op, lhs, rhs, dim);
+        return gcd(lhsDivisibility, rhsDivisibility,
+                   multiplyDivisor(resContiguity, elemSize));
+      } else {
+        return gcd(lhsDivisibility, rhsDivisibility);
+      }
     }
   }
 
