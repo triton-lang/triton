@@ -5,5 +5,5 @@ add_library(TritonTestAnalysis
   TestBufferRegion.cpp
   TestMembar.cpp
 )
-target_link_libraries(TritonTestAnalysis PUBLIC MLIRPass TritonAnalysis)
+target_link_libraries(TritonTestAnalysis PUBLIC MLIRPass TritonAnalysis TritonNvidiaGPUTransforms)
 target_compile_options(TritonTestAnalysis PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
