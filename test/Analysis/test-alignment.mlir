@@ -35,7 +35,7 @@ tt.func @add(%arg0: tensor<128xi32> {tt.contiguity = 1 : i32, tt.divisibility = 
   // Contiguous + contiguous with different base parity yields an odd sequence.
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %even_plus_odd = arith.addi %0, %odd : tensor<128xi32>
-  // Contiguous + contiguous with odd bases may yield an even sequence but we still conservatively estimate the 
+  // Contiguous + contiguous with odd bases may yield an even sequence but we still conservatively estimate the
   // divisibility as 1.
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %odd_plus_odd = arith.addi %odd, %odd : tensor<128xi32>
