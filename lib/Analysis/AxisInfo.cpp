@@ -284,20 +284,35 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    // Contiguity assumes an increasing sequence. So for SubIOp contiguous
-    // RHS doesn't produce a contiguous result.
-    if (isa<arith::SubIOp>(op))
+    if (isa<arith::SubIOp>(op)) {
+      // A: If contiguity(lhs) > 1 and contiguity(rhs) > 1
+      // x - y = [base_x + t] - [base_y + t] = base_x - base_y for any t > 0, where t is an
+      // intra contiguous block offset, so contiguity is 1
+      // B: If contiguity(lhs) > 1 and contiguity(rhs) == 1
+      // x - y = [base_x + t] - [base_y] = base_x - base_y + t for any t > 0, the contiguity depends
+      // on the constancy of rhs
+      // C: If contiguity(lhs) == 1 and contiguity(rhs) > 1
+      // x - y = [base_x] - [base_y + t] = base_x - base_y - t for any t > 0, the result is decreasing
+      // within the contiguous block, so contiguity is 1
+      // D: If contiguity(lhs) == 1 and contiguity(rhs) == 1
+      // x - y = [base_x] - [base_y] = base_x - base_y, contiguity is 1
       return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
-
+    }
+    // For AddIOp and AddPtrOp
+    // A: If contiguity(lhs) > 1 and contiguity(rhs) > 1
+    // x + y = [base_x + t] + [base_y + t] = base_x + base_y + 2t for any t > 0, so contiguity is 1
+    // B: If contiguity(lhs) > 1 and contiguity(rhs) == 1
+    // x + y = [base_x + t] + [base_y] = base_x + base_y + t for any t > 0, so contiguity depends on constancy of rhs
+    // C: If contiguity(lhs) == 1 and contiguity(rhs) > 1
+    // It's symmetric to case B
+    // D: If contiguity(lhs) == 1 and contiguity(rhs) == 1
+    // It's trivial that contiguity is 1
     return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
                     gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
-    // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs + rhs = k * d_lhs + p * d_rhs = (k * k' + p * p') * gcd(d_lhs, d_rhs)
     int64_t elemSize = 1;
     auto lhsDivisibility = lhs.getDivisibility(dim);
     auto rhsDivisibility = rhs.getDivisibility(dim);
@@ -318,31 +333,39 @@ private:
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
-    if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
-      // For subtraction, when both operands have the same contiguity, the
-      // in-group offsets cancel out:
-      //   (base_lhs + t) - (base_rhs + t) = base_lhs - base_rhs.
-      // In this case we can preserve the gcd divisibility without needing to
-      // clamp based on the result contiguity.
-      if (lhs.getContiguity(dim) == rhs.getContiguity(dim))
-        return gcd(lhsDivisibility, rhsDivisibility);
+    if (lhs.getContiguity(dim) > 1 && rhs.getContiguity(dim) > 1) {
+      // If both operands are contiguous, the in-group offsets are:
+      // For subtraction:
+      //   (base_lhs + t) + (base_rhs + t) = base_lhs + base_rhs + 2t.
+      // For addition:
+      //   (base_lhs + t) - (base_rhs + t) = base_lhs - base_rhs
+      if ((lhsDivisibility % 2 == 0 && rhsDivisibility % 2 == 0) ||
+          (lhsDivisibility % 2 == 1 && rhsDivisibility % 2 == 1)) {
+        // Both even or both odd -> result divisible by 2
+        return 2;
+      } else {
+        // One even, one odd -> result divisible by 1
+        return 1;
+      }
+    } else {
+      // At least one operand is partially constant.
+      // Divisibility is defined on the *first element* of a contiguity
+      // group. When an operand has contiguity larger than the result
+      // contiguity, the "first element of a result group" can fall inside an
+      // operand's contiguity group, so we must clamp the operand divisibility
+      // accordingly (otherwise we can overestimate alignment).
+      auto resContiguity = getContiguity(op, lhs, rhs, dim);
+      auto clampDivisibility = [&](int64_t contiguity, int64_t div) {
+        if (resContiguity >= contiguity)
+          return div;
+        return gcd(div, multiplyDivisor(resContiguity, elemSize));
+      };
+      lhsDivisibility =
+          clampDivisibility(lhs.getContiguity(dim), lhsDivisibility);
+      rhsDivisibility =
+          clampDivisibility(rhs.getContiguity(dim), rhsDivisibility);
+      return gcd(lhsDivisibility, rhsDivisibility);
     }
-    // Divisibility is defined on the *first element* of a contiguity
-    // group. When an operand has contiguity larger than the result contiguity,
-    // the "first element of a result group" can fall inside an operand's
-    // contiguity group, so we must clamp the operand divisibility accordingly
-    // (otherwise we can overestimate alignment).
-    auto resContiguity = getContiguity(op, lhs, rhs, dim);
-    auto clampDivisibility = [&](int64_t contiguity, int64_t div) {
-      if (resContiguity >= contiguity)
-        return div;
-      return gcd(div, multiplyDivisor(resContiguity, elemSize));
-    };
-    lhsDivisibility =
-        clampDivisibility(lhs.getContiguity(dim), lhsDivisibility);
-    rhsDivisibility =
-        clampDivisibility(rhs.getContiguity(dim), rhsDivisibility);
-    return gcd(lhsDivisibility, rhsDivisibility);
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
