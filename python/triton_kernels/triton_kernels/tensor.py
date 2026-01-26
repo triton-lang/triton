@@ -270,15 +270,13 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
     assert False, f"Unknown dtype: {id}"
 
 
-def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
+def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
+          allow_implicit_conversion: bool = False):
     storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
+    initial_layout = layout if isinstance(layout, StridedLayout) else StridedLayout()
     # pack sub-byte datatype along last dimension
-    if layout is None:
-        layout = StridedLayout()
-    # storage shape
-    assert isinstance(layout, StridedLayout)
-    order = layout.order(len(storage_shape))
+    order = initial_layout.order(len(storage_shape))
     dim = order[0]
     storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
     # storage strides
@@ -288,4 +286,8 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None)
         strides[d] = running
         running *= storage_shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
-    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
+    ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=initial_layout)
+    assert initial_layout == ret.storage.layout or allow_implicit_conversion
+    if allow_implicit_conversion:
+        ret = convert_layout(ret, layout)
+    return ret
