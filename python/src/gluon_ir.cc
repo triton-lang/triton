@@ -975,6 +975,12 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src, barrier);
            })
+      .def("create_async_tdm_scatter",
+           [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
+              Value dstColOffset, Value src, Value barrier) {
+             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices,
+                                                  dstColOffset, src, barrier);
+           })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value pred, bool speculative, bool returnOffsets) -> Value {
