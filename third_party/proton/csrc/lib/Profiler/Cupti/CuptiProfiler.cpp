@@ -729,6 +729,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    cupti::activityEnableHWTrace<true>(/*enable=*/1);
   }
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
   setGraphCallbacks(subscriber, /*enable=*/true);
