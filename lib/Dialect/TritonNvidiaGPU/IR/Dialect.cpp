@@ -150,13 +150,48 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
         LinearLayout::identity1D(cgaShape[0], rowColDims[1], dims[0]) *
         LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
     auto quot = divideRight(ll, ctaCol);
-    assert(quot.has_value());
+    bool isM64TwoCTA = !quot.has_value();
+    if (isM64TwoCTA) {
+      auto bases = ll.getBases();
+      auto logNCols = ll.getInDimSizeLog2(rowColDims[1]);
+      auto numCTAs = ctaCol.getTotalOutDimSize();
+      auto basisCTA1 = logNCols - 1 - llvm::Log2_32(numCTAs * numWarps / 4);
+      // Swap the (soon to be) warp=2 and block=1 bases
+      std::swap(bases[rowColDims[0]].back(), bases[rowColDims[1]][basisCTA1]);
+      auto transposedLL =
+          LinearLayout(std::move(bases), ll.getOutDims(), ll.isSurjective());
+      auto ctaCol =
+          LinearLayout::identity1D(cgaShape[0] / 2, rowColDims[1], dims[0]) *
+          LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
+      quot = divideRight(transposedLL, ctaCol);
+      assert(quot.has_value());
+    }
     auto maybeRet =
         getDistributedLayoutForTmemLdSt(*quot, atom, numWarps, bitwidth);
     if (!maybeRet)
       return maybeRet;
     // Add the full block layout (with broadcasting)
-    return *maybeRet * cgaLayout->getLinearLayout();
+    if (isM64TwoCTA) {
+      auto bases = maybeRet->getBases();
+      // Last reg has block[0] basis
+      // This is correct as we don't currently support emitting
+      // more than 1 tcgen05.mma instruction per N dimension
+      auto kReg = StringAttr::get(ctx, "register");
+      bases[kBlock].push_back(bases[kReg].back());
+      bases[kReg].pop_back();
+      auto kWarp = StringAttr::get(ctx, "warp");
+      std::swap(bases[kWarp][1], bases[kBlock][0]);
+      auto ret = LinearLayout(std::move(bases), maybeRet->getOutDims(),
+                              maybeRet->isSurjective());
+      // Remove first block basis as it's already in the layout
+      auto cta1 = LinearLayout::identity1D(2, kBlock, dims[0]);
+      auto smallCgaLayout = divideLeft(cgaLayout->getLinearLayout(), cta1);
+      assert(smallCgaLayout.has_value());
+      ret *= smallCgaLayout.value();
+      return ret;
+    } else {
+      return *maybeRet * cgaLayout->getLinearLayout();
+    }
   }
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
@@ -464,7 +499,29 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// Type methods
+//===----------------------------------------------------------------------===//
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Verifier
+//===----------------------------------------------------------------------===//
+LogicalResult
+TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
+                             RankedTensorType blockType) {
+  // blockType must be rank 2 for im2col mode
+  if (blockType.getRank() != 2) {
+    return emitError()
+           << "TensorDescIm2ColType requires rank-2 blockType, got rank "
+           << blockType.getRank();
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
@@ -498,6 +555,10 @@ void TritonNvidiaGPUDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+      >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();

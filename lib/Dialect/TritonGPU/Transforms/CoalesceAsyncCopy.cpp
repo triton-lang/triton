@@ -3,6 +3,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir {
@@ -11,6 +12,43 @@ namespace gpu {
 
 #define GEN_PASS_DEF_TRITONGPUCOALESCEASYNCCOPY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+static Value convertValueLayout(Value src, Attribute enc,
+                                PatternRewriter &rewriter) {
+  auto ty = cast<RankedTensorType>(src.getType());
+  auto newTy = ty.cloneWithEncoding(enc);
+  auto cvt = ConvertLayoutOp::create(rewriter, src.getLoc(), newTy, src);
+  return cvt.getResult();
+}
+
+static void retargetCopyOperandsToEncoding(
+    AsyncCopyGlobalToLocalOp copyOp, Attribute newEncoding,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternRewriter &rewriter) {
+  Value src = copyOp.getSrc();
+  Value mask = copyOp.getMask();
+  Value other = copyOp.getOther();
+
+  // insert cvt's after src, mask, and other
+  src = convertValueLayout(src, newEncoding, rewriter);
+  if (mask)
+    mask = convertValueLayout(mask, newEncoding, rewriter);
+  if (other)
+    other = convertValueLayout(other, newEncoding, rewriter);
+
+  unsigned contiguity = axisInfoAnalysis.getContiguity(src);
+  if (mask)
+    contiguity =
+        std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
+
+  rewriter.modifyOpInPlace(copyOp, [&]() {
+    copyOp.getSrcMutable().assign(src);
+    if (mask)
+      copyOp.getMaskMutable().assign(mask);
+    if (other)
+      copyOp.getOtherMutable().assign(other);
+    copyOp.setContiguity(contiguity);
+  });
+}
 
 // This pass currently only applies if the following are all true...
 //   1) Operand A for WGMMA is to be loaded in registers
@@ -85,33 +123,53 @@ struct ClipAsyncCopySizePerThread
         blockedEnc.getOrder(), numWarps, threadsPerWarp,
         blockedEnc.getCGALayout());
 
-    // insert cvt's after src, mask, and other
-    auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {
-      auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy = ty.cloneWithEncoding(enc);
-      auto cvt =
-          ConvertLayoutOp::create(rewriter, copyOp->getLoc(), newTy, src);
-      return cvt.getResult();
-    };
-    src = convertBlockLayout(src, newBlockEnc);
-    if (mask)
-      mask = convertBlockLayout(mask, newBlockEnc);
-    if (other)
-      other = convertBlockLayout(other, newBlockEnc);
+    retargetCopyOperandsToEncoding(copyOp, newBlockEnc, axisInfoAnalysis,
+                                   rewriter);
 
-    unsigned contiguity = axisInfoAnalysis.getContiguity(src);
-    if (mask)
-      contiguity = std::min<unsigned>(contiguity,
-                                      axisInfoAnalysis.getMaskAlignment(mask));
+    return success();
+  }
+};
 
-    rewriter.modifyOpInPlace(copyOp, [&]() {
-      copyOp.getSrcMutable().assign(src);
-      if (mask)
-        copyOp.getMaskMutable().assign(mask);
-      if (other)
-        copyOp.getOtherMutable().assign(other);
-      copyOp.setContiguity(contiguity);
-    });
+// For cheap loads we usually pick the layout based on users but when converting
+// to async_cp the layout of the copy is independent of the layout of the users
+// so picking a coalesced layout is better.
+struct CoalesceCheapAsyncCopyGlobalToLocal
+    : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
+  DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap;
+  using OpRewritePattern::OpRewritePattern;
+  CoalesceCheapAsyncCopyGlobalToLocal(
+      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+      DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap,
+      MLIRContext *context)
+      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis),
+        coalescedAsyncCopyMap(coalescedAsyncCopyMap) {}
+
+  LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
+                                PatternRewriter &rewriter) const override {
+    Value src = copyOp.getSrc();
+    Value mask = copyOp.getMask();
+    Value other = copyOp.getOther();
+    RankedTensorType srcTy = cast<RankedTensorType>(src.getType());
+    auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
+    int numWarps = triton::gpu::lookupNumWarps(copyOp);
+    auto mod = copyOp->getParentOfType<ModuleOp>();
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numCTAs = triton::gpu::getNumCTAs(dstTy.getEncoding());
+    int64_t size = srcTy.getNumElements();
+    // Assume the expensive copies are already coalesced.
+    // Skip dtype smaller than 32 bits to avoid problems with contiguity.
+    if (size >= numWarps * threadsPerWarp ||
+        dstTy.getElementTypeBitWidth() < 32)
+      return failure();
+    auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
+    auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
+
+    auto newEnc = coalescedAsyncCopyMap[copyOp];
+    if (newEnc == nullptr || newEnc == srcTy.getEncoding())
+      return failure();
+
+    retargetCopyOperandsToEncoding(copyOp, newEnc, axisInfoAnalysis, rewriter);
 
     return success();
   }
@@ -124,10 +182,27 @@ struct CoalesceAsyncCopyPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     triton::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
+    // Collect the coalesced encoding first as changing the IR invalidates the
+    // axis analysis.
+    DenseMap<AsyncCopyGlobalToLocalOp, Attribute> coalescedAsyncCopyMap;
+    m.walk([&](AsyncCopyGlobalToLocalOp copyOp) {
+      auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
+      int numWarps = triton::gpu::lookupNumWarps(copyOp);
+      int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
+      int numCTAs = triton::gpu::getNumCTAs(dstTy.getEncoding());
+      auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
+      auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
+      coalescedAsyncCopyMap[copyOp] =
+          buildCoalescedEncoding(axisInfoAnalysis, copyOp, numWarps,
+                                 threadsPerWarp, cgaLayout, shapePerCTA);
+    });
+
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
+    patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
+        axisInfoAnalysis, coalescedAsyncCopyMap, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();

@@ -38,6 +38,7 @@ static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/OpsEnums.cpp.inc"
 
 namespace mlir::triton::gpu {
 
@@ -772,6 +773,101 @@ LogicalResult LocalLoadOp::verify() {
   return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
+// LocalGatherOp
+LogicalResult LocalGatherOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto dstTy = cast<RankedTensorType>(getType());
+  unsigned axis = getAxis();
+
+  // Verify source has shared memory encoding
+  auto srcEnc = srcTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(srcEnc)) {
+    return emitError("source must have shared memory encoding");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  // Verify result has the same shape as indices
+  if (dstTy.getShape() != indicesTy.getShape()) {
+    return emitError("result shape must match indices shape");
+  }
+
+  // Verify src and indices have the same rank
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitError("source and indices must have the same rank");
+  }
+
+  // Verify axis is valid
+  if (axis >= srcTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for source rank " << srcTy.getRank();
+  }
+
+  // Verify element types match
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match source element type");
+  }
+
+  // Verify indices and result have the same layout
+  if (indicesTy.getEncoding() != dstTy.getEncoding()) {
+    return emitError("indices and result must have the same layout");
+  }
+
+  return success();
+}
+
+// LocalScatterOp
+LogicalResult LocalScatterOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  unsigned axis = getAxis();
+
+  // Verify destination has shared memory encoding
+  auto dstEnc = dstTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  // Verify values and indices have the same shape
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+
+  // Verify dst and indices have the same rank
+  if (dstTy.getRank() != indicesTy.getRank()) {
+    return emitError("destination and indices must have the same rank");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values and indices have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+
+  // Verify element types match
+  if (dstTy.getElementType() != valuesTy.getElementType()) {
+    return emitError("values element type must match destination element type");
+  }
+
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
@@ -1255,6 +1351,53 @@ std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
 unsigned WarpSpecializeOp::getTotalPartitionWarps() {
   ArrayRef<int32_t> numWarps = getPartitionNumWarps();
   return std::accumulate(numWarps.begin(), numWarps.end(), 0);
+}
+
+//===----------------------------------------------------------------------===//
+// BarrierOp
+//===----------------------------------------------------------------------===//
+
+void BarrierOp::print(OpAsmPrinter &p) {
+  // print "all" instead of  "local|global_read|global_write|tensor|all"
+  if (getAddrSpace() == AddrSpace::All) {
+    p << " all";
+  } else {
+    p << ' ' << stringifyAddrSpace(getAddrSpace());
+  }
+}
+
+ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto parseAddrSpace = [&]() -> FailureOr<AddrSpace> {
+    std::string keyword;
+    if (parser.parseKeywordOrString(&keyword))
+      return failure();
+
+    auto addrSpace = symbolizeAddrSpace(keyword);
+    if (!addrSpace)
+      return parser.emitError(parser.getCurrentLocation())
+             << "unknown addrSpace '" << keyword << "'";
+
+    return *addrSpace;
+  };
+
+  auto addrSpace = parseAddrSpace();
+  if (failed(addrSpace))
+    return failure();
+
+  AddrSpace addrSpaceRet = *addrSpace;
+
+  while (succeeded(parser.parseOptionalVerticalBar())) {
+    addrSpace = parseAddrSpace();
+    if (failed(addrSpace))
+      return failure();
+
+    addrSpaceRet = bitEnumSet(addrSpaceRet, *addrSpace);
+  }
+
+  result.addAttribute("addrSpace",
+                      AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
+
+  return success();
 }
 
 } // namespace mlir::triton::gpu

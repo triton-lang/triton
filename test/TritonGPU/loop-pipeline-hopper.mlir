@@ -514,7 +514,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global
       // CHECK: scf.yield
-      tt.descriptor_store %desc[%1], %arg0 : !tt.tensordesc<tensor<128x128xf32, #shared>>, tensor<128x128xf32, #blocked>
+      tt.descriptor_store %desc[%c0_i32, %1], %arg0 : !tt.tensordesc<tensor<128x128xf32, #shared>>, tensor<128x128xf32, #blocked>
     }
     // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32}
     tt.return
@@ -786,13 +786,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   ttg.local_load
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   ttg.async_copy_global_to_local
@@ -854,13 +850,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK: scf.for
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 3 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
@@ -948,21 +940,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // CHECK:   ttg.local_load
     // CHECK:   ttg.local_load
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
+    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
-    // CHECK:   ttng.warp_group_dot
-    // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 7 : i32}
     // CHECK:   ttg.async_copy_global_to_local
     // CHECK:   ttg.async_commit_group
     // CHECK:   ttg.async_copy_global_to_local
@@ -1011,7 +992,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
@@ -1025,6 +1005,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // Note that this "overwriting" makes the program invalid after SWP, since warp_group_dot does not support row-major fp8 RHS.
     // In this case, the TMA load on B should not be pipelined. When this bug is fixed, this test should be rewritten to verify that.
     // CHECK-NOT: order = [0, 1]
+    // CHECK: tt.return
     %c128_i32 = arith.constant 128 : i32
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -1058,5 +1039,98 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %13 = ttng.reinterpret_tensor_descriptor %arg2 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf32, #nvmma_128>>
     tt.descriptor_store %13[%5, %6], %12 : !tt.tensordesc<tensor<128x64xf32, #nvmma_128>>, tensor<128x64xf32, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: wgmma_not_yielded
+  // CHECK: scf.for
+  // CHECK-NEXT: ttng.warp_group_dot
+  // CHECK-NEXT: ttng.warp_group_dot_wait
+
+  tt.func public @wgmma_not_yielded() -> tensor<64x32xf32, #mma> {
+    %cst = arith.constant dense<3.000000e+00> : tensor<64x32xf32, #mma>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x32xbf16, #blocked>
+    %cst_2 = arith.constant dense<1.000000e+00> : tensor<32x32xbf16, #blocked>
+    %0 = ttg.local_alloc %cst_1 : (tensor<64x32xbf16, #blocked>) -> !ttg.memdesc<64x32xbf16, #shared, #smem, mutable>
+    %1 = ttg.local_alloc %cst_2 : (tensor<32x32xbf16, #blocked>) -> !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>
+    %2 = scf.for %arg0 = %c0_i32 to %c64_i32 step %c32_i32 iter_args(%arg1 = %cst_0) -> (tensor<64x32xf32, #mma>)  : i32 {
+      %3 = ttng.warp_group_dot %0, %1, %cst_0 {inputPrecision = 0 : i32} : !ttg.memdesc<64x32xbf16, #shared, #smem, mutable> * !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable> -> tensor<64x32xf32, #mma>
+      %4 = arith.cmpi ne, %arg0, %c0_i32 : i32
+      %5 = scf.if %4 -> (tensor<64x32xf32, #mma>) {
+        %6 = arith.addf %3, %cst : tensor<64x32xf32, #mma>
+        scf.yield %6 : tensor<64x32xf32, #mma>
+      } else {
+        %6 = arith.mulf %3, %cst : tensor<64x32xf32, #mma>
+        scf.yield %6 : tensor<64x32xf32, #mma>
+      }
+      scf.yield %5 : tensor<64x32xf32, #mma>
+    }
+    tt.return %2 : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: dot_outer_loop_arg
+  // CHECK: scf.for
+  // CHECK-NEXT: scf.for
+  // CHECK-NEXT: ttng.warp_group_dot
+  // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+  // CHECK-NEXT: scf.yield
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  tt.func public @dot_outer_loop_arg(%arg0: i32, %arg2: !ttg.memdesc<64x32xbf16, #shared, #smem, mutable>, %arg3: !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>) -> tensor<64x32xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %outer:2 = scf.for %arg4 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg5 = %arg3, %arg8 = %cst_0) -> (!ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>)  : i32 {
+      %0 = scf.for %arg6 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg7 = %arg8) -> (tensor<64x32xf32, #mma>)  : i32 {
+        %1 = ttng.warp_group_dot %arg2, %arg5, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<64x32xbf16, #shared, #smem, mutable> * !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable> -> tensor<64x32xf32, #mma>
+        scf.yield %1 : tensor<64x32xf32, #mma>
+      }
+      scf.yield %arg5, %0 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
+    }
+    tt.return %outer#1 : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: loop_arg_cycle
+  // CHECK: scf.for
+  // CHECK-NEXT: ttng.warp_group_dot
+  // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+  // CHECK-NEXT: scf.yield
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  tt.func public @loop_arg_cycle(%arg0: i32, %arg2: !ttg.memdesc<64x32xbf16, #shared, #smem, mutable>, %arg3: !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>) -> tensor<64x32xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %0:2 = scf.for %arg4 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg5 = %arg3, %arg7 = %cst_0) -> (!ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>)  : i32 {
+      %1 = ttng.warp_group_dot %arg2, %arg5, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<64x32xbf16, #shared, #smem, mutable> * !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable> -> tensor<64x32xf32, #mma>
+      scf.yield %arg5, %1 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
+    }
+    tt.return %0#1 : tensor<64x32xf32, #mma>
   }
 }

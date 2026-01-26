@@ -200,23 +200,30 @@ struct ConvertLayoutOpConversion
     SmallVector<Value> outVals;
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
-    auto noPaddingOffset = [](Value v) { return v; };
 
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
-
+      if (i > 0) {
+        if (isWarpSync) {
+          targetInfo.warpSync(loc, rewriter);
+        } else {
+          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        }
+      }
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      noPaddingOffset, affineOffset, maskSpanAffineOffset,
+                      /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                       rewriter, targetInfo);
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (isWarpSync) {
+        targetInfo.warpSync(loc, rewriter);
+      } else {
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      }
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }

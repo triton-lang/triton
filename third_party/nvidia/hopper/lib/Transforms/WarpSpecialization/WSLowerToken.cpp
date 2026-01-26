@@ -68,7 +68,7 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
     // then find the count from init_barrier
     arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, 1);
   } else {
-    assert(false);
+    llvm::report_fatal_error("unsupported load type for producer commit");
   }
 
   assert(op.getOperation()->hasAttr("async_task_id"));
@@ -141,7 +141,8 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     }
 
     assert(numCTAs == 1 && "remote CTA is not supported yet");
-    mlir::gpu::BarrierOp::create(builder, loc);
+    mlir::triton::gpu::BarrierOp::create(builder, loc,
+                                         triton::gpu::AddrSpace::Local);
 
     // Helper function for extracting one index from bufferFullArray.
     auto extractBufferFull = [&](Location loc, Value idx) -> Value {

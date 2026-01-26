@@ -195,7 +195,8 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        if not amd.supports_tdm(options.arch):
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -225,6 +226,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         amd.passes.ttgpuir.add_optimize_dot_operands(pm, options.arch)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+        amd.passes.ttgpuir.add_sink_layout_conversions(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.common.add_canonicalizer(pm)
@@ -238,6 +240,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
+        amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
         passes.common.add_canonicalizer(pm)
         if options.schedule_hint.lower() != "none":
             for hint in options.schedule_hint.split(","):
@@ -262,6 +265,7 @@ class HIPBackend(BaseBackend):
             )
 
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
+        amd.passes.ttgpuir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)

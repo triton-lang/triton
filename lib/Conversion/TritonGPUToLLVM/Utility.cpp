@@ -476,30 +476,55 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
-Value emitPadding(Location loc, RewriterBase &rewriter,
-                  triton::gpu::PaddedSharedEncodingAttr layout,
-                  unsigned bitwidth, Value smemOffset, bool offsetInBytes) {
-  TritonLLVMOpBuilder b(loc, rewriter);
+SmallVector<std::pair<unsigned, unsigned>>
+getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes) {
+  auto padded = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(enc);
+  if (!padded)
+    return {};
 
-  assert((bitwidth >= 8) && "Invalid bitwidth for padded shared layout");
-  Value padOffset = b.i32_val(0);
-  unsigned offScale = offsetInBytes ? bitwidth / 8 : 1;
+  SmallVector<std::pair<unsigned, unsigned>> shifts;
+  assert(bitwidth >= 8 && (bitwidth % 8 == 0) &&
+         "bitwidth must be a positive multiple of 8 for padding");
+  uint64_t offScale = offsetInBytes ? (bitwidth / 8) : 1;
   for (auto [interval, padding] :
-       llvm::zip_equal(layout.getIntervals(), layout.getPaddings())) {
-    unsigned intervalScaled = offScale * interval;
-    unsigned paddingScaled = offScale * padding;
-    Value iVal = b.i32_val(llvm::Log2_32(intervalScaled));
-    Value pVal = b.i32_val(llvm::Log2_32(paddingScaled));
-    padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
+       llvm::zip_equal(padded.getIntervals(), padded.getPaddings())) {
+    uint64_t intervalScaled = static_cast<uint64_t>(interval) * offScale;
+    uint64_t paddingScaled = static_cast<uint64_t>(padding) * offScale;
+    unsigned i = llvm::Log2_64(intervalScaled);
+    unsigned p = llvm::Log2_64(paddingScaled);
+    assert(i < 32 && p < 32 && "shift amount must be < 32 for i32 offsets");
+    shifts.push_back({i, p});
   }
-  return padOffset;
+  return shifts;
+}
+
+Value applyPadding(Location loc, RewriterBase &rewriter, Value baseOffset,
+                   ArrayRef<std::pair<unsigned, unsigned>> shifts) {
+  if (shifts.empty())
+    return baseOffset;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value pad = b.i32_val(0);
+  for (auto [i, p] : shifts)
+    pad = b.add(pad, b.shl(b.lshr(baseOffset, b.i32_val(i)), b.i32_val(p)));
+  return b.add(baseOffset, pad);
+}
+
+uint32_t applyPadding(uint32_t baseOffset,
+                      ArrayRef<std::pair<unsigned, unsigned>> shifts) {
+  uint64_t pad = 0;
+  for (auto [i, p] : shifts)
+    pad += (static_cast<uint64_t>(baseOffset) >> i) << p;
+  uint64_t out = baseOffset + pad;
+  assert(out <= std::numeric_limits<uint32_t>::max() &&
+         "padded offset must be within 32-bit range");
+  return static_cast<uint32_t>(out);
 }
 
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> calcPaddedOffset,
+                ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
                 std::optional<int> maybeMaxVecElems, Operation *localLoadOp) {
@@ -527,7 +552,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
-                   calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
+                   paddingShifts, affineOffset, maskSpanAffineOffset, laneId,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
@@ -535,7 +560,7 @@ SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
-    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
     uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
     RewriterBase &rewriter, const TargetInfoBase &targetInfo,
     std::optional<int> maybeMaxVecElems,
@@ -600,15 +625,18 @@ SmallVector<Value> lowerLdSt(
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);
     Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
+    offset = applyPadding(loc, rewriter, offset, paddingShifts);
     for (int j = 0; j < nAdditive; j += elemsPerVec) {
       // all these constants will go as immediate values to LDS/STS
       auto regIdxAdd =
           reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
+      // `actionAdditiveStrides` forces `regIdxAddI8` and `offset` to be bitwise
+      // disjoint, so we can calculate their padding contributions separately.
+      regIdxAddI8 = applyPadding(regIdxAddI8, paddingShifts);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-      auto vecAddr =
-          b.gep(smemPtrTy, i8_ty, smemBase, calcPaddedOffset(innerOffset),
-                LLVM::GEPNoWrapFlags::inbounds);
+      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
+                           LLVM::GEPNoWrapFlags::inbounds);
       llvm::append_range(outVals,
                          lowerInst(rewriter, loc, vals, vecAddr, i + j, vecTy));
     }
@@ -633,18 +661,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
-  auto calcPaddedOffset = [&](Value smemOffset) {
-    TritonLLVMOpBuilder b(loc, rewriter);
-    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            srcTy.getEncoding())) {
-      // Apply the offset needed for padding.
-      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                    smemOffset, /*offsetInBytes=*/true);
-      smemOffset = b.add(smemOffset, padOffset);
-    }
-    return smemOffset;
-  };
+
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
@@ -665,13 +682,17 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
 
   std::optional<int> maybeMaxVecElems;
+  SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
           srcTy.getEncoding())) {
     maybeMaxVecElems = paddedEnc.getMinInterval();
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+    paddingShifts = getPaddedSharedShifts(paddedEnc, bitwidth,
+                                          /*offsetInBytes=*/true);
   }
 
   return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
-                         smemObj.getBase(), calcPaddedOffset, affineOffset,
+                         smemObj.getBase(), paddingShifts, affineOffset,
                          maskSpanAffineOffset, rewriter, targetInfo,
                          maybeMaxVecElems, localLoadOp);
 }
@@ -1229,6 +1250,45 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   return result;
 }
 
+// Puts the bits of `a` that are set in `mask` into the bits of `result`
+Value pdep_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  assert(a.getType() == i32_ty && "a must be i32");
+
+  if (mask == 0)
+    return b.i32_val(0);
+  assert(mask < 64 && "mask must be less than 64");
+
+  // Blocked algorithm (same grouping trick as the pext example).
+  uint32_t mskConst = mask;
+  uint32_t depcnt = 0; // how many source bits from `a` we've consumed
+  Value result = b.i32_val(0);
+
+  while (mskConst) {
+    uint32_t oldmsk = mskConst;
+
+    // Isolate lsb set bit, then clear the lowest contiguous run of 1s.
+    uint32_t bitgrplsb = mskConst & (~mskConst + 1); // m & -m
+    mskConst &= (bitgrplsb + mskConst);
+    uint32_t bitgrp = mskConst ^ oldmsk; // the cleared run (contiguous 1s)
+
+    // Group start position and length.
+    uint32_t lsbpos = __builtin_ctz(bitgrplsb);
+    uint32_t grplen = __builtin_ctz(~(bitgrp >> lsbpos));
+
+    // Align the next grplen bits of `a` to the group's lsb, then mask to the
+    // group.
+    uint32_t shift =
+        lsbpos - depcnt; // non-negative invariant for this traversal order
+    depcnt += grplen;
+
+    Value deposited = b.and_(b.shl(a, b.i32_val(shift)), b.i32_val(bitgrp));
+    result = b.or_(result, deposited);
+  }
+
+  return result;
+}
+
 std::tuple<SmallVector<Value>, Value>
 delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
@@ -1340,6 +1400,20 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
       Value dimSize = b.i32_val(dimShape);
       linear = b.add(b.mul(linear, dimSize), dim);
     }
+  }
+  return linear;
+}
+
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                triton::gpu::LinearEncodingAttr encoding, StringAttr dimName) {
+  auto orderDim = encoding.orderPerDim(dimName, encoding.getOrder());
+  auto shapeDim = encoding.basesPerDim(dimName);
+  auto linear = linearize(rewriter, loc, multiDim, shapeDim, orderDim);
+  auto ll = encoding.getLinearLayout();
+  int32_t freeVarMask = ll.getFreeVariableMasks().lookup(dimName);
+  if (freeVarMask != 0) {
+    int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
+    linear = pdep_i32(rewriter, loc, linear, nonFreeVarMask);
   }
   return linear;
 }
@@ -1547,16 +1621,15 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
     return unpackLLVector(loc, loadedVec, rewriter);
   };
 
-  auto noPaddingOffset = [](Value v) { return v; };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
-            /*calcPaddedOffset=*/noPaddingOffset, /*affineOffset=*/b.i32_val(0),
+            /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
+
   resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
-                         /*calcPaddedOffset=*/noPaddingOffset,
-                         /*affineOffset=*/b.i32_val(0),
+                         /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
                          /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
                          targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
 

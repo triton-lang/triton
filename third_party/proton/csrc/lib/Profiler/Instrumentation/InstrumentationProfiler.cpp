@@ -1,7 +1,6 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "TraceDataIO/CircularLayoutParser.h"
 
-#include "Driver/GPU/CudaApi.h"
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Numeric.h"
@@ -10,8 +9,6 @@
 #include <cstdint>
 #include <map>
 #include <numeric>
-#include <queue>
-#include <set>
 #include <stdexcept>
 
 namespace proton {
@@ -240,7 +237,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                          circularLayoutConfig->numBlocks);
               for (auto [data, entry] : dataToEntryMap) {
                 auto kernelId = entry.id;
-                entry = data->addOp(kernelId, contexts);
+                entry = data->addOp(entry.phase, kernelId, contexts);
                 entry.upsertMetric(std::make_unique<CycleMetric>(
                     event.first->cycle, event.second->cycle, duration,
                     normalizedDuration, kernelId, functionName,
@@ -263,11 +260,11 @@ void InstrumentationProfiler::doAddMetrics(
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   if (dataToEntryMap.empty()) {
     for (auto *data : dataSet) {
-      data->addScopeMetrics(scopeId, scalarMetrics);
+      data->addMetrics(scopeId, scalarMetrics);
     }
   } else {
     for (auto [data, entry] : dataToEntryMap) {
-      data->addEntryMetrics(entry.id, scalarMetrics);
+      data->addMetrics(entry.phase, entry.id, scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the

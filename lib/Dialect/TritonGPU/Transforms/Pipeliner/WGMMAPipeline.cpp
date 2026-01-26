@@ -306,9 +306,15 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
 }
 
 std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
-  // Splits a wgmma(tensor, shmem) MxK, KxN -> MxN into
-  // along K into multiple wgmma(tensor, shmem) Mx16, 16xN -> MxN
-  // where 16 is the instruction size
+  // Splits wgmma(tensor, shmem, acc) into
+  //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
+  //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
+  // which allows for in-register pipelining of the wgmmas.
+  //
+  // Theoretically, it may be beneficial to split even further which allows more
+  // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
+  // best performance. In future this may be something we want to allow the user
+  // to tune.
   if (!isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
@@ -316,13 +322,14 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   auto a = cast<TypedValue<RankedTensorType>>(dotOp.getA());
   auto b = cast<TypedValue<ttg::MemDescType>>(dotOp.getB());
   auto origK = a.getType().getShape().back();
-  auto newK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
-                  .getInstrShape()[2];
-  auto numSplits = origK / newK;
+  auto instrK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
+                    .getInstrShape()[2];
   // Nothing to split
-  if (numSplits <= 1) {
+  if (origK <= instrK) {
     return {dotOp};
   }
+  constexpr int numSplits = 2;
+  uint32_t newK = origK / numSplits;
 
   assert(origK % newK == 0 && "origK must be divisible by newK");
   auto builder = OpBuilder(dotOp);
@@ -334,7 +341,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 
   Value useC = dotOp.getUseC();
   Value C = dotOp.getC();
-  auto numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
+  uint32_t numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
   std::vector<ttng::WarpGroupDotOp> dots;
   for (int i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
@@ -431,21 +438,30 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     // come from an MemDescIndex op.  Only ConvertLayout and view ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
-                           ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
-               transitiveOperand.getDefiningOp()) ||
-           isa<BlockArgument>(transitiveOperand)) {
-      auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);
-      if (blockArg && blockArg.getOwner() == forOp.getBody()) {
-        transitiveOperand =
-            cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
-                .getOperand(blockArg.getArgNumber() - 1);
-      } else if (Operation *def = transitiveOperand.getDefiningOp()) {
-        transitiveOperand = def->getOperand(0);
+    DenseSet<BlockArgument> visitedBlockArgs;
+    while (!forOp.isDefinedOutsideOfLoop(transitiveOperand)) {
+      if (auto *definingOp = transitiveOperand.getDefiningOp()) {
+        if (isa<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
+                ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(definingOp)) {
+          transitiveOperand = definingOp->getOperand(0);
+          continue;
+        }
+        return isa<ttg::MemDescIndexOp>(definingOp);
       }
+      auto blockArg = cast<BlockArgument>(transitiveOperand);
+      // We know that the dotOp is a top level operation in the loop body, and
+      // we have already checked that transitiveOperand is not defined outside
+      // the loop, therefore the block arg must be an iter arg of this loop.
+      assert(dotOp->getParentOp() == forOp);
+      assert(blockArg.getOwner() == forOp.getBody());
+      // If we have already visited this block arg, that means that it
+      // participates in a cycle containing only permitted operations. The
+      // initial value therefore originates outside the loop, making this valid.
+      if (!visitedBlockArgs.insert(blockArg).second)
+        return true;
+      transitiveOperand = forOp.getTiedLoopYieldedValue(blockArg)->get();
     }
-    return forOp.isDefinedOutsideOfLoop(transitiveOperand) ||
-           transitiveOperand.getDefiningOp<ttg::MemDescIndexOp>();
+    return true;
   };
 
   // Rule 1: All shmem operands are multi-buffered.
@@ -503,6 +519,12 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
+
+  // The dot result is not used by the loop yield. This could happen if it is
+  // dead, or if it is only used inside (but not yielded by) an scf::IfOp.
+  if (!iterArg)
+    return std::nullopt;
+
   // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
   if (!dotOp.getC().getType().getElementType().isF32()) {
     LDBG("Can't make dot async because the accumulator is not fp32");
@@ -739,25 +761,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     waitOperands.push_back(forOp.getResult(iterArgIdx));
   }
-
-  // Insert a wait(0) before the first use outside the loop
-  auto curBlock = forOp->getBlock();
-  Operation *firstUse = nullptr;
-  for (auto accVal : waitOperands) {
-    for (auto user : accVal.getUsers()) {
-      auto target = curBlock->findAncestorOpInBlock(*user);
-      if (!target)
-        continue;
-      if (!firstUse || target->isBeforeInBlock(firstUse))
-        firstUse = target;
-    }
-  }
-
-  if (firstUse) {
-    builder.setInsertionPoint(firstUse);
-  } else {
-    builder.setInsertionPoint(curBlock->getTerminator());
-  }
+  // Wait until there are 0 outstanding async dot ops.
+  builder.setInsertionPointAfter(forOp);
   auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
       builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);

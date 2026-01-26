@@ -50,7 +50,7 @@ def test_context(source: str, tmp_path: pathlib.Path):
 def test_session(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_session.hatchet"
     session_id = libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend())
-    libproton.deactivate(session_id)
+    libproton.deactivate(session_id, False)
     libproton.activate(session_id)
     libproton.finalize(session_id, "hatchet")
     libproton.finalize_all("hatchet")

@@ -38,9 +38,14 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.h.inc"
+
 namespace mlir::triton::nvidia_gpu::impl {
 LogicalResult verifyMMAv5Op(Operation *op);
 } // namespace mlir::triton::nvidia_gpu::impl
+
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.h.inc"
 
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"

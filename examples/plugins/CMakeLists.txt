@@ -14,26 +14,17 @@ set(TritonPluginsTestLib_SOURCES
     TritonPlugin.cpp
     )
 
+# Dialect Plugins
+add_subdirectory(DialectPlugins)
 
 foreach( plugin ${TRITON_PLUGIN_PASSES} )
-    add_mlir_library(${plugin}
-        ${${plugin}_SOURCES}
-        SHARED
-
-        ADDITIONAL_HEADER_DIRS
-        ${PROJECT_BINARY_DIR}/lib
-
-        DEPENDS
-        TritonTableGen
-        TritonCanonicalizeIncGen
-        TritonPluginsIncGen
-
-        LINK_LIBS PUBLIC
-        MLIRPass
-        LLVMSupport
-        MLIRSupport
-        "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
-        )
+    add_library(${plugin} SHARED ${${plugin}_SOURCES})
+    add_dependencies(${plugin}
+      TritonTableGen
+      TritonCanonicalizeIncGen
+      TritonPluginsIncGen
+    )
+    target_link_libraries(${plugin} PRIVATE MLIRPass)
 
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
     # build. It is empty if building directly from the root
@@ -46,5 +37,5 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../plugins")
     endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
 
-    target_compile_options(${plugin} PRIVATE -fvisibility=hidden)
+    target_compile_options(${plugin} PRIVATE -fvisibility=hidden ${TRITON_DISABLE_EH_RTTI_FLAGS})
 endforeach()

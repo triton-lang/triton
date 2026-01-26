@@ -43,7 +43,11 @@ def is_ampere_or_newer():
 
 
 def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
 def is_hopper_or_newer():
