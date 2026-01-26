@@ -27,7 +27,11 @@ struct LoadInfo {
   // The distance of this load's stage to its use' stage.
   int distToUse = 0;
   Operation *use = nullptr;
+  int globalPrefetch = 0;
+  bool hasEncoding() const { return sharedEncoding != nullptr; }
+  triton::gpu::SharedEncodingTrait encoding() const { return sharedEncoding; }
 };
+
 using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
 // A slim wrapper of ttg::loadOpsToIndirectionLevel, to get the indirection

@@ -93,9 +93,11 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   if (arch)
     isaFamily = triton::AMD::deduceISAFamily(*arch);
 
+  bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4 &&
+                            !isRDNA(isaFamily) &&
+                            isaFamily != triton::AMD::ISAFamily::GFX1250;
+
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
-  bool filterSmallVectors =
-      isaFamily != triton::AMD::ISAFamily::CDNA4 && !isRDNA(isaFamily);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       triton::gpu::loadOpsToIndirectionLevel(forOp, pipelineWithoutDot,
                                              axisInfoAnalysis, numStages,
@@ -321,8 +323,9 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, info] : loadToInfo) {
     // Non-LoadOp(s) are the (final) root uses of all LoadOp(s).
-    if (!isa<tt::LoadOp>(info.use))
+    if (!isa<tt::LoadOp>(info.use) && !isa<tt::DescriptorLoadOp>(info.use)) {
       schedule.insert(info.use, stages[SCHED_COMPUTE], clusters[SCHED_COMPUTE]);
+    }
   }
 
   // Assign stages to the loads.
@@ -542,11 +545,18 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
+    LoadInfo loadInfo = {nullptr, distance, use};
+    auto useTDM = isa<tt::DescriptorLoadOp>(load);
+    if (useTDM) {
+      loadToInfo[load] = loadInfo;
+      continue;
+    }
+
     auto newLoad = bypassLDS(load, use);
     if (newLoad) {
-      loadToInfo[newLoad] = {nullptr, distance, use};
+      loadToInfo[newLoad] = loadInfo;
     } else {
-      loadToInfo[load] = {nullptr, distance, use};
+      loadToInfo[load] = loadInfo;
     }
   }
 
