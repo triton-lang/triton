@@ -503,6 +503,27 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
 
 //===----------------------------------------------------------------------===//
+// Type methods
+//===----------------------------------------------------------------------===//
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Verifier
+//===----------------------------------------------------------------------===//
+LogicalResult
+TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
+                             RankedTensorType blockType) {
+  // blockType must be rank 2 for im2col mode
+  if (blockType.getRank() != 2) {
+    return emitError()
+           << "TensorDescIm2ColType requires rank-2 blockType, got rank "
+           << blockType.getRank();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
 namespace {
@@ -534,6 +555,10 @@ void TritonNvidiaGPUDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+      >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();

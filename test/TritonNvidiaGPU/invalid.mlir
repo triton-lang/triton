@@ -374,3 +374,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+// Test invalid TensorDescIm2ColType: rank-3 blockType (must be rank-2)
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // expected-error @below {{TensorDescIm2ColType requires rank-2 blockType, got rank 3}}
+  tt.func @tensordesc_im2col_wrong_rank(%desc: !ttng.tensordesc_im2col<tensor<32x64x128xf16>>) {
+    tt.return
+  }
+}
