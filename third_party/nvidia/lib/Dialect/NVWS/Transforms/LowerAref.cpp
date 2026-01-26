@@ -126,8 +126,8 @@ struct ArefValue {
   Value fullMbars;
   int depth;
   SmallVector<Value> buffers;
-  bool emptyMultiThreaded;
-  bool fullMultiThreaded;
+  bool emptyIsPerWarp;
+  bool fullIsPerWarp;
 };
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
@@ -153,10 +153,10 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
 struct BarrierCount {
   int producerPendingCount{0};
   int consumerPendingCount{0};
-  SetVector<int> producerPartitionIds;
-  SetVector<int> consumerPartitionIds;
-  bool consumerMultiThreaded{false};
-  bool producerMultiThreaded{false};
+  SmallVector<int> producerPartitionIds;
+  SmallVector<int> consumerPartitionIds;
+  bool consumerIsPerWarp{false};
+  bool producerIsPerWarp{false};
 };
 
 SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
@@ -183,7 +183,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
-      count.producerPartitionIds.insert(partitionIds.front());
+      count.producerPartitionIds.push_back(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -191,7 +191,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
           count.producerPendingCount += 1;
           break;
         case AsyncOp::NONE:
-          count.producerMultiThreaded = true;
+          count.producerIsPerWarp = true;
           count.producerPendingCount += 1;
           break;
         default:
@@ -203,7 +203,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       consumerGroups.insert(partitionIds.front());
-      count.consumerPartitionIds.insert(partitionIds.front());
+      count.consumerPartitionIds.push_back(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -211,7 +211,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
           break;
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          count.consumerMultiThreaded = true;
+          count.consumerIsPerWarp = true;
           count.consumerPendingCount += 1;
           break;
         default:
@@ -232,17 +232,16 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
                      int numBarriers, int arrivalCount,
-                     SetVector<int> dependentPartitionIds, bool multiThreaded) {
+                     SmallVector<int> dependentPartitionIds, bool IsPerWarp) {
   Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    if (dependentPartitionIds.empty() || !multiThreaded) {
+    if (dependentPartitionIds.empty() || !IsPerWarp) {
       InitBarrierOp::create(b1, barrierView, arrivalCount);
     } else {
       InitBarrierOp::create(
           b1, barrierView,
-          DenseI32ArrayAttr::get(b1.getContext(),
-                                 llvm::to_vector(dependentPartitionIds)));
+          DenseI32ArrayAttr::get(b1.getContext(), dependentPartitionIds));
     }
   }
   // Invalidate and deallocate the barriers.
@@ -273,17 +272,17 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
 
   auto emptyMbars =
       createBarriers(b1, b2, depth, count.consumerPendingCount,
-                     count.consumerPartitionIds, count.consumerMultiThreaded);
+                     count.consumerPartitionIds, count.consumerIsPerWarp);
   auto fullMbars =
       createBarriers(b1, b2, depth, count.producerPendingCount,
-                     count.producerPartitionIds, count.producerMultiThreaded);
+                     count.producerPartitionIds, count.producerIsPerWarp);
 
   return ArefValue{emptyMbars,
                    fullMbars,
                    static_cast<int>(depth),
                    op.getOperands(),
-                   count.consumerMultiThreaded,
-                   count.producerMultiThreaded};
+                   count.consumerIsPerWarp,
+                   count.producerIsPerWarp};
 }
 
 SmallVector<Value>
@@ -488,7 +487,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
 }
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
-                         PatternRewriter &rewriter, Value mbar, bool isWarp,
+                         PatternRewriter &rewriter, Value mbar, bool isPerWarp,
                          std::optional<PartitionWsTagIds> partitionWsTagIds,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
@@ -497,7 +496,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
       arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1,
-                                                     /*isWarp=*/isWarp);
+                                                     isPerWarp);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
@@ -558,7 +557,7 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, arefVal.fullMultiThreaded,
+                      fullBarrier, arefVal.fullIsPerWarp,
                       getPartitionWsTagIds(op), getStageCluster(op));
 }
 
@@ -597,7 +596,7 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      arefVal.emptyMultiThreaded, getPartitionWsTagIds(op),
+                      arefVal.emptyIsPerWarp, getPartitionWsTagIds(op),
                       stageCluster);
 }
 

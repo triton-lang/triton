@@ -136,7 +136,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
       Exactly one of `count` or `dependentPartitionIds` must be provided:
       - `count`: The number of arrives expected by the barrier.
       - `dependentPartitionIds`: The barrier count will be calculated as the
-        cumulative number of threads in the specified partitions.
+        cumulative number of warps in the specified dependent partitions.
 
       This lowers to PTX mbarrier.init.shared::cta.b64.
   }];
@@ -249,8 +249,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
     of at least 1 and exactly one of `per_grid` or `per_warp` attributes. The
     pending arrival count of the mbarrier is decreased by the specified count.
 
-    `per_grid`: the lead thread of the grid performs the operation.
-    `per_warp`: the lead thread of each warp performs the operation.
+    `per_grid`: only the lead thread of the grid performs the operation.
+    `per_warp`: only the lead thread of each warp performs the operation.
 
     The operation accepts an optional predicate.
 
@@ -275,17 +275,31 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isWarp), [{
+    // Default builders - isPerWarp defaults to false (per_grid)
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
       auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = isWarp ? nullptr : $_builder.getUnitAttr();
-      auto perWarpAttr = isWarp ? $_builder.getUnitAttr() : nullptr;
+      auto perGridAttr = $_builder.getUnitAttr();
+      return build($_builder, $_state, alloc, countAttr, perGridAttr,
+                   /*per_warp=*/nullptr, /*pred=*/Value());
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
+      auto countAttr = $_builder.getI32IntegerAttr(count);
+      auto perGridAttr = $_builder.getUnitAttr();
+      return build($_builder, $_state, alloc, countAttr, perGridAttr,
+                   /*per_warp=*/nullptr, pred);
+    }]>,
+    // Explicit builders for when you need to specify isPerWarp
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp), [{
+      auto countAttr = $_builder.getI32IntegerAttr(count);
+      auto perGridAttr = isPerWarp ? nullptr : $_builder.getUnitAttr();
+      auto perWarpAttr = isPerWarp ? $_builder.getUnitAttr() : nullptr;
       return build($_builder, $_state, alloc, countAttr, perGridAttr,
                    perWarpAttr, /*pred=*/Value());
     }]>,
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isWarp, "Value":$pred), [{
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp, "Value":$pred), [{
       auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = isWarp ? nullptr : $_builder.getUnitAttr();
-      auto perWarpAttr = isWarp ? $_builder.getUnitAttr() : nullptr;
+      auto perGridAttr = isPerWarp ? nullptr : $_builder.getUnitAttr();
+      auto perWarpAttr = isPerWarp ? $_builder.getUnitAttr() : nullptr;
       return build($_builder, $_state, alloc, countAttr, perGridAttr,
                    perWarpAttr, pred);
     }]>

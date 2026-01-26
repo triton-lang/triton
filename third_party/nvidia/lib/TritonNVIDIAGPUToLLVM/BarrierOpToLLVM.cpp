@@ -27,7 +27,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
@@ -35,7 +34,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -300,7 +298,5 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  // Parsing arrive ops depends on seeing corresponding barrier init ops.
-  patterns.add<ArriveBarrierOpConversion>(
-      typeConverter, PatternBenefit(benefit.getBenefit() + 1));
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
 }

@@ -108,15 +108,14 @@ def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
 
 
 @builtin
-def arrive(mbarrier, *, is_warp=False, pred=True, _semantic=None):
+def arrive(mbarrier, *, pred=True, _semantic=None):
     """
     Arrive on an mbarrier, signaling that a thread has reached the barrier.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to arrive on.
-        is_warp (bool): If True, per-warp arrive (lead thread of each warp). If False, per-grid arrive (lead thread of grid). Defaults to False.
         pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
     """
     count = 1
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, is_warp, pred.handle)
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)
