@@ -30,6 +30,24 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     auto ifOpBuilder = ifOp.getElseBodyBuilder();
     scf::YieldOp::create(ifOpBuilder, loc, dotOp->getOperand(2));
     return ifOp;
+  } else if (auto copyOp =
+                 dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(copyOp);
+    // TDM requires the mask as I32
+    auto predI32 = arith::ExtUIOp::create(rewriter, copyOp->getLoc(),
+                                          copyOp.getPred().getType(), pred);
+    Value mask = arith::AndIOp::create(rewriter, copyOp->getLoc(),
+                                       copyOp.getPred(), predI32);
+    copyOp.getPredMutable().assign(mask);
+    return op;
+  } else if (auto copyOp = dyn_cast<triton::amdgpu::TDMPrefetchOp>(op)) {
+    rewriter.setInsertionPoint(copyOp);
+    Value mask = arith::AndIOp::create(rewriter, copyOp->getLoc(),
+                                       copyOp.getPred(), pred);
+    copyOp.getPredMutable().assign(mask);
+    return op;
+  } else if (auto waitOp = dyn_cast<triton::amdgpu::AsyncTDMWait>(op)) {
+    return op;
   }
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
