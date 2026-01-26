@@ -300,7 +300,8 @@ def make_default_opt_flags_nvidia(
 
     # Occupancy target and maxnreg (for Hopper)
     occupancy_target = 1
-    if isinstance(b_mx_scale_layout, HopperMXScaleLayout):
+    is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
+    if is_hopper_scale:
         occupancy_target = 16 // num_warps
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
@@ -339,7 +340,11 @@ def make_default_opt_flags_nvidia(
         is_persistent=is_persistent,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
-        target_kernel_kwargs=dict(maxnreg=maxnreg),
+        target_kernel_kwargs=dict(
+            maxnreg=maxnreg,
+            # For some reason, overlapping the epilogue is slower for hopper bf16 x mxfp4
+            FLATTEN_LOOPS=not is_hopper_scale,
+        ),
         idle_sms=constraints.get("idle_sms", 0),
         occupancy_target=occupancy_target,
     )

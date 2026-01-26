@@ -1248,10 +1248,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    lowerLdSt(
-        loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
-        warpId, rewriter, targetInfo, maxVec, emitCpAsync);
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
+              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset, laneId,
+              warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),

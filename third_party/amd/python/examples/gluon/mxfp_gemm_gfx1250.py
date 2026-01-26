@@ -4,7 +4,6 @@ import hip
 # Needed for internal dev flow for now; will remove later
 hip.hip.hipInit(0)
 
-import re
 import torch
 import pytest
 import triton
@@ -15,25 +14,11 @@ from triton.experimental.gluon.language.amd.gfx1250 import async_copy as cp
 from triton.language.core import _aggregate as aggregate
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
-
-def static_profile(kernel):
-    amdgcn = kernel.asm['amdgcn']
-
-    sgpr_count = int(re.search(r'\.sgpr_count:\s+(\d+)', amdgcn).group(1))
-    sgpr_spill_count = int(re.search(r'\.sgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_count = int(re.search(r'\.vgpr_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_spill_count = int(re.search(r'\.vgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    scratch_size = int(re.search(r';\s+ScratchSize:\s+(\d+)', amdgcn).group(1))
-    code_len_in_byte = int(re.search(r';\s+codeLenInByte\s+=\s+(\d+)', amdgcn).group(1))
-    occupancy = int(re.search(r';\s+Occupancy:\s+(\d+)', amdgcn).group(1))
-
-    print(f"- sgpr_count: {sgpr_count}\n"
-          f"- sgpr_spill_count: {sgpr_spill_count}\n"
-          f"- vgpr_count: {vgpr_count}\n"
-          f"- vgpr_spill_count: {vgpr_spill_count}\n"
-          f"- scratch_size: {scratch_size}\n"
-          f"- code_len_in_byte: {code_len_in_byte}\n"
-          f"- occupancy: {occupancy}\n")
+# Handle imports for both pytest (module context) and direct execution
+try:
+    from .gfx1250_utils import static_profile
+except ImportError:
+    from gfx1250_utils import static_profile
 
 
 @gluon.constexpr_function
@@ -78,7 +63,6 @@ class MXFPGEMMConfig:
     BLOCK_M_PRESHUFFLED: gl.constexpr
     BLOCK_N_PRESHUFFLED: gl.constexpr
     BLOCK_K_SCALE_PRESHUFFLED: gl.constexpr
-    tiles_per_warp: gl.constexpr
     SCALE_BLOCK: gl.constexpr
     ASYNC_COPY_SCALE: gl.constexpr
 
@@ -115,8 +99,6 @@ class MXFPGEMMConfig:
         else:
             reg_bases: gl.constexpr = []
             warp_bases: gl.constexpr = [[0, 1], [1, 0]]
-
-        self.tiles_per_warp = gl.constexpr([2, 2] if SCALE_PRESHUFFLE else [1, 1])
 
         self.BLOCK_M_PRESHUFFLED = gl.constexpr(BLOCK_M // self.PRESHUFFLE_FACTOR)
         self.BLOCK_N_PRESHUFFLED = gl.constexpr(BLOCK_N // self.PRESHUFFLE_FACTOR)
@@ -280,7 +262,7 @@ class MXFPGEMMPipelinedProgram:
                                         a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
 
     @gluon.jit
-    def issue_loads(self, load_idx, pred=True):
+    def issue_loads(self, load_idx, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_K = cfg.NUM_SUBTILES[2]
         BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
@@ -359,9 +341,12 @@ class MXFPGEMMPipelinedProgram:
 
         accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
         loop_ub = gl.cdiv(K, cfg.BLOCK_K)
+        gl.assume(loop_ub > 0)
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         for i in range(0, loop_ub):
-            load_idx = self.issue_loads(load_idx, pred=(i < epilogue_lb))
+            pred = i - epilogue_lb
+            pred = (pred >> 31) & 1
+            load_idx = self.issue_loads(load_idx, pred=pred)
 
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * self.cfg.NUM_LOADS_IN_BATCH)
 
@@ -554,7 +539,7 @@ class MXFPGEMMSliceNKProgram:
         return b, scale_b
 
     @gluon.jit
-    def issue_load_a(self, load_idx, a_buffer, a_scale_buffer, pred=True):
+    def issue_load_a(self, load_idx, a_buffer, a_scale_buffer, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
@@ -574,7 +559,7 @@ class MXFPGEMMSliceNKProgram:
         return load_idx + 1
 
     @gluon.jit
-    def issue_load_b(self, load_idx, b_buffer, b_scale_buffer, pred=True):
+    def issue_load_b(self, load_idx, b_buffer, b_scale_buffer, pred=1):
         cfg = self.cfg
         NUM_SUBTILES_N: gl.constexpr = cfg.NUM_SUBTILES[1]
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
@@ -642,9 +627,11 @@ class MXFPGEMMSliceNKProgram:
                       layout=cfg.acc_layout)
 
         loop_ub = gl.cdiv(K, cfg.BLOCK_K)
+        gl.assume(loop_ub > 0)
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         for i in range(0, loop_ub):
-            pred = (i < epilogue_lb)
+            pred = i - epilogue_lb
+            pred = (pred >> 31) & 1
 
             # iter i + 1
             load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer0, self.a_scale_buffer0, pred=pred)

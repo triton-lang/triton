@@ -257,9 +257,11 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
                                                accumulator, (NUM_BUFFERS - 1) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
         producer = 0
+        pred = tile_idx + 1 - num_tiles
+        pred = (pred >> 31) & 1
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             producer = issue_loads(producer, a_desc, b_desc, off_am_next, off_bn_next, a_buffer, b_buffer, BLOCK_K,
-                                   NUM_BUFFERS, TRANSPOSE_B, pred=tile_idx + 1 < num_tiles)
+                                   NUM_BUFFERS, TRANSPOSE_B, pred=pred)
             consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                                accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
@@ -383,6 +385,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     loop_ub = ttgl.cdiv(K, BLOCK_K)
     epilogue_lb = loop_ub - (NUM_BUFFERS - 1)
     for i in range(0, loop_ub):
+        pred = i - epilogue_lb
+        pred = (pred >> 31) & 1
         # SubIteration0
         # LDS load SubIteration1
         a1, b1 = lds_subtile_load(consumer, SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
@@ -394,7 +398,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         # TDM load for next tile
         # If we are in epilogue, we have already issued our tile loads
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                               pred=i < epilogue_lb)
+                               pred=pred)
         # LDS load SubIteration2
         a2, b2 = lds_subtile_load(consumer, 2 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
