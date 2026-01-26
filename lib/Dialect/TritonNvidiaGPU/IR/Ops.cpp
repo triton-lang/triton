@@ -228,15 +228,13 @@ LogicalResult ClusterWaitOp::verify() {
 }
 
 // -- TMA operation verifiers --
-static LogicalResult verifyTMAEncoding(Operation *op,
-                                       TypedValue<TensorDescType> desc,
+static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
                                        Attribute enc) {
   auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
-  auto descTy = desc.getType();
   auto descEnc = dyn_cast_if_present<NVMMASharedEncodingAttr>(
-      descTy.getBlockType().getEncoding());
+      desc.getBlockType().getEncoding());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
   // rank-reducing loads
   if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
@@ -253,7 +251,7 @@ static LogicalResult verifyTMAEncoding(Operation *op,
 }
 
 static LogicalResult verifyAsyncTMALoadOp(Operation *op,
-                                          TypedValue<TensorDescType> desc,
+                                          TensorDescInterface desc,
                                           TypedValue<MemDescType> barrier,
                                           MemDescType resultType) {
   if (failed(verifyBarrierType(op, barrier.getType())))
@@ -273,15 +271,20 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  return verifyTMAEncoding(op, desc, srcEnc);
+  return verifyTMAEncoding(op, desc.getType(), srcEnc);
+}
+
+// Helper to determine if the descriptor type is for im2col mode
+static bool isIm2ColDescriptor(Type descType) {
+  return isa<TensorDescIm2ColType>(descType);
 }
 
 static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
-                                          TypedValue<TensorDescType> desc,
-                                          TensorMode tensorMode) {
-  unsigned blockRank = desc.getType().getBlockType().getRank();
+                                          TensorDescInterface desc,
+                                          bool isIm2Col) {
+  unsigned blockRank = desc.getBlockType().getRank();
 
-  if (tensorMode == TensorMode::IM2COL) {
+  if (isIm2Col) {
     // For IM2COL mode, coordinates are for the full tensor (3D-5D)
     // not the 2D block shape
     if (coords.size() < 3)
@@ -304,9 +307,9 @@ static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
   return success();
 }
 
-static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
+static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col,
                                    ValueRange coords, ValueRange offsets) {
-  if (tensorMode == TensorMode::IM2COL) {
+  if (isIm2Col) {
     if (offsets.empty())
       return op->emitOpError("IM2COL mode requires offsets to be provided");
 
@@ -329,17 +332,19 @@ static LogicalResult verifyTMAMode(Operation *op, TensorMode tensorMode,
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
-  if (failed(
-          verifyAsyncTMACoords(*this, getCoord(), getDesc(), getTensorMode())))
+  auto descType = getDesc().getType();
+  bool isIm2Col = isIm2ColDescriptor(descType);
+  auto descInterface = cast<TensorDescInterface>(descType);
+
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), descInterface, isIm2Col)))
     return failure();
   auto resultType = getResult().getType();
-  if (failed(
-          verifyDescriptorLoadStoreOp(*this, getDesc().getType(), resultType)))
+  if (failed(verifyDescriptorLoadStoreOp(*this, descType, resultType)))
     return failure();
-  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(),
+  if (failed(verifyAsyncTMALoadOp(*this, descInterface, getBarrier(),
                                   getResult().getType())))
     return failure();
-  if (failed(verifyTMAMode(*this, getTensorMode(), getCoord(), getOffsets())))
+  if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
   return success();
 }
@@ -347,8 +352,8 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   // Store ops only support TILED mode
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
-                                  TensorMode::TILED)))
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
+                                  /*isIm2Col=*/false)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
@@ -359,8 +364,8 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
 // -- AsyncTMAReduceOp --
 LogicalResult AsyncTMAReduceOp::verify() {
   // Reduce ops only support TILED mode
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc(),
-                                  TensorMode::TILED)))
+  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
+                                  /*isIm2Col=*/false)))
     return failure();
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
@@ -371,7 +376,8 @@ LogicalResult AsyncTMAReduceOp::verify() {
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
   auto resultType = getResult().getType();
-  if (failed(verifyAsyncTMALoadOp(*this, getDesc(), getBarrier(), resultType)))
+  if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
+                                  resultType)))
     return failure();
   // `tile::gather4` does not support fp4_padded operands.
   if (isFp4Padded(getResult().getType().getEncoding()))
