@@ -323,6 +323,8 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, info] : loadToInfo) {
     // Non-LoadOp(s) are the (final) root uses of all LoadOp(s).
+    // FIXME: Do we need to check desc-load? Is it possible that desc-load
+    // a direct in indirect use of a load?
     if (!isa<tt::LoadOp>(info.use) && !isa<tt::DescriptorLoadOp>(info.use)) {
       schedule.insert(info.use, stages[SCHED_COMPUTE], clusters[SCHED_COMPUTE]);
     }
@@ -545,7 +547,8 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
-    LoadInfo loadInfo = {nullptr, distance, use};
+    LoadInfo loadInfo = {
+        .sharedEncoding = nullptr, .distToUse = distance, .use = use};
     auto useTDM = isa<tt::DescriptorLoadOp>(load);
     if (useTDM) {
       loadToInfo[load] = loadInfo;
