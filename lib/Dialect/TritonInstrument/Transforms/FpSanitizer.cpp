@@ -580,37 +580,6 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
-Value createPointerTensorUnencoded2D(PatternRewriter &rewriter, Location loc,
-                                     Value base, ArrayRef<int64_t> shape) {
-  Type ptrTy = base.getType();
-  auto ptrTensorTy = RankedTensorType::get(shape, ptrTy);
-  Value ptrTensor = tt::SplatOp::create(rewriter, loc, ptrTensorTy, base);
-  Type i32Ty = rewriter.getI32Type();
-  auto offsetsTy = RankedTensorType::get(shape, i32Ty);
-
-  auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty);
-  auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
-  Value stride0 = createConstIntTensor(rewriter, loc, 1, dim0Ty);
-  auto off0 = arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0);
-  auto off0ExpTy = RankedTensorType::get({shape[0], 1}, i32Ty);
-  auto off0Exp = tt::ExpandDimsOp::create(rewriter, loc, off0ExpTy, off0, 1);
-  auto off0Full = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Full);
-
-  auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty);
-  auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
-  Value stride1 = createConstIntTensor(rewriter, loc, shape[0], dim1Ty);
-  auto off1 = arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1);
-  auto off1ExpTy = RankedTensorType::get({1, shape[1]}, i32Ty);
-  auto off1Exp = tt::ExpandDimsOp::create(rewriter, loc, off1ExpTy, off1, 0);
-  auto off1Full = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Full);
-
-  return ptrTensor;
-}
-
 Value expandAllSlicedDims(PatternRewriter &rewriter, Location loc,
                           Value tensor) {
   auto type = cast<RankedTensorType>(tensor.getType());
@@ -661,33 +630,15 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   return ptrTensor;
 }
 
-Value loadScratchUnencoded(PatternRewriter &rewriter, Location loc, Value base,
-                           RankedTensorType resultTy) {
-  auto shape = resultTy.getShape();
-  auto ptrTensor = createPointerTensorUnencoded2D(rewriter, loc, base, shape);
-  return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                            EvictionPolicy::NORMAL, false);
-}
-
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType resultTy, int64_t stride1) {
   auto shape = resultTy.getShape();
   auto encoding = dyn_cast<ttg::BlockedEncodingAttr>(resultTy.getEncoding());
-  if (!encoding)
-    return loadScratchUnencoded(rewriter, loc, base, resultTy);
+  assert(encoding && "expected encoded tensor type");
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, shape,
                                                 stride1, encoding);
   return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
                             EvictionPolicy::NORMAL, false);
-}
-
-Operation *storeScratchUnencoded(PatternRewriter &rewriter, Location loc,
-                                 Value base, Value tensor,
-                                 RankedTensorType tensorTy) {
-  auto ptrTensor =
-      createPointerTensorUnencoded2D(rewriter, loc, base, tensorTy.getShape());
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
-                             CacheModifier::NONE, EvictionPolicy::NORMAL);
 }
 
 Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
@@ -695,8 +646,7 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                  RankedTensorType tensorTy, int64_t stride1) {
   auto shape = tensorTy.getShape();
   auto encoding = dyn_cast<ttg::BlockedEncodingAttr>(tensorTy.getEncoding());
-  if (!encoding)
-    return storeScratchUnencoded(rewriter, loc, base, tensor, tensorTy);
+  assert(encoding && "expected encoded tensor type");
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, shape,
                                                 stride1, encoding);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
@@ -812,23 +762,18 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
 
     Location loc = op.getLoc();
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
-    Value result;
-    if (resultTy.getEncoding()) {
-      Value scratchVal =
-          createLoadScratchMemory(rewriter, loc, info->ptr, info->tensorType);
-      if (!scratchVal)
-        return failure();
-      if (scratchVal.getType() != resultTy) {
-        scratchVal =
-            ttg::ConvertLayoutOp::create(rewriter, loc, resultTy, scratchVal)
-                .getResult();
-      }
-      result = scratchVal;
-    } else {
-      if (resultTy.getRank() != 2)
-        return failure();
-      result = loadScratchUnencoded(rewriter, loc, info->ptr, resultTy);
+    if (!resultTy.getEncoding())
+      return failure();
+    Value scratchVal =
+        createLoadScratchMemory(rewriter, loc, info->ptr, info->tensorType);
+    if (!scratchVal)
+      return failure();
+    if (scratchVal.getType() != resultTy) {
+      scratchVal =
+          ttg::ConvertLayoutOp::create(rewriter, loc, resultTy, scratchVal)
+              .getResult();
     }
+    Value result = scratchVal;
 
     if (op.getNumResults() == 1) {
       rewriter.replaceOp(op, result);
@@ -859,20 +804,16 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
 
     auto loc = op.getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    if (srcTy.getEncoding()) {
-      Value src = op.getSrc();
-      if (src.getType() != info->tensorType) {
-        src = ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, src)
-                  .getResult();
-      }
-      if (!createStoreScratchMemory(rewriter, loc, info->ptr, src,
-                                    info->tensorType))
-        return failure();
-    } else {
-      if (srcTy.getRank() != 2)
-        return failure();
-      storeScratchUnencoded(rewriter, loc, info->ptr, op.getSrc(), srcTy);
+    if (!srcTy.getEncoding())
+      return failure();
+    Value src = op.getSrc();
+    if (src.getType() != info->tensorType) {
+      src = ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, src)
+                .getResult();
     }
+    if (!createStoreScratchMemory(rewriter, loc, info->ptr, src,
+                                  info->tensorType))
+      return failure();
 
     if (op.getNumResults() == 0) {
       rewriter.eraseOp(op);
