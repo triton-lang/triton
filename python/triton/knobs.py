@@ -532,7 +532,13 @@ class proton_knobs(base_knobs):
     #
     # You can ensure this in one of the following ways:
     # 1) Use the `proton` CLI tool to launch the Python script.
+    # e.g., `TRITON_ENABLE_HW_TRACE=1 proton python my_script.py`
     # 2) Call `proton.start()` immediately after `import triton.profiler as proton`.
+    # e.g., ```python
+    # import triton.profiler as proton
+    # proton.enable_hw_trace = True
+    # proton.start(hook="triton")
+    # ```
     enable_hw_trace: env_bool = env_bool("TRITON_ENABLE_HW_TRACE", False)
 
 
