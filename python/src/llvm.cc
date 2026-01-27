@@ -48,6 +48,44 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
+// Set an LLVM command-line option and return its original value
+template <typename T> T setLLVMOption(const std::string &name, T value) {
+  auto options = llvm::cl::getRegisteredOptions();
+  auto it = options.find(name);
+  if (it == options.end())
+    return T{};
+  auto *opt = static_cast<llvm::cl::opt<T> *>(it->second);
+  T original = opt->getValue();
+  opt->setValue(value);
+  return original;
+}
+
+// Restore an LLVM command-line option to a previous value
+template <typename T> void restoreLLVMOption(const std::string &name, T value) {
+  auto options = llvm::cl::getRegisteredOptions();
+  auto it = options.find(name);
+  if (it != options.end()) {
+    auto *opt = static_cast<llvm::cl::opt<T> *>(it->second);
+    opt->setValue(value);
+  }
+}
+
+// RAII guard that sets an LLVM option and restores it on destruction
+template <typename T> class ScopedLLVMOption {
+  std::string name;
+  T originalValue;
+
+public:
+  ScopedLLVMOption(const std::string &n, T newValue) : name(n) {
+    originalValue = setLLVMOption<T>(name, newValue);
+  }
+  ~ScopedLLVMOption() { restoreLLVMOption<T>(name, originalValue); }
+
+  // Non-copyable
+  ScopedLLVMOption(const ScopedLLVMOption &) = delete;
+  ScopedLLVMOption &operator=(const ScopedLLVMOption &) = delete;
+};
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
@@ -84,13 +122,11 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     return;
   }
 
-  // options
-  auto options = llvm::cl::getRegisteredOptions();
-  for (std::string flag : flags) {
-    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-    assert(shortPtr);
-    shortPtr->setValue(true);
+  // Apply flags
+  for (const std::string &flag : flags) {
+    setLLVMOption<bool>(flag, true);
   }
+
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -98,15 +134,18 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
-        }
+      for (const auto &flag : split) {
+        setLLVMOption<bool>(flag.str(), true);
       }
     }
   }
+
+  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
+
+  // Use RAII to set options and restore them when scope exits
+  ScopedLLVMOption<std::string> stopAfterGuard("stop-after",
+                                               "machine-scheduler");
+  ScopedLLVMOption<bool> mischedPrintGuard("misched-print-dags", true);
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -125,28 +164,8 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
   // set data layout
   module.setDataLayout(machine->createDataLayout());
 
-  int saved_stderr_fd = -1;
-  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
-
-  // Save and set stop-after
-  std::string originalStopAfter;
-  auto stopAfterOpt = options.find("stop-after");
-  if (stopAfterOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(stopAfterOpt->second);
-    originalStopAfter = optPtr->getValue();
-    optPtr->setValue("machine-scheduler");
-  }
-
-  // Enable misched-print-dags for DAG
-  auto mischedPrintOpt = options.find("misched-print-dags");
-  if (mischedPrintOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
-    optPtr->setValue(true);
-  }
-
   // Save original stderr file descriptor
-  saved_stderr_fd = dup(fileno(stderr));
+  int saved_stderr_fd = dup(fileno(stderr));
 
   // Redirect stderr to append to dump file
   FILE *redirected = freopen(dumpFilename.c_str(), "a", stderr);
@@ -167,7 +186,7 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     pass.run(module);
   }
 
-  // Restore stderr and reset options
+  // Restore stderr
   fflush(stderr);
   if (saved_stderr_fd != -1) {
     dup2(saved_stderr_fd, fileno(stderr));
@@ -175,18 +194,8 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     clearerr(stderr);
   }
 
-  if (stopAfterOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(stopAfterOpt->second);
-    optPtr->setValue(originalStopAfter);
-  }
-
-  if (mischedPrintOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
-    optPtr->setValue(false);
-  }
-
   llvm::errs() << "DAG dumped to: " << dumpFilename << "\n";
+  // LLVM options are automatically restored when scope exits via RAII
 }
 
 std::string
@@ -205,13 +214,11 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
 
   llvm::StripDebugInfo(module);
 
-  // options
-  auto options = llvm::cl::getRegisteredOptions();
-  for (std::string flag : flags) {
-    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-    assert(shortPtr);
-    shortPtr->setValue(true);
+  // Apply flags
+  for (const std::string &flag : flags) {
+    setLLVMOption<bool>(flag, true);
   }
+
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -219,32 +226,19 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
-        }
+      for (const auto &flag : split) {
+        setLLVMOption<bool>(flag.str(), true);
       }
     }
   }
 
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    auto optIt = options.find("print-after-all");
-    if (optIt != options.end()) {
-      auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-      *optPtr = true;
-    }
+    setLLVMOption<bool>("print-after-all", true);
   }
-  // Save and set stop-before if needed (for MIR output or custom stop point)
-  std::string originalStopBefore;
-  auto stopBeforeOpt = options.find("stop-before");
-  if (stopBeforeOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-    originalStopBefore = optPtr->getValue();
-    optPtr->setValue("machine-scheduler");
-  }
+
+  // Use RAII to set stop-before and restore it when scope exits
+  ScopedLLVMOption<std::string> stopBeforeGuard("stop-before",
+                                                "machine-scheduler");
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -273,12 +267,6 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
     machine->addPassesToEmitFile(pass, pstream, nullptr,
                                  llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
-  }
-
-  if (stopBeforeOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-    optPtr->setValue(originalStopBefore);
   }
 
   std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
@@ -306,20 +294,16 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::vector<std::string> &flags,
                                  bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
-  // options
-  auto options = llvm::cl::getRegisteredOptions();
-  for (std::string flag : flags) {
-    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-    assert(shortPtr);
-    shortPtr->setValue(true);
+
+  // Apply flags
+  for (const std::string &flag : flags) {
+    setLLVMOption<bool>(flag, true);
   }
+
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    auto optIt = options.find("print-after-all");
-    if (optIt != options.end()) {
-      auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-      *optPtr = true;
-    }
+    setLLVMOption<bool>("print-after-all", true);
   }
+
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -327,12 +311,8 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
-        }
+      for (const auto &flag : split) {
+        setLLVMOption<bool>(flag.str(), true);
       }
     }
   }
@@ -397,52 +377,23 @@ std::string translateMIRToASM(const std::string &mirPath,
                               bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
-  auto options = llvm::cl::getRegisteredOptions();
-
   // We need to start before machine-scheduler and disable it instead of simply
   // start after it because machine-scheduler is used as anchor point to insert
   // some passes. Starting after machine-scheduler would also not insert these
   // passes to the pipeline.
-  auto startBeforeOpt = options.find("start-before");
-  std::string originalStartBefore;
-  if (startBeforeOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
-    originalStartBefore = optPtr->getValue();
-    optPtr->setValue("machine-scheduler");
-  }
-
-  auto enableMISchedOpt = options.find("enable-misched");
-  bool originalEnableMisched;
-  if (enableMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
-    originalEnableMisched = optPtr->getValue();
-    enableMISchedOpt->second->addOccurrence(1, "enable-misched", "false");
-  }
-
-  auto enablePostMISchedOpt = options.find("enable-post-misched");
-  bool originalEnablePostMisched;
-  if (enablePostMISchedOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
-    originalEnablePostMisched = optPtr->getValue();
-    enablePostMISchedOpt->second->addOccurrence(1, "enable-post-misched",
-                                                "false");
-  }
+  // Use RAII to set options and restore them when scope exits
+  ScopedLLVMOption<std::string> startBeforeGuard("start-before",
+                                                 "machine-scheduler");
+  ScopedLLVMOption<bool> enableMISchedGuard("enable-misched", false);
+  ScopedLLVMOption<bool> enablePostMISchedGuard("enable-post-misched", false);
 
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    auto optIt = options.find("print-after-all");
-    if (optIt != options.end()) {
-      auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-      *optPtr = true;
-    }
+    setLLVMOption<bool>("print-after-all", true);
   }
+
   // Apply other flags
   for (const std::string &flag : flags) {
-    auto it = options.find(flag);
-    if (it != options.end()) {
-      it->second->addOccurrence(1, flag, "true");
-    }
+    setLLVMOption<bool>(flag, true);
   }
 
   // Parse MIR into LLVM Module
@@ -504,24 +455,7 @@ std::string translateMIRToASM(const std::string &mirPath,
     pass.run(*module);
   }
 
-  // Restore options
-  if (startBeforeOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<std::string> *>(startBeforeOpt->second);
-    optPtr->setValue(originalStartBefore);
-  }
-
-  if (enableMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
-    optPtr->setValue(originalEnableMisched);
-  }
-
-  if (enablePostMISchedOpt != options.end()) {
-    auto *optPtr =
-        static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
-    optPtr->setValue(originalEnablePostMisched);
-  }
-
+  // LLVM options are automatically restored when scope exits via RAII
   return result;
 }
 
@@ -670,15 +604,10 @@ void init_triton_llvm(py::module &&m) {
         // optimizations.
         auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
         if (!flagList.empty()) {
-          auto options = llvm::cl::getRegisteredOptions();
           llvm::SmallVector<StringRef, 3> split;
           StringRef(flagList.c_str()).split(split, ',');
-          for (auto flag : split) {
-            auto optIt = options.find(flag);
-            if (optIt != options.end()) {
-              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-              *optPtr = true;
-            }
+          for (const auto &flag : split) {
+            setLLVMOption<bool>(flag.str(), true);
           }
         }
         using namespace llvm;
@@ -700,12 +629,7 @@ void init_triton_llvm(py::module &&m) {
         StandardInstrumentations standardInstr(mod->getContext(),
                                                /*DebugLogging*/ true);
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          auto optMap = llvm::cl::getRegisteredOptions();
-          auto optIt = optMap.find("print-after-all");
-          if (optIt != optMap.end()) {
-            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-            *optPtr = true;
-          }
+          setLLVMOption<bool>("print-after-all", true);
           standardInstr.registerCallbacks(passInstrCb, &mam);
           instrCbPtr = &passInstrCb;
         }
