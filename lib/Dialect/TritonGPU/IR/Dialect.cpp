@@ -4035,11 +4035,33 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
 FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
-    function_ref<InFlightDiagnostic()> emitError) {
+    function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
   SmallVector<int64_t> blockShape(shapePerCTA);
+
+  // Common logic for both tiled and im2col modes
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
   if (fp4Padded)
     blockShape[contigDim] *= 2;
+
+  if (mode == TMAMode::Im2Col) {
+    // Im2col mode produces a 2D block: [pixelsPerColumn, channelsPerPixel]
+    assert(blockShape.size() == 2 &&
+           "im2col mode requires a 2D block shape");
+    // Im2col mode block shape constraints:
+    // - contigDim (channelsPerPixel): max 256
+    // - other dimension (pixelsPerColumn): max 1024
+    // - Both dimensions must be powers of 2
+    // - Doc: https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
+    constexpr int64_t contigDimMax = 256;
+    constexpr int64_t otherDimMax = 1024;
+    for (int i = 0; i < blockShape.size(); ++i) {
+      int64_t maxVal = (i == contigDim) ? contigDimMax : otherDimMax;
+      blockShape[i] = std::min(blockShape[i], maxVal);
+    }
+    return blockShape;
+  }
+
+  // Tiled mode specific logic
   // All dimensions must be at most 256
   constexpr int64_t dimMax = 256;
   for (auto &size : blockShape)
@@ -4064,14 +4086,16 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
 }
 SmallVector<int64_t> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
-    bool fp4Padded, bool isTransposed, bool packedSize) {
+    bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
   return *getTMABlockShape(
       shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded, isTransposed,
-      packedSize, []() -> InFlightDiagnostic {
+      packedSize,
+      []() -> InFlightDiagnostic {
         llvm::report_fatal_error(
             "Block shape is too small for the swizzle byte "
             "size in NVMMA Shared Layout.");
-      });
+      },
+      mode);
 }
 
 SetVector<int> triton::gpu::getPartitionIds(Operation *op) {

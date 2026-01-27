@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -1296,6 +1297,27 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
   return unpackLayout * packedLayout;
 }
 
+// Validate im2col mode constraints for TMA operations.
+// Returns success if valid, or emits an error and returns failure.
+static LogicalResult
+validateIm2ColConstraints(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op) {
+  // Im2col mode requires offsets to be provided
+  if (op.getOffsets().empty()) {
+    return op.emitError("im2col mode requires offsets to be provided");
+  }
+  // The number of offsets should be coord.size() - 2
+  // For 3D tensors (NWC): 1 offset (offset_w)
+  // For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
+  // For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
+  size_t expectedOffsets = op.getCoord().size() - 2;
+  if (op.getOffsets().size() != expectedOffsets) {
+    return op.emitError("im2col mode expects ")
+           << expectedOffsets << " offsets for a " << op.getCoord().size()
+           << "D tensor, but got " << op.getOffsets().size();
+  }
+  return success();
+}
+
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1311,6 +1333,18 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       return op.emitError("eviction policy not supported yet");
     if (op.getIsVolatile())
       return op.emitError("volatile not supported yet");
+
+    // Determine the TMA mode based on the descriptor type
+    auto descType = op.getDesc().getType();
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
+
+    // Validate and handle im2col mode
+    if (isIm2Col) {
+      if (failed(validateIm2ColConstraints(op)))
+        return failure();
+      // TODO: Implement im2col mode lowering
+      return op.emitError("im2col mode is not yet implemented");
+    }
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
