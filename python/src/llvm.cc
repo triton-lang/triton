@@ -48,25 +48,61 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
-// Set an LLVM command-line option and return its original value
-template <typename T> T setLLVMOption(const std::string &name, T value) {
+// Set an LLVM command-line option using addOccurrence (simulates command-line)
+// and return its original value. Using addOccurrence instead of setValue is
+// necessary because some LLVM passes (like schedulers) check whether the option
+// was explicitly set on the command line.
+template <typename T> T setLLVMOption(const std::string &name, T value);
+
+template <> bool setLLVMOption<bool>(const std::string &name, bool value) {
   auto options = llvm::cl::getRegisteredOptions();
   auto it = options.find(name);
   if (it == options.end())
-    return T{};
-  auto *opt = static_cast<llvm::cl::opt<T> *>(it->second);
-  T original = opt->getValue();
-  opt->setValue(value);
+    return false;
+  auto *opt = static_cast<llvm::cl::opt<bool> *>(it->second);
+  bool original = opt->getValue();
+  // Use addOccurrence to mark the option as explicitly set on command line.
+  // This is important for options like enable-misched where LLVM checks
+  // getNumOccurrences() to determine if the option was explicitly set.
+  // See: llvm/lib/CodeGen/MachineScheduler.cpp -
+  // enableMachineSchedDefaultSched() checks
+  // "EnableMachineSched.getNumOccurrences()" to decide behavior.
+  it->second->addOccurrence(1, name, value ? "true" : "false");
+  return original;
+}
+
+template <>
+std::string setLLVMOption<std::string>(const std::string &name,
+                                       std::string value) {
+  auto options = llvm::cl::getRegisteredOptions();
+  auto it = options.find(name);
+  if (it == options.end())
+    return "";
+  auto *opt = static_cast<llvm::cl::opt<std::string> *>(it->second);
+  std::string original = opt->getValue();
+  it->second->addOccurrence(1, name, value);
   return original;
 }
 
 // Restore an LLVM command-line option to a previous value
-template <typename T> void restoreLLVMOption(const std::string &name, T value) {
+template <typename T> void restoreLLVMOption(const std::string &name, T value);
+
+template <> void restoreLLVMOption<bool>(const std::string &name, bool value) {
   auto options = llvm::cl::getRegisteredOptions();
   auto it = options.find(name);
   if (it != options.end()) {
-    auto *opt = static_cast<llvm::cl::opt<T> *>(it->second);
+    auto *opt = static_cast<llvm::cl::opt<bool> *>(it->second);
     opt->setValue(value);
+  }
+}
+
+template <>
+void restoreLLVMOption<std::string>(const std::string &name,
+                                    std::string value) {
+  auto options = llvm::cl::getRegisteredOptions();
+  auto it = options.find(name);
+  if (it != options.end()) {
+    it->second->addOccurrence(1, name, value);
   }
 }
 
