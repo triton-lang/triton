@@ -1918,22 +1918,23 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
-def test_cat(dtype_str, num_warps, device):
+@pytest.mark.parametrize("can_reorder", [True, False])
+def test_cat(dtype_str, num_warps, can_reorder, device):
     check_type_supported(dtype_str, device)
 
     @triton.jit
-    def kernel(X, Y, Z, N: tl.constexpr):
+    def kernel(X, Y, Z, N: tl.constexpr, CAN_REORDER: tl.constexpr):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl.cat(x, y, can_reorder=True)
+        z = tl.cat(x, y, can_reorder=CAN_REORDER)
         tl.store(Z + tl.arange(0, 2 * N), z)
 
     x = torch.arange(0, 128, device=device).to(getattr(torch, dtype_str))
     y = torch.arange(-128, 0, device=device).to(getattr(torch, dtype_str))
     z_ref = torch.cat([x, y], dim=0).sum()
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
-    kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
+    kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
     assert z.sum() == z_ref
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
