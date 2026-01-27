@@ -89,6 +89,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_global_to_local_im2col
+  // CHECK: elect.sync
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.4d.shared::cta.global.mbarrier
+  // CHECK: return
+  tt.func @tma_copy_global_to_local_im2col(%tma: !ttng.tensordesc_im2col<tensor<16x64xf32, #shared1>>, %alloc: !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
+    %off_w = arith.constant 1 : i16
+    %off_h = arith.constant 2 : i16
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<tensor<16x64xf32, #shared1>>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

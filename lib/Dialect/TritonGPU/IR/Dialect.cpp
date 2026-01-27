@@ -4054,9 +4054,33 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     // - Doc: https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
     constexpr int64_t contigDimMax = 256;
     constexpr int64_t otherDimMax = 1024;
-    for (int i = 0; i < blockShape.size(); ++i) {
-      int64_t maxVal = (i == contigDim) ? contigDimMax : otherDimMax;
-      blockShape[i] = std::min(blockShape[i], maxVal);
+    int otherDim = (contigDim == 0) ? 1 : 0;
+    // Check that pixelsPerColumn doesn't exceed the maximum
+    // [To Do] For now, we restrict the blockShape in other dimension to have maximum value 1024.
+    // [To Do] can add support for > 1024 in the future. 
+    if (blockShape[otherDim] > otherDimMax) {
+      return emitError() << "im2col mode: pixelsPerColumn dimension "
+                         << blockShape[otherDim]
+                         << " exceeds the maximum supported value of "
+                         << otherDimMax;
+    }
+    // Clamp the contiguous dimension (channelsPerPixel) to max 256
+    blockShape[contigDim] = std::min(blockShape[contigDim], contigDimMax);
+    // Last dim must equal the swizzle byte size
+    if (swizzleBytes != 0) {
+      auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+      if (blockShape[contigDim] < contigDimSize) {
+        return emitError() << "im2col mode: block shape along the contiguous "
+                              "dimension "
+                           << contigDim
+                           << " is too small for the swizzle byte size "
+                           << swizzleBytes << ", got " << blockShape[contigDim]
+                           << " but expected at least " << contigDimSize;
+      }
+      blockShape[contigDim] = contigDimSize;
+    }
+    if (fp4Padded && packedSize) {
+      blockShape[contigDim] /= 2;
     }
     return blockShape;
   }
