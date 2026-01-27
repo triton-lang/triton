@@ -2,7 +2,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -324,57 +323,6 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
       }
       ptrTensor =
           AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
-    }
-    return ptrTensor;
-  }
-
-  if (isa<triton::gluon::AutoEncodingAttr,
-          triton::gluon::CoalescedEncodingAttr>(encoding)) {
-    Value ptrTensor = SplatOp::create(
-        b, loc,
-        RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
-        base);
-    auto offsetsType =
-        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-    SmallVector<int64_t> strides(tensorType.getRank());
-    strides[0] = 1;
-    for (int i = 1; i < tensorType.getRank(); ++i) {
-      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
-    }
-    for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                              b.getI32Type(), encoding);
-      auto arange =
-          MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
-      auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
-      auto arangeTimesStride =
-          arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-
-      Value expanded = arangeTimesStride;
-      for (int j = 0; j < i; ++j) {
-        auto currTy = cast<RankedTensorType>(expanded.getType());
-        auto newShape = SmallVector<int64_t>(currTy.getShape());
-        newShape.insert(newShape.begin(), 1);
-        auto newTy =
-            RankedTensorType::get(newShape, currTy.getElementType(), encoding);
-        expanded = ExpandDimsOp::create(b, loc, newTy, expanded, 0);
-      }
-      for (int j = i + 1; j < tensorType.getRank(); ++j) {
-        auto currTy = cast<RankedTensorType>(expanded.getType());
-        auto newShape = SmallVector<int64_t>(currTy.getShape());
-        newShape.push_back(1);
-        auto newTy =
-            RankedTensorType::get(newShape, currTy.getElementType(), encoding);
-        expanded =
-            ExpandDimsOp::create(b, loc, newTy, expanded, newShape.size() - 1);
-      }
-
-      if (cast<RankedTensorType>(expanded.getType()).getShape() !=
-          tensorType.getShape()) {
-        expanded = BroadcastOp::create(b, loc, offsetsType, expanded);
-      }
-      ptrTensor =
-          AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expanded);
     }
     return ptrTensor;
   }
