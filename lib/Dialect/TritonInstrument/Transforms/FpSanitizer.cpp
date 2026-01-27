@@ -41,10 +41,14 @@ Type getIntTypeLike(Type ty) {
 
   auto *ctx = ty.getContext();
   auto intElem = IntegerType::get(ctx, elem.getWidth());
-  auto ranked = dyn_cast<RankedTensorType>(ty);
-  assert(ranked && "expected RankedTensorType");
-  return RankedTensorType::get(ranked.getShape(), intElem,
-                               ranked.getEncoding());
+  if (auto ranked = dyn_cast<RankedTensorType>(ty)) {
+    return RankedTensorType::get(ranked.getShape(), intElem,
+                                 ranked.getEncoding());
+  }
+  if (isa<FloatType>(ty))
+    return intElem;
+  assert(false && "expected FloatType or RankedTensorType");
+  return Type();
 }
 
 unsigned getIntBitwidth(Type ty) {
@@ -314,21 +318,15 @@ public:
   }
 
   static ttg::BlockedEncodingAttr
-  getDefaultBlockedEncoding(PatternRewriter &rewriter,
-                            ArrayRef<int64_t> shape) {
+  getOptimizedBlockedEncoding(PatternRewriter &rewriter,
+                              ArrayRef<int64_t> shape, Type elemType) {
     int numWarps =
         ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
     int threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
     int numCTAs =
         ttg::lookupNumCTAs(rewriter.getInsertionBlock()->getParentOp());
-    return ttg::getDefaultBlockedEncoding(rewriter.getContext(), shape,
-                                          numWarps, threadsPerWarp, numCTAs);
-  }
-
-  static ttg::BlockedEncodingAttr
-  getOptimizedBlockedEncoding(PatternRewriter &rewriter,
-                              ArrayRef<int64_t> shape, Type elemType) {
-    auto base = getDefaultBlockedEncoding(rewriter, shape);
+    auto base = ttg::getDefaultBlockedEncoding(
+        rewriter.getContext(), shape, numWarps, threadsPerWarp, numCTAs);
     SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
     SmallVector<unsigned> sizePerThread(shape.size(), 1);
     unsigned elemBits = elemType.getIntOrFloatBitWidth();
