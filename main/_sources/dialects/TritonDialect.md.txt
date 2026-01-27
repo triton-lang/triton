@@ -53,7 +53,11 @@ Syntax:
 >
 ```
 
-A portable abstraction for nvidia-TMA descriptors.
+A portable abstraction for TMA descriptors.
+This is the base tensor descriptor type for tiled tensor memory access.
+
+For specialized access patterns like im2col, see TensorDescIm2ColType
+in the TritonNvidiaGPU dialect.
 
 #### Parameters:
 

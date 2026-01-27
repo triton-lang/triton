@@ -332,7 +332,7 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc&lt;1xi64, #shared, #smem, 
 <p><em>Copy data based on descriptor from global memory to local memory asynchronously</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.async_tma_copy_global_to_local` $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict | `tensorMode` `=` $tensorMode)
+              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `-&gt;` qualified(type($result))
 </pre></div>
 </div>
@@ -341,14 +341,14 @@ asynchronously.  This is analogue to tt.load except the data are copied to
 local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc</span></code>.</p>
-<p>The operation supports two tensor modes:</p>
+<p>The tensor mode is determined by the descriptor type:</p>
 <ul class="simple">
-<li><p>TILED (default): Regular tiled tensor memory access</p>
+<li><p>tt.tensordesc: TILED mode - Regular tiled tensor memory access</p>
 <ul>
 <li><p>See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode</p></li>
 </ul>
 </li>
-<li><p>IM2COL: Im2col mode for convolution-friendly access patterns</p>
+<li><p>ttng.tensordesc_im2col: IM2COL mode - Im2col mode for convolution-friendly access patterns</p>
 <ul>
 <li><p>In IM2COL mode, ‘coord’ is the coordinates in the input tensor</p>
 <ul>
@@ -376,17 +376,6 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-<tr><td><code>tensorMode</code></td><td>::mlir::triton::nvidia_gpu::TensorModeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1</summary>{{% markdown %}}
-    Enum attribute for TMA tensor mode.
-<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>TILED: Tiled mode for regular tensor memory access.
-IM2COL: Im2col mode for convolution-friendly tensor memory access.
-
-See:
-- https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
-- https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
-</pre></div>
-</div>
-<p>{{% /markdown %}}</details></td></tr></p>
 </table>
 </section>
 <section id="id4">
@@ -399,7 +388,7 @@ See:
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
-<td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
+<td><p>tensor descriptor type</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">coord</span></code></p></td>
 <td><p>variadic of 32-bit signless integer</p></td>
