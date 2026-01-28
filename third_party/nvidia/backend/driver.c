@@ -611,7 +611,7 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
 
   // For im2col mode, shape determines the tensor rank, not blockSize
   // blockSize is typically 2D [pixelsPerColumn, channelsPerPixel]
-  // while shape can be 4D or 5D (e.g., NCHW or NCDHW)
+  // while shape can be 4D or 5D (e.g., NHWC or NDHWC)
   shapeFast = PySequence_Fast(shape, "shape must be a sequence");
   if (!shapeFast)
     goto cleanup;
@@ -645,13 +645,11 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
     goto cleanup;
 
   if (rank != PySequence_Fast_GET_SIZE(stridesFast)) {
-    char errMsg[512];
-    snprintf(errMsg, sizeof(errMsg),
-             "Rank mismatch for strides in fillTMADescriptorIm2col: shape has "
-             "rank %d but strides has %zd elements. "
-             "Expected strides to have %d elements.",
-             rank, PySequence_Fast_GET_SIZE(stridesFast), rank);
-    PyErr_SetString(PyExc_RuntimeError, errMsg);
+    PyErr_Format(PyExc_RuntimeError,
+                 "Rank mismatch for strides in fillTMADescriptorIm2col: shape "
+                 "has rank %d but strides has %zd elements. "
+                 "Expected strides to have %d elements.",
+                 rank, PySequence_Fast_GET_SIZE(stridesFast), rank);
     goto cleanup;
   }
   for (int i = 0; i + 1 < rank; ++i) {
@@ -764,13 +762,13 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
                     "Triton Error [CUDA]: Failed to create im2col tensor map "
                     "descriptor: %s\n",
                     str ? str : "Unknown error");
-    off += snprintf(err + off, sizeof(err) - off,
-                    "elemType=%d rank=%d global_address=0x%llx elemSize=%d "
-                    "swizzle=%d padding=%d channelsPerPixel=%d "
-                    "pixelsPerColumn=%d\n",
-                    elemType, rank, (unsigned long long)global_address,
-                    elemSize, swizzle, padding, channelsPerPixel,
-                    pixelsPerColumn);
+    off +=
+        snprintf(err + off, sizeof(err) - off,
+                 "elemType=%d rank=%d global_address=0x%llx elemSize=%d "
+                 "swizzle=%d padding=%d channelsPerPixel=%d "
+                 "pixelsPerColumn=%d\n",
+                 elemType, rank, (unsigned long long)global_address, elemSize,
+                 swizzle, padding, channelsPerPixel, pixelsPerColumn);
     off += snprintf(err + off, sizeof(err) - off, "shape=[");
     for (int i = 0; i < rank; ++i) {
       off +=
@@ -805,9 +803,9 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     off += snprintf(err + off, sizeof(err) - off, "elementStrides=[");
     for (int i = 0; i < rank; ++i) {
-      off += snprintf(err + off, sizeof(err) - off, "%u%s",
-                      (unsigned)elementStridesInt[i],
-                      (i + 1 < rank) ? ", " : "");
+      off +=
+          snprintf(err + off, sizeof(err) - off, "%u%s",
+                   (unsigned)elementStridesInt[i], (i + 1 < rank) ? ", " : "");
     }
     off += snprintf(err + off, sizeof(err) - off, "]\n");
     PyErr_SetString(PyExc_RuntimeError, err);
