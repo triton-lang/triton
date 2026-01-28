@@ -56,19 +56,21 @@ Type replaceEncoding(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-bool isTransposableEncoding(Attribute srcEnc, Attribute dstEnc) {
+bool isTransposableEncoding(RankedTensorType srcType,
+                            ttg::MemDescType dstType) {
+  auto srcEnc = srcType.getEncoding();
+  auto dstEnc = dstType.getEncoding();
   auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(srcEnc);
   if (!blockedEnc)
     return false;
 
-  auto swizzledEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstEnc);
-  auto srcOrder = blockedEnc.getOrder();
-  auto dstOrder = swizzledEnc.getOrder();
+  auto srcOrder = ttg::getOrder(srcType);
+  auto dstOrder = ttg::getOrder(dstType);
   return srcOrder[0] != dstOrder[0];
 }
 
-unsigned getTransposableSizePerThread(Attribute enc) {
-  auto blockedEnc = cast<ttg::BlockedEncodingAttr>(enc);
+unsigned getTransposableSizePerThread(RankedTensorType srcType) {
+  auto blockedEnc = cast<ttg::BlockedEncodingAttr>(srcType.getEncoding());
   auto inThreadShape = blockedEnc.getSizePerThread();
   assert(inThreadShape.size() == 2);
   return std::min(inThreadShape[0], inThreadShape[1]);
@@ -109,17 +111,14 @@ matchTransposableLocalMemPattern(typename TraitsT::OpT localMemOp) {
     return std::nullopt;
   }
 
-  auto srcEnc = srcType.getEncoding();
-  auto dstEnc = dstType.getEncoding();
-
   // Check if the encoding is transposable
-  if (!isTransposableEncoding(srcEnc, dstEnc)) {
+  if (!isTransposableEncoding(srcType, dstType)) {
     LDBG("src encoding is not suitable for transpose");
     return std::nullopt;
   }
 
   // Check that there's room for transpose
-  auto kDimMaxSizePerThread = getTransposableSizePerThread(srcEnc);
+  auto kDimMaxSizePerThread = getTransposableSizePerThread(srcType);
   if (kDimMaxSizePerThread < 2) {
     LDBG("kDim size per thread < 2, cannot transpose");
     return std::nullopt;

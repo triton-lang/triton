@@ -84,6 +84,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4, 16], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [0, 1], shape = [32, 128]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+
+// CHECK-LABEL: paddedSharedEncoding
+// CHECK: amdg.in_thread_transpose
+  tt.func public @paddedSharedEncoding(%data: tensor<32x128xf16, #blocked>, %buf: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>) -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable> {
+    ttg.local_store %data, %buf : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    tt.return %buf : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
