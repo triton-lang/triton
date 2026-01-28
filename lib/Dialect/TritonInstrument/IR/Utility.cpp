@@ -380,7 +380,8 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
       expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
     }
     for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto partialEncoding = getSingleDimSliceEncoding(blocked, i);
+      auto partialEncoding =
+          getSingleDimSliceEncoding(distributed, i, tensorType.getRank());
       auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
                                               b.getI32Type(), partialEncoding);
       auto arange =
