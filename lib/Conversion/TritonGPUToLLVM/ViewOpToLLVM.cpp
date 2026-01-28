@@ -408,7 +408,7 @@ struct MemDescTransOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(),
+        srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
         /*offsets=*/applyPermutation(srcSmemObj.getOffsets(), op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
@@ -441,8 +441,9 @@ struct MemDescReshapeOpConversion
     SmallVector<Value> delinearizedOffset =
         LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(), delinearizedOffset);
+    auto dstSmemObj =
+        SharedMemoryObject(srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
+                           delinearizedOffset);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -537,8 +538,6 @@ struct MemDescIndexOpConversion
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
-    auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
     auto prevOffsets = smemObj.getOffsets();
     SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
@@ -551,10 +550,16 @@ struct MemDescIndexOpConversion
       offset = b.add(offset, padOffset);
     }
 
-    // Advance the pointer and keep the opOffsets as the new shape
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    // Advance all base pointers by the same offset
+    SmallVector<Value> newBases;
+    for (Value base : smemObj.getBases()) {
+      auto elemPtrTy = base.getType();
+      newBases.push_back(b.gep(elemPtrTy, llvmElemTy, base, offset));
+    }
+
+    // Create new smemObj with advanced base pointers
+    auto newSmemObj = SharedMemoryObject(newBases, llvmElemTy, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, newSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
   }
@@ -581,16 +586,16 @@ struct MemDescSubsliceOpConversion
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
 
-    auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
     // Accumulate the logical offsets
     SmallVector<Value> offsetVals;
     for (auto [oldOffVal, opOff] :
          llvm::zip(smemObj.getOffsets(), opOffsetVals)) {
       offsetVals.push_back(b.add(oldOffVal, b.i32_val(opOff)));
     }
-    smemObj = SharedMemoryObject(base, llvmElemTy, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    // Subslice preserves all bases, only updates logical offsets
+    auto newSmemObj =
+        SharedMemoryObject(smemObj.getBases(), llvmElemTy, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, newSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
   }
@@ -610,8 +615,14 @@ struct MemDescReinterpretOpConversion
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
-    Value newBase = smemObj.getShmemAffineBase(loc, b, srcTy);
-    SharedMemoryObject newObj(newBase, dstElemTy, dstTy.getRank(), loc, b);
+    SmallVector<Value> newBases;
+    auto builder = TritonLLVMOpBuilder(loc, b);
+    Value offset = smemObj.getShmemOffset(loc, b, srcTy);
+    for (Value base : smemObj.getBases()) {
+      newBases.push_back(
+          builder.gep(base.getType(), smemObj.getBaseElemType(), base, offset));
+    }
+    SharedMemoryObject newObj(newBases, dstElemTy, dstTy.getRank(), loc, b);
     b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
     return success();
   }

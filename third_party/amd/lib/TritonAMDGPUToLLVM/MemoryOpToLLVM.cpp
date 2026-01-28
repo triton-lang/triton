@@ -30,6 +30,11 @@ public:
     auto loc = op.getLoc();
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
+
+    // Partitioned tensors have multiple bases; fall back to generic lowering.
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return failure();
+    }
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();

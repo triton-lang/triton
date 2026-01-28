@@ -349,15 +349,49 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 namespace LLVM {
 using namespace mlir::triton;
 
+/// Represents a shared memory allocation for tensor operations.
+///
+/// For non-partitioned tensors, this contains a single base pointer.
+/// For partitioned tensors (PartitionedEncodingAttr), this contains multiple
+/// base pointers, one per partition.
 class SharedMemoryObject {
 public:
+  /// Single-base constructor (for non-partitioned tensors)
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets);
 
+  /// Multi-base constructor (for partitioned tensors)
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType,
+                     ArrayRef<Value> offsets);
+
+  /// Single-base constructor
   SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
                      RewriterBase &rewriter);
 
+  /// Multi-base constructor with zero offsets
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType, int64_t rank,
+                     Location loc, RewriterBase &rewriter);
+
   SmallVector<Value> getOffsets() const { return offsets; }
-  Value getBase() const { return base; }
+
+  /// Returns the single base pointer.
+  /// IMPORTANT: This asserts that there is exactly one base. For partitioned
+  /// tensors (multiple bases), use getBases() instead.
+  /// Callers should use getBases() and handle all partitions appropriately.
+  Value getBase() const {
+    assert(bases.size() == 1 &&
+           "getBase() called on partitioned tensor with multiple bases. "
+           "Use getBases() and handle all partitions.");
+    return bases[0];
+  }
+
+  /// Returns all base pointers. For partitioned tensors, returns one base
+  /// per partition.
+  ArrayRef<Value> getBases() const { return bases; }
+
+  /// Returns the number of base pointers (1 for non-partitioned, N for
+  /// partitioned).
+  size_t getNumBases() const { return bases.size(); }
+
   Type getBaseElemType() const { return baseElemType; }
 
   SmallVector<Value> getElems() const;
@@ -391,7 +425,9 @@ public:
   Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  Value base; // i32 ptr. The start address of the shared memory object.
+  SmallVector<Value>
+      bases; // Shared memory base pointers. One for non-partitioned tensors,
+             // multiple for partitioned tensors (one per partition).
   Type baseElemType;
   SmallVector<Value>
       offsets; // i32 int. The offsets are zero at the initial allocation.
@@ -456,6 +492,21 @@ Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
+
+/// Returns the allocation offsets for the given operation.
+/// For non-partitioned tensors, returns a single offset.
+/// For partitioned tensors, returns multiple offsets (one per partition).
+/// This provides backward compatibility - operations without partition
+/// encoding will still get a single-element vector.
+SmallVector<int64_t> getPartitionOffsets(Operation *op);
+
+/// Returns all shared memory bases for the given operation.
+/// For non-partitioned tensors, returns a single base pointer.
+/// For partitioned tensors, returns multiple base pointers (one per
+/// partition).
+SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                                        const TargetInfoBase &target,
+                                        Operation *op);
 
 // -----------------------------------------------------------------------
 // MXFP utilities
@@ -543,10 +594,14 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
+// cvt: Maps (reg, lane, warp) → (offset[, partition]).
+//      If partition output exists and smemBases.size() > 1, partition-aware.
+// smemBases: For non-partitioned tensors, a single base pointer.
+//            For partitioned tensors, one base per partition.
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
+                Type llvmElemTy, ArrayRef<Value> smemBases,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
@@ -554,15 +609,13 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
-// PTX instruction Lowers to st when valArrays is empty, and to ld when it is
+// PTX instruction. Lowers to st when valArrays is empty, and to ld when it is
 // not, and returns the output values.
-// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
-// and computes a new offset (mlir::Value) by applying padding based on
-// shared memory layout.
+// cvt: Maps (reg, lane, warp) → (offset[, partition]).
 SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase,
+    Type llvmElemTy, ArrayRef<Value> smemBases,
     std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
     uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
     RewriterBase &rewriter, const TargetInfoBase &targetInfo,
@@ -572,6 +625,7 @@ SmallVector<Value> lowerLdSt(
         lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
+// Automatically handles partitioned shared memory encodings.
 SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt,          // Map from registers to offset

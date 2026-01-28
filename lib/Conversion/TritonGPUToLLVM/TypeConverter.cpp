@@ -1,6 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -62,7 +63,20 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
   }
 
   SmallVector<Type, 4> types;
-  types.push_back(ptrType);
+
+  // Determine number of base pointers based on encoding.
+  // For partitioned tensors, we need one base pointer per partition.
+  size_t numBases = 1;
+  if (auto partitioned = dyn_cast<triton::gpu::PartitionedSharedEncodingAttr>(
+          type.getEncoding())) {
+    numBases = partitioned.getNumLogicalPieces();
+  }
+
+  // Add base pointer(s)
+  for (size_t i = 0; i < numBases; ++i) {
+    types.push_back(ptrType);
+  }
+
   auto rank = type.getRank();
   // offsets
   for (auto i = 0; i < rank; i++) {

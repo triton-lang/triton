@@ -359,6 +359,95 @@ For identity mappings a short form based on order and shape is used to increase 
   let genVerifyDecl = 1;
 }
 
+
+def PartitionedSharedEncodingAttr
+    : TritonGPU_Attr<"PartitionedSharedEncoding", "partitioned_shared_encoding",
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods,  LayoutEncodingTrait]> {
+  let mnemonic = "partitioned_shared";
+
+  let description = [{
+    An encoding for tensors whose elements are partitioned across multiple
+    separate shared memory allocations. This reduces shared memory partition
+    conflicts by splitting a tensor along a specific dimension into separate
+    allocations.
+
+    Parameters:
+    - numPartitions: Number of distinct memory partitions.
+      Pieces within the same group that are in different partitions MUST be
+      placed in different physical shared memory slots.
+    - numGroups: Number of groups. Each group contains numPartitions
+      consecutive pieces.
+    - partitionDim: The dimension along which the tensor is partitioned.
+    - partitionLayout: The shared memory layout used within each piece.
+
+    The total number of logical pieces is numPartitions * numGroups.
+    Pieces are organized as:
+      [Group 0: pieces 0..numPartitions-1]
+      [Group 1: pieces numPartitions..2*numPartitions-1]
+      ...
+
+    For example, with numPartitions=4, numGroups=2 and
+    partitionDim=0 on a [128, 32] tensor:
+    - Total 8 logical pieces, each of size [16, 32]
+    - Piece layout: [0, 1, 2, 3, 4, 5, 6, 7]
+    - Partitions:    0  1  2  3  0  1  2  3
+    - Groups:       | Group 0  | Group 1   |
+
+    - Piece 0 (rows 0-15)   -> Partition 0, Group 0
+    - Piece 1 (rows 16-31)  -> Partition 1, Group 0
+    - Piece 2 (rows 32-47)  -> Partition 2, Group 0
+    - Piece 3 (rows 48-63)  -> Partition 3, Group 0
+    - Piece 4 (rows 64-79)  -> Partition 0, Group 1
+    - Piece 5 (rows 80-95)  -> Partition 1, Group 1
+    - Piece 6 (rows 96-111) -> Partition 2, Group 1
+    - Piece 7 (rows 112-127)-> Partition 3, Group 1
+
+    Physical allocation guarantee: Within each group, pieces in different
+    partitions MUST reside in distinct physical shared memory partitions.
+    Pieces across different groups have no placement constraints relative
+    to each other.
+  }];
+
+  let parameters = (ins
+      "unsigned":$numPartitions,
+      "unsigned":$numGroups,
+      "unsigned":$partitionDim,
+      "SharedEncodingTrait":$partitionLayout
+  );
+
+  let extraClassDeclaration = [{
+    /// Returns the total number of logical pieces.
+    unsigned getNumLogicalPieces() const {
+      return getNumPartitions() * getNumGroups();
+    }
+
+    /// Returns which physical partition a logical piece belongs to.
+    unsigned getPartitionForPiece(unsigned pieceIdx) const {
+      return pieceIdx % getNumPartitions();
+    }
+
+    /// Returns which group a logical piece belongs to.
+    unsigned getGroupForPiece(unsigned pieceIdx) const {
+      return pieceIdx / getNumPartitions();
+    }
+
+    /// Returns true if two pieces are neighbors (must be in different
+    /// physical partitions). Pieces are neighbors if they are in different
+    /// partitions AND in the same group.
+    bool arePiecesNeighbors(unsigned pieceA, unsigned pieceB) const {
+      if (pieceA == pieceB) return false;
+      // Must be in different partitions
+      if (getPartitionForPiece(pieceA) == getPartitionForPiece(pieceB))
+        return false;
+      // Must be in the same group
+      return getGroupForPiece(pieceA) == getGroupForPiece(pieceB);
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait,

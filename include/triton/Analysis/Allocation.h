@@ -70,8 +70,11 @@ public:
   explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
+  /// \param sharedMemoryPartitionSize The size of each shared memory partition
+  ///        in bytes. A value of 0 means shared memory is not partitioned.
   void run(FuncAllocMapT &funcAllocMap,
-           triton::AllocationAnalysisScratchSizeFn scratchSizeGetter);
+           triton::AllocationAnalysisScratchSizeFn scratchSizeGetter,
+           size_t sharedMemoryPartitionSize = 0);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -92,24 +95,29 @@ public:
     return Interval<size_t>(buffer.offset, buffer.offset + buffer.size);
   }
 
-  /// Returns the buffer id of the given value.
-  /// This interface only returns the allocated buffer id.
-  /// If you want to get all the buffer ids that are associated with the given
-  /// value, including alias buffers, use getBufferIds.
-  BufferId getBufferId(Value value) const {
-    if (valueBuffer.count(value)) {
-      return valueBuffer.lookup(value)->id;
-    } else {
-      return InvalidBufferId;
+  /// Returns all buffer ids for a value.
+  /// For partitioned tensors, returns all logical piece buffer ids.
+  /// For non-partitioned values, returns a single-element vector.
+  /// Returns empty vector if value has no associated buffer.
+  SmallVector<BufferId> getBufferIds(Value value) const {
+    SmallVector<BufferId> bufferIds;
+    auto it = valueBuffer.find(value);
+    if (it == valueBuffer.end())
+      return bufferIds;
+
+    for (auto *buffer : it->second) {
+      bufferIds.push_back(buffer->id);
     }
+    return bufferIds;
   }
 
-  /// Returns all the buffer ids of the given value, including alias buffers.
-  BufferIdSetT getBufferIds(Value value) const {
+  /// Returns all buffer ids of the given value, including alias buffers.
+  /// This is a superset of getBufferIds that also includes aliased buffers.
+  BufferIdSetT getAllBufferIdsWithAliases(Value value) const {
     BufferIdSetT bufferIds;
-    auto allocBufferId = getBufferId(value);
-    if (allocBufferId != InvalidBufferId)
-      bufferIds.insert(allocBufferId);
+    for (auto bufferId : getBufferIds(value)) {
+      bufferIds.insert(bufferId);
+    }
     for (auto *buffer : aliasBuffer.lookup(value)) {
       if (buffer->id != InvalidBufferId)
         bufferIds.insert(buffer->id);
@@ -154,6 +162,10 @@ private:
     size_t alignment;
     size_t offset;
 
+    /// For partitioned tensors: buffers that reside in different physical
+    /// partitions.
+    SmallVector<BufferT *> neighbors;
+
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
@@ -169,8 +181,8 @@ private:
 
   /// Op -> Scratch Buffer
   using OpScratchMapT = llvm::MapVector<Operation *, BufferT *>;
-  /// Value -> Explicit Buffer
-  using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
+  /// Value -> Explicit Buffers (vector for partitioned tensors)
+  using ValueBufferMapT = llvm::MapVector<Value, SmallVector<BufferT *>>;
   /// Value -> Alias Buffer
   using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
   /// BufferId -> Buffer
@@ -184,7 +196,7 @@ private:
         nextId, BufferT(Kind, nextId, key, std::forward<Args>(args)...));
     BufferT *buffer = &it->second;
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
-      valueBuffer[key] = buffer;
+      valueBuffer[key].push_back(buffer);
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
       opVirtual[key] = buffer;
     } else {
@@ -192,8 +204,49 @@ private:
     }
   }
 
+  /// Create multiple buffers for logical pieces with a neighbor checker
+  /// function.
+  ///
+  /// \param key The value/operation that owns these buffers
+  /// \param numPieces Total number of logical pieces
+  /// \param pieceSize Size of each piece in bytes
+  /// \param alignment Required alignment for each piece
+  /// \param arePiecesNeighbors Function that returns true if two pieces
+  ///        must be in different physical partitions (i.e., are neighbors)
+  template <typename KeyType, typename NeighborFn>
+  void addPartitionBuffersWithMapping(KeyType &key, unsigned numPieces,
+                                      size_t pieceSize, size_t alignment,
+                                      NeighborFn arePiecesNeighbors) {
+    SmallVector<BufferT *> pieceBuffers;
+    pieceBuffers.reserve(numPieces);
+
+    // Create all piece buffers first
+    for (unsigned i = 0; i < numPieces; ++i) {
+      BufferId nextId = bufferIdCounter++;
+      auto [it, inserted] = bufferSet.insert_or_assign(
+          nextId, BufferT(BufferT::BufferKind::Explicit, nextId, key, pieceSize,
+                          alignment));
+      pieceBuffers.push_back(&it->second);
+    }
+
+    // Link pieces as neighbors using the provided neighbor checker.
+    for (unsigned i = 0; i < numPieces; ++i) {
+      for (unsigned j = 0; j < numPieces; ++j) {
+        if (arePiecesNeighbors(i, j)) {
+          pieceBuffers[i]->neighbors.push_back(pieceBuffers[j]);
+        }
+      }
+    }
+
+    // Store all piece buffers in valueBuffer
+    // (all pieces share the same liveness range via their owner)
+    valueBuffer[key] = std::move(pieceBuffers);
+  }
+
   void addAlias(Value value, Value alloc) {
-    aliasBuffer[value].insert(valueBuffer[alloc]);
+    for (auto *buffer : valueBuffer[alloc]) {
+      aliasBuffer[value].insert(buffer);
+    }
   }
 
 private:
@@ -222,7 +275,8 @@ public:
 
   ModuleAllocation(ModuleOp moduleOp,
                    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter =
-                       triton::defaultAllocationAnalysisScratchSizeFn)
+                       triton::defaultAllocationAnalysisScratchSizeFn,
+                   size_t sharedMemoryPartitionSize = 0)
       : triton::CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
@@ -231,7 +285,8 @@ public:
         [&](FunctionOpInterface funcOp) {
           auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcMap, scratchSizeGetter);
+            iter->second.run(funcMap, scratchSizeGetter,
+                             sharedMemoryPartitionSize);
         });
   }
 

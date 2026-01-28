@@ -1163,6 +1163,61 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   return ensureLayoutNotLargerThan(tile, shapeMap);
 }
 
+// Convert a PartitionedSharedEncodingAttr to a LinearLayout.
+// The layout maps from:
+//   Input: "offset", "block", "partition"
+//   Output: dim0, dim1, ... (tensor coordinates)
+//
+// The tensor is divided into numLogicalPieces along the partitionDim.
+// Each piece has size shape[partitionDim] / numLogicalPieces.
+//
+// The underlying partition layout provides the layout within each piece,
+// and the "partition" input dimension selects which logical piece is being
+// addressed.
+//
+// The combined layout is: baseLayout * partLayout
+// - baseLayout: handles addressing within a single piece (from the underlying
+//               partition layout)
+// - partLayout: identity layout that maps the "partition" dimension to offsets
+//               along partitionDim, selecting which logical piece
+LinearLayout
+partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                PartitionedSharedEncodingAttr partitioned) {
+  MLIRContext *ctx = partitioned.getContext();
+  unsigned numLogicalPieces = partitioned.getNumLogicalPieces();
+  unsigned partitionDim = partitioned.getPartitionDim();
+  auto partitionLayout = partitioned.getPartitionLayout();
+
+  // Each logical piece has this size along the partition dimension
+  int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
+
+  // Compute the shape of each piece
+  SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
+  partitionShape[partitionDim] = pieceSize;
+
+  // Get the linear layout for the underlying partition layout.
+  // This gives us (offset, block) -> dim coordinates within a single piece.
+  // Handle PaddedSharedEncodingAttr specially since it stores its LinearLayout
+  // directly, while other layouts use toLinearLayout.
+  LinearLayout baseLayout;
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(partitionLayout)) {
+    baseLayout = padded.getLinearComponent();
+  } else {
+    baseLayout = toLinearLayout(partitionShape, partitionLayout);
+  }
+
+  // Create the partition layout.
+  // The "partition" input dimension selects which logical piece along
+  // partitionDim, with each piece having size pieceSize.
+  auto outDimNames = standardOutDimNames(ctx, shape.size());
+  LinearLayout partLayout = LinearLayout::identity1D(
+      numLogicalPieces, S("partition"), outDimNames[partitionDim]);
+
+  // Combine: baseLayout handles addressing within a piece,
+  // partLayout selects which logical piece
+  return baseLayout * partLayout;
+}
+
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                                               Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
@@ -1189,6 +1244,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
+    } else if (auto partitioned =
+                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
+      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);

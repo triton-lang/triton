@@ -20,6 +20,13 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+// Returns partition index when partitionSize > 0, otherwise returns 0.
+static size_t getPartitionIndex(size_t offset, size_t partitionSize) {
+  if (partitionSize == 0)
+    return 0;
+  return offset / partitionSize;
+}
+
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
@@ -116,9 +123,11 @@ public:
   AllocationAnalysis(Operation *operation,
                      Allocation::FuncAllocMapT *funcAllocMap,
                      Allocation *allocation,
-                     AllocationAnalysisScratchSizeFn scratchSizeGetter)
+                     AllocationAnalysisScratchSizeFn scratchSizeGetter,
+                     size_t partitionSize)
       : operation(operation), funcAllocMap(funcAllocMap),
-        allocation(allocation), scratchSizeGetter(scratchSizeGetter) {
+        allocation(allocation), scratchSizeGetter(scratchSizeGetter),
+        partitionSize(partitionSize) {
     run();
   }
 
@@ -143,6 +152,43 @@ private:
     if (!alloc || !alloc.isSharedMemoryAlloc())
       return;
     auto allocType = alloc.getType();
+    auto alignment = alloc.getAlignmentOrDefault();
+
+    // Handle PartitionedSharedEncodingAttr: create separate buffers for each
+    // logical piece. Mark pieces in different physical partitions as neighbors.
+    if (auto partitionedEnc = dyn_cast<gpu::PartitionedSharedEncodingAttr>(
+            allocType.getEncoding())) {
+      unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
+
+      // Calculate size per logical piece
+      auto partitionLayout = partitionedEnc.getPartitionLayout();
+      int64_t totalNumElems = 0;
+
+      if (auto paddedEnc =
+              dyn_cast<gpu::PaddedSharedEncodingAttr>(partitionLayout)) {
+        SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
+        totalNumElems = paddedEnc.getPaddedSize(unpaddedShape);
+      } else {
+        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+        totalNumElems = product<int64_t>(shapePerCTA);
+      }
+
+      int64_t totalBytes =
+          totalNumElems *
+          getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
+      int64_t pieceSize = totalBytes / numLogicalPieces;
+
+      // Create buffers for each logical piece, using the encoding's method
+      // to determine neighbor relationships.
+      allocation->addPartitionBuffersWithMapping(
+          alloc, numLogicalPieces, pieceSize, alignment,
+          [&](unsigned pieceA, unsigned pieceB) {
+            return partitionedEnc.arePiecesNeighbors(pieceA, pieceB);
+          });
+      return;
+    }
+
+    // Standard (non-partitioned) buffer allocation
     int64_t numElems = 0;
     if (auto paddedEnc =
             dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
@@ -155,7 +201,6 @@ private:
     int64_t bytes =
         numElems * getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
 
-    auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
                                                          alignment);
   }
@@ -247,16 +292,23 @@ private:
 
   /// Computes the liveness range of the allocated value.
   /// Each buffer is allocated only once.
+  /// For partitioned tensors, all partition buffers share the same liveness
+  /// range.
   void resolveExplicitBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto valueBufferIter : allocation->valueBuffer) {
+    for (auto &valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
-      auto *buffer = valueBufferIter.second;
-      bufferRange[buffer] = getLiveness(value);
-      LLVM_DEBUG({
-        llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
-        value.dump();
-      });
+      auto &buffers = valueBufferIter.second;
+      auto range = getLiveness(value);
+
+      // Apply the same liveness range to all buffers for this value
+      for (auto *buffer : buffers) {
+        bufferRange[buffer] = range;
+        LLVM_DEBUG({
+          llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+          value.dump();
+        });
+      }
     }
   }
 
@@ -491,7 +543,8 @@ private:
   }
 
   /// Builds a graph of all shared memory values. Edges are created between
-  /// shared memory values that are overlapping.
+  /// shared memory values that are overlapping, or between partition neighbors
+  /// that are placed in the same physical partition.
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
                               GraphT &interference) {
     // Reset interference graph
@@ -527,12 +580,27 @@ private:
           interference[x].insert(y);
         }
       }
+
+      // Partition neighbors interfere if they are in the same
+      // physical partition. This ensures that different partitions of the
+      // same partitioned tensor are placed in different physical partitions.
+      // Only check this when partitioning is enabled (partitionSize > 0).
+      if (partitionSize > 0) {
+        for (auto *neighbor : x->neighbors) {
+          if (getPartitionIndex(x->offset, partitionSize) ==
+              getPartitionIndex(neighbor->offset, partitionSize)) {
+            interference[x].insert(neighbor);
+          }
+        }
+      }
     }
 
     LLVM_DEBUG(dumpInterferenceGraph(interference));
   }
 
   /// Finalizes shared memory offsets considering interference.
+  /// For partition neighbors, bumps to the next physical partition boundary
+  /// to ensure they are placed in different physical partitions.
   void allocate(const SmallVector<BufferT *> &buffers,
                 const GraphT &interference) {
     // Reset shared memory size
@@ -570,7 +638,20 @@ private:
     for (auto x : buffers) {
       size_t newOffset = 0;
       for (auto y : interference.lookup(x)) {
-        newOffset = std::max(newOffset, y->offset + y->size);
+        // Check if y is a partition neighbor of x
+        bool isPartitionNeighbor =
+            std::find(x->neighbors.begin(), x->neighbors.end(), y) !=
+            x->neighbors.end();
+        if (isPartitionNeighbor && partitionSize > 0) {
+          // For partition neighbors, bump to the next partition
+          // boundary to ensure they are in different physical partitions
+          size_t nextPartitionStart =
+              (getPartitionIndex(y->offset, partitionSize) + 1) * partitionSize;
+          newOffset = std::max(newOffset, nextPartitionStart);
+        } else {
+          // Regular interference - just move past the interfering buffer
+          newOffset = std::max(newOffset, y->offset + y->size);
+        }
       }
       if (colors.lookup(x) != 0)
         x->setOffsetAligned(newOffset);
@@ -586,15 +667,16 @@ private:
   Allocation *allocation;
   BufferRangeMapT bufferRange;
   AllocationAnalysisScratchSizeFn scratchSizeGetter;
+  size_t partitionSize;
 };
 
 } // namespace triton
 
-void Allocation::run(
-    FuncAllocMapT &funcAllocMap,
-    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter) {
+void Allocation::run(FuncAllocMapT &funcAllocMap,
+                     triton::AllocationAnalysisScratchSizeFn scratchSizeGetter,
+                     size_t sharedMemoryPartitionSize) {
   triton::AllocationAnalysis(getOperation(), &funcAllocMap, this,
-                             scratchSizeGetter);
+                             scratchSizeGetter, sharedMemoryPartitionSize);
 }
 
 std::map<Operation *, SmallVector<Allocation::BufferId>>
@@ -608,12 +690,14 @@ Allocation::getLiveBuffers() {
     if (scratchBuffer != InvalidBufferId)
       liveBuffers[op].push_back(scratchBuffer);
     for (auto result : op->getOpResults()) {
-      auto bufferId = getBufferId(result);
-      if (bufferId == Allocation::InvalidBufferId)
+      auto bufferIds = getBufferIds(result);
+      if (bufferIds.empty())
         continue;
       auto liveOperations = liveness.resolveLiveness(result);
-      for (auto depOp : liveOperations)
-        liveBuffers[depOp].push_back(bufferId);
+      for (auto depOp : liveOperations) {
+        for (auto bufferId : bufferIds)
+          liveBuffers[depOp].push_back(bufferId);
+      }
     }
   };
   rootOperation->walk(analyzeOperation);

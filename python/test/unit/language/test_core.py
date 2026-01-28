@@ -3102,7 +3102,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_base_cases():
-    return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
+    return [(*shape, 4, False, True, epilogue, input_precision, in_dtype, out_dtype, 1, None)
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
             for input_precision in ['tf32', 'tf32x3', 'ieee', 'bf16x3', 'bf16x6']
@@ -6714,6 +6714,135 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
     d = a.to(torch.float32) @ b.to(torch.float32)
 
     assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)
+
+
+# -----------------------
+# test partitioned shared encoding lowering
+# -----------------------
+
+
+def _generate_partitioned_shared_ttgir(M, K, numPartitions, numGroups, partitionDim, partitionLayoutType, destLayout):
+    """
+    Generate TTGIR for testing PartitionedSharedEncodingAttr with various configurations.
+
+    Parameters:
+    - M, K: Tensor dimensions
+    - numPartitions: Number of virtual partitions
+    - numGroups: Number of pieces per partition
+    - partitionDim: Dimension along which to partition (0 or 1)
+    - partitionLayoutType: "swizzled" or "padded"
+    - destLayout: "blocked" or "dot"
+    """
+    # Generate partition layout based on type
+    if partitionLayoutType == "swizzled":
+        partition_layout_def = '#partition_layout = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [1, 0]}>'
+    else:  # padded
+        partition_layout_def = f'#partition_layout = #ttg.padded_shared<[16:+4] {{order = [1, 0], shape = [{M}, {K}]}}>'
+
+    # Generate destination layout
+    if destLayout == "blocked":
+        dest_layout_def = '#dest = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>'
+        dest_layout_ref = '#dest'
+    else:  # dot
+        dest_layout_def = '''#mma = #ttg.amd_wmma<{version = 3, isTransposed = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#dest = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>'''
+        dest_layout_ref = '#dest'
+
+    # Also need a blocked layout for loading data (always needed)
+    blocked_for_load = '#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>'
+
+    # Build the TTGIR template
+    ttgir = f'''{blocked_for_load}
+{partition_layout_def}
+{dest_layout_def}
+#partitioned = #ttg.partitioned_shared<{{numPartitions = {numPartitions}, numGroups = {numGroups}, partitionDim = {partitionDim}, partitionLayout = #partition_layout}}>
+#smem = #ttg.shared_memory
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @test_partitioned_copy(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+    %cst_k = arith.constant dense<{K}> : tensor<{M}x1xi32, #blocked>
+    %row_offs = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+    %row_offs_exp = tt.expand_dims %row_offs {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
+    %row_times_k = arith.muli %row_offs_exp, %cst_k : tensor<{M}x1xi32, #blocked>
+    %row_bcast = tt.broadcast %row_times_k : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{K}xi32, #blocked>
+    %col_offs = tt.make_range {{end = {K} : i32, start = 0 : i32}} : tensor<{K}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
+    %col_offs_exp = tt.expand_dims %col_offs {{axis = 0 : i32}} : tensor<{K}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{K}xi32, #blocked>
+    %col_bcast = tt.broadcast %col_offs_exp : tensor<1x{K}xi32, #blocked> -> tensor<{M}x{K}xi32, #blocked>
+    %offs = arith.addi %row_bcast, %col_bcast : tensor<{M}x{K}xi32, #blocked>
+    %src_ptrs = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{K}x!tt.ptr<f16>, #blocked>
+    %load_ptrs = tt.addptr %src_ptrs, %offs : tensor<{M}x{K}x!tt.ptr<f16>, #blocked>, tensor<{M}x{K}xi32, #blocked>
+    %data = tt.load %load_ptrs : tensor<{M}x{K}x!tt.ptr<f16>, #blocked>
+    %alloc = ttg.local_alloc %data : (tensor<{M}x{K}xf16, #blocked>) -> !ttg.memdesc<{M}x{K}xf16, #partitioned, #smem>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<{M}x{K}xf16, #partitioned, #smem> -> tensor<{M}x{K}xf16, {dest_layout_ref}>
+    %converted = ttg.convert_layout %loaded : tensor<{M}x{K}xf16, {dest_layout_ref}> -> tensor<{M}x{K}xf16, #blocked>
+    %dst_ptrs = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{K}x!tt.ptr<f16>, #blocked>
+    %store_ptrs = tt.addptr %dst_ptrs, %offs : tensor<{M}x{K}x!tt.ptr<f16>, #blocked>, tensor<{M}x{K}xi32, #blocked>
+    tt.store %store_ptrs, %converted : tensor<{M}x{K}x!tt.ptr<f16>, #blocked>
+    tt.return
+  }}
+}}
+'''
+    return ttgir
+
+
+@pytest.mark.parametrize("M, K", [(64, 32), (128, 32)])
+@pytest.mark.parametrize("numPartitions", [2, 4])
+@pytest.mark.parametrize("numGroups", [1, 2])
+@pytest.mark.parametrize("partitionDim", [0, 1])
+@pytest.mark.parametrize("partitionLayoutType", ["swizzled", "padded"])
+@pytest.mark.parametrize("destLayout", ["blocked", "dot"])
+def test_partitioned_shared_encoding(M, K, numPartitions, numGroups, partitionDim, partitionLayoutType, destLayout,
+                                     device):
+    """
+    Test that PartitionedSharedEncodingAttr compiles correctly with various configurations.
+
+    This compiles a TTGIR file directly that uses partitioned shared memory encoding
+    with different parameters for:
+    - numPartitions: Number of physical partitions (2 or 4)
+    - numGroups: Number of pieces per partition (1 or 2)
+    - partitionDim: Partition dimension (0=rows, 1=cols)
+    - partitionLayoutType: Layout within each piece (swizzled or padded)
+    - destLayout: Destination layout after local_load (blocked or dot operand)
+
+    Note: This test currently only verifies compilation success. Execution testing
+    is enabled when the lowering is complete.
+    """
+    if not is_hip():
+        pytest.skip("PartitionedSharedEncodingAttr only supported on AMD HIP")
+
+    from triton.compiler import compile as triton_compile
+    import tempfile
+    import os
+
+    # Generate the TTGIR template based on parameters
+    TTGIR_TEMPLATE = _generate_partitioned_shared_ttgir(M, K, numPartitions, numGroups, partitionDim,
+                                                        partitionLayoutType, destLayout)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        ttgir_path = os.path.join(temp_dir, "test_partitioned.ttgir")
+        with open(ttgir_path, 'w') as f:
+            f.write(TTGIR_TEMPLATE)
+
+        # Compile from TTGIR - this tests the lowering path
+        try:
+            compiled = triton_compile(ttgir_path)
+        except Exception as e:
+            pytest.fail(f"Failed to compile TTGIR with PartitionedSharedEncodingAttr "
+                        f"(numPartitions={numPartitions}, "
+                        f"numGroups={numGroups}, "
+                        f"partitionDim={partitionDim}, "
+                        f"partitionLayoutType={partitionLayoutType}, "
+                        f"destLayout={destLayout}): {e}")
+
+        # Verify compilation produced an executable
+        assert compiled is not None, "Compilation returned None"
+
+        # Create input/output tensors (flattened)
+        src = torch.randn((M * K, ), device=device, dtype=torch.float16)
+        dst = torch.empty((M * K, ), device=device, dtype=torch.float16)
+
+        grid = (1, 1, 1)
+        compiled[grid](src.data_ptr(), dst.data_ptr())
+        torch.testing.assert_close(dst, src, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])

@@ -107,7 +107,9 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
+    ModuleAllocation allocation(mod,
+                                triton::defaultAllocationAnalysisScratchSizeFn,
+                                targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
@@ -144,7 +146,7 @@ struct ConvertTritonAMDGPUToLLVM
     }
 
     AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-
+    // mod.dump();
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
     // cache the values. The reason to do it here is that cluster_ctaid is
     // currently implemented via inline asm, and thus cannot be CSEed.
