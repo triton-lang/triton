@@ -1464,25 +1464,30 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       auto encoding = op.getDesc().getType().getBlockType().getEncoding();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
 
-      // Apply offsets to coordinates based on message iteration.
-      // Offsets are computed from the 2D output block shape and applied in
-      // reverse order to match PTX coordinate convention.
-      //
-      // For TILED mode (2D tensor [M, N]):
-      //   - offsets[0] -> coord[rank-2] (M dimension)
-      //   - offsets[1] -> coord[rank-1] (N dimension)
-      //
-      // For IM2COL mode (e.g., 4D input [N, H, W, C] -> 2D [pixels, channels]):
-      //   - 2D output: [pixelsPerColumn (dim 0), channelsPerPixel (dim 1)]
-      //   - offsets[0] (pixels) -> spatial coord (N, H, W), always 0 due to <=1024
-      //   - offsets[1] (channels) -> channel coord (C), may be non-zero
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (fp4Padded && i == 0) {
           coord = b.mul(coord, b.i32_val(2));
         }
         if (i < offsets.size()) {
-          coord = b.add(coord, offsets[offsets.size() - i - 1].second);
+          Value offset = offsets[offsets.size() - i - 1].second;
+
+          // For im2col mode, only the channel dimension (i=0, corresponding to
+          // the last input coordinate C) should get a non-zero offset. The
+          // pixelsPerColumn dimension is constrained to <= 1024, so it always
+          // fits in a single TMA message (offset should be 0 for i > 0).
+          if (isIm2Col && i > 0) {
+            // Verify offset is 0 if it's a compile-time constant
+            if (auto constOp = offset.getDefiningOp<LLVM::ConstantOp>()) {
+              auto constVal =
+                  dyn_cast<mlir::IntegerAttr>(constOp.getValue()).getInt();
+              assert(constVal == 0 &&
+                     "im2col: pixelsPerColumn offset must be 0 (dimension "
+                     "constrained to <= 1024)");
+            }
+          }
+
+          coord = b.add(coord, offset);
         }
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));

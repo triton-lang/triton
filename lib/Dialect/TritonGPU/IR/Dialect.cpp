@@ -4055,9 +4055,12 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     constexpr int64_t contigDimMax = 256;
     constexpr int64_t otherDimMax = 1024;
     int otherDim = (contigDim == 0) ? 1 : 0;
-    // Check that pixelsPerColumn doesn't exceed the maximum
-    // [To Do] For now, we restrict the blockShape in other dimension to have maximum value 1024.
-    // [To Do] can add support for > 1024 in the future. 
+    // Check that pixelsPerColumn doesn't exceed the hardware maximum of 1024.
+    // This constraint ensures a single TMA message can cover all pixels, avoiding
+    // the need for multiple messages along spatial dimensions (N, D, H, W).
+    // Supporting pixelsPerColumn > 1024 would require computing offsets that
+    // depend on input tensor shape and padding, which is non-trivial.
+    // TODO: Add support for pixelsPerColumn > 1024 in the future.
     if (blockShape[otherDim] > otherDimMax) {
       return emitError() << "im2col mode: pixelsPerColumn dimension "
                          << blockShape[otherDim]
