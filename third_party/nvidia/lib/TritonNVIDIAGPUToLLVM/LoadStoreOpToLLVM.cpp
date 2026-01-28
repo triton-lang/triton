@@ -1262,8 +1262,9 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                               ttg::TMAMode mode) {
+static LinearLayout
+getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                           ttg::TMAMode mode = ttg::TMAMode::Tiled) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
@@ -1500,13 +1501,17 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
       }
-      // Add im2col offsets if in IM2COL mode
+      // Add im2col offsets if in IM2COL mode.
+      // Offsets are reversed to match PTX/CUDA order (innermost to outermost),
+      // similar to how coordinates are reversed above.
       if (isIm2Col) {
         auto im2colOffsets = adaptor.getOffsets();
         if (!im2colOffsets.empty()) {
           tmaInst += ", {";
           for (size_t i = 0; i < im2colOffsets.size(); i++) {
-            operands.push_back(ptxBuilderTMA.newOperand(im2colOffsets[i], "h"));
+            // Reverse the order: im2colOffsets[size - 1 - i]
+            operands.push_back(ptxBuilderTMA.newOperand(
+                im2colOffsets[im2colOffsets.size() - 1 - i], "h"));
             tmaInst += "$" + std::to_string(operandIdx++);
             if (i != im2colOffsets.size() - 1)
               tmaInst += ", ";
@@ -1553,7 +1558,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   // TMA store only supports tiled mode
   auto msgToPackedOffset =
-      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
+      getMsgToPackedOffsetLayout(srcTy);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
