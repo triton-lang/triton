@@ -1815,23 +1815,18 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
 
     rank = len(input.shape)
     assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
+    dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
     assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
                dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
 
+    # Join introduces a new minor dim; move it before the concat dim and merge.
+    c = join(input, other, _semantic=_semantic)
     order = list(builtins.range(rank))
-    order[dim], order[-1] = order[-1], order[dim]
-    inv_order = [order.index(i) for i in builtins.range(rank)]
-
-    a = permute(input, order, _semantic=_semantic)
-    b = permute(other, order, _semantic=_semantic)
-
-    leading = a.shape[:-1]
-    a = reshape(a, (math.prod(leading), a.shape[-1]), _semantic=_semantic)
-    b = reshape(b, (math.prod(leading), b.shape[-1]), _semantic=_semantic)
-
-    c = join(a, b, _semantic=_semantic)
-    c = reshape(c, leading + [a.shape[-1] + b.shape[-1]], _semantic=_semantic)
-    return permute(c, inv_order, _semantic=_semantic)
+    order.insert(dim, rank)
+    c = permute(c, order, _semantic=_semantic)
+    new_shape = list(input.shape)
+    new_shape[dim] = input.shape[dim] + other.shape[dim]
+    return reshape(c, new_shape, _semantic=_semantic)
 
 
 @builtin

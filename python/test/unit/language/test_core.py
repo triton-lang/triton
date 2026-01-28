@@ -14,6 +14,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
     integral_dtypes,
@@ -1932,12 +1933,43 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
 
     x = torch.arange(0, 128, device=device).to(getattr(torch, dtype_str))
     y = torch.arange(-128, 0, device=device).to(getattr(torch, dtype_str))
-    z_ref = torch.cat([x, y], dim=0).sum()
+    z_ref = torch.cat([x, y], dim=0)
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
-    assert z.sum() == z_ref
+    assert z.sum() == z_ref.sum()
+    if not can_reorder:
+        torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
+
+
+CAT_ND_SHAPES = ((128, ), (16, 32), (8, 16, 4), (2, 4, 8, 16))
+CAT_ND_CASES = []
+for shape in CAT_ND_SHAPES:
+    for dim in range(len(shape)):
+        CAT_ND_CASES.append(pytest.param(shape, dim, id=f"rank={len(shape)},dim={dim}"))
+
+
+@pytest.mark.parametrize("shape, dim", CAT_ND_CASES)
+def test_cat_nd(shape, dim, device):
+
+    @triton.jit
+    def kernel(x_desc, y_desc, z_desc, dim: tl.constexpr, shape: tl.constexpr):
+        rank: tl.constexpr = len(shape)
+        x = x_desc.load([0] * rank)
+        y = y_desc.load([0] * rank)
+        z = tl.cat(x, y, dim=dim)
+        z_desc.store([0] * rank, z)
+
+    x = torch.rand(shape, device=device)
+    y = torch.rand(shape, device=device)
+    z_ref = torch.cat([x, y], dim=dim)
+    z = torch.empty_like(z_ref)
+    x_desc = TensorDescriptor.from_tensor(x, block_shape=shape)
+    y_desc = TensorDescriptor.from_tensor(y, block_shape=shape)
+    z_desc = TensorDescriptor.from_tensor(z, block_shape=z_ref.shape)
+    kernel[(1, )](x_desc, y_desc, z_desc, dim=dim, shape=shape)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
 @pytest.mark.interpreter
