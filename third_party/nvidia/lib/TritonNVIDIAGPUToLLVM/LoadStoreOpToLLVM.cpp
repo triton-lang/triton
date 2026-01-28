@@ -1262,13 +1262,15 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
+static LinearLayout
+getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                           ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
   auto shapePerCTA = ttg::getShapePerCTA(ty);
   int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
   auto outDimNames = standardOutDimNames(ctx, rank);
   LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {
@@ -1337,13 +1339,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // Determine the TMA mode based on the descriptor type
     auto descType = op.getDesc().getType();
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
+    ttg::TMAMode tmaMode =
+        isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
 
-    // Validate and handle im2col mode
+    // Validate im2col mode constraints
     if (isIm2Col) {
       if (failed(validateIm2ColConstraints(op)))
         return failure();
-      // TODO: Implement im2col mode lowering
-      return op.emitError("im2col mode is not yet implemented");
     }
 
     auto loc = op.getLoc();
@@ -1374,7 +1376,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
@@ -1450,7 +1452,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
           "shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
-          ".global.mbarrier::complete_tx::bytes";
+          ".global" + (isIm2Col ? ".im2col" : "") +
+          ".mbarrier::complete_tx::bytes";
       if (multicast)
         tmaInst += ".multicast::cluster";
       tmaInst += " [$1], [$2, {";
@@ -1460,13 +1463,27 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       int operandIdx = 3;
       auto encoding = op.getDesc().getType().getBlockType().getEncoding();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
+
+      // Apply offsets to coordinates based on message iteration.
+      // Offsets are computed from the 2D output block shape and applied in
+      // reverse order to match PTX coordinate convention.
+      //
+      // For TILED mode (2D tensor [M, N]):
+      //   - offsets[0] -> coord[rank-2] (M dimension)
+      //   - offsets[1] -> coord[rank-1] (N dimension)
+      //
+      // For IM2COL mode (e.g., 4D input [N, H, W, C] -> 2D [pixels, channels]):
+      //   - 2D output: [pixelsPerColumn (dim 0), channelsPerPixel (dim 1)]
+      //   - offsets[0] (pixels) -> spatial coord (N, H, W), always 0 due to <=1024
+      //   - offsets[1] (channels) -> channel coord (C), may be non-zero
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (fp4Padded && i == 0) {
           coord = b.mul(coord, b.i32_val(2));
         }
-        if (i < offsets.size())
+        if (i < offsets.size()) {
           coord = b.add(coord, offsets[offsets.size() - i - 1].second);
+        }
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
@@ -1478,6 +1495,20 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       if (multicast) {
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
+      }
+      // Add im2col offsets if in IM2COL mode
+      if (isIm2Col) {
+        auto im2colOffsets = adaptor.getOffsets();
+        if (!im2colOffsets.empty()) {
+          tmaInst += ", {";
+          for (size_t i = 0; i < im2colOffsets.size(); i++) {
+            operands.push_back(ptxBuilderTMA.newOperand(im2colOffsets[i], "h"));
+            tmaInst += "$" + std::to_string(operandIdx++);
+            if (i != im2colOffsets.size() - 1)
+              tmaInst += ", ";
+          }
+          tmaInst += "}";
+        }
       }
       tmaInst += ";";
 
@@ -1516,7 +1547,9 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   auto rank = coords.size();
 
-  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
+  // TMA store only supports tiled mode
+  auto msgToPackedOffset =
+      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
