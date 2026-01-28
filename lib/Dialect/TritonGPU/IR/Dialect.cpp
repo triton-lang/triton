@@ -4045,21 +4045,21 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
 
   if (mode == TMAMode::Im2Col) {
     // Im2col mode produces a 2D block: [pixelsPerColumn, channelsPerPixel]
-    assert(blockShape.size() == 2 &&
-           "im2col mode requires a 2D block shape");
+    assert(blockShape.size() == 2 && "im2col mode requires a 2D block shape");
     // Im2col mode block shape constraints:
     // - contigDim (channelsPerPixel): max 256
     // - other dimension (pixelsPerColumn): max 1024
     // - Both dimensions must be powers of 2
-    // - Doc: https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
+    // - Doc:
+    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
     constexpr int64_t contigDimMax = 256;
     constexpr int64_t otherDimMax = 1024;
     int otherDim = (contigDim == 0) ? 1 : 0;
     // Check that pixelsPerColumn doesn't exceed the hardware maximum of 1024.
-    // This constraint ensures a single TMA message can cover all pixels, avoiding
-    // the need for multiple messages along spatial dimensions (N, D, H, W).
-    // Supporting pixelsPerColumn > 1024 would require computing offsets that
-    // depend on input tensor shape and padding, which is non-trivial.
+    // This constraint ensures a single TMA message can cover all pixels,
+    // avoiding the need for multiple messages along spatial dimensions (N, D,
+    // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
+    // that depend on input tensor shape and padding, which is non-trivial.
     // TODO: Add support for pixelsPerColumn > 1024 in the future.
     if (blockShape[otherDim] > otherDimMax) {
       return emitError() << "im2col mode: pixelsPerColumn dimension "

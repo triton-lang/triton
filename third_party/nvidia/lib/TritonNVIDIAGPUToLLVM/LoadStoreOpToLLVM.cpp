@@ -1262,9 +1262,8 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout
-getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                           ttg::TMAMode mode) {
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                                               ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");

@@ -296,8 +296,8 @@ LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
 
 // TMA tensor access modes
 enum class TMAMode {
-  Tiled,  // Regular tiled tensor memory access
-  Im2Col  // Im2col mode for convolution-friendly access patterns
+  Tiled, // Regular tiled tensor memory access
+  Im2Col // Im2col mode for convolution-friendly access patterns
 };
 
 FailureOr<SmallVector<int64_t>>
