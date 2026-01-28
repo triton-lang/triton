@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseSet.h"
 #include <cassert>
 
 namespace mlir {
@@ -60,6 +61,31 @@ Type getTypeWithElement(Type ty, Type elemTy) {
   auto ranked = dyn_cast<RankedTensorType>(ty);
   assert(ranked && "expected RankedTensorType");
   return RankedTensorType::get(ranked.getShape(), elemTy, ranked.getEncoding());
+}
+
+void recordPreferredLayout(
+    DenseMap<Value, ttg::BlockedEncodingAttr> &preferredLayouts,
+    DenseSet<Value> &conflictingLayouts, Value memdesc, Type tensorTy) {
+  if (!memdesc)
+    return;
+  auto ranked = dyn_cast<RankedTensorType>(tensorTy);
+  if (!ranked)
+    return;
+  auto encoding =
+      dyn_cast_or_null<ttg::BlockedEncodingAttr>(ranked.getEncoding());
+  if (!encoding)
+    return;
+  if (conflictingLayouts.contains(memdesc))
+    return;
+  auto it = preferredLayouts.find(memdesc);
+  if (it == preferredLayouts.end()) {
+    preferredLayouts[memdesc] = encoding;
+    return;
+  }
+  if (it->second != encoding) {
+    preferredLayouts.erase(it);
+    conflictingLayouts.insert(memdesc);
+  }
 }
 
 Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
@@ -302,6 +328,27 @@ bool isValueDefinedInRegion(Value value, Region *region) {
 
 class TmemScratchManager {
 public:
+  TmemScratchManager(
+      const DenseMap<Value, ttg::BlockedEncodingAttr> *preferredLayouts,
+      const DenseSet<Value> *conflictingLayouts)
+      : preferredLayouts(preferredLayouts),
+        conflictingLayouts(conflictingLayouts) {}
+
+  ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
+                                              Value memdesc,
+                                              ttg::MemDescType memTy) {
+    Value key = resolveMemdesc(memdesc);
+    if (!key)
+      key = memdesc;
+    if (preferredLayouts && conflictingLayouts &&
+        !conflictingLayouts->contains(key)) {
+      if (auto it = preferredLayouts->find(key); it != preferredLayouts->end())
+        return it->second;
+    }
+    return getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                       memTy.getElementType());
+  }
+
   static Value castToI32(PatternRewriter &rewriter, Location loc, Value value) {
     auto i32Ty = rewriter.getI32Type();
     auto ty = value.getType();
@@ -382,8 +429,7 @@ public:
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&scope->front());
       auto loc = alloc.getLoc();
-      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                                memTy.getElementType());
+      auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -445,8 +491,7 @@ public:
           rewriter, loc, rewriter.getI32Type(), offsetVal, strideVal);
       auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
                                       baseInfo->ptr, offsetEls);
-      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                                memTy.getElementType());
+      auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -489,8 +534,7 @@ public:
                                           idx, strideVal);
       auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
                                       baseInfo->ptr, offset);
-      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                                memTy.getElementType());
+      auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -517,8 +561,7 @@ public:
         ptr = tt::BitcastOp::create(rewriter, loc, ptrTy, ptr);
       }
 
-      auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                                memTy.getElementType());
+      auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
 
@@ -530,15 +573,35 @@ public:
   }
 
 private:
+  Value resolveMemdesc(Value memdesc) const {
+    if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
+      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
+              arg.getOwner()->getParentOp())) {
+        auto capture = wsPartitions.getParentOp()
+                           .getExplicitCaptures()[arg.getArgNumber()];
+        return resolveMemdesc(capture);
+      }
+      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+        unsigned argNum = arg.getArgNumber();
+        if (argNum == 0)
+          return Value();
+        Value init = forOp.getInitArgs()[argNum - 1];
+        return resolveMemdesc(init);
+      }
+    }
+    return memdesc;
+  }
+
   DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
+  const DenseMap<Value, ttg::BlockedEncodingAttr> *preferredLayouts = nullptr;
+  const DenseSet<Value> *conflictingLayouts = nullptr;
 };
 
 std::optional<ScratchInfo>
 createOperandScratch(PatternRewriter &rewriter, Location loc,
                      TmemScratchManager &scratch, Value memdesc,
                      ttg::MemDescType memTy, bool isTmem, Region *scope) {
-  auto layout = TmemScratchManager::getOptimizedBlockedEncoding(
-      rewriter, memTy.getShape(), memTy.getElementType());
+  auto layout = scratch.getScratchEncoding(rewriter, memdesc, memTy);
   auto tensorTy =
       RankedTensorType::get(memTy.getShape(), memTy.getElementType(), layout);
   Value fullVal;
@@ -1126,7 +1189,29 @@ class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
   void runOnOperation() override {
-    TmemScratchManager scratch;
+    DenseMap<Value, ttg::BlockedEncodingAttr> preferredLayouts;
+    DenseSet<Value> conflictingLayouts;
+    getOperation().walk([&](Operation *op) {
+      if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
+        if (Value src = alloc.getSrc()) {
+          recordPreferredLayout(preferredLayouts, conflictingLayouts,
+                                alloc.getResult(), src.getType());
+        }
+        return;
+      }
+      if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
+        recordPreferredLayout(preferredLayouts, conflictingLayouts,
+                              load.getSrc(), load.getType());
+        return;
+      }
+      if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
+        recordPreferredLayout(preferredLayouts, conflictingLayouts,
+                              store.getDst(), store.getSrc().getType());
+        return;
+      }
+    });
+
+    TmemScratchManager scratch(&preferredLayouts, &conflictingLayouts);
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
