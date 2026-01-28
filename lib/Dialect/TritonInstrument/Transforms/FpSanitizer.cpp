@@ -63,9 +63,48 @@ Type getTypeWithElement(Type ty, Type elemTy) {
   return RankedTensorType::get(ranked.getShape(), elemTy, ranked.getEncoding());
 }
 
+Value resolveMemdescRoot(Value memdesc) {
+  Value cur = memdesc;
+  while (cur) {
+    if (auto arg = dyn_cast<BlockArgument>(cur)) {
+      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
+              arg.getOwner()->getParentOp())) {
+        auto capture = wsPartitions.getParentOp()
+                           .getExplicitCaptures()[arg.getArgNumber()];
+        cur = capture;
+        continue;
+      }
+      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+        unsigned argNum = arg.getArgNumber();
+        if (argNum == 0)
+          return Value();
+        cur = forOp.getInitArgs()[argNum - 1];
+        continue;
+      }
+      return cur;
+    }
+
+    if (auto subslice = cur.getDefiningOp<ttng::TMEMSubSliceOp>()) {
+      cur = subslice.getSrc();
+      continue;
+    }
+    if (auto view = cur.getDefiningOp<ttg::MemDescIndexOp>()) {
+      cur = view.getSrc();
+      continue;
+    }
+    if (auto view = cur.getDefiningOp<ttg::MemDescReinterpretOp>()) {
+      cur = view.getSrc();
+      continue;
+    }
+    return cur;
+  }
+  return Value();
+}
+
 void recordPreferredLayout(
     DenseMap<Value, ttg::BlockedEncodingAttr> &preferredLayouts,
     DenseSet<Value> &conflictingLayouts, Value memdesc, Type tensorTy) {
+  memdesc = resolveMemdescRoot(memdesc);
   if (!memdesc)
     return;
   auto ranked = dyn_cast<RankedTensorType>(tensorTy);
@@ -123,28 +162,19 @@ Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Value like,
                                    rewriter.getIntegerAttr(intTy, value));
 }
 
-Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aI,
-                     Value bI, Value kI32, int64_t m, int64_t n,
-                     ttg::BlockedEncodingAttr accLayout) {
+Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
+                     Value bSlice, int64_t m, int64_t n,
+                     ttg::BlockedEncodingAttr accLayout, IntegerType accElem) {
   OpBuilder::InsertionGuard guard(rewriter);
-  auto accElemTy = getElementType(aI.getType());
-  auto idxTy = rewriter.getI32Type();
-  auto aIdxTy = RankedTensorType::get({m, 1}, idxTy, accLayout);
-  auto bIdxTy = RankedTensorType::get({1, n}, idxTy, accLayout);
-  auto aSliceTy = RankedTensorType::get({m, 1}, accElemTy, accLayout);
-  auto bSliceTy = RankedTensorType::get({1, n}, accElemTy, accLayout);
-  auto fullTy = RankedTensorType::get({m, n}, accElemTy, accLayout);
-
-  Value aIdx = tt::SplatOp::create(rewriter, loc, aIdxTy, kI32);
-  Value bIdx = tt::SplatOp::create(rewriter, loc, bIdxTy, kI32);
-  Value aSlice = tt::GatherOp::create(rewriter, loc, aSliceTy, aI, aIdx,
-                                      rewriter.getI32IntegerAttr(1), UnitAttr())
-                     .getResult();
-  Value bSlice = tt::GatherOp::create(rewriter, loc, bSliceTy, bI, bIdx,
-                                      rewriter.getI32IntegerAttr(0), UnitAttr())
-                     .getResult();
-  Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aSlice);
-  Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bSlice);
+  auto fullTy = RankedTensorType::get({m, n}, accElem, accLayout);
+  auto aI = bitcastToInt(rewriter, loc, aSlice);
+  auto bI = bitcastToInt(rewriter, loc, bSlice);
+  aI = castIntValueToType(rewriter, loc, aI,
+                          getTypeWithElement(aI.getType(), accElem));
+  bI = castIntValueToType(rewriter, loc, bI,
+                          getTypeWithElement(bI.getType(), accElem));
+  Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aI);
+  Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bI);
   return arith::MulIOp::create(rewriter, loc, aFull, bFull);
 }
 
@@ -247,18 +277,16 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
 
   Value aTilePtr =
       tt::AddPtrOp::create(rewriter, loc, aPtr.getType(), aPtr, mIdxI32);
-  Value aTile = loadScratchStrided2D(rewriter, loc, aTilePtr, aTileTy, aStride);
   Value bOffset = arith::MulIOp::create(rewriter, loc, nIdxI32, kConst);
   Value bTilePtr =
       tt::AddPtrOp::create(rewriter, loc, bPtr.getType(), bPtr, bOffset);
-  Value bTile = loadScratchStrided2D(rewriter, loc, bTilePtr, bTileTy, bStride);
 
-  Value aI = bitcastToInt(rewriter, loc, aTile);
-  Value bI = bitcastToInt(rewriter, loc, bTile);
-  aI = castIntValueToType(rewriter, loc, aI,
-                          getTypeWithElement(aI.getType(), accElem));
-  bI = castIntValueToType(rewriter, loc, bI,
-                          getTypeWithElement(bI.getType(), accElem));
+  auto aSliceTy =
+      RankedTensorType::get({tileM, 1}, aTileTy.getElementType(), accLayout);
+  auto bSliceTy =
+      RankedTensorType::get({1, tileN}, bTileTy.getElementType(), accLayout);
+  Value aStrideVal = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(aStride));
 
   Value zeroSum = getIntConstantLike(rewriter, loc, accTileI, 0);
   Value kUpper =
@@ -269,8 +297,17 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
   rewriter.setInsertionPointToStart(kLoop.getBody());
   Value kIdx = kLoop.getInductionVar();
   Value kI32 = arith::IndexCastOp::create(rewriter, loc, i32Ty, kIdx);
-  Value partial =
-      emulateDotStep(rewriter, loc, aI, bI, kI32, tileM, tileN, accLayout);
+  Value aOffset = arith::MulIOp::create(rewriter, loc, i32Ty, kI32, aStrideVal);
+  Value aSlicePtr =
+      tt::AddPtrOp::create(rewriter, loc, aPtr.getType(), aTilePtr, aOffset);
+  Value aSlice =
+      loadScratchStrided2D(rewriter, loc, aSlicePtr, aSliceTy, aStride);
+  Value bSlicePtr =
+      tt::AddPtrOp::create(rewriter, loc, bPtr.getType(), bTilePtr, kI32);
+  Value bSlice =
+      loadScratchStrided2D(rewriter, loc, bSlicePtr, bSliceTy, bStride);
+  Value partial = emulateDotStep(rewriter, loc, aSlice, bSlice, tileM, tileN,
+                                 accLayout, accElem);
   Value acc = kLoop.getRegionIterArgs()[0];
   Value next = arith::AddIOp::create(rewriter, loc, acc, partial);
   scf::YieldOp::create(rewriter, loc, next);
@@ -342,7 +379,9 @@ public:
       key = memdesc;
     if (preferredLayouts && conflictingLayouts &&
         !conflictingLayouts->contains(key)) {
-      if (auto it = preferredLayouts->find(key); it != preferredLayouts->end())
+      if (auto it = preferredLayouts->find(key);
+          it != preferredLayouts->end() &&
+          isEncodingCompatible(it->second, rewriter))
         return it->second;
     }
     return getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
@@ -449,12 +488,9 @@ public:
         if (src && src.getDefiningOp())
           rewriter.setInsertionPointAfter(src.getDefiningOp());
         Value init = src;
-        if (init && init.getType() != tensorTy) {
-          init = ttg::ConvertLayoutOp::create(rewriter, loc, tensorTy, init)
-                     .getResult();
-        }
         if (init) {
-          if (!createStoreScratchMemory(rewriter, loc, ptr, init, tensorTy))
+          auto initTy = cast<RankedTensorType>(init.getType());
+          if (!createStoreScratchMemory(rewriter, loc, ptr, init, initTy))
             return std::nullopt;
         }
       }
@@ -573,6 +609,23 @@ public:
   }
 
 private:
+  static unsigned productUnsigned(ArrayRef<unsigned> dims) {
+    unsigned prod = 1;
+    for (unsigned d : dims)
+      prod *= d;
+    return prod;
+  }
+
+  static bool isEncodingCompatible(ttg::BlockedEncodingAttr encoding,
+                                   PatternRewriter &rewriter) {
+    unsigned encWarps = productUnsigned(encoding.getWarpsPerCTA());
+    unsigned encThreads = productUnsigned(encoding.getThreadsPerWarp());
+    unsigned numWarps =
+        ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
+    unsigned threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
+    return encWarps == numWarps && encThreads == threadsPerWarp;
+  }
+
   Value resolveMemdesc(Value memdesc) const {
     if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
       if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
@@ -588,6 +641,16 @@ private:
         Value init = forOp.getInitArgs()[argNum - 1];
         return resolveMemdesc(init);
       }
+      return memdesc;
+    }
+    if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
+      return resolveMemdesc(subslice.getSrc());
+    }
+    if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
+      return resolveMemdesc(view.getSrc());
+    }
+    if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
+      return resolveMemdesc(view.getSrc());
     }
     return memdesc;
   }
@@ -609,14 +672,9 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
     auto info = scratch.getOrCreate(memdesc, rewriter, scope);
     if (!info)
       return std::nullopt;
-    fullVal =
-        createLoadScratchMemory(rewriter, loc, info->ptr, info->tensorType);
+    fullVal = createLoadScratchMemory(rewriter, loc, info->ptr, tensorTy);
     if (!fullVal)
       return std::nullopt;
-    if (fullVal.getType() != tensorTy) {
-      fullVal = ttg::ConvertLayoutOp::create(rewriter, loc, tensorTy, fullVal)
-                    .getResult();
-    }
   } else {
     fullVal =
         ttg::LocalLoadOp::create(rewriter, loc, tensorTy, memdesc, Value())
@@ -663,7 +721,7 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   auto i32Ty = rewriter.getI32Type();
   auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
 
-  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
+  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0, shape.size());
   auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
   auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
   auto stride0 = createConstIntTensor(rewriter, loc, 1, dim0Ty);
@@ -675,7 +733,7 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   ptrTensor =
       tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
 
-  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
+  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1, shape.size());
   auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
   auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
   auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
@@ -825,16 +883,9 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     if (!resultTy.getEncoding())
       return failure();
-    Value scratchVal =
-        createLoadScratchMemory(rewriter, loc, info->ptr, info->tensorType);
-    if (!scratchVal)
+    Value result = createLoadScratchMemory(rewriter, loc, info->ptr, resultTy);
+    if (!result)
       return failure();
-    if (scratchVal.getType() != resultTy) {
-      scratchVal =
-          ttg::ConvertLayoutOp::create(rewriter, loc, resultTy, scratchVal)
-              .getResult();
-    }
-    Value result = scratchVal;
 
     if (op.getNumResults() == 1) {
       rewriter.replaceOp(op, result);
@@ -867,13 +918,7 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     if (!srcTy.getEncoding())
       return failure();
-    Value src = op.getSrc();
-    if (src.getType() != info->tensorType) {
-      src = ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, src)
-                .getResult();
-    }
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, src,
-                                  info->tensorType))
+    if (!createStoreScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
       return failure();
 
     if (op.getNumResults() == 0) {
@@ -911,13 +956,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
-    if (srcReg.getType() != info->tensorType) {
-      srcReg =
-          ttg::ConvertLayoutOp::create(rewriter, loc, info->tensorType, srcReg)
-              .getResult();
-    }
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg,
-                                  info->tensorType))
+    if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return failure();
 
     if (Value barrier = op.getBarrier()) {

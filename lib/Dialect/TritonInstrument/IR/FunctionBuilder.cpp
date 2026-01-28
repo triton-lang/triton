@@ -239,7 +239,8 @@ Value createOneHot(ImplicitLocOpBuilder &b, int size, int index,
 Value createColumnMask(ImplicitLocOpBuilder &b, int column,
                        RankedTensorType tensorType) {
   auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
-  auto columnEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
+  auto columnEncoding =
+      tti::getSingleDimSliceEncoding(encoding, /*dim=*/1, tensorType.getRank());
   Value oneHot =
       createOneHot(b, tensorType.getShape()[1], column, columnEncoding);
   return convertAndBroadcast(b, oneHot, /*dim=*/0, tensorType);
@@ -274,7 +275,8 @@ Value createThreadColumnMask(ImplicitLocOpBuilder &b, Value threadMask,
                              RankedTensorType tensorType) {
   auto loc = b.getLoc();
   auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
-  auto sliceEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
+  auto sliceEncoding =
+      tti::getSingleDimSliceEncoding(encoding, /*dim=*/1, tensorType.getRank());
   int columns = tensorType.getShape()[1];
 
   RankedTensorType rangeType =
@@ -304,7 +306,8 @@ Value createColumnMask(ImplicitLocOpBuilder &b, Value column,
                        RankedTensorType tensorType) {
   auto loc = b.getLoc();
   auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
-  auto sliceEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
+  auto sliceEncoding =
+      tti::getSingleDimSliceEncoding(encoding, /*dim=*/1, tensorType.getRank());
   auto colType = RankedTensorType::get({tensorType.getShape()[1]},
                                        b.getI32Type(), sliceEncoding);
   Value range = triton::MakeRangeOp::create(b, colType, /*start=*/0,

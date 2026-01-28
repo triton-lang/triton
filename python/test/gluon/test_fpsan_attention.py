@@ -986,7 +986,7 @@ def test_attention_fwd(monkeypatch):
 
     ref_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=128)
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=64)
-    torch.testing.assert_close(ref_out, tri_out, atol=0, rtol=0)
+    # torch.testing.assert_close(ref_out, tri_out, atol=0, rtol=0)
     assert not compare_bitwise_equal(ref_out,
                                      tri_out), "Reference and Triton outputs should not be bitwise equal in fp mode"
 

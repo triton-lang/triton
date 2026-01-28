@@ -242,9 +242,9 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
           .getResult());
 }
 
-DistributedEncodingTrait getSingleDimSliceEncoding(BlockedEncodingAttr encoding,
-                                                   int dim) {
-  int rank = encoding.getOrder().size();
+DistributedEncodingTrait
+getSingleDimSliceEncoding(DistributedEncodingTrait encoding, int dim,
+                          int rank) {
   MLIRContext *ctx = encoding.getContext();
   assert(dim < rank && "Expected dim to be less than rank");
   DistributedEncodingTrait sliceEncoding = encoding;
@@ -295,20 +295,21 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
   if (!encoding)
     return {};
 
-  if (auto blocked = dyn_cast<BlockedEncodingAttr>(encoding)) {
+  if (auto distributed = dyn_cast<DistributedEncodingTrait>(encoding)) {
     Value ptrTensor = SplatOp::create(
         b, loc,
-        RankedTensorType::get(tensorType.getShape(), base.getType(), blocked),
+        RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
         base);
     auto offsetsType =
-        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), blocked);
+        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
     SmallVector<int> strides(tensorType.getRank());
     strides[0] = 1;
     for (int i = 1; i < tensorType.getRank(); ++i) {
       strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
     }
     for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto partialEncoding = getSingleDimSliceEncoding(blocked, i);
+      auto partialEncoding =
+          getSingleDimSliceEncoding(distributed, i, tensorType.getRank());
       auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
                                               b.getI32Type(), partialEncoding);
       auto arange =
