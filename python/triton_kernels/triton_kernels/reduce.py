@@ -115,7 +115,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
             s1_term_s = 0 if SCALE_BROADCAST_S1 else (offs_x_s1[None, :] * stride_s1)
             s_ptrs = Scale + k_term_s + s0_term_s + s1_term_s
             s = tl.load(s_ptrs, mask=mask, other=1)
-            x = x * s
+            x = tl.fma(x, s, 0.0)
         y += x
     if POSTPROCESS_FN1 is not None:
         y = POSTPROCESS_FN1(y, *postprocess_fn1_args)
