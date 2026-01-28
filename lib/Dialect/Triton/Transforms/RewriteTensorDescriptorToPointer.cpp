@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -340,9 +341,17 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
 
     Value result = newLoad.getResult();
     if (descTy.getBlockType().getElementType().isF32()) {
+
+      auto ifOp = scf::IfOp::create(rewriter, loc, result.getType(),
+                                    desc.roundF32ToTF32, /*withElse=*/true);
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(ifOp.thenBlock());
       auto rounded = roundF32ToTF32(rewriter, loc, result);
-      result = arith::SelectOp::create(rewriter, loc, desc.roundF32ToTF32,
-                                       rounded, result);
+      scf::YieldOp::create(rewriter, loc, rounded);
+
+      rewriter.setInsertionPointToStart(ifOp.elseBlock());
+      scf::YieldOp::create(rewriter, loc, result);
+      result = ifOp.getResult(0);
     }
 
     rewriter.replaceOp(op, result);
