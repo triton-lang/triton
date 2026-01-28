@@ -2397,12 +2397,12 @@ def test_tdm_load_pred():
         b_offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, reg_layout))
         b_ptrs = b_ptr + b_offs_m[:, None] * 64 + b_offs_n[None, :]
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=False)
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=0)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         tile1 = smem.load(reg_layout)
         ttgl.store(b_ptrs, tile1)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=True)
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=1)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         tile2 = smem.load(reg_layout)
         ttgl.store(b_ptrs + 32, tile2)
@@ -2999,3 +2999,245 @@ def test_runtime_cluster_barrier_arrive_and_wait():
     # Ensure that arrive and wait don't hang
     cluster_barrier_arrive_and_wait_kernel[(4, )](num_warps=8, num_ctas=2)
     torch.cuda.synchronize()
+
+
+# =============================================================================
+# TDM Scatter Mode Tests
+# =============================================================================
+
+
+@gluon.jit
+def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, stride_n, BLOCK_M: ttgl.constexpr,
+                       BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, DST_COL_OFFSET: ttgl.constexpr):
+    """Kernel that uses TDM scatter to write non-contiguous rows."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # For scatter indices, use a layout where all indices are available per thread.
+    # NUM_INDICES must be a power of 2.
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    # Allocate shared memory for the data to scatter
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    # Load data from global to shared memory using TDM
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    # Create tensor descriptor for output
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+
+    # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("BLOCK_M", [16, 32])
+@pytest.mark.parametrize("BLOCK_N", [64, 128])
+@pytest.mark.parametrize("dtype", ["fp16", "bf16", "fp8e5", "fp8e4nv"])
+@pytest.mark.parametrize("index_dtype", ["i16", "i32"])
+def test_compile_tdm_scatter(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype):
+    """Test that TDM scatter compiles correctly."""
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_indices_per_instr = 16 if index_dtype == "i16" else 8
+    if NUM_INDICES > max_indices_per_instr:
+        pytest.skip(f"NUM_INDICES={NUM_INDICES} exceeds max {max_indices_per_instr} for {index_dtype} indices")
+
+    dtype_str = dtype
+    signature = {
+        "inp_ptr": f"*{dtype_str}",
+        "out_ptr": f"*{dtype_str}",
+        "dst_row_indices_ptr": f"*{index_dtype}",
+        "M_out": "i32",
+        "N_out": "i32",
+        "stride_m": "i32",
+        "stride_n": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "NUM_INDICES": "constexpr",
+        "DST_COL_OFFSET": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "NUM_INDICES": NUM_INDICES,
+        "DST_COL_OFFSET": 0,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_scatter_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    amdgcn = k.asm["amdgcn"]
+
+    # Verify the scatter uses tensor store from lds
+    assert re.search("tensor_store_from_lds", amdgcn), "Expected tensor_store_from_lds instruction for TDM scatter"
+    assert re.search("s_wait_tensorcnt 0x0", amdgcn), "Expected s_wait_tensorcnt instruction"
+
+
+def _create_scatter_test_data(shape, dtype):
+    """Create random test data for TDM scatter tests, handling special dtypes."""
+    if dtype == torch.float8_e5m2:
+        # float8_e5m2: range from min normal to max normal
+        return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+    elif dtype == torch.float8_e4m3fn:
+        # float8_e4m3fn: range from min normal to max normal
+        return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
+    else:
+        # float16, bfloat16, float32, etc.
+        return torch.randn(shape, dtype=dtype)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("dst_col_offset", [0, 32])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e5m2,
+    torch.float8_e4m3fn,
+])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter(NUM_INDICES, BLOCK_M, BLOCK_N, dst_col_offset, dtype, index_dtype):
+    """Test TDM scatter correctness at runtime."""
+    torch.manual_seed(42)
+
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_indices_per_instr = 16 if index_dtype == torch.int16 else 8
+    if NUM_INDICES > max_indices_per_instr:
+        pytest.skip(f"NUM_INDICES={NUM_INDICES} exceeds max {max_indices_per_instr} for {index_dtype} indices")
+
+    M_out = 2048
+    # Output width needs to accommodate dst_col_offset + BLOCK_N
+    N_out = dst_col_offset + BLOCK_N
+
+    # Create input data (contiguous block)
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+
+    # Create output tensor (larger, with zeros)
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+
+    # Create dst_row_indices (row indices for non-contiguous rows in output)
+    # NUM_INDICES must be a power of 2
+    dst_row_indices = torch.arange(NUM_INDICES, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    h = tdm_scatter_kernel[(1, )](inp_d, out_d, indices_d, M_out=M_out, N_out=N_out, stride_m=out_d.stride(0),
+                                  stride_n=out_d.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=NUM_INDICES,
+                                  DST_COL_OFFSET=dst_col_offset)
+
+    # Assert that only a single tensor_store_from_lds is emitted
+    amdgcn = h.asm["amdgcn"]
+    actual_count = len(re.findall(r"tensor_store_from_lds", amdgcn))
+    assert actual_count == 1, \
+        f"Expected 1 tensor_store_from_lds instruction, but found {actual_count}"
+
+    out_result = out_d.cpu()
+
+    # Build expected output: zeros with scattered rows at the right positions
+    ref_out = torch.zeros_like(out)
+    ref_out[dst_row_indices.long(), dst_col_offset:dst_col_offset + BLOCK_N] = inp[:NUM_INDICES]
+    torch.testing.assert_close(out_result, ref_out)
+
+
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("index_dtype", ["i16", "i32"])
+def test_compile_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype):
+    """Test that TDM scatter emits the correct number of instructions for large BLOCK_M."""
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_per_instr = 16 if index_dtype == "i16" else 8
+    if BLOCK_M <= max_per_instr:
+        pytest.skip("This test is for cases requiring multiple TDM instructions")
+    dtype = "fp32"
+    dtype_str = str(dtype).split('.')[-1]
+
+    # For multiple instructions test, use BLOCK_M as NUM_INDICES
+    signature = {
+        "inp_ptr": f"*{dtype_str}",
+        "out_ptr": f"*{dtype_str}",
+        "dst_row_indices_ptr": f"*{index_dtype}",
+        "M_out": "i32",
+        "N_out": "i32",
+        "stride_m": "i32",
+        "stride_n": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "NUM_INDICES": "constexpr",
+        "DST_COL_OFFSET": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "NUM_INDICES": BLOCK_M,
+        "DST_COL_OFFSET": 0,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_scatter_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    amdgcn = k.asm["amdgcn"]
+
+    expected_num_instructions = math.ceil(BLOCK_M / max_per_instr)
+    actual_count = len(re.findall(r"tensor_store_from_lds", amdgcn))
+
+    assert actual_count == expected_num_instructions, \
+        f"Expected {expected_num_instructions} tensor_store_from_lds instructions for BLOCK_M={BLOCK_M} " \
+        f"with {index_dtype} indices, but found {actual_count}"
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("dst_col_offset", [0, 16])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e5m2,
+    torch.float8_e4m3fn,
+])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, dst_col_offset, dtype, index_dtype):
+    """Test TDM scatter with more rows than can fit in a single instruction."""
+    torch.manual_seed(42)
+
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_per_instr = 16 if index_dtype == torch.int16 else 8
+    if BLOCK_M <= max_per_instr:
+        pytest.skip("This test is for cases requiring multiple TDM instructions")
+
+    M_out = 2048  # Large enough to hold all scattered rows
+    N_out = dst_col_offset + BLOCK_N
+
+    # Create input data
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+
+    # Create output tensor
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+
+    # Create randomized non-contiguous dst_row_indices
+    dst_row_indices = torch.randperm(M_out, dtype=torch.int32)[:BLOCK_M]
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    tdm_scatter_kernel[(1, )](inp_d, out_d, indices_d, M_out=M_out, N_out=N_out, stride_m=N_out, stride_n=1,
+                              BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=BLOCK_M, DST_COL_OFFSET=dst_col_offset)
+
+    out_result = out_d.cpu()
+
+    # Build expected output: zeros with scattered rows at the right positions
+    ref_out = torch.zeros_like(out)
+    ref_out[dst_row_indices.long(), dst_col_offset:dst_col_offset + BLOCK_N] = inp
+    torch.testing.assert_close(out_result, ref_out)

@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TDMUtility.h"
 #include "Utility.h"
@@ -11,6 +12,31 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+Attribute findEncodingFromUsers(Operation *op) {
+  Attribute sharedEnc;
+
+  for (auto use : op->getUsers()) {
+    Attribute userEnc;
+    if (auto load = llvm::dyn_cast<amdgpu::AsyncTDMCopyGlobalToLocalOp>(use)) {
+      userEnc = load.getResult().getType().getEncoding();
+    } else if (auto store =
+                   llvm::dyn_cast<amdgpu::AsyncTDMCopyLocalToGlobalOp>(use)) {
+      userEnc = store.getSrc().getType().getEncoding();
+    }
+    if (!userEnc)
+      continue;
+
+    // Assign first encoding found; or error out if different encoding is found
+    if (!sharedEnc)
+      sharedEnc = userEnc;
+    else if (sharedEnc != userEnc) {
+      op->emitError("Descriptor is used with different shared encodings.");
+      return {};
+    }
+  }
+  return sharedEnc;
+}
+
 struct MakeTensorDescOpConversion
     : public ConvertOpToLLVMPattern<triton::MakeTensorDescOp> {
   using ConvertOpToLLVMPattern<
@@ -29,7 +55,10 @@ struct MakeTensorDescOpConversion
     auto blockTy = tensorDescTy.getBlockType();
     auto sharedEnc = blockTy.getEncoding();
     if (!sharedEnc) {
-      return rewriter.notifyMatchFailure(op, "Descriptor has no layout.");
+      // TODO: add an extra pass to assign layout to descriptors
+      sharedEnc = findEncodingFromUsers(op);
+      if (!sharedEnc)
+        return rewriter.notifyMatchFailure(op, "Descriptor has no layout.");
     }
     auto paddedEnc = llvm::dyn_cast<PaddedSharedEncodingAttr>(sharedEnc);
 

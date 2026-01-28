@@ -157,15 +157,14 @@ DataEntry TraceData::addOp(const std::string &name) {
   auto contextId = currentTrace->addContexts(contexts);
   auto eventId = currentTrace->addEvent(contextId);
   auto &event = currentTrace->getEvent(eventId);
-  return DataEntry(eventId, currentPhase, event.metrics);
+  return DataEntry(eventId, currentPhase.load(std::memory_order_relaxed),
+                   event.metrics);
 }
 
 DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *trace = (phase == currentPhase)
-                    ? currentPhasePtrAs<Trace>()
-                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
+  auto lock = lockIfCurrentPhase(phase);
+  auto *trace = phasePtrAs<Trace>(phase);
   // Add a new context under it and update the context
   auto &event = trace->getEvent(eventId);
   auto contextId = trace->addContexts(contexts, event.contextId);
@@ -174,13 +173,11 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   return DataEntry(newEventId, phase, newEvent.metrics);
 }
 
-void TraceData::addEntryMetrics(
+void TraceData::addMetrics(
     size_t phase, size_t eventId,
     const std::map<std::string, MetricValueType> &metrics) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *trace = (phase == currentPhase)
-                    ? currentPhasePtrAs<Trace>()
-                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
+  auto lock = lockIfCurrentPhase(phase);
+  auto *trace = phasePtrAs<Trace>(phase);
   auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
@@ -192,7 +189,7 @@ void TraceData::addEntryMetrics(
   }
 }
 
-void TraceData::addScopeMetrics(
+void TraceData::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *currentTrace = currentPhasePtrAs<Trace>();

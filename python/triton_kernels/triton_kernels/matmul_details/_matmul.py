@@ -74,6 +74,7 @@ def _matmul(
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             FLATTEN_LOOPS: tl.constexpr = True, # Only relevant to persistent kernel
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,

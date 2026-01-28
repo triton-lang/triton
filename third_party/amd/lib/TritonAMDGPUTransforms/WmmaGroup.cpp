@@ -154,6 +154,8 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                     "llvm.amdgcn.wmma.i32.16x16x16.iu8", 16, 16),
       TRITON_WMMA_v(2, 16, 16, i8T, i8T, 8, i32T,
                     "llvm.amdgcn.wmma.i32.16x16x16.iu8", 16, 8),
+      TRITON_WMMA_v(3, 16, 16, i8T, i8T, 8, i32T,
+                    "llvm.amdgcn.wmma.i32.16x16x64.iu8", 64, 32),
 
       // iu4 inputs
       // wmma_i32_16x16x16_iu4

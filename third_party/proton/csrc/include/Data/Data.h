@@ -4,10 +4,12 @@
 #include "Context/Context.h"
 #include "Metric.h"
 #include "PhaseStore.h"
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <ostream>
 #include <set>
 #include <shared_mutex>
@@ -31,7 +33,7 @@ struct DataEntry {
   /// with the entry.
   /// Flexible metrics cannot be directly stored here since they maybe added by
   /// both the frontend and the backend.
-  /// Use `Data::addScopeMetrics` and `Data::addEntryMetrics` to add flexible
+  /// Use `Data::addMetrics` and `Data::addMetrics` to add flexible
   /// metrics.
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
 
@@ -56,6 +58,15 @@ class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
 
+  struct PhaseInfo {
+    size_t current{0};
+    size_t completeUpTo{kNoCompletePhase};
+
+    bool isComplete(size_t phase) const {
+      return completeUpTo != kNoCompletePhase && completeUpTo >= phase;
+    }
+  };
+
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
@@ -68,15 +79,6 @@ public:
     return contextSource->getContexts();
   }
 
-  /// Advance to the next phase.
-  size_t advancePhase();
-
-  /// Get the current phase.
-  size_t getCurrentPhase() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return currentPhase;
-  }
-
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);
 
@@ -85,19 +87,14 @@ public:
   /// Otherwise, clear all phases up to and including the given phase.
   void clear(size_t phase, bool clearUpToPhase = false);
 
+  /// Advance to the next phase.
+  size_t advancePhase();
+
   /// Mark phases up to `phase` as complete.
-  void updateCompletePhase(size_t phase);
+  void completePhase(size_t phase);
 
-  /// Check if the given phase is complete (i.e., all device-side records for
-  /// this phase have been flushed to host and the phase will no longer receive
-  /// new records).
-  bool isPhaseComplete(size_t phase) const;
-
-  /// To Json
-  virtual std::string toJsonString(size_t phase) const = 0;
-
-  /// To MsgPack
-  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
+  /// Atomically get current and complete phases.
+  PhaseInfo getPhaseInfo() const;
 
   /// Add an op to the data of the current phase.
   /// If `opName` is empty, just use the current context as is.
@@ -124,8 +121,8 @@ public:
   /// directly associated with a scope.
   /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
-  addScopeMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics) = 0;
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// Record a batch of named metrics for an entry.
   ///
@@ -135,8 +132,14 @@ public:
   ///
   /// The same as `addOp`, `phase` is important for asynchronous profilers.
   virtual void
-  addEntryMetrics(size_t phase, size_t entryId,
-                  const std::map<std::string, MetricValueType> &metrics) = 0;
+  addMetrics(size_t phase, size_t entryId,
+             const std::map<std::string, MetricValueType> &metrics) = 0;
+
+  /// To Json
+  virtual std::string toJsonString(size_t phase) const = 0;
+
+  /// To MsgPack
+  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
 protected:
   /// The actual implementations
@@ -150,8 +153,27 @@ protected:
     return static_cast<T *>(currentPhasePtr);
   }
 
-  std::size_t currentPhase{0};
-  std::size_t completePhase{kNoCompletePhase};
+  template <typename T> T *phasePtrAs(size_t phase) {
+    return static_cast<T *>(phaseStore->getPtr(phase));
+  }
+
+  [[nodiscard]] std::unique_lock<std::shared_mutex>
+  lockIfCurrentPhase(size_t phase) {
+    std::unique_lock<std::shared_mutex> lock(mutex, std::defer_lock);
+    const auto currentPhaseValue = currentPhase.load(std::memory_order_relaxed);
+    // Note that currentPhase is not locked here and can get incremented after
+    // this point. Correctness can still be guaranteed as no threads other than
+    // the profiler thread will access the data after phase advancement.
+    if (phase == currentPhaseValue) {
+      lock.lock();
+    }
+    // Otherwise, no need to lock for other phases since they won't be updated
+    // by the application thread
+    return lock;
+  }
+
+  std::atomic<std::size_t> currentPhase{0};
+  std::size_t completeUpToPhase{kNoCompletePhase};
   std::set<size_t> activePhases{};
 
   mutable std::shared_mutex mutex;
@@ -159,9 +181,6 @@ protected:
   ContextSource *contextSource{};
 
 private:
-  void validateNonCurrentPhase(const char *operation, const char *action,
-                               size_t phase) const;
-
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
 };

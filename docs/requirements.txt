@@ -4,7 +4,7 @@ sphinx
 matplotlib
 myst_parser
 sphinx-rtd-theme
-pandas
+pandas<3.0
 pytest
 sphinx-gallery
 sphinx-multiversion

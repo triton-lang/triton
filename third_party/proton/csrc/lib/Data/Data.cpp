@@ -11,17 +11,17 @@ namespace proton {
 
 void Data::initPhaseStore(PhaseStoreBase &store) {
   phaseStore = &store;
-  currentPhasePtr = phaseStore->getOrCreatePtr(0);
+  currentPhasePtr = phaseStore->createPtr(0);
   activePhases.insert(0);
 }
 
 size_t Data::advancePhase() {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  const auto nextPhase = currentPhase + 1;
-  currentPhasePtr = phaseStore->getOrCreatePtr(nextPhase);
+  const auto nextPhase = currentPhase.load(std::memory_order_relaxed) + 1;
+  currentPhasePtr = phaseStore->createPtr(nextPhase);
   activePhases.insert(nextPhase);
-  currentPhase = nextPhase;
-  return currentPhase;
+  currentPhase.store(nextPhase, std::memory_order_release);
+  return nextPhase;
 }
 
 void Data::clear(size_t phase, bool clearUpToPhase) {
@@ -48,19 +48,21 @@ void Data::clear(size_t phase, bool clearUpToPhase) {
   }
 
   // In case the current phase is cleared, recreate its pointer.
-  currentPhasePtr = phaseStore->getOrCreatePtr(currentPhase);
-  activePhases.insert(currentPhase);
+  const auto phaseToRecreate = currentPhase.load(std::memory_order_relaxed);
+  currentPhasePtr = phaseStore->createPtr(phaseToRecreate);
+  activePhases.insert(phaseToRecreate);
 }
 
-void Data::updateCompletePhase(size_t phase) {
+void Data::completePhase(size_t phase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  if (completePhase == kNoCompletePhase || phase > completePhase)
-    completePhase = phase;
+  if (completeUpToPhase == kNoCompletePhase || phase > completeUpToPhase)
+    completeUpToPhase = phase;
 }
 
-bool Data::isPhaseComplete(size_t phase) const {
+Data::PhaseInfo Data::getPhaseInfo() const {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  return completePhase != kNoCompletePhase && completePhase >= phase;
+  return PhaseInfo{currentPhase.load(std::memory_order_relaxed),
+                   completeUpToPhase};
 }
 
 void Data::dump(const std::string &outputFormat) {
@@ -75,7 +77,9 @@ void Data::dump(const std::string &outputFormat) {
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
-      auto suffix = currentPhase == 0 ? "" : ".part_" + std::to_string(phase);
+      auto suffix = currentPhase.load(std::memory_order_relaxed) == 0
+                        ? ""
+                        : ".part_" + std::to_string(phase);
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =

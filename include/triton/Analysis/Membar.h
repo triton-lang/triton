@@ -14,7 +14,8 @@ class OpBuilder;
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
-using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
+using MembarFilterFn =
+    std::function<bool(Operation *, Operation *, Allocation *)>;
 
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
@@ -101,13 +102,16 @@ struct BlockInfo {
   }
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
-    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
-                                 filter) ||
+  bool isIntersected(const BlockInfo &other, MembarFilterFn filter,
+                     Allocation *allocation) const {
+    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices, filter,
+                                 allocation) ||
            /*WAR*/
-           isIntersected(syncReadSlices, other.syncWriteSlices, filter) ||
+           isIntersected(syncReadSlices, other.syncWriteSlices, filter,
+                         allocation) ||
            /*WAW*/
-           isIntersected(syncWriteSlices, other.syncWriteSlices, filter);
+           isIntersected(syncWriteSlices, other.syncWriteSlices, filter,
+                         allocation);
   }
 
   /// Clears the slices because a barrier is inserted.
@@ -126,13 +130,13 @@ struct BlockInfo {
 
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
-                     MembarFilterFn filter) const {
+                     MembarFilterFn filter, Allocation *allocation) const {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
           for (auto lhsOp : lhs.second)
             for (auto rhsOp : rhs.second)
-              if (!filter || !filter(lhsOp, rhsOp))
+              if (!filter || !filter(lhsOp, rhsOp, allocation))
                 return true;
     return false;
   }
