@@ -236,6 +236,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
   FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
+  FOR_EACH_ERR_FN(hipModuleUnload, hipModule_t module)                         \
   FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
                   hipModule_t module, const char *kname)                       \
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
@@ -476,7 +477,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       hipSymbolTable.hipModuleLoadDataEx(&mod, data, 5, opt, optval))
   HIP_CHECK_AND_RETURN_NULL(
       hipSymbolTable.hipModuleGetFunction(&fun, mod, name));
-
+  // HIP_CHECK_AND_RETURN_NULL(
+  //     hipSymbolTable.hipModuleUnload(mod))
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
@@ -492,6 +494,18 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(KKiii)", (uint64_t)mod, (uint64_t)fun, n_regs,
                        n_spills, n_max_threads);
+}
+
+static PyObject *unLoadModule(PyObject *self, PyObject *args) {
+  hipModule_t mod;
+  if (!PyArg_ParseTuple(args, "p", &mod)) {
+    return NULL;
+  }
+
+  HIP_CHECK_AND_RETURN_NULL(
+      hipSymbolTable.hipModuleUnload(mod))
+
+  return NULL;
 }
 
 static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
@@ -1091,6 +1105,8 @@ cleanup:
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided hsaco into HIP driver"},
+    {"unload_module", unLoadModule, METH_VARARGS,
+     "unload provided module to free memory"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
     {"create_tdm_descriptor", createTDMDescriptor, METH_VARARGS,
