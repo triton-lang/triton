@@ -561,9 +561,6 @@ def benchmark_moe(M=65536, E=256, K=7168, N=2048, topk=8, is_stage1=True, is_sta
 if __name__ == "__main__":
     verify()
 
-    # print("\n=== Benchmark Config A: N=2048 (TP=1 equivalent) ===")
     # benchmark_moe(M=65536, E=256, K=7168, N=2048, topk=8)
-
-    # Benchmarking Small N (TP=8 target)
     print("\n=== Benchmark Config B: N=256 (TP=8 equivalent) ===")
     benchmark_moe(M=65536, E=256, K=7168, N=256, topk=8)
