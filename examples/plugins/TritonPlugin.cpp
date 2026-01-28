@@ -78,7 +78,7 @@ tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
     return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
-    passNames[i] = passName;
+    passNames[i++] = passName;
   }
   return TP_SUCCESS;
 }
