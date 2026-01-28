@@ -259,24 +259,24 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":261:0)
+        # CHECK: #loc = loc("{{.*}}":261:5)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
-        # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc14)
+        # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc12)
         # CHECK:          %c16_i32 = arith.constant 16 : i32 loc(#loc2)
-        # CHECK:          %pid = tt.get_program_id x : i32 loc(#loc15)
-        # CHECK:          %offset = arith.muli %pid, %c16_i32 : i32 loc(#loc16)
-        # CHECK:          %offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32> loc(#loc17)
-        # CHECK:          %offsets_0 = tt.splat %offset : i32 -> tensor<16xi32> loc(#loc18)
-        # CHECK:          %offsets_1 = arith.addi %offsets_0, %offsets : tensor<16xi32> loc(#loc18)
-        # CHECK:          %load_src_store_dst = tt.splat %src : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>> loc(#loc19)
-        # CHECK:          %load_src_store_dst_2 = tt.addptr %load_src_store_dst, %offsets_1 : tensor<16x!tt.ptr<f32>>, tensor<16xi32> loc(#loc19)
-        # CHECK:          %mask = tt.splat %N : i32 -> tensor<16xi32> loc(#loc20)
-        # CHECK:          %mask_3 = arith.cmpi slt, %offsets_1, %mask : tensor<16xi32> loc(#loc20)
-        # CHECK:          %x_plus_1_4 = tt.load %load_src_store_dst_2, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc21)
-        # CHECK:          %x_plus_1_5 = arith.addf %x_plus_1_4, %x_plus_1 : tensor<16xf32> loc(#loc14)
-        # CHECK:          tt.store %load_src_store_dst_2, %x_plus_1_5, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc10)
-        # CHECK:          tt.return loc(#loc11)
+        # CHECK:          %pid = tt.get_program_id x : i32 loc(#loc13)
+        # CHECK:          %offset = arith.muli %pid, %c16_i32 : i32 loc(#loc14)
+        # CHECK:          %offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32> loc(#loc15)
+        # CHECK:          %offsets_0 = tt.splat %offset : i32 -> tensor<16xi32> loc(#loc16)
+        # CHECK:          %offsets_1 = arith.addi %offsets_0, %offsets : tensor<16xi32> loc(#loc16)
+        # CHECK:          %load_src_store_dst = tt.splat %src : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>> loc(#loc17)
+        # CHECK:          %load_src_store_dst_2 = tt.addptr %load_src_store_dst, %offsets_1 : tensor<16x!tt.ptr<f32>>, tensor<16xi32> loc(#loc17)
+        # CHECK:          %mask = tt.splat %N : i32 -> tensor<16xi32> loc(#loc18)
+        # CHECK:          %mask_3 = arith.cmpi slt, %offsets_1, %mask : tensor<16xi32> loc(#loc18)
+        # CHECK:          %x_plus_1_4 = tt.load %load_src_store_dst_2, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc12)
+        # CHECK:          %x_plus_1_5 = arith.addf %x_plus_1_4, %x_plus_1 : tensor<16xf32> loc(#loc12)
+        # CHECK:          tt.store %load_src_store_dst_2, %x_plus_1_5, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc9)
+        # CHECK:          tt.return loc(#loc)
         # CHECK:          } loc(#loc)
         # CHECK:         } loc(#loc)
 
@@ -289,16 +289,13 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK: #loc7 = loc({{.*}})
         # CHECK: #loc8 = loc({{.*}})
         # CHECK: #loc9 = loc({{.*}})
-        # CHECK: #loc10 = loc({{.*}})
-        # CHECK: #loc11 = loc({{.*}})
-        # CHECK: #loc14 = loc("x_plus_1"(#loc1))
-        # CHECK: #loc15 = loc("pid"(#loc3))
-        # CHECK: #loc16 = loc("offset"(#loc4))
-        # CHECK: #loc17 = loc("offsets"(#loc5))
-        # CHECK: #loc18 = loc("offsets"(#loc6))
-        # CHECK: #loc19 = loc("load_src_store_dst"(#loc7))
-        # CHECK: #loc20 = loc("mask"(#loc8))
-        # CHECK: #loc21 = loc("x_plus_1"(#loc9))
+        # CHECK: #loc12 = loc("x_plus_1"(#loc1))
+        # CHECK: #loc13 = loc("pid"(#loc3))
+        # CHECK: #loc14 = loc("offset"(#loc4))
+        # CHECK: #loc15 = loc("offsets"(#loc5))
+        # CHECK: #loc16 = loc("offsets"(#loc6))
+        # CHECK: #loc17 = loc("load_src_store_dst"(#loc7))
+        # CHECK: #loc18 = loc("mask"(#loc8))
 
         pid = tl.program_id(0)
         offset = pid * BLOCK_SIZE
@@ -484,3 +481,63 @@ def test_map_elementwise_has_lineinfo():
     kernel_info = kernel.warmup(torch.float32, torch.float32, grid=(1, ))
     check_template = inspect.getsource(kernel.fn)
     run_filecheck("test", kernel_info.asm["ttir"], check_template)
+
+
+def test_line_and_column_numbers(fresh_triton_cache):
+
+    @triton.jit
+    def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
+        # CHECK: #loc = loc("{{.*}}":450:5)
+        # CHECK: #loc10 = loc("src"(#loc))
+        # CHECK: #loc11 = loc("N"(#loc))
+        # CHECK-LABEL:  tt.func public @kernel_basic(
+        # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
+        # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc12)
+        # CHECK:          %c16_i32 = arith.constant 16 : i32 loc(#loc2)
+        # CHECK:          %pid = tt.get_program_id x : i32 loc(#loc13)
+        # CHECK:          %offset = arith.muli %pid, %c16_i32 : i32 loc(#loc14)
+        # CHECK:          %offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32> loc(#loc15)
+        # CHECK:          %offsets_0 = tt.splat %offset : i32 -> tensor<16xi32> loc(#loc16)
+        # CHECK:          %offsets_1 = arith.addi %offsets_0, %offsets : tensor<16xi32> loc(#loc16)
+        # CHECK:          %load_src_store_dst = tt.splat %src : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>> loc(#loc17)
+        # CHECK:          %load_src_store_dst_2 = tt.addptr %load_src_store_dst, %offsets_1 : tensor<16x!tt.ptr<f32>>, tensor<16xi32> loc(#loc17)
+        # CHECK:          %mask = tt.splat %N : i32 -> tensor<16xi32> loc(#loc18)
+        # CHECK:          %mask_3 = arith.cmpi slt, %offsets_1, %mask : tensor<16xi32> loc(#loc18)
+        # CHECK:          %x_plus_1_4 = tt.load %load_src_store_dst_2, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc12)
+        # CHECK:          %x_plus_1_5 = arith.addf %x_plus_1_4, %x_plus_1 : tensor<16xf32> loc(#loc12)
+        # CHECK:          tt.store %load_src_store_dst_2, %x_plus_1_5, %mask_3 : tensor<16x!tt.ptr<f32>> loc(#loc9)
+        # CHECK:          tt.return loc(#loc)
+        # CHECK:          } loc(#loc)
+        # CHECK:         } loc(#loc)
+
+        # CHECK: #loc1 = loc({{.*}}:496:20)
+        # CHECK: #loc2 = loc(unknown)
+        # CHECK: #loc3 = loc({{.*}}:491:15)
+        # CHECK: #loc4 = loc({{.*}}:492:18)
+        # CHECK: #loc5 = loc({{.*}}:493:28)
+        # CHECK: #loc6 = loc({{.*}}:493:19)
+        # CHECK: #loc7 = loc({{.*}}:494:30)
+        # CHECK: #loc8 = loc({{.*}}:495:16)
+        # CHECK: #loc9 = loc({{.*}}:497:9)
+        # CHECK: #loc12 = loc("x_plus_1"(#loc1))
+        # CHECK: #loc13 = loc("pid"(#loc3))
+        # CHECK: #loc14 = loc("offset"(#loc4))
+        # CHECK: #loc15 = loc("offsets"(#loc5))
+        # CHECK: #loc16 = loc("offsets"(#loc6))
+        # CHECK: #loc17 = loc("load_src_store_dst"(#loc7))
+        # CHECK: #loc18 = loc("mask"(#loc8))
+
+        pid = tl.program_id(0)
+        offset = pid * BLOCK_SIZE
+        offsets = offset + tl.arange(0, BLOCK_SIZE)
+        load_src_store_dst = src + offsets
+        mask = offsets < N
+        x_plus_1 = tl.load(load_src_store_dst, mask=mask) + 1
+        tl.store(load_src_store_dst, x_plus_1, mask=mask)
+
+    h = triton.compile(
+        triton.compiler.ASTSource(fn=kernel_basic, signature={"src": "*fp32", "N": "i32", "BLOCK_SIZE": "constexpr"},
+                                  constexprs={"BLOCK_SIZE": 16}))
+
+    check_template = inspect.getsource(kernel_basic.fn)
+    run_filecheck("placeholder", h.asm["ttir"], check_template)

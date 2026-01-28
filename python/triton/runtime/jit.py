@@ -24,6 +24,8 @@ from triton._C.libtriton import get_cache_invalidating_env_vars, native_speciali
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
 
+INDENT_PATTERN = re.compile(r"^(?P<indent>[ \t]*)def\s+\w+\s*\(", re.MULTILINE)
+
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -454,6 +456,18 @@ def get_full_name(fn):
     return f"{fn.__module__}.{fn.__qualname__}"
 
 
+def get_begin_col_number(raw_src_str):
+    # Find the amount of indenting to use in the source location information.
+    indented_def = INDENT_PATTERN.search(raw_src_str)
+    if not indented_def:
+        raise ValueError("No function definition found for kernel")
+    # Consider spaces and tabs as single characters to match the ast
+    begin_col = len(indented_def.group("indent"))
+    # Columns start at 1
+    begin_col += 1
+    return begin_col
+
+
 class JITCallable:
 
     def __init__(self, fn):
@@ -467,7 +481,12 @@ class JITCallable:
         self._hash_lock = threading.RLock()
 
         # function source code (without decorators)
-        src = textwrap.dedent("".join(self.raw_src))
+        raw_src_str = "".join(self.raw_src)
+
+        # get starting column number
+        self.begin_col = get_begin_col_number(raw_src_str)
+
+        src = textwrap.dedent(raw_src_str)
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None

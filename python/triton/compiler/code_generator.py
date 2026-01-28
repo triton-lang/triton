@@ -275,7 +275,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
                  module_map, is_gluon, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0):
+                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0, begin_col=1):
         self.context = context
         self.is_gluon = is_gluon
         if is_gluon:
@@ -291,7 +291,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
-        self.builder.set_loc(file_name, begin_line, 0)
+        self.begin_col = begin_col
+        self.builder.set_loc(file_name, begin_line, begin_col)
         self.builder.options = options
         # dict of functions provided by the backend. Below are the list of possible functions:
         # Convert custom types not natively supported on HW.
@@ -1329,9 +1330,9 @@ class CodeGenerator(ast.NodeVisitor):
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, caller_context=caller_context,
-                                      is_gluon=self.is_gluon)
+                                      begin_col=fn.begin_col, options=self.builder.options,
+                                      codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
+                                      caller_context=caller_context, is_gluon=self.is_gluon)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1543,12 +1544,12 @@ class CodeGenerator(ast.NodeVisitor):
         last_loc = self.builder.get_loc()
         self.cur_node = node
         if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno,
+                                               self.begin_col + node.col_offset)
             if self.name_loc_as_prefix is not None:
                 self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
             else:
                 self.builder.set_loc(here_loc)
-            last_loc = self.builder.get_loc()
         try:
             ret = super().visit(node)
         except CompilationError:
@@ -1643,8 +1644,9 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
-                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
-                              codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
+                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line,
+                              begin_col=fn.begin_col, options=options, codegen_fns=codegen_fns, module_map=module_map,
+                              module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     module = generator.module
     # module takes ownership of the context
