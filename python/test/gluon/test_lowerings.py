@@ -130,12 +130,16 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
 
 
 def _funky_reduce_layouts():
+
+    def ilog2(x):
+        return x.bit_length() - 1
+
     # Broadcasting here and there and bases in a weird order
     layouts = [
         # Funky layout where the warp bases fit in the lane bases
         ttgl.DistributedLinearLayout(
             reg_bases=[[0, 8], [1, 0], [0, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
-            lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]],
+            lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
             warp_bases=[[32, 0], [0, 16]],
             block_bases=[],
             shape=[128, 32],
@@ -143,7 +147,7 @@ def _funky_reduce_layouts():
         # Another funky layout for good measure
         ttgl.DistributedLinearLayout(
             reg_bases=[[1, 0], [2, 0]],
-            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
             warp_bases=[[16, 0], [32, 0]],
             block_bases=[],
             shape=[64, 8],
@@ -151,36 +155,35 @@ def _funky_reduce_layouts():
         # Funky layout where warp bases do *not* fit in the lane bases
         ttgl.DistributedLinearLayout(
             reg_bases=[[1, 0], [2, 0]],
-            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
             warp_bases=[[16, 0], [32, 0], [64, 0]],
             block_bases=[],
             shape=[128, 8],
         ),
-        # NYI: Need to generalize cross-CTA convert_layouts to support LinearLayouts
-        # Basic funky layout with block bases. They fit int he lane bases
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[[1, 0], [2, 0]],
-        #    lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]],
-        #    warp_bases=[[16, 0], [32, 0]],
-        #    block_bases=[[64, 0]],
-        #    shape=[128, 4],
-        #),
-        ## Funky layout with two convert_layouts with block_bases
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[],
-        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
-        #    warp_bases=[[4, 0], [8, 0]],
-        #    block_bases=[[2, 0]],
-        #    shape=[16, 8],
-        #),
-        ## three convert_layouts
-        #ttgl.DistributedLinearLayout(
-        #    reg_bases=[],
-        #    lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]],
-        #    warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0], [1024, 0]],
-        #    block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
-        #    shape=[2048, 8],
-        #),
+        # Basic funky layout with block bases. They fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[[64, 0]],
+            shape=[128, 4],
+        ),
+        # Funky layout with two convert_layouts with block_bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[4, 0], [8, 0]],
+            block_bases=[[2, 0]],
+            shape=[16, 8],
+        ),
+        # Three convert_layouts
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0]],
+            block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
+            shape=[1024, 8],
+        ),
     ]
     for axis in [0, 1]:
         for layout in layouts:
@@ -189,14 +192,16 @@ def _funky_reduce_layouts():
 
 @pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
 def test_reduce_funky_layout(src_layout, axis, device):
-    if not is_cuda():
-        pytest.skip("requires CUDA")
-    if THREADS_PER_WARP != 32:
-        pytest.skip("requires 32-thread warps")
 
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
     num_ctas = 2**len(src_layout.block_bases)
+    # TODO: Remove this once AMD supports num_ctas > 1
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+    # PTXAS BUGGGG
+    if shape == (16, 8) and axis == 0:
+        pytest.skip("PTXAS BUGGGG")
 
     torch.manual_seed(0)
     x = torch.randn(shape, dtype=torch.float32, device=device)
@@ -222,7 +227,7 @@ def test_reduce_funky_layout(src_layout, axis, device):
     axis_blocks = bases_along_axis(src_layout.block_bases, axis)
 
     # warp-sync
-    if axis_warps + axis_blocks == 0:
+    if is_cuda() and axis_warps + axis_blocks == 0:
         assert pm.asm["ptx"].count("bar.sync") == 0
 
 

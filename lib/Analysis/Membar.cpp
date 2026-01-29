@@ -324,7 +324,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       auto dstTy = cast<RankedTensorType>(cvt.getType());
       auto srcLayout = triton::gpu::toLinearLayout(srcTy);
       auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-      isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
+      auto kWarp = StringAttr::get(op->getContext(), "warp");
+      isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
     }
 
     if (!curBlockInfo.syncReadSlices.empty() ||
