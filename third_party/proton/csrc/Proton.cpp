@@ -4,6 +4,7 @@
 #include <map>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -11,11 +12,12 @@
 
 using namespace proton;
 
-// For simplicity, the Python interface restricts metrics to int64_t and double.
-// without uint64_t. Allowing types such as uint64_t vs. int64_t would force
-// users to handle subtle type differences for the same metric name, which would
-// be confusing and error-prone.
-using PythonMetricValueType = std::variant<int64_t, double>;
+// For simplicity, the Python interface restricts *scalar* metrics to int64_t
+// and double (i.e. no uint64_t) to avoid subtle signed-vs-unsigned differences
+// for the same metric name. For vector-valued (FlexibleMetric) metrics, mirror
+// the scalar restriction (int64_t / double).
+using PythonMetricValueType =
+    std::variant<int64_t, double, std::vector<int64_t>, std::vector<double>>;
 namespace {
 
 std::map<std::string, MetricValueType> convertPythonMetrics(

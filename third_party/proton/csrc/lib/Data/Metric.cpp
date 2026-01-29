@@ -126,6 +126,9 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
         if constexpr (std::is_same_v<T, std::string>) {
           throw std::runtime_error(
               "[PROTON] String metrics are not supported in MetricBuffer");
+        } else if constexpr (is_std_vector_v<T>) {
+          throw std::runtime_error(
+              "[PROTON] Vector metrics are not supported in MetricBuffer");
         } else {
           static_assert(sizeof(T) == sizeof(uint64_t),
                         "MetricValueType alternative must be 8 bytes");

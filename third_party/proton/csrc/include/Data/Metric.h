@@ -19,7 +19,16 @@ namespace proton {
 
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
-using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
+// MetricValueType is used for both:
+// - internal scalar metrics (e.g. MetricBuffer, tensor/scalar metric kernels)
+// - user-provided flexible metrics (via add_metrics)
+//
+// Vector-valued metrics are intended for FlexibleMetric only; internal
+// metric-buffer paths reject non-scalar alternatives at runtime.
+using MetricValueType = std::variant<uint64_t, int64_t, double, std::string,
+                                     std::vector<uint64_t>,
+                                     std::vector<int64_t>,
+                                     std::vector<double>>;
 
 inline const char *getTypeNameForIndex(std::size_t idx) {
   switch (idx) {
@@ -31,25 +40,17 @@ inline const char *getTypeNameForIndex(std::size_t idx) {
     return "double";
   case 3:
     return "std::string";
+  case 4:
+    return "std::vector<uint64_t>";
+  case 5:
+    return "std::vector<int64_t>";
+  case 6:
+    return "std::vector<double>";
   default:
     return "<unknown>";
   }
 }
 
-inline const size_t getMetricValueSize(size_t index) {
-  switch (index) {
-  case 0:
-    return sizeof(uint64_t);
-  case 1:
-    return sizeof(int64_t);
-  case 2:
-    return sizeof(double);
-  case 3:
-    throw std::runtime_error("[PROTON] MetricValueType string size is unknown");
-  default:
-    throw std::runtime_error("[PROTON] Unknown MetricValueType index");
-  }
-}
 
 /// A metric is a class that can be associated with a context.
 /// `Metric` is the base class for all metrics.
@@ -100,8 +101,29 @@ public:
             if constexpr (std::is_same_v<ValueType, CurrentType>) {
               if (isProperty(valueId)) {
                 currentValue = otherValue;
-              } else {
+              } else if constexpr (std::is_arithmetic_v<CurrentType>) {
                 currentValue += otherValue;
+              } else if constexpr (is_std_vector_v<CurrentType> &&
+                                   std::is_arithmetic_v<
+                                       typename CurrentType::value_type>) {
+                if (currentValue.size() != otherValue.size()) {
+                  throw std::runtime_error(
+                      std::string("[PROTON] Vector metric size mismatch for "
+                                  "valueId ") +
+                      std::to_string(valueId) + " (" + getValueName(valueId) +
+                      "): current=" + std::to_string(currentValue.size()) +
+                      ", new=" + std::to_string(otherValue.size()));
+                }
+                for (size_t i = 0; i < currentValue.size(); ++i) {
+                  currentValue[i] += otherValue[i];
+                }
+              } else {
+                throw std::runtime_error(
+                    std::string("[PROTON] Metric aggregation not supported for "
+                                "valueId ") +
+                    std::to_string(valueId) + " (" + getValueName(valueId) +
+                    "): type=" +
+                    getTypeNameForIndex(values[valueId].index()));
               }
             }
           },
