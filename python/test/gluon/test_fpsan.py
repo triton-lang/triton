@@ -127,8 +127,10 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         ("mod", _expected_srem_i32),
     ],
 )
-def test_binops_payload_semantics(device, op, expected_fn):
+def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     # Use int32 storage but treat it as float32 via TensorWrapper so fpsan operates on payload bits.
     n_elements = 1024
@@ -145,7 +147,7 @@ def test_binops_payload_semantics(device, op, expected_fn):
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
     grid = (triton.cdiv(n_elements, BLOCK), )
-    _binop_kernel[grid](xw, yw, outw, n_elements, OP=op, BLOCK=BLOCK, fpsan=True, num_warps=4)
+    _binop_kernel[grid](xw, yw, outw, n_elements, OP=op, BLOCK=BLOCK)
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
@@ -180,8 +182,10 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
         "ceil",
     ],
 )
-def test_unary_math_identity(device, op):
+def test_unary_math_identity(device, op, fresh_knobs):
     _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
@@ -200,8 +204,6 @@ def test_unary_math_identity(device, op):
         n_elements,
         OP=op,
         BLOCK=BLOCK,
-        fpsan=True,
-        num_warps=4,
     )
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), x_bits)
@@ -226,11 +228,13 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return out.astype(np.uint32).view(np.int32)
 
 
-def test_dot_fma(device):
+def test_dot_fma(device, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 16
     BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
@@ -271,13 +275,13 @@ def test_dot_fma(device):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, cw, outw, fpsan=True, num_warps=4)
+    kernel[(1, )](aw, bw, cw, outw)
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tcgen05_mma(device):
+def test_tcgen05_mma(device, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 64
@@ -287,6 +291,8 @@ def test_tcgen05_mma(device):
         return torch.empty(size, device="cuda", dtype=torch.int32)
 
     triton.set_allocator(allocator)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, out_ptr):
@@ -341,7 +347,7 @@ def test_tcgen05_mma(device):
     bw = triton.TensorWrapper(b, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, outw, fpsan=True, num_warps=4)
+    kernel[(1, )](aw, bw, outw)
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
 
