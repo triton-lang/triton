@@ -69,8 +69,7 @@ Value resolveMemdescRoot(Value memdesc) {
     if (auto arg = dyn_cast<BlockArgument>(cur)) {
       if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
               arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getParentOp()
-                           .getExplicitCaptures()[arg.getArgNumber()];
+        auto capture = wsPartitions.getExplicitCaptures()[arg.getArgNumber()];
         cur = capture;
         continue;
       }
@@ -374,7 +373,7 @@ public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
                                               Value memdesc,
                                               ttg::MemDescType memTy) {
-    Value key = resolveMemdesc(memdesc);
+    Value key = resolveMemdescRoot(memdesc);
     if (!key)
       key = memdesc;
     if (preferredLayouts && conflictingLayouts &&
@@ -435,8 +434,7 @@ public:
     if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
       if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
               arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getParentOp()
-                           .getExplicitCaptures()[arg.getArgNumber()];
+        auto capture = wsPartitions.getExplicitCaptures()[arg.getArgNumber()];
         return getOrCreate(capture, rewriter, scope);
       }
       if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
@@ -624,35 +622,6 @@ private:
         ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
     unsigned threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
     return encWarps == numWarps && encThreads == threadsPerWarp;
-  }
-
-  Value resolveMemdesc(Value memdesc) const {
-    if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
-      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-              arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getParentOp()
-                           .getExplicitCaptures()[arg.getArgNumber()];
-        return resolveMemdesc(capture);
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        unsigned argNum = arg.getArgNumber();
-        if (argNum == 0)
-          return Value();
-        Value init = forOp.getInitArgs()[argNum - 1];
-        return resolveMemdesc(init);
-      }
-      return memdesc;
-    }
-    if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      return resolveMemdesc(subslice.getSrc());
-    }
-    if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      return resolveMemdesc(view.getSrc());
-    }
-    if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      return resolveMemdesc(view.getSrc());
-    }
-    return memdesc;
   }
 
   DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
