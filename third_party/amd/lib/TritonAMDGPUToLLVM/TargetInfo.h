@@ -22,6 +22,10 @@ public:
 
   int getSharedMemorySize() const;
 
+  // Shared memory partitioning support.
+  size_t getSharedMemoryPartitionSize() const override;
+  bool hasSharedMemoryPartitions() const override;
+
   bool supportMaximumMinimum() const override;
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
