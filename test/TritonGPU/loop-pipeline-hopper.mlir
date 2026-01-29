@@ -1080,3 +1080,57 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %2 : tensor<64x32xf32, #mma>
   }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: dot_outer_loop_arg
+  // CHECK: scf.for
+  // CHECK-NEXT: scf.for
+  // CHECK-NEXT: ttng.warp_group_dot
+  // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+  // CHECK-NEXT: scf.yield
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  tt.func public @dot_outer_loop_arg(%arg0: i32, %arg2: !ttg.memdesc<64x32xbf16, #shared, #smem, mutable>, %arg3: !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>) -> tensor<64x32xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %outer:2 = scf.for %arg4 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg5 = %arg3, %arg8 = %cst_0) -> (!ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>)  : i32 {
+      %0 = scf.for %arg6 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg7 = %arg8) -> (tensor<64x32xf32, #mma>)  : i32 {
+        %1 = ttng.warp_group_dot %arg2, %arg5, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<64x32xbf16, #shared, #smem, mutable> * !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable> -> tensor<64x32xf32, #mma>
+        scf.yield %1 : tensor<64x32xf32, #mma>
+      }
+      scf.yield %arg5, %0 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
+    }
+    tt.return %outer#1 : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: loop_arg_cycle
+  // CHECK: scf.for
+  // CHECK-NEXT: ttng.warp_group_dot
+  // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+  // CHECK-NEXT: scf.yield
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  tt.func public @loop_arg_cycle(%arg0: i32, %arg2: !ttg.memdesc<64x32xbf16, #shared, #smem, mutable>, %arg3: !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>) -> tensor<64x32xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %0:2 = scf.for %arg4 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg5 = %arg3, %arg7 = %cst_0) -> (!ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>)  : i32 {
+      %1 = ttng.warp_group_dot %arg2, %arg5, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<64x32xbf16, #shared, #smem, mutable> * !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable> -> tensor<64x32xf32, #mma>
+      scf.yield %arg5, %1 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
+    }
+    tt.return %0#1 : tensor<64x32xf32, #mma>
+  }
+}

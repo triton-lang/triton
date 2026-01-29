@@ -22,6 +22,7 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -35,6 +36,16 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
+                             TritonLLVMOpBuilder &b) {
+  if (targetInfo.getComputeCapability() >= 90) {
+    return LLVM::NVIDIA::createElectPredicateWarp0(b.loc, *b.builder);
+  } else {
+    auto tid = getThreadId(*b.builder, b.loc);
+    return b.icmp_eq(tid, b.i32_val(0));
+  }
+}
+
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -85,6 +96,12 @@ struct FenceMBarrierInitReleaseClusterOpConversion
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  const NVIDIA::TargetInfo *targetInfo;
+  InitBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                          PatternBenefit benefit,
+                          NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InitBarrierOp op, OpAdaptor adaptor,
@@ -96,8 +113,9 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    auto pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = getElectWarp0OrThread0(*targetInfo, b);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
@@ -115,6 +133,12 @@ struct InitBarrierOpConversion
 struct InvalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InvalBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  const NVIDIA::TargetInfo *targetInfo;
+  InvalBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit,
+                           NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InvalBarrierOp op, OpAdaptor adaptor,
@@ -126,8 +150,9 @@ struct InvalBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
-    auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    // We use an elect predicate to tell ptxas that the operation is uniform,
+    // which results in better codegen.
+    Value pred = getElectWarp0OrThread0(*targetInfo, b);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
     auto &barSyncOp = *ptxBuilder.create(ptx);
@@ -331,8 +356,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
-  patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
-                                                                  benefit);
+  patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
+      typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);

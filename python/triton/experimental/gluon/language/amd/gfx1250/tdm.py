@@ -11,7 +11,8 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch"
+    "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
+    "async_scatter"
 ]
 
 
@@ -129,14 +130,14 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred: bool = True, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
+        pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
@@ -174,6 +175,44 @@ def async_wait(num_outstanding=0, _semantic=None) -> None:
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_tdm_wait(num_outstanding)
+
+
+@builtin
+def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col_offset, src: shared_memory_descriptor,
+                  mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+    """Scatter data from shared memory to non-contiguous rows in global memory asynchronously.
+
+    This operation uses TDM scatter mode to write data to non-contiguous rows in global memory.
+    Unlike async_store which writes to contiguous rows, scatter allows writing to arbitrary
+    rows specified by the dst_row_indices tensor.
+
+    The dtype of dst_row_indices determines the index size:
+    - int16: up to 16 rows can be scattered per TDM instruction
+    - int32: up to 8 rows can be scattered per TDM instruction
+    If more rows are needed, multiple TDM instructions will be automatically issued.
+
+    Args:
+        desc (tensor_descriptor): the destination tensor descriptor. Must be 2D.
+        dst_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the destination tensor.
+        dst_col_offset (int or tensor): the starting column offset in the destination tensor
+                                        for all scattered rows.
+        src (shared_memory_descriptor): the shared memory source containing data to scatter. Must be 2D.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+    """
+    ndim = len(desc.block_shape)
+    assert ndim == 2, f"TDM scatter only supports 2D tensors, got {ndim}D"
+
+    src_ndim = len(src.shape)
+    assert src_ndim == 2, f"TDM scatter src must be 2D, got {src_ndim}D"
+
+    # Convert dst_col_offset to i32
+    dst_col_offset_handle = _semantic._convert_to_ir_values([dst_col_offset], require_i64=False)[0]
+
+    mbarrier = _unwrap_if_constexpr(mbarrier)
+    mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+
+    _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, dst_col_offset_handle, src.handle,
+                                               mbarrier_handle)
 
 
 @builtin

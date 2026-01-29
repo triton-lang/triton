@@ -16,7 +16,7 @@ import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip, is_blackwell
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -1167,3 +1167,21 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
         assert scope_a_frame["metrics"]["bytes"] == 16000
         assert foo_test_frame["metrics"]["bytes"] == 16000
         assert foo_test_frame["metrics"]["flops"] == 4000
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
+def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.proton.enable_hw_trace = True
+    temp_file = tmp_path / "test_hw_trace.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+
+    with proton.scope("init"):
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)  # noqa: F841
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    kernel_frame = data[0]["children"][0]["children"][0]
+    assert "elementwise" in kernel_frame["frame"]["name"]
+    assert kernel_frame["metrics"]["time (ns)"] > 0
