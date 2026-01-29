@@ -39,7 +39,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         uint64_t typedValue{};
         std::memcpy(&typedValue, &bits, sizeof(typedValue));
         metricValueVariant = typedValue;
-
         break;
       }
       case variant_index_v<int64_t, MetricValueType>: {

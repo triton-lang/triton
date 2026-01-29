@@ -86,10 +86,16 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
                 # implicit casting to double or int64 tensors
                 if value.is_floating_point():
                     value = value.double()
-                    metric_index = libproton.metric_double_index
+                    if value.numel() > 1:
+                        metric_index = libproton.metric_vector_double_index
+                    else:
+                        metric_index = libproton.metric_double_index
                 else:
                     value = value.long()
-                    metric_index = libproton.metric_int64_index
+                    if value.numel() > 1:
+                        metric_index = libproton.metric_vector_int64_index
+                    else:
+                        metric_index = libproton.metric_int64_index
                 exit_state()
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:

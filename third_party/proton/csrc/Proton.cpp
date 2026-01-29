@@ -62,6 +62,10 @@ static void initProton(pybind11::module &&m) {
       pybind11::cast(variant_index_v<int64_t, MetricValueType>);
   m.attr("metric_double_index") =
       pybind11::cast(variant_index_v<double, MetricValueType>);
+  m.attr("metric_vector_int64_index") =
+      pybind11::cast(variant_index_v<std::vector<int64_t>, MetricValueType>);
+  m.attr("metric_vector_double_index") =
+      pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);  
 
   m.def(
       "start",
