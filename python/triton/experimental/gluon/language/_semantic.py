@@ -129,9 +129,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                                  "at index " + str(i) + ": " + str(left) + " and " + str(right))
         return ret_shape
 
-    def _full_like(self, input: TensorTy, value, scalar_ty: ttgl.dtype) -> TensorTy:
-        return self.full(input.shape, value, scalar_ty, layout=input.type.layout)
-
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [ttgl._unwrap_if_constexpr(x) for x in input.shape]
         dst_shape.insert(axis, 1)

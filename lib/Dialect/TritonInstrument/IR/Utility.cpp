@@ -379,35 +379,15 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
         tensorType.getShape()) {
       expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
     }
-    for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto partialEncoding =
-          getSingleDimSliceEncoding(distributed, i, tensorType.getRank());
-      auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                              b.getI32Type(), partialEncoding);
-      auto arange =
-          MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
-      auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
-      auto arangeTimesStride =
-          arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-      auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
-      if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-          tensorType.getShape()) {
-        expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
-      }
-      ptrTensor =
-          AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
-    }
-    return ptrTensor;
+    ptrTensor =
+        AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
   }
-
-  return {};
+  return ptrTensor;
 }
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  if (!ptrTensor)
-    return nullptr;
   return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
                          EvictionPolicy::NORMAL);
 }
@@ -415,8 +395,6 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  if (!ptrTensor)
-    return {};
   return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
                         EvictionPolicy::NORMAL, false);
 }

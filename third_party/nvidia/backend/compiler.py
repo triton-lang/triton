@@ -127,7 +127,6 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
-    fpsan: bool = False
     arch: str = None
     instrumentation_mode: str = ""
 
@@ -179,12 +178,6 @@ class CUDABackend(BaseBackend):
         if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
-        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "fpsan":
-            opts["sanitize_overflow"] = False
-            opts["fpsan"] = False
-        if opts.get("fpsan", False) and not opts.get("instrumentation_mode"):
-            opts["instrumentation_mode"] = "fpsan"
-            opts["fpsan"] = False
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
@@ -326,7 +319,6 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.gluon.add_infer_coalesced_encodings(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -349,7 +341,6 @@ class CUDABackend(BaseBackend):
 
         if options.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.gluon.add_infer_coalesced_encodings(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()

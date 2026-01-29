@@ -969,11 +969,6 @@ def is_blackwell():
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
     device = "cuda"
 
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
-
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())

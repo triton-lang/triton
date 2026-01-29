@@ -32,9 +32,6 @@ class TritonSemantic(Generic[TensorTy]):
     def __init__(self, builder):
         self.builder = builder
 
-    def _full_like(self, input: TensorTy, value: numbers.Number, scalar_ty: tl.dtype) -> TensorTy:
-        return self.full(input.shape, value, scalar_ty)
-
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##
