@@ -378,9 +378,9 @@ private:
 
 /// Each TensorMetric represents a metric stored in a device buffer.
 struct TensorMetric {
-  uint8_t *ptr{};   // device pointer
-  size_t typeIndex{};   // MetricValueType variant index
-  uint64_t size{1}; // number of uint64 words stored at ptr
+  uint8_t *ptr{};     // device pointer
+  size_t typeIndex{}; // MetricValueType variant index
+  uint64_t size{1};   // number of uint64 words stored at ptr
 };
 
 /// Collect tensor metrics from device to host.
