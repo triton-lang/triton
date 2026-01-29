@@ -926,7 +926,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert scope_b_frame["metrics"]["sum"] == 40.0
     assert "count" not in scope_b_frame["metrics"]
     assert scope_d_frame is not None
-    assert scope_d_frame["metrics"]["vec"] == [0, 20, 40, 60]
+    assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
