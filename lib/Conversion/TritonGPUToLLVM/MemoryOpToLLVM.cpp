@@ -104,10 +104,10 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
     if (paddedEnc) {
       // Convert offset to bytes for padding calculation
       Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                    offsetBytes, /*offsetInBytes=*/true);
+      auto shifts = getPaddedSharedShifts(paddedEnc, bitwidth,
+                                          /*offsetInBytes=*/true);
       // GEP in bytes: base + offset*elemSize + padOffset
-      Value totalOffset = b.add(offsetBytes, padOffset);
+      Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
       ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
                   totalOffset);
     } else {
@@ -344,6 +344,22 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+class BarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
+public:
+  BarrierOpConversion(const LLVMTypeConverter &converter,
+                      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::BarrierOp>(converter, benefit) {}
+  using OpAdaptor = typename triton::gpu::BarrierOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::gpu::BarrierOp>(op);
+    return success();
+  }
+};
+
 struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<LocalGatherOp> {
 public:
   LocalGatherOpConversion(LLVMTypeConverter &typeConverter,
@@ -425,26 +441,6 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
-
-class LocalBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
-public:
-  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
-                           PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter,
-                                                            benefit) {}
-  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    rewriter.replaceOpWithNewOp<mlir::gpu::BarrierOp>(op);
-
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
@@ -458,5 +454,5 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
 }

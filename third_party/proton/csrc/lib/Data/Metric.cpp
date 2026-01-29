@@ -15,10 +15,15 @@ std::atomic<size_t> MetricBuffer::metricId{0};
 
 MetricBuffer::~MetricBuffer() {
   for (auto &[device, buffer] : deviceBuffers) {
-    runtime->freeDeviceBuffer(buffer.devicePtr);
-    runtime->freeDeviceBuffer(buffer.deviceOffsetPtr);
     runtime->freeHostBuffer(buffer.hostPtr);
-    runtime->destroyStream(buffer.priorityStream);
+    runtime->freeHostBuffer(reinterpret_cast<uint8_t *>(buffer.hostOffset));
+    if (!mappedHostBuffer) {
+      runtime->freeDeviceBuffer(buffer.devicePtr);
+      runtime->freeDeviceBuffer(buffer.deviceOffsetPtr);
+    }
+    if (buffer.priorityStream) {
+      runtime->destroyStream(buffer.priorityStream);
+    }
   }
 }
 
@@ -70,9 +75,10 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
   return descriptor;
 }
 
-const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
-    const std::map<std::string, TensorMetric> &tensorMetrics,
-    void *stream) const {
+std::map<std::string, MetricValueType>
+collectTensorMetrics(Runtime *runtime,
+                     const std::map<std::string, TensorMetric> &tensorMetrics,
+                     void *stream) {
   std::map<std::string, MetricValueType> tensorMetricsHost;
   for (auto &[name, tensorMetric] : tensorMetrics) {
     uint64_t metricBits = 0;
@@ -96,10 +102,12 @@ const std::map<std::string, MetricValueType> MetricBuffer::collectTensorMetrics(
 void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
+  uint64_t size = capacity / sizeof(uint64_t);
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
+                          reinterpret_cast<void *>(&size),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&globalScratchPtr),
@@ -111,6 +119,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
 void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
+  uint64_t size = capacity / sizeof(uint64_t);
   uint64_t metricBits = std::visit(
       [](auto &&value) -> uint64_t {
         using T = std::decay_t<decltype(value)>;
@@ -130,6 +139,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
+                          reinterpret_cast<void *>(&size),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
@@ -140,9 +150,14 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
 
 void MetricBuffer::synchronize(DeviceBuffer &buffer) {
   runtime->synchronizeDevice();
+  if (mappedHostBuffer) {
+    // Buffer lives in mapped host memory; avoid treating mapped pointers as
+    // device allocations (e.g. cuMemcpyDtoH / cuMemset) which can error.
+    return;
+  }
   runtime->copyDeviceToHostAsync(buffer.hostPtr, buffer.devicePtr, capacity,
                                  buffer.priorityStream);
-  runtime->copyDeviceToHostAsync(&buffer.hostOffset, buffer.deviceOffsetPtr,
+  runtime->copyDeviceToHostAsync(buffer.hostOffset, buffer.deviceOffsetPtr,
                                  sizeof(uint64_t), buffer.priorityStream);
   runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
                   buffer.priorityStream);
@@ -155,14 +170,28 @@ MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
   if (deviceBuffers.find(device) == deviceBuffers.end()) {
     deviceBuffers[device] = DeviceBuffer{};
     auto &buffer = deviceBuffers.at(device);
-    runtime->allocateDeviceBuffer(&buffer.devicePtr, capacity);
-    runtime->allocateDeviceBuffer(&buffer.deviceOffsetPtr, sizeof(uint64_t));
-    runtime->allocateHostBuffer(&buffer.hostPtr, capacity);
-    buffer.priorityStream = runtime->getPriorityStream();
-    buffer.hostOffset = 0;
-    runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
-                    buffer.priorityStream);
-    runtime->synchronizeStream(buffer.priorityStream);
+    if (mappedHostBuffer) {
+      runtime->allocateHostBuffer(&buffer.hostPtr, capacity, /*mapped=*/true);
+      runtime->getHostDevicePointer(buffer.hostPtr, &buffer.devicePtr);
+      runtime->allocateHostBuffer(
+          reinterpret_cast<uint8_t **>(&buffer.hostOffset), sizeof(uint64_t),
+          /*mapped=*/true);
+      runtime->getHostDevicePointer(
+          reinterpret_cast<uint8_t *>(buffer.hostOffset),
+          &buffer.deviceOffsetPtr);
+      *buffer.hostOffset = 0;
+    } else {
+      runtime->allocateDeviceBuffer(&buffer.devicePtr, capacity);
+      runtime->allocateDeviceBuffer(&buffer.deviceOffsetPtr, sizeof(uint64_t));
+      runtime->allocateHostBuffer(&buffer.hostPtr, capacity, /*mapped=*/false);
+      runtime->allocateHostBuffer(
+          reinterpret_cast<uint8_t **>(&buffer.hostOffset), sizeof(uint64_t),
+          /*mapped=*/false);
+      buffer.priorityStream = runtime->getPriorityStream();
+      runtime->memset(buffer.deviceOffsetPtr, 0, sizeof(uint64_t),
+                      buffer.priorityStream);
+      runtime->synchronizeStream(buffer.priorityStream);
+    }
   }
   return deviceBuffers.at(device);
 }

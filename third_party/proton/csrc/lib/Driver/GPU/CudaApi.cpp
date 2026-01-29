@@ -53,6 +53,12 @@ DEFINE_DISPATCH(ExternLibCuda, memFree, cuMemFree, CUdeviceptr)
 
 DEFINE_DISPATCH(ExternLibCuda, memAllocHost, cuMemAllocHost, void **, size_t)
 
+DEFINE_DISPATCH(ExternLibCuda, memHostAlloc, cuMemHostAlloc, void **, size_t,
+                unsigned int)
+
+DEFINE_DISPATCH(ExternLibCuda, memHostGetDevicePointer,
+                cuMemHostGetDevicePointer, CUdeviceptr *, void *, unsigned int)
+
 DEFINE_DISPATCH(ExternLibCuda, memFreeHost, cuMemFreeHost, void *)
 
 DEFINE_DISPATCH(ExternLibCuda, launchKernel, cuLaunchKernel, CUfunction,

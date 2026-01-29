@@ -409,10 +409,16 @@ import triton.profiler as proton
 session_id = proton.start(name="profile_name")
 ...
 
-# get_data_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
-proton.deactivate(session_id)
+# data.get_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
+# Usage 1: flush the profile data from the device eagerly and access all data
+proton.deactivate(session_id, flushing=True) # with flushing=False, it's not guaranteed that all kernels are finished
 # Get a json dictionary
-data = proton.get_data(session_id)
+data = proton.data.get_json(session_id)
 # Get a msgpack bytes
-data_msgpack = proton.get_data_msgpack(session_id)
+data_msgpack = proton.data.get_msgpack(session_id)
+
+# Usage 2: query the phase completion status and access data in the completed phases
+if proton.data.is_phase_complete(session_id, phase_id):
+    data_phase = proton.data.get_json(session_id, phase_id)
+    proton.data.clear(session_id, phase_id)
 ```

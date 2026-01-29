@@ -114,7 +114,8 @@ struct AssertInThreadOpConversion
       // tensor in those two operations may have different layout we need to
       // make sure all the threads are done executing the assert before going to
       // the next op.
-      b.barrier();
+
+      b.barrier(ttg::AddrSpace::None);
     }
     rewriter.eraseOp(op);
     return success();
@@ -298,7 +299,9 @@ struct LockAcquireOpConversion
     LLVM::CondBrOp::create(b, loc, cond, whileBlock, endBlock);
 
     b.setInsertionPointToStart(endBlock);
-    mlir::gpu::BarrierOp::create(b, loc);
+    triton::gpu::BarrierOp::create(b, loc,
+                                   triton::gpu::AddrSpace::GlobalRead |
+                                       triton::gpu::AddrSpace::GlobalWrite);
     b.eraseOp(op);
     return success();
   }
@@ -322,7 +325,9 @@ struct LockReleaseOpConversion
     Type elType = cast<PointerType>(lock.getType()).getPointeeType();
     assert(elType == b.getI32Type() && "Expected i32 lock element type");
 
-    mlir::gpu::BarrierOp::create(b, loc);
+    triton::gpu::BarrierOp::create(b, loc,
+                                   triton::gpu::AddrSpace::GlobalRead |
+                                       triton::gpu::AddrSpace::GlobalWrite);
     Value zero =
         arith::ConstantOp::create(b, loc, elType, b.getIntegerAttr(elType, 0));
     triton::AtomicRMWOp::create(b, loc, elType, RMWOp::XCHG, lock, zero,

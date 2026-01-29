@@ -171,11 +171,15 @@ struct ConvertLayoutOpSwizzlingConversion
     SmallVector<Value> outVals;
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
-    auto noPaddingOffset = [](Value v) { return v; };
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (i > 0) {
+        if (isWarpSync) {
+          targetInfo.warpSync(loc, rewriter);
+        } else {
+          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        }
+      }
 
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
@@ -183,8 +187,8 @@ struct ConvertLayoutOpSwizzlingConversion
       // idxSrc 0: st.shared, idxSrc 1: stmatrix, idxSrc 2: stmatrix.trans
       if (idxSrc == 0) {
         lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                        noPaddingOffset, affineOffset, maskSpanAffineOffset,
-                        rewriter, targetInfo);
+                        /*paddingShifts=*/{}, affineOffset,
+                        maskSpanAffineOffset, rewriter, targetInfo);
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
@@ -193,13 +197,17 @@ struct ConvertLayoutOpSwizzlingConversion
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (isWarpSync) {
+        targetInfo.warpSync(loc, rewriter);
+      } else {
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      }
       // Load
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans
       if (idxDst == 0) {
         tileOutVals = lowerLdStShared(
-            loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
+            loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
             affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       } else {
         assert(idxDst == 1 || idxDst == 2);

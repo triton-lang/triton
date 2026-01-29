@@ -52,9 +52,11 @@ private:
         rewriter, loc, rewriter.getF32Type(), input,
         LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
 
-    const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, returnType,
-                                           mulOp->getResult(0));
+    Value arg = mulOp->getResult(0);
+    if (ftz)
+      return ROCDL::ROCDLExp2::create(rewriter, loc, returnType, arg);
+
+    return LLVM::Exp2Op::create(rewriter, loc, returnType, arg);
   }
 
   LogicalResult convertToLLVMIntrinsic(LLVM::CallOp callOp,
@@ -92,9 +94,8 @@ private:
           LLVM::RintOp::create(rewriter, loc, returnType, operands[0]);
     } else if (calleeName == "__triton_hip_fast_fdividef") {
       assert(operands.size() == 2);
-      const char *intrinsic = "llvm.amdgcn.rcp.f32";
-      auto rcpOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
-                                                   returnType, operands[1]);
+      auto rcpOp =
+          ROCDL::ROCDLRcp::create(rewriter, loc, returnType, operands[1]);
 
       LLVM::FastmathFlagsAttr defaultFlags{};
       replacementOp =

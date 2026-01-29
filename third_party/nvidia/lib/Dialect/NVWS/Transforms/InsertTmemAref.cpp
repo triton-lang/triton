@@ -346,7 +346,6 @@ struct TmemAccessDag {
   // --------------------------------------------------------------------------
 
   std::unique_ptr<Node> dag;
-  DenseMap<scf::ForOp, TMEMAllocOp> arefTmemAllocs;
 };
 
 void assignStage(OpBuilder &b, Operation *op, StageCluster stageCluster) {
@@ -883,6 +882,15 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 }
 
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
+  // Skip this function if there is no warp specialized loop.
+  auto walkResult = funcOp.walk([&](scf::ForOp forOp) {
+    if (forOp->hasAttr(kWarpSpecializeAttrName))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (!walkResult.wasInterrupted())
+    return success();
+
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     tmemDags.push_back(TmemAccessDag::build(allocOp));

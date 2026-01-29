@@ -89,8 +89,6 @@ jobs:
         run: make test-lit
       - name: Run python tests on CUDA
         run: make NUM_PROCS=24 test-unit
-      - name: Run distributed tests
-        run: make test-distributed
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret

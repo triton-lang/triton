@@ -27,8 +27,20 @@ void HipRuntime::memset(void *devicePtr, uint32_t value, size_t size,
   (void)status;
 }
 
-void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
-  (void)hip::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
+void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size,
+                                    bool mapped) {
+  if (mapped) {
+    (void)hip::memHostAlloc<true>(reinterpret_cast<void **>(buffer), size,
+                                  hipHostAllocMapped);
+  } else {
+    (void)hip::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
+  }
+}
+
+void HipRuntime::getHostDevicePointer(uint8_t *hostPtr, uint8_t **devicePtr) {
+  hipDeviceptr_t devicePtrV;
+  (void)hip::memHostGetDevicePointer<true>(&devicePtrV, hostPtr, 0);
+  *devicePtr = reinterpret_cast<uint8_t *>(devicePtrV);
 }
 
 void HipRuntime::freeHostBuffer(uint8_t *buffer) {

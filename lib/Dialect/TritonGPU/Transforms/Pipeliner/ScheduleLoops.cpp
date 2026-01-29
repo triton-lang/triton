@@ -41,7 +41,7 @@ bool isSafeToPipeline(scf::ForOp forOp) {
   if (isOuterLoop(forOp))
     return false;
   // Skip loops with barriers, asserts or prints
-  if (containsAny<mlir::gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(forOp))
+  if (containsAny<ttg::BarrierOp, tt::AssertOp, tt::PrintOp>(forOp))
     return false;
 
   return true;

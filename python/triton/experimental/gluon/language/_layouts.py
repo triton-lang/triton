@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 import itertools
+import math
 from typing import List
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-import math
+from triton._C.libtriton import gluon_ir
 
 
 class DistributedLayout:
@@ -19,6 +20,12 @@ class DistributedLayout:
     @property
     def rank(self):
         raise NotImplementedError("DistributedLayout subclasses must define rank")
+
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
 
 
 @dataclass(frozen=True)
@@ -316,6 +323,12 @@ class SharedLayout:
     def type(self):
         return constexpr_type(self)
 
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
+
 
 @constexpr_function
 def _get_shape_per_cta(shape, cga_layout):
@@ -323,14 +336,17 @@ def _get_shape_per_cta(shape, cga_layout):
         return shape
     shape_per_cta = list(shape)
     rank = len(cga_layout[0])
-    cga_shape = [1] * rank
+    cga_shape = [0] * rank
     for basis in cga_layout:
         assert len(basis) == rank
         for i in range(rank):
             cga_shape[i] = max(cga_shape[i], basis[i])
-    # The shape is the largest stride * 2
+    # The shape is the largest stride * 2, or 1 if the stride was always zero
     for i in range(rank):
-        cga_shape[i] *= 2
+        if cga_shape[i] == 0:
+            cga_shape[i] = 1
+        else:
+            cga_shape[i] *= 2
     for dim in range(rank):
         assert shape_per_cta[dim] % cga_shape[dim] == 0, f"Shape {shape} is not divisible by CGA layout {cga_layout}"
         shape_per_cta[dim] //= cga_shape[dim]

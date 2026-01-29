@@ -6,9 +6,9 @@
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: no_conversion
   llvm.func @no_conversion() {
-    //CHECK: rocdl.barrier
+    //CHECK: ttg.barrier local|global_read|global_write
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-    gpu.barrier
+    ttg.barrier local|global_read|global_write
     llvm.return
   }
 }

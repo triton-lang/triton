@@ -10,7 +10,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-NEXT: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK-NEXT: proton_gpu.circular_store start %[[SEGMENT]], %[[START]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: proton_gpu.circular_store end %[[SEGMENT]], %[[END]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local|global_read|global_write
   // CHECK-NEXT: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
   // CHECK-NEXT: tt.return
   tt.func @simple_record() {
@@ -36,7 +36,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-NEXT: %[[END1:.*]] = proton_gpu.read_counter : i32
   // CHECK-NEXT: proton_gpu.circular_store start %[[SEGMENT]], %[[START1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
   // CHECK-NEXT: proton_gpu.circular_store end %[[SEGMENT]], %[[END1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local|global_read|global_write
   // CHECK-NEXT: proton_gpu.finalize %[[SEGMENT]], %[[SCRATCH]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
   // CHECK-NEXT: tt.return
   tt.func @simple_record() {

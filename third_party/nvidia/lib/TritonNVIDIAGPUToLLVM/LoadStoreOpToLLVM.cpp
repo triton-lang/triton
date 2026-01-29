@@ -565,7 +565,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1) {
-    b.barrier();
+    b.barrier(ttg::AddrSpace::Local);
   } else {
     triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
     triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
@@ -951,7 +951,8 @@ public:
 
           // Recover values from predicated block (from SMEM)
           rewriter.setInsertionPointToStart(endBlock);
-          b.barrier();
+          b.barrier(ttg::AddrSpace::Local);
+
           Value ret = b.load(valueElemTy, atomPtr);
           rewriter.replaceOp(op, {ret});
           return success();
@@ -1247,10 +1248,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    lowerLdSt(
-        loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
-        warpId, rewriter, targetInfo, maxVec, emitCpAsync);
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
+              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset, laneId,
+              warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
@@ -1352,31 +1352,41 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto zero = b.i32_val(0);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
-    auto maskCGABroadcast = smemLayout.getFreeVariableMasks().lookup(kBlock);
+    uint32_t maskCGABroadcast =
+        smemLayout.getFreeVariableMasks().lookup(kBlock);
     bool multicast = op.getMulticast() && maskCGABroadcast != 0;
     Value multicastMask;
     Value barrierPtr = barrierMemObj.getBase();
     if (multicast) {
-      auto numCTAs = ttg::lookupNumCTAs(op);
-      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
-          loc, rewriter, maskCGABroadcast, numCTAs);
+      multicastMask =
+          LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, maskCGABroadcast);
       // If we multicast, we emit the full message from the representative CTA
       // meaning the CTA with the lowest CTA id in a multicast group.
       auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
       pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
     }
 
-    auto barrierMask =
+    uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (barrierMask) {
+    // We emit a cluster-level barrier if we change the barrier and we don't
+    // multicast over that dimension (in which case that CTA would be predicated
+    // out)
+    bool clusterBarrier = barrierMask & ~maskCGABroadcast;
+    if (clusterBarrier) {
       // This part is to support TMA into tcgen05.mma 2CTA mostly, i.e.,
       // barrierMask == 1
       // Mask with ones on the bits where the CTA broadcasts.
       // This is a trick from cutlass to implement a faster `mapa`.
-      auto fullMask = ~(barrierMask << 24);
+      uint32_t fullMask = ~(barrierMask << 24);
       Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
       barrierInt = b.and_(barrierInt, b.i32_val(fullMask));
       barrierPtr = b.inttoptr(barrierPtr.getType(), barrierInt);
+    }
+
+    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
+    std::string ctaGroup;
+    if (getModuleTwoCTAs(op)) {
+      ctaGroup = "cta_group::2.";
     }
 
     // The bounding box inner dimension must be less than or equal to the
@@ -1384,6 +1394,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
     // We clamp the block size and the codegen will emit multiple copy
     // operations.
+
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)
@@ -1403,8 +1414,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
-          "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-          "d.shared::cluster.global.mbarrier::complete_tx::bytes";
+          "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
+          "shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
+          ".global.mbarrier::complete_tx::bytes";
       if (multicast)
         tmaInst += ".multicast::cluster";
       tmaInst += " [$1], [$2, {";

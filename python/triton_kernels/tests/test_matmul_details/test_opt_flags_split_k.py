@@ -6,7 +6,7 @@ import types
 import torch
 
 import triton_kernels.matmul_details.opt_flags as opt_flags
-
+from triton_kernels.tensor_details.dtype import FP16
 
 class _DummyPrecisionConfig:
     def __init__(self):
@@ -31,7 +31,7 @@ def setup_amd(monkeypatch):
         lambda *args, **kwargs: (64, 32),
     )
 
-    fake_target = types.SimpleNamespace(backend="hip")
+    fake_target = types.SimpleNamespace(backend="hip", arch=0)
     monkeypatch.setattr(
         "triton.runtime.driver.active.get_current_target",
         lambda: fake_target,
@@ -72,7 +72,7 @@ def setup_nvidia(monkeypatch):
         lambda block_m, block_n, is_persistent, precision_config, constraints: 4,
     )
 
-    fake_target = types.SimpleNamespace(backend="cuda")
+    fake_target = types.SimpleNamespace(backend="cuda", arch=100)
     monkeypatch.setattr(
         "triton.runtime.driver.active.get_current_target",
         lambda: fake_target,
@@ -84,9 +84,9 @@ def test_make_default_opt_flags_amd_split_k_constraint(monkeypatch):
 
     precision_config = _DummyPrecisionConfig()
     flags = opt_flags.make_default_opt_flags_amd(
-        torch.float16,
-        torch.float16,
-        torch.float16,
+        FP16,
+        FP16,
+        FP16,
         precision_config,
         2,
         128,

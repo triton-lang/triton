@@ -215,10 +215,10 @@ tt.func public @attention_forward(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // CHECK: ttng.fence_async_shared
-  // PIPELINE: partition0
+  // PIPELINE: partition1
   // PIPELINE-COUNT-4: ttng.tc_gen5_mma
   // PIPELINE-NOT: ttng.tc_gen5_mma
-  // PIPELINE: partition1
+  // PIPELINE: partition2
   // PIPELINE-COUNT-4: ttng.async_tma_copy_global_to_local
   // PIPELINE-NOT: ttng.async_tma_copy_global_to_local
   %loop_outs:3 = scf.for %i = %c0_i32 to %n_tiles step %c64_i32 iter_args(

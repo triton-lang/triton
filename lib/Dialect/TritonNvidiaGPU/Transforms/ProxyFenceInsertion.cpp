@@ -65,7 +65,7 @@ bool ignoreOpForProxyFence(Operation *op) {
              triton::nvidia_gpu::InvalBarrierOp>(op);
 }
 
-bool filterFn(Operation *op, Operation *other) {
+bool filterFn(Operation *op, Operation *other, Allocation *allocation) {
   return ignoreOpForProxyFence(other);
 }
 
@@ -155,7 +155,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
   if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
-    if (proxyBlockInfo.isIntersected(*blockInfo, filter)) {
+    if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
       blockInfo->sync();

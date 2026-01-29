@@ -79,12 +79,13 @@ static void initProton(pybind11::module &&m) {
   m.def("activate_all",
         []() { SessionManager::instance().activateAllSessions(); });
 
-  m.def("deactivate", [](size_t sessionId) {
-    SessionManager::instance().deactivateSession(sessionId);
+  m.def("deactivate", [](size_t sessionId, bool flushing) {
+    SessionManager::instance().deactivateSession(sessionId, flushing);
   });
 
-  m.def("deactivate_all",
-        []() { SessionManager::instance().deactivateAllSessions(); });
+  m.def("deactivate_all", [](bool flushing) {
+    SessionManager::instance().deactivateAllSessions(flushing);
+  });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     SessionManager::instance().finalizeSession(sessionId, outputFormat);
@@ -168,24 +169,38 @@ static void initProton(pybind11::module &&m) {
 
   m.def(
       "get_data",
-      [](size_t sessionId) {
-        return SessionManager::instance().getData(sessionId);
+      [](size_t sessionId, size_t phase) {
+        return SessionManager::instance().getData(sessionId, phase);
       },
-      pybind11::arg("sessionId"));
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
 
   m.def(
       "get_data_msgpack",
-      [](size_t sessionId) {
-        auto data = SessionManager::instance().getDataMsgPack(sessionId);
+      [](size_t sessionId, size_t phase) {
+        auto data = SessionManager::instance().getDataMsgPack(sessionId, phase);
         return pybind11::bytes(reinterpret_cast<const char *>(data.data()),
                                data.size());
       },
-      pybind11::arg("sessionId"));
-
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
       "clear_data",
-      [](size_t sessionId) { SessionManager::instance().clearData(sessionId); },
+      [](size_t sessionId, size_t phase, bool clearUpToPhase) {
+        SessionManager::instance().clearData(sessionId, phase, clearUpToPhase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"),
+      pybind11::arg("clearUpToPhase") = false);
+  m.def(
+      "advance_data_phase",
+      [](size_t sessionId) {
+        return SessionManager::instance().advanceDataPhase(sessionId);
+      },
       pybind11::arg("sessionId"));
+  m.def(
+      "is_data_phase_complete",
+      [](size_t sessionId, size_t phase) {
+        return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
 }
 
 PYBIND11_MODULE(libproton, m) {

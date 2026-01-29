@@ -47,6 +47,13 @@ template <bool CheckSuccess> CUresult memFree(CUdeviceptr dptr);
 
 template <bool CheckSuccess> CUresult memAllocHost(void **pp, size_t bytesize);
 
+template <bool CheckSuccess>
+CUresult memHostAlloc(void **pp, size_t bytesize, unsigned int flags);
+
+template <bool CheckSuccess>
+CUresult memHostGetDevicePointer(CUdeviceptr *pdptr, void *p,
+                                 unsigned int flags);
+
 template <bool CheckSuccess> CUresult memFreeHost(void *p);
 
 template <bool CheckSuccess>

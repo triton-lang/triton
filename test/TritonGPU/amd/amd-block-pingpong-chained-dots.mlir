@@ -87,7 +87,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // Compute Cluster1
   // CHECK: tt.dot
   // CHECK: rocdl.sched.barrier 0
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster1
   // CHECK: ttg.local_store
@@ -101,7 +101,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // Compute Cluster2
   // CHECK: tt.dot
   // CHECK: rocdl.sched.barrier 0
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster2
   // CHECK: ttg.local_store

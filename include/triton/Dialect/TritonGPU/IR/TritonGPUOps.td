@@ -2,6 +2,7 @@
 #define TRITONGPU_OPS
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUEnums.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
@@ -668,23 +669,56 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
   let assemblyFormat = "attr-dict";
 }
 
-def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
-  let summary = "Synchronizes execution and shared memory reads/writes for all threads in a CTA.";
+def TTG_BarrierOp : TTG_Op<"barrier"> {
+  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
   let description = [{
-    The `local_barrier` op synchronizes the execution and all operations
-    between shared memory and registers for all threads in a CTA.
-    It is used to coordinate communication between the threads of the CTA.
+    The `barrier` op synchronises the execution and all operations between the selected address spaces for all
+    threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
-    This operation waits until all threads in the CTA have reached a `local_barrier`
-    and operations between shared memory and registers made by these threads prior
-    to the op are visible to all threads in the CTA.
+    This operation waits until all threads in the CTA have reached a `barrier` (for syncronisation) and operations
+    between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.
 
-    Data hazards between threads accessing the same memory can be avoided by synchronizing the
-    CTA in-between these accesses with a `local_barrier`.
+    Data hazards between threads accessing the same memory can be avoided by synchronising the
+    specified scope in-between these accesses with a `barrier`.
 
-    A `local_barrier` operation does not provide syncronization guarantees on global memory.
+    A `barrier` operation only provides syncronisation and memory guarantees on the selected address spaces in the CTA.
+
+    The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
+
+    * `none`         control-only syncronisation (no memory ordering).
+    * `local`        shared-memory operations are complete and visible CTA-wide.
+    * `global_read`  global memory reads are complete and visible CTA-wide.
+    * `global_write` global memory writes are complete and visible CTA-wide.
+    * `tensor_read`  tensor memory read operations are complete and visible CTA-wide.
+    * `tensor_write` tensor memory write operations are complete and visible CTA-wide.
+    * `all`          convenience alias for `["local", "global_read", "global_write", "tensor_read", "tensor_write"]`.
+
+    Multiple address spaces can be combined (e.g. `local|tensor_write`). `none` cannot be combined with other address spaces.
+
+    Example:
+
+    ```mlir
+    ttg.barrier local
+    ttg.barrier local|global_read|global_write
+    ```
   }];
-  let assemblyFormat = "attr-dict";
+
+  let arguments = (ins TTG_AddrSpace:$addrSpace);
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    /// Returns true if the barrier includes all of the given address spaces.
+    /// For example, hasAddrSpaces(Local | GlobalRead) returns true only if
+    /// both Local and GlobalRead are set.
+    bool hasAddrSpace(AddrSpace space) {
+      return bitEnumContainsAll(getAddrSpace(), space);
+    }
+    bool hasLocal() { return hasAddrSpace(AddrSpace::Local); }
+    bool hasGlobalRead() { return hasAddrSpace(AddrSpace::GlobalRead); }
+    bool hasGlobalWrite() { return hasAddrSpace(AddrSpace::GlobalWrite); }
+    bool hasTensorRead() { return hasAddrSpace(AddrSpace::TensorRead); }
+    bool hasTensorWrite() { return hasAddrSpace(AddrSpace::TensorWrite); }
+  }];
 }
 
 def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {

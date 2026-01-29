@@ -38,6 +38,7 @@ static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/OpsEnums.cpp.inc"
 
 namespace mlir::triton::gpu {
 
@@ -1350,6 +1351,53 @@ std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
 unsigned WarpSpecializeOp::getTotalPartitionWarps() {
   ArrayRef<int32_t> numWarps = getPartitionNumWarps();
   return std::accumulate(numWarps.begin(), numWarps.end(), 0);
+}
+
+//===----------------------------------------------------------------------===//
+// BarrierOp
+//===----------------------------------------------------------------------===//
+
+void BarrierOp::print(OpAsmPrinter &p) {
+  // print "all" instead of  "local|global_read|global_write|tensor|all"
+  if (getAddrSpace() == AddrSpace::All) {
+    p << " all";
+  } else {
+    p << ' ' << stringifyAddrSpace(getAddrSpace());
+  }
+}
+
+ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto parseAddrSpace = [&]() -> FailureOr<AddrSpace> {
+    std::string keyword;
+    if (parser.parseKeywordOrString(&keyword))
+      return failure();
+
+    auto addrSpace = symbolizeAddrSpace(keyword);
+    if (!addrSpace)
+      return parser.emitError(parser.getCurrentLocation())
+             << "unknown addrSpace '" << keyword << "'";
+
+    return *addrSpace;
+  };
+
+  auto addrSpace = parseAddrSpace();
+  if (failed(addrSpace))
+    return failure();
+
+  AddrSpace addrSpaceRet = *addrSpace;
+
+  while (succeeded(parser.parseOptionalVerticalBar())) {
+    addrSpace = parseAddrSpace();
+    if (failed(addrSpace))
+      return failure();
+
+    addrSpaceRet = bitEnumSet(addrSpaceRet, *addrSpace);
+  }
+
+  result.addAttribute("addrSpace",
+                      AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
+
+  return success();
 }
 
 } // namespace mlir::triton::gpu

@@ -381,6 +381,8 @@ def SharedLinearEncodingAttr
 
     SmallVector<unsigned> getOrder() const;
 
+    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
+
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
     int32_t getAlignment() const { return static_cast<int32_t>(getLayoutAlignment()); }
@@ -698,6 +700,8 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> getThreadsPerWarp() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
+
+    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getSizePerThread() const;

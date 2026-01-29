@@ -21,6 +21,8 @@ from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
+from triton_kernels.tensor_details.dtype import FP32
+
 # ---------------
 # numerics stuff
 # ---------------
@@ -134,9 +136,9 @@ def _build_test_op_cases():
         Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
         Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
-        Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
     ])
     # mxfloat x mxfloat
     test_cases.extend([
@@ -145,11 +147,11 @@ def _build_test_op_cases():
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
         Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
-        Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
-        Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
+        Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
     ])
     # amd-specific float8
@@ -340,9 +342,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
-        scale_hbm_swizzling_args = {"ragged_metadata": None}, # ragged_metadata will be set in the make_random_tensor function
     )
-
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
         n_slices = n_slices,
@@ -354,10 +354,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_b" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         is_mx_rowmajor = not colmajor_mxfp_weight,
-        value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
-        value_hbm_swizzling_args = {"mx_axis":-2},
-        scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
-        scale_hbm_swizzling_args = dict(mx_axis=-2, num_warps=num_warps),
+        value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
+        scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
     )
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
@@ -428,8 +426,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     maxtol, rmstol = None, None
     if c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
-    elif b_dtype.is_mxfloat4:
-        maxtol, rmstol = 3e-2, None
+    elif b_dtype.has_mx_scale:
+        # Higher tolerance needed for float8 x mx combinations
+        if "float8" in act_dtype_str:
+            maxtol, rmstol = 2e-1, None
+        else:
+            maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
@@ -442,6 +444,6 @@ def test_set_idle_sms():
     from triton_kernels.matmul_details.opt_flags import make_opt_flags
     num_idle_sms = 24
     matmul_set_idle_sms(num_idle_sms)
-    flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
+    flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms

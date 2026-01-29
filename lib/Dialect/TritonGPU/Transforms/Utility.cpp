@@ -1357,18 +1357,15 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
       deadArg.push_back(yieldOperand.index());
     }
-    if (deadArg.empty())
-      return failure();
-    rewriter.modifyOpInPlace(forOp, [&]() {
-      // For simplicity we just change the dead yield operand to use the
-      // associated argument and leave the operations and argument removal to
-      // dead code elimination.
-      for (unsigned deadArgIdx : deadArg) {
-        BlockArgument arg = block.getArgument(deadArgIdx + 1);
-        yieldOp.setOperand(deadArgIdx, arg);
-      }
-    });
-    return success();
+    bool changed = false;
+    // For simplicity we just replace users of the block arg with init value and
+    // leave the operations and argument removal to dead code elimination.
+    for (unsigned deadArgIdx : deadArg) {
+      BlockArgument arg = block.getArgument(deadArgIdx + 1);
+      changed |= !arg.use_empty();
+      rewriter.replaceAllUsesWith(arg, forOp.getTiedLoopInit(arg)->get());
+    }
+    return success(changed);
   }
 };
 

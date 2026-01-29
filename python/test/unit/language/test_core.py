@@ -14,6 +14,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
     integral_dtypes,
@@ -1918,25 +1919,57 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
-def test_cat(dtype_str, num_warps, device):
+@pytest.mark.parametrize("can_reorder", [True, False])
+def test_cat(dtype_str, num_warps, can_reorder, device):
     check_type_supported(dtype_str, device)
 
     @triton.jit
-    def kernel(X, Y, Z, N: tl.constexpr):
+    def kernel(X, Y, Z, N: tl.constexpr, CAN_REORDER: tl.constexpr):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl.cat(x, y, can_reorder=True)
+        z = tl.cat(x, y, can_reorder=CAN_REORDER)
         tl.store(Z + tl.arange(0, 2 * N), z)
 
     x = torch.arange(0, 128, device=device).to(getattr(torch, dtype_str))
     y = torch.arange(-128, 0, device=device).to(getattr(torch, dtype_str))
-    z_ref = torch.cat([x, y], dim=0).sum()
+    z_ref = torch.cat([x, y], dim=0)
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
-    kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
-    assert z.sum() == z_ref
+    kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
+    assert z.sum() == z_ref.sum()
+    if not can_reorder:
+        torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
+
+
+CAT_ND_SHAPES = ((128, ), (16, 32), (8, 16, 4), (2, 4, 8, 16))
+CAT_ND_CASES = []
+for shape in CAT_ND_SHAPES:
+    for dim in range(len(shape)):
+        CAT_ND_CASES.append(pytest.param(shape, dim, id=f"rank={len(shape)},dim={dim}"))
+
+
+@pytest.mark.parametrize("shape, dim", CAT_ND_CASES)
+def test_cat_nd(shape, dim, device):
+
+    @triton.jit
+    def kernel(x_desc, y_desc, z_desc, dim: tl.constexpr, shape: tl.constexpr):
+        rank: tl.constexpr = len(shape)
+        x = x_desc.load([0] * rank)
+        y = y_desc.load([0] * rank)
+        z = tl.cat(x, y, dim=dim)
+        z_desc.store([0] * rank, z)
+
+    x = torch.rand(shape, device=device)
+    y = torch.rand(shape, device=device)
+    z_ref = torch.cat([x, y], dim=dim)
+    z = torch.empty_like(z_ref)
+    x_desc = TensorDescriptor.from_tensor(x, block_shape=shape)
+    y_desc = TensorDescriptor.from_tensor(y, block_shape=shape)
+    z_desc = TensorDescriptor.from_tensor(z, block_shape=z_ref.shape)
+    kernel[(1, )](x_desc, y_desc, z_desc, dim=dim, shape=shape)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
 @pytest.mark.interpreter
@@ -3421,9 +3454,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_hip_cdna() or is_hip_gfx1250():
         amdgcn = pgm.asm['amdgcn']
 
-        if (M, N) == (4, 64) or (M, N) == (64, 4):
+        if is_hip_cdna() and ((M, N) == (4, 64) or (M, N) == (64, 4)):
             assert 'v_mfma_f32_4x4' in amdgcn
-        elif (M, N) == (4, 32):
+        elif is_hip_cdna() and (M, N) == (4, 32):
             if in_dtype == 'float16':
                 assert 'v_dot2c_f32_f16' in amdgcn
             elif (in_dtype == 'bfloat16') and (is_hip_cdna4() or is_hip_gfx1250()):
@@ -5745,7 +5778,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs_except_libraries):
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -5754,7 +5787,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        fresh_knobs_except_libraries.language.default_fp_fusion = enable_fp_fusion
+        fresh_knobs.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
@@ -5772,7 +5805,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("enable_reflect_ftz", [False, True])
-def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs_except_libraries):
+def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
 
     @triton.jit
     def exp2(data):
@@ -5793,7 +5826,7 @@ def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs_except_libra
 
 @pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
-def test_override_arch(arch, env_var_override, device, fresh_knobs_except_libraries):
+def test_override_arch(arch, env_var_override, device, fresh_knobs):
     if arch.startswith("sm") and not is_cuda():
         pytest.skip(f"{arch} arch only for CUDA")
     elif arch.startswith("gfx") and not is_hip():
@@ -5810,7 +5843,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs_except_librar
 
     if is_cuda():
         if env_var_override:
-            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
+            fresh_knobs.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -5820,7 +5853,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs_except_librar
         # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
         # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
         if env_var_override:
-            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
+            fresh_knobs.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -6396,7 +6429,8 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
+    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3()
+            or is_hip_rdna4()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
         pytest.skip('Not enough LDS.')

@@ -1,14 +1,10 @@
 # fmt: off
-
 import torch
-import torch.distributed as dist
-import torch.distributed._symmetric_memory as symm_mem
 import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple
-from math import prod
+from .distributed_details.mesh import SymmetricMemoryPool
 
 @dataclass
 class ExptAssignment:
@@ -24,160 +20,6 @@ class ExptAssignment:
     expt_map: torch.Tensor
     # number of experts per shard
     n_expts_per_shard: list[int]
-
-
-@dataclass
-class _MemoryRegion:
-    base: int
-    size: int
-    alignment: int
-
-class SymmetricMemoryPool:
-    def __init__(self):
-        self._is_initialized = False
-        self.size = 0
-        self.buf = None
-        self.bufs = None
-        self.hdl = None
-        self.regions = {}
-
-    def release(self):
-        if self._is_initialized:
-            self.hdl.barrier(channel=0)
-            self.hdl = None
-            self.buf = None
-            self.bufs = None
-            self._is_initialized = False
-            self.size = 0
-            self.regions = {}
-
-    @staticmethod
-    def align_up(value: int, alignment: int) -> int:
-        if alignment <= 1:
-            return value
-        return ((value + alignment - 1) // alignment) * alignment
-
-    def _reserve_region(self, name: str, size: int, alignment: int, offset: int) -> int:
-        if self._is_initialized:
-            raise RuntimeError("Cannot reserve regions after initialization")
-        if name in self.regions:
-            raise ValueError(f"Region {name} already reserved")
-        alignment = max(alignment, 1)
-        size_aligned = self.align_up(size, alignment)
-        base = self.align_up(offset, alignment)
-        end = base + size_aligned
-        self.regions[name] = _MemoryRegion(base=base, size=size_aligned, alignment=alignment)
-        return end
-
-    def make_empty(
-        self,
-        shape: Tuple[int, ...],
-        dtype: torch.dtype,
-        region: str,
-        region_offset: int = 0,
-        clear: bool = False,
-    ) -> Tuple[torch.Tensor, ...]:
-        """
-        Allocate symmetric tensors from a reserved region.
-
-        Args:
-            shape: Shape of the tensor to allocate.
-            dtype: Data type of the tensor to allocate.
-            region: Name of the reserved region to allocate from.
-            region_offset: Offset (in bytes) within the region to allocate from.
-            clear: If True, zero out the allocated tensors.
-        Returns:
-            A tuple of tensors, one per rank in the process group.
-        """
-        if not self._is_initialized:
-            raise RuntimeError("SymmetricMemoryPool is not initialized")
-
-        region_info = self.regions.get(region)
-        if region_info is None:
-            raise ValueError(f"Region {region} not found")
-
-        elem_size = torch.empty((), dtype=dtype).element_size()
-        if region_offset % elem_size != 0:
-            raise ValueError(f"Region offset {region_offset} not aligned to element size {elem_size}")
-
-        numel = prod(shape)
-        nbytes = numel * elem_size
-        region_start = region_info.base + region_offset
-        region_end = region_info.base + region_info.size
-
-        if region_start + nbytes > region_end:
-            raise ValueError(
-                f"Slice [{region_start}:{region_start + nbytes}) exceeds region {region} bounds [{region_info.base}:{region_end})"
-            )
-
-        tensors = []
-        for buf in self.bufs:
-            storage = buf.untyped_storage()
-            total = storage.nbytes()
-            if region_start + nbytes > total:
-                raise ValueError(
-                    f"Slice [{region_start}:{region_start + nbytes}) exceeds storage size {total} bytes."
-                )
-            tensor = torch.empty(0, dtype=dtype, device=buf.device)
-            tensor.set_(storage, region_start // elem_size, torch.Size(shape))
-            if clear:
-                tensor.zero_()
-            tensors.append(tensor)
-
-        return tuple(tensors)
-
-    def _initialize(
-        self,
-        n_ranks: int,
-        group: dist.ProcessGroup,
-        device: torch.device,
-    ) -> None:
-        if self._is_initialized:
-            return
-
-        self.size = int(sum(region.size for region in self.regions.values()))
-        self.buf = symm_mem.empty((self.size,), dtype=torch.uint8, device=device)
-        self.hdl = symm_mem.rendezvous(self.buf, group=group)
-        self.bufs = tuple(
-            self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)
-        )
-        self.hdl.barrier(channel=0)
-
-        self._is_initialized = True
-
-    def initialize_matmul(
-        self,
-        n_tokens_global: int,
-        d_input: int,
-        d_model: int,
-        n_expts_act: int,
-        n_expts_tot: int,
-        dtype: torch.dtype,
-        n_ranks: int,
-        group: dist.ProcessGroup,
-        device: torch.device,
-    ) -> None:
-        if self._is_initialized:
-            return
-
-        BLOCK_N = 32
-        BLOCK_M = 32
-        n_bytes_topk = n_tokens_global * n_expts_act * 4 # topk logits (float32): pessimistic estimate
-        n_bytes_topk += n_tokens_global * n_expts_act * 2 # topk indx (int16)
-        num_blocks_m = triton.cdiv(n_tokens_global, BLOCK_M)
-        num_blocks_n = triton.cdiv(n_expts_tot, BLOCK_N)
-        n_bytes_topk += num_blocks_m * BLOCK_M * num_blocks_n * BLOCK_N // 32 * 4 # expt bitmatrix (int32)
-        elem_size = torch.empty((), dtype=dtype).element_size()
-        n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
-        n_bytes_ep_to_dp = (n_tokens_global // n_ranks) * n_expts_act * d_model * elem_size
-
-        offset = self._reserve_region("topk", n_bytes_topk, 128, 0)
-        offset = self._reserve_region("ep_to_dp", n_bytes_ep_to_dp, 128, offset)
-        offset = self._reserve_region("dp_to_ep", n_bytes_dp_to_ep, 128, offset)
-        self._initialize(n_ranks=n_ranks, group=group, device=device)
-
-
-symm_mem_pool = SymmetricMemoryPool()
 
 
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
@@ -270,10 +112,10 @@ def _convert_launch_metadata(grid, kernel, args):
     local_expt_indx = expt_indx[src_row_start:src_row_start + n_tokens_local]
     src_rank_filter = expt_filter[src_rank]
     local_filter = ((src_rank_filter[local_expt_indx // 32] >> (local_expt_indx % 32)) & 1).to(torch.int32)
-    dst_local_tokens = torch.sum(local_filter).item()
+    dst_local_tokens = torch.sum(local_filter)
     dst_output_tokens = local_filter.numel() - dst_local_tokens
     global_filter = ((src_rank_filter[expt_indx // 32] >> (expt_indx % 32)) & 1).to(torch.int32)
-    dst_input_tokens = torch.sum(global_filter).item() - dst_local_tokens
+    dst_input_tokens = torch.sum(global_filter) - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
     dram_bytes = src_bytes + dst_local_tokens * d_model * elem_bytes
     if "dp_to_ep" in kernel.name:
@@ -331,26 +173,24 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
+def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool: SymmetricMemoryPool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
-    rank = dist.get_rank()
-    n_ranks = dist.get_world_size()
     device = src.device
     n_tokens_local, d_model = src.shape
     n_tokens_global, n_expt_act = expt_indx.shape
     # validate invariants
-    assert n_ranks == expt_bitmask.size(0)
+    assert symm_mem_pool.mesh.world_size == expt_bitmask.size(0)
     assert all(t.device == device for t in [expt_bitmask, expt_indx, gate_indx]), "all tensors must be on the same device"
     assert expt_bitmask.dtype == torch.int32, "expt_bitmask must be int32 bitmask words"
     assert expt_bitmask.stride(-1) == 1 and expt_indx.stride(-1) == 1 and gate_indx.stride(-1) == 1
-    assert n_tokens_local * n_ranks <= n_tokens_global
+    assert n_tokens_local * symm_mem_pool.mesh.world_size <= n_tokens_global
     peer_bufs = symm_mem_pool.make_empty(
         region="dp_to_ep",
         shape=(n_tokens_global * n_expt_act, d_model),
         dtype=src.dtype,
     )
-    dst_local = peer_bufs[rank]
+    dst_local = peer_bufs[symm_mem_pool.mesh.local_rank]
     hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
@@ -362,9 +202,9 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         expt_indx, expt_indx.stride(0),
         gate_indx, n_expt_act,
         n_tokens_local,
-        SRC_RANK=rank,
+        SRC_RANK=symm_mem_pool.mesh.local_rank,
         N_EXPT_ACT=n_expt_act,
-        N_RANKS=n_ranks,
+        N_RANKS=symm_mem_pool.mesh.world_size,
         BLOCK=BLOCK,
     )
     hdl.barrier(channel=0)
@@ -413,19 +253,17 @@ def _convert_ep_to_dp(
         dst_ptrs += BLOCK
 
 
-def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
+def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx, symm_mem_pool: SymmetricMemoryPool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
-    rank = dist.get_rank()
-    n_ranks = dist.get_world_size()
     n_tokens_global, d_model = src.shape
-    n_tokens_local = n_tokens_global // n_ranks
+    n_tokens_local = n_tokens_global // symm_mem_pool.mesh.world_size
     peer_bufs = symm_mem_pool.make_empty(
         region="ep_to_dp",
         shape=(n_tokens_local, d_model),
         dtype=src.dtype,
     )
-    dst_local = peer_bufs[rank]
+    dst_local = peer_bufs[symm_mem_pool.mesh.local_rank]
     hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
@@ -438,8 +276,8 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
-        SRC_RANK=rank,
-        N_RANKS=n_ranks,
+        SRC_RANK=symm_mem_pool.mesh.local_rank,
+        N_RANKS=symm_mem_pool.mesh.world_size,
     )
     hdl.barrier(channel=0)
     return dst_local

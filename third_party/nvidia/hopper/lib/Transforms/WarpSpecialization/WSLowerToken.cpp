@@ -150,7 +150,8 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     }
 
     assert(numCTAs == 1 && "remote CTA is not supported yet");
-    mlir::gpu::BarrierOp::create(builder, loc);
+    mlir::triton::gpu::BarrierOp::create(builder, loc,
+                                         triton::gpu::AddrSpace::Local);
 
     // Helper function for extracting one index from bufferFullArray.
     auto extractBufferFull = [&](Location loc, Value idx) -> Value {

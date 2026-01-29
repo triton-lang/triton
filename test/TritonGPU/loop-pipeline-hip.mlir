@@ -986,7 +986,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // ASYNC-NOT: ttg.swizzled_shared
 // ASYNC: [[PADDED_ENC:#.*]] = #ttg.padded_shared
-// ASYNC-SAME{LITERAL}: {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [32, 0], [16, 0], [1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], block = []}
+// ASYNC-SAME{LITERAL}: {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [16, 0], [32, 0], [1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], block = []}
 // ASYNC-NOT: ttg.padded_shared
 // ASYNC-NOT: ttg.swizzled_shared
 
@@ -1138,5 +1138,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// small Block size 32x64
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 4], instrShape = [16, 16, 32], isTransposed = true}>
+
+// ASYNC-NOT: ttg.swizzled_shared
+// ASYNC{LITERAL}: padded_shared<[512:+16] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [4, 0], [8, 0], [16, 0], [1, 0], [2, 0]]
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // ASYNC-LABEL: loop_padding_block_size_small
+  tt.func public @loop_padding_block_size_small(%arg0: i32, %arg1: tensor<32x64x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<32x64x!tt.ptr<f16>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<32x64xf16, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<32x64x!tt.ptr<f16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<32x64xf16, #blocked> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x64xf16, #mma>
+      scf.yield %3 : tensor<32x64xf16, #mma>
+    }
+    tt.store %arg2, %0 : tensor<32x64x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
 
 // End of negative tests for padding on gfx950

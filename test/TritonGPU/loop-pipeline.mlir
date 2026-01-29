@@ -1733,9 +1733,9 @@ tt.func @peeled_prologue_statically_dead(
 // COMMON-LABEL: tt.func public @barrier_in_loop_kernel
 // COMMON:  scf.for
 // COMMON:    tt.load
-// COMMON:    gpu.barrier
+// COMMON:    ttg.barrier local
 // COMMON:    tt.store
-// COMMON-NOT:  gpu.barrier
+// COMMON-NOT:  ttg.barrier local
 // COMMON:  tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -1745,7 +1745,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c0_i32 = arith.constant 0 : i32
     scf.for %arg4 = %c0_i32 to %arg2 step %c1024_i32  : i32 {
       %12 = tt.load %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
-      gpu.barrier
+      ttg.barrier local
       tt.store %arg1, %12 : tensor<1024x!tt.ptr<f32>, #blocked>
     } {tt.num_stages = 2 : i32}
     tt.return

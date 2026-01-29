@@ -98,9 +98,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       auto tensorType = cast<RankedTensorType>(ptr.getType());
       CGAEncodingAttr cgaLayout = getCGALayout(tensorType.getEncoding());
       SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
-      auto layout = buildCoalescedEncoding(&getContext(), axisInfoAnalysis,
-                                           curr, numWarps, threadsPerWarp,
-                                           cgaLayout, shapePerCTA);
+      auto layout =
+          buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
+                                 threadsPerWarp, cgaLayout, shapePerCTA);
       layoutMap[curr] = layout;
     });
 

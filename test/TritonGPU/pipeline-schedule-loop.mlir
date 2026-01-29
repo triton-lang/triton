@@ -336,7 +336,7 @@ tt.func @indirect_load(%lb : index, %ub : index, %step : index,
   tt.return %loop#3: tensor<128x128xf32, #C>
 }
 
-// Verify that we don't schedule/pipeline loops with gpu.barrier
+// Verify that we don't schedule/pipeline loops with barrier
 // CHECK-LABEL: @gpu_barrier
 tt.func @gpu_barrier(%lb : index, %ub : index, %step : index,
                  %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {
@@ -345,7 +345,7 @@ tt.func @gpu_barrier(%lb : index, %ub : index, %step : index,
     // CHECK-NOT: loop.cluster
     %a = tt.load %a_ptr_init {tt.latency = 2 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     %res = arith.addf %acc, %a : tensor<128x32xf16, #A>
-    gpu.barrier
+    ttg.barrier local
     scf.yield %res : tensor<128x32xf16, #A>
   }
   tt.return %loop#0 : tensor<128x32xf16, #A>

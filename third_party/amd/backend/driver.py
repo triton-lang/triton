@@ -13,6 +13,10 @@ from triton.runtime.build import compile_module_from_src
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 PyTDMDescriptor = None
+PyKernelArg = None
+ARG_CONSTEXPR = None
+ARG_KERNEL = None
+ARG_TUPLE = None
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
@@ -177,8 +181,18 @@ class HIPUtils(object):
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.create_tdm_descriptor = mod.create_tdm_descriptor
+        self.launch = mod.launch
+        self.build_signature_metadata = mod.build_signature_metadata
         global PyTDMDescriptor
+        global PyKernelArg
+        global ARG_CONSTEXPR
+        global ARG_KERNEL
+        global ARG_TUPLE
         PyTDMDescriptor = mod.PyTDMDescriptor
+        PyKernelArg = mod.PyKernelArg
+        ARG_CONSTEXPR = mod.ARG_CONSTEXPR
+        ARG_KERNEL = mod.ARG_KERNEL
+        ARG_TUPLE = mod.ARG_TUPLE
 
 
 # -------------------- Launcher ----------------------------
@@ -206,519 +220,74 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-FLOAT_STORAGE_TYPE = {
-    "fp16": "uint16_t",
-    "bf16": "uint16_t",
-    "fp32": "uint32_t",
-    "f32": "uint32_t",
-    "fp64": "uint64_t",
-}
-FLOAT_PACK_FUNCTION = {
-    "fp16": "pack_fp16",
-    "bf16": "pack_bf16",
-    "fp32": "pack_fp32",
-    "f32": "pack_fp32",
-    "fp64": "pack_fp64",
-}
+def expand_signature(signature, tensordesc_meta):
+    output = []
+    tensordesc_idx = 0
+    for sig in signature:
+        if isinstance(sig, str) and sig.startswith("tensordesc"):
+            meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
+            tensordesc_idx += 1
 
-_BASE_ARGS_FORMAT = "piiiKKOOOOO"
+            match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+            dtype = match.group(1)
+            shape = match.group(2)
+            ndim = shape.count(",") + 1
 
-
-def make_launcher(constants, signature, warp_size, tensordesc_meta):
-
-    def _expand_signature(signature):
-        output = []
-        tensordesc_idx = 0
-        for sig in signature:
-            if isinstance(sig, str) and sig.startswith("tensordesc"):
-                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-                tensordesc_idx += 1
-
-                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
-                dtype = match.group(1)
-                shape = match.group(2)
-                ndim = shape.count(",") + 1
-
-                # If there is no descriptor's metadata, the descriptor has been decomposed to base pointer, shape and strides
-                if meta is None:
-                    output.append("*" + dtype)
-                    for _ in range(2 * ndim):
-                        output.append("i64")
-                    output.append("i1")
-                else:
-                    output.append("tensordesc")
-
-                for _ in range(ndim):
-                    output.append("i32")
-                for _ in range(ndim):
+            # If there is no descriptor's metadata, the descriptor has been decomposed to base pointer, shape and strides
+            if meta is None:
+                output.append("*" + dtype)
+                for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
             else:
-                output.append(sig)
+                output.append("tensordesc")
 
-        return output
-
-    def _serialize_signature(sig):
-        if isinstance(sig, tuple):
-            return ','.join(map(_serialize_signature, sig))
-        return sig
-
-    def _extracted_type(ty):
-        if isinstance(ty, tuple):
-            val = ','.join(map(_extracted_type, ty))
-            return f"[{val}]"
-        if ty.startswith("*") or ty.startswith("tensordesc"):
-            return "PyObject*"
-        if ty == "constexpr":
-            return "PyObject*"
-        return ty_to_cpp(ty)
-
-    def format_of(ty):
-        if isinstance(ty, tuple):
-            val = ''.join(map(format_of, ty))
-            return f"({val})"
-        if ty.startswith("*") or ty.startswith("tensordesc"):
-            return "O"
-        if ty == "constexpr":
-            return "O"
-        return {
-            "double": "d",
-            "long": "l",
-            "int8_t": "b",
-            "int16_t": "h",
-            "int32_t": "i",
-            "int64_t": "L",
-            "uint8_t": "B",
-            "uint16_t": "H",
-            "uint32_t": "I",
-            "uint64_t": "K",
-        }[ty_to_cpp(ty)]
-
-    signature = {idx: s for idx, s in enumerate(_expand_signature(signature.values()))}
-
-    args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = _BASE_ARGS_FORMAT + args_format
-    signature = ','.join(map(_serialize_signature, signature.values()))
-    signature = list(filter(bool, signature.split(',')))
-    signature = {i: s for i, s in enumerate(signature)}
-    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
-    # Record the end of regular arguments;
-    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decl_list = []
-    for i, ty in signature.items():
-        if ty == "constexpr":
-            continue
-        if ty in FLOAT_STORAGE_TYPE:
-            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+            for _ in range(ndim):
+                output.append("i32")
+            for _ in range(ndim):
+                output.append("i64")
         else:
-            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
-    arg_decls = ', '.join(arg_decl_list)
-    internal_args_list = []
-    for i, ty in signature.items():
-        if ty.startswith("*"):
-            internal_args_list.append(f"ptr_info{i}.dev_ptr")
-        elif ty.startswith("tensordesc"):
-            internal_args_list.append(f"*desc{i}")
-        elif ty in FLOAT_STORAGE_TYPE:
-            internal_args_list.append(f"_arg{i}_storage")
-        elif ty != "constexpr":
-            internal_args_list.append(f"_arg{i}")
+            output.append(sig)
 
-    newline = '\n  '
-    ptr_decls = [
-        f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;"
-        for i, ty in signature.items()
-        if ty.startswith("*")
-    ]
-    tensor_desc_decls = [
-        f"TDMDescriptor* desc{i} = getTDMDescriptor(_arg{i}, {i});" for i, ty in signature.items()
-        if ty.startswith("tensordesc")
-    ]
-    float_storage_decls = [
-        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
-        for i, ty in signature.items()
-        if ty in FLOAT_STORAGE_TYPE
-    ]
+    return output
 
-    libhip_path = _get_path_to_hip_runtime_dylib()
 
-    # generate glue code
-    params = list(range(len(signature)))
-    params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
-    params.append("&global_scratch")
-    params.append("&profile_scratch")
-    src = f"""
-#define __HIP_PLATFORM_AMD__
-#include <hip/hip_runtime.h>
-#include <hip/hip_runtime_api.h>
-#include <Python.h>
-#include <dlfcn.h>
-#include <stdbool.h>
-#include <dlfcn.h>
+def make_kernel_signature(signature):
+    """
+    Creates a kernel signature in C to be able to efficiently extract
+    arguments in the launcher.
+    """
 
-typedef struct {{
-  uint32_t group0_0;
-  uint32_t group0_1;
-  uint32_t group0_2;
-  uint32_t group0_3;
-  uint32_t group1_0;
-  uint32_t group1_1;
-  uint32_t group1_2;
-  uint32_t group1_3;
-  uint32_t group1_4;
-  uint32_t group1_5;
-  uint32_t group1_6;
-  uint32_t group1_7;
-  uint32_t group2_0;
-  uint32_t group2_1;
-  uint32_t group2_2;
-  uint32_t group2_3;
-  uint32_t group3_0;
-  uint32_t group3_1;
-  uint32_t group3_2;
-  uint32_t group3_3;
-}} TDMDescriptor;
+    def _flatten_signature(sig, output):
+        # Flatten tuples
+        if isinstance(sig, tuple):
+            for x in sig:
+                _flatten_signature(x, output)
+        else:
+            output.append(sig)
 
-typedef struct {{
-  PyObject_HEAD;
-  TDMDescriptor desc;
-}} PyTDMDescriptorObject;
+    flat_signature = []
+    for sig in signature:
+        _flatten_signature(sig, flat_signature)
+    kernel_signature = [x for x in flat_signature if x != "constexpr"]
 
-// The list of paths to search for the HIP runtime library. The caller Python
-// code should substitute the search path placeholder.
-static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
+    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
-// The list of HIP dynamic library symbols and their signature we are interested
-// in this file.
-#define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
-  FOR_EACH_STR_FN(hipGetLastError, true)                                      \\
-  FOR_EACH_STR_FN(hipGetErrorString, true, hipError_t hipError)               \\
-  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx, false,                                \\
-                  const HIP_LAUNCH_CONFIG *config,                            \\
-                  hipFunction_t f,                                            \\
-                  void **kernelParams,                                        \\
-                  void **extra)                                               \\
-  FOR_EACH_ERR_FN(hipModuleLaunchKernel, true, hipFunction_t f,               \\
-                  unsigned int gridDimX, unsigned int gridDimY,               \\
-                  unsigned int gridDimZ, unsigned int blockDimX,              \\
-                  unsigned int blockDimY, unsigned int blockDimZ,             \\
-                  unsigned int sharedMemBytes, hipStream_t stream,            \\
-                  void **kernelParams, void **extra)                          \\
-  FOR_EACH_ERR_FN(hipModuleLaunchCooperativeKernel, true, hipFunction_t f,    \\
-                  unsigned int gridDimX, unsigned int gridDimY,               \\
-                  unsigned int gridDimZ, unsigned int blockDimX,              \\
-                  unsigned int blockDimY, unsigned int blockDimZ,             \\
-                  unsigned int sharedMemBytes, hipStream_t stream,            \\
-                  void **kernelParams, void **extra)                          \\
-  FOR_EACH_ERR_FN(hipPointerGetAttribute, true, void *data,                   \\
-                  hipPointer_attribute attribute, hipDeviceptr_t ptr)
 
-// The HIP symbol table for holding resolved dynamic library symbols.
-struct HIPSymbolTable {{
-#define DEFINE_EACH_ERR_FIELD(hipSymbolName, required, ...)                   \\
-  hipError_t (*hipSymbolName)(__VA_ARGS__);
-#define DEFINE_EACH_STR_FIELD(hipSymbolName, required, ...)                   \\
-  const char *(*hipSymbolName)(__VA_ARGS__);
-
-  HIP_SYMBOL_LIST(DEFINE_EACH_ERR_FIELD, DEFINE_EACH_STR_FIELD)
-}};
-
-static struct HIPSymbolTable hipSymbolTable;
-
-bool initSymbolTable() {{
-  // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-
-  // Otherwise, go through the list of search paths to dlopen the first HIP
-  // driver library.
-  if (!lib) {{
-    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
-    for (int i = 0; i < n; ++i) {{
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
-      if (handle) {{
-        lib = handle;
-      }}
-    }}
-  }}
-  if (!lib) {{
-    PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
-    return false;
-  }}
-
-  typedef hipError_t (*hipGetProcAddress_fn)(
-      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
-      hipDriverProcAddressQueryResult *symbolStatus);
-  hipGetProcAddress_fn hipGetProcAddress;
-  dlerror(); // Clear existing errors
-  const char *error = NULL;
-  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
-  error = dlerror();
-  if (error) {{
-    PyErr_SetString(PyExc_RuntimeError,
-                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
-    dlclose(lib);
-    return false;
-  }}
-
-  // Resolve all symbols we are interested in.
-  int hipVersion = HIP_VERSION;
-  uint64_t hipFlags = 0;
-  hipDriverProcAddressQueryResult symbolStatus;
-  hipError_t status = hipSuccess;
-#define QUERY_EACH_FN(hipSymbolName, required, ...)                            \
-  status = hipGetProcAddress(#hipSymbolName,                                   \
-                             (void **)&hipSymbolTable.hipSymbolName,           \
-                             hipVersion, hipFlags, &symbolStatus);             \
-  if (required && status != hipSuccess) {{                                     \
-    PyErr_SetString(PyExc_RuntimeError,                                        \
-                    "cannot get address for '" #hipSymbolName                  \
-                    "' from libamdhip64.so");                                  \
-    dlclose(lib);                                                              \
-    return false;                                                              \
-  }}
-
-  HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
-
-  return true;
-}}
-
-static inline void gpuAssert(hipError_t code, const char *file, int line)
-{{
-   if (code != HIP_SUCCESS)
-   {{
-      const char* prefix = "Triton Error [HIP]: ";
-      const char* str = hipSymbolTable.hipGetErrorString(code);
-      char err[1024] = {{0}};
-      snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
-      PyErr_SetString(PyExc_RuntimeError, err);
-   }}
-}}
-
-#define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  if (gridX * gridY * gridZ == 0)
-    return;
-  hipDeviceptr_t global_scratch = 0;
-  void *params[] = {{ {', '.join(params)} }};
-  if(num_ctas > 1) {{
-    if (!hipSymbolTable.hipDrvLaunchKernelEx) {{
-        PyErr_SetString(PyExc_RuntimeError, "missing hipDrvLaunchKernelEx symbol; please update HIP runtime");
-        return;
-    }}
-
-    hipLaunchAttribute attributes[2];
-    // Attribute0: Cluster dimensions
-    attributes[0].id = 4;
-    int *cluster_dims = (int*)attributes[0].val.pad;
-    cluster_dims[0] = num_ctas;
-    cluster_dims[1] = 1;
-    cluster_dims[2] = 1;
-    // Attribute1: Cooperative launch
-    attributes[1].id = hipLaunchAttributeCooperative;
-    attributes[1].val.cooperative = launch_cooperative_grid;
-
-    HIP_LAUNCH_CONFIG config = {{
-        gridX * num_ctas, gridY, gridZ, // Grid size
-        {warp_size} * num_warps, 1, 1, // Block size
-        shared_memory, stream,
-        attributes, 2 // Number of attributes
-    }};
-    HIP_CHECK(hipSymbolTable.hipDrvLaunchKernelEx(&config, function, params, 0));
-    return;
-  }}
-  else if (launch_cooperative_grid) {{
-    HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
-    return;
-  }}
-  else {{
-    HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
-  }}
-}}
-
-typedef struct _DevicePtrInfo {{
-    hipDeviceptr_t dev_ptr;
-    bool valid;
-}} DevicePtrInfo;
-
-static PyObject* data_ptr_str = NULL;
-static PyObject* py_tdm_descriptor_type = NULL;
-
-static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
-  DevicePtrInfo ptr_info;
-  hipError_t status = hipSuccess;
-  ptr_info.dev_ptr = 0;
-  ptr_info.valid = true;
-  if (PyLong_Check(obj)) {{
-    ptr_info.dev_ptr = (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
-    return ptr_info;
-  }}
-  if (obj == Py_None) {{
-    // valid nullptr
-    return ptr_info;
-  }}
-  PyObject *ret = PyObject_CallMethodNoArgs(obj, data_ptr_str);
-  if (!ret) {{
-    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-    ptr_info.valid = false;
-    goto cleanup;
-  }}
-  if (!PyLong_Check(ret)) {{
-    PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-    ptr_info.valid = false;
-    goto cleanup;
-  }}
-  ptr_info.dev_ptr = (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
-  if (!ptr_info.dev_ptr)
-    goto cleanup;
-  uint64_t dev_ptr;
-  status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
-  if (status == hipErrorInvalidValue) {{
-      PyErr_Format(PyExc_ValueError,
-                   "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
-      ptr_info.valid = false;
-      // Clear and ignore HIP error
-      (void)hipSymbolTable.hipGetLastError();
-  }}
-  ptr_info.dev_ptr = (hipDeviceptr_t)dev_ptr;
-cleanup:
-  Py_DECREF(ret);
-  return ptr_info;
-}}
-
-static inline TDMDescriptor* getTDMDescriptor(PyObject* obj, int idx) {{
-  if (Py_TYPE(obj) != (PyTypeObject*)py_tdm_descriptor_type) {{
-    PyErr_Format(PyExc_TypeError, "object must be of type PyTDMDescriptor, got %s", Py_TYPE(obj)->tp_name);
-    return NULL;
-  }}
-
-  TDMDescriptor* desc = &((PyTDMDescriptorObject*)obj)->desc;
-  return desc;
-}}
-
-static uint16_t pack_fp16(double f) {{
-    uint16_t result;
-    // from https://github.com/python/pythoncapi-compat/blob/5e317108f872c904eb726cb8d560dcadbdf88a72/pythoncapi_compat.h#L482-L492
-#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
-    _PyFloat_Pack2(f, (unsigned char*)&result, 1);
-#else
-    PyFloat_Pack2(f, (char*)&result, 1);
-#endif
-    return result;
-}}
-
-static uint16_t pack_bf16(double f) {{
-    float f32 = (float)f;
-    uint32_t u32 = *(uint32_t*)&f32;
-    return (uint16_t)(u32 >> 16);
-}}
-
-static uint32_t pack_fp32(double f) {{
-    float f32 = (float)f;
-    return *(uint32_t*)&f32;
-}}
-
-static uint64_t pack_fp64(double f) {{
-    return *(uint64_t*)&f;
-}}
-
-static PyObject* launch(PyObject* self, PyObject* args) {{
-  int gridX, gridY, gridZ;
-  uint64_t _stream;
-  uint64_t _function;
-  int launch_cooperative_grid;
-  PyObject *profile_scratch_obj = NULL;
-  PyObject *launch_enter_hook = NULL;
-  PyObject *launch_exit_hook = NULL;
-  PyObject *kernel_metadata = NULL;
-  PyObject *launch_metadata = NULL;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &launch_cooperative_grid,
-                                           &gridX, &gridY, &gridZ, &_stream, &_function, &profile_scratch_obj,
-                                           &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
-    return NULL;
-  }}
-
-  // extract kernel metadata
-  int num_warps, num_ctas, shared_memory;
-  if (!PyArg_ParseTuple(kernel_metadata, \"iii\", &num_warps, &num_ctas, &shared_memory)) {{
-    return NULL;
-  }}
-  // extract launch metadata
-  if (launch_enter_hook != Py_None){{
-    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
-    if (!ret)
-      return NULL;
-    Py_DECREF(ret);
-  }}
-
-  hipDeviceptr_t profile_scratch = 0;
-  if (profile_scratch_obj != Py_None) {{
-    DevicePtrInfo profile_scratch_info = getPointer(profile_scratch_obj, -1);
-    if (!profile_scratch_info.valid) {{
-      return NULL;
-    }}
-    profile_scratch = profile_scratch_info.dev_ptr;
-  }}
-
-  // raise exception asap
-  {newline.join(tensor_desc_decls)}
-  {newline.join(ptr_decls)}
-  {newline.join(float_storage_decls)}
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, (hipDeviceptr_t)profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
-
-  if(launch_exit_hook != Py_None){{
-    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
-    if (!ret)
-      return NULL;
-    Py_DECREF(ret);
-  }}
-
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
-  Py_RETURN_NONE;
-}}
-
-static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-  {{NULL, NULL, 0, NULL}} // sentinel
-}};
-
-static struct PyModuleDef ModuleDef = {{
-  PyModuleDef_HEAD_INIT,
-  \"__triton_launcher\",
-  NULL, //documentation
-  -1, //size
-  ModuleMethods
-}};
-
-PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-  if (!initSymbolTable()) {{
-    return NULL;
-  }}
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
-  data_ptr_str = PyUnicode_InternFromString("data_ptr");
-  if(data_ptr_str == NULL) {{
-    return NULL;
-  }}
-  PyObject* driver_mod = PyImport_ImportModule("triton.backends.amd.driver");
-  if (driver_mod == NULL) {{
-    return NULL;
-  }}
-  py_tdm_descriptor_type = PyObject_GetAttrString(driver_mod, "PyTDMDescriptor");
-  if (py_tdm_descriptor_type == NULL) {{
-    return NULL;
-  }}
-
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
-}}
-"""
-    return src
+def annotate_arguments(signature):
+    """
+    This recreates the signature with annotations as C objects which can then
+    be used to efficiently flatten tuples, and remove constexpr in the launcher.
+    """
+    annotated_arguments = []
+    for sig in signature:
+        if isinstance(sig, tuple):
+            annotated_arguments.append((PyKernelArg(nested_tuple=annotate_arguments(sig), type=ARG_TUPLE)))
+        elif sig != "constexpr":
+            annotated_arguments.append(PyKernelArg(nested_tuple=None, type=ARG_KERNEL))
+        else:
+            annotated_arguments.append(PyKernelArg(nested_tuple=None, type=ARG_CONSTEXPR))
+    return annotated_arguments
 
 
 def make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata):
@@ -788,19 +357,20 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_metadata):
         tensordesc_metadata = [None] * len(tensordesc_indices)
 
     def inner(*args):
-        meta_args = args[:len(_BASE_ARGS_FORMAT)]
-        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
-        final_args = []
+        base_args = args[:-1]
+        kernel_metadata = base_args[7]
+        kernel_args = args[-1]
+
+        final_kernel_args = []
         tensordesc_idx = 0
-        for i, arg in enumerate(raw_kernel_args):
+        for i, arg in enumerate(kernel_args):
             if i in tensordesc_indices:
-                tensordesc_args = make_tensordesc_arg(arg, meta_args[7],  # kernel_metadata
-                                                      tensordesc_metadata[tensordesc_idx])
-                final_args.extend(tensordesc_args)
+                final_kernel_args.extend(make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata[tensordesc_idx]))
                 tensordesc_idx += 1
             else:
-                final_args.append(arg)
-        return launcher(*meta_args, *final_args)
+                final_kernel_args.append(arg)
+
+        return launcher(*base_args, final_kernel_args)
 
     return inner
 
@@ -813,10 +383,13 @@ class HIPLauncher(object):
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        src = make_launcher(constants, signature, metadata.warp_size, tensordesc_meta)
-        mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
-        self.launch = wrap_handle_tensordesc(mod.launch, signature, tensordesc_meta)
+        launcher = triton.runtime.driver.active.utils.launch
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        self.arg_annotations = annotate_arguments(expanded_signature)
+        self.kernel_signature = make_kernel_signature(expanded_signature)
+        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
+        self.warp_size = metadata.warp_size
         # Check if cooperative groups are supported on the device.
         if self.launch_cooperative_grid:
             driver = triton.runtime.driver.active
@@ -828,7 +401,8 @@ class HIPLauncher(object):
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
 
-    def __call__(self, gridX, gridY, gridZ, stream, function, *args):
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -841,7 +415,9 @@ class HIPLauncher(object):
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
                                            _allocation._profile_allocator)
 
-        self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, profile_scratch, *args)
+        self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, profile_scratch,
+                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, self.warp_size,
+                    self.arg_annotations, self.kernel_signature, args)
 
 
 class HIPDriver(GPUDriver):

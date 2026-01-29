@@ -29,6 +29,7 @@ def _get_strides(t, dim, strides=None):
 
 
 def reduce_launch_metadata(grid, kernel, args):
+    from .proton_opts import launch_metadata_allow_sync
     ret = dict()
     X, Y, Mask, dim = args["X"], args["Y"], args["Mask"], args["DIM"]
     nbits = X.dtype.itemsize * 8
@@ -40,8 +41,11 @@ def reduce_launch_metadata(grid, kernel, args):
         ret["bytes"] = X.numel() * X.element_size() + Y.numel() * Y.element_size()
     else:
         m = (Mask != 0)
-        total_loads = m.sum().item()
-        total_adds = (m.sum(dim=dim) - 1).clamp(min=0).sum().item()
+        total_loads = m.sum()
+        total_adds = (m.sum(dim=dim) - 1).clamp(min=0).sum()
+        if launch_metadata_allow_sync():
+            total_loads = total_loads.item()
+            total_adds = total_adds.item()
         ret[f"flops{nbits}"] = total_adds
         ret["bytes"] = total_loads * X.element_size() + Y.numel() * Y.element_size()
     return ret
@@ -111,7 +115,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
             s1_term_s = 0 if SCALE_BROADCAST_S1 else (offs_x_s1[None, :] * stride_s1)
             s_ptrs = Scale + k_term_s + s0_term_s + s1_term_s
             s = tl.load(s_ptrs, mask=mask, other=1)
-            x = x * s
+            x = tl.fma(x, s, 0.0)
         y += x
     if POSTPROCESS_FN1 is not None:
         y = POSTPROCESS_FN1(y, *postprocess_fn1_args)

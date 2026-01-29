@@ -15,12 +15,15 @@ public:
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
 
-  // Insert a synchronization barrier. If isWarpSync is true, emit a warp-level
-  // synchronization when supported by the backend; otherwise emit a block/CTA
-  // level barrier. Backends that do not support warp-level barriers should
-  // conservatively emit a block-level barrier.
+  // Emit a block/CTA level barrier that guarantees visibility for the
+  // target address space
   virtual void barrier(Location loc, RewriterBase &rewriter,
-                       bool isWarpSync = false) const = 0;
+                       triton::gpu::AddrSpace targets) const = 0;
+  // Insert a warp syncronization barrier that also guarantees local address
+  // space visibility at warp level when supported by the backend.
+  // Backends that do not support warp-level barriers should conservatively
+  // emit a block-level barrier with local address space visibility.
+  virtual void warpSync(Location loc, RewriterBase &rewriter) const = 0;
 
   // Store/load a value from shared memory, either in the same CTA or, if
   // `ctaId` is non-nullopt, in another CTA in the same group.

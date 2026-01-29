@@ -122,7 +122,7 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 }
 
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, RewriterBase &rewriter) {
+Value createElectPredicate(Location loc, OpBuilder &rewriter) {
   return NVVM::ElectSyncOp::create(rewriter, loc, i1_ty,
                                    /*membermask=*/Value());
 }
@@ -132,7 +132,7 @@ void createSyncWarp(Location loc, OpBuilder &rewriter) {
   NVVM::SyncWarpOp::create(rewriter, loc, b.i32_val(0xffffffff));
 }
 
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
+Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value warpId = getLaneAndWarpId(rewriter, loc).second;
   Value warp0 = b.icmp_eq(warpId, b.i32_val(0));
@@ -140,7 +140,8 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
 }
 
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits, int numCTAs) {
+                             uint16_t broadcastBits) {
+  int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
   int blockBits = llvm::Log2_32(numCTAs);
   uint32_t fixedBits = (~broadcastBits) & (numCTAs - 1);
   uint32_t pattern = 1;

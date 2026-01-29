@@ -887,7 +887,7 @@ def _patch_lang_tensor(tensor, scope: _LangPatchScope):
         res_ty = tl.core.block_type(self.dtype, block_shape)
         return tl.core.tensor(handle, res_ty)
 
-    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data))
+    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data.squeeze()))
     scope.set_attr(tensor, "__bool__", lambda self: _get_bool(self))
     scope.set_attr(tensor, "__repr__", lambda self: repr(self.handle.data))
     scope.set_attr(tensor, "__str__", lambda self: str(self.handle.data))

@@ -4,8 +4,10 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Profiler.h"
+#include "Profiler/Graph.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
+#include "Utility/Env.h"
 #include "Utility/Map.h"
 #include "Utility/Table.h"
 
@@ -19,6 +21,27 @@
 #include <vector>
 
 namespace proton {
+
+namespace detail {
+
+void flushDataPhasesImpl(
+    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    std::map<Data *, size_t> &dataFlushedPhases,
+    const std::map<Data *,
+                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases,
+    PendingGraphPool *pendingGraphPool);
+
+void updateDataPhases(
+    std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+        &dataPhases,
+    Data *data, size_t phase);
+
+void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
+                             std::string &periodicFlushingFormat,
+                             const std::vector<std::string> &modeAndOptions,
+                             const char *profilerName);
+} // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
@@ -76,8 +99,6 @@ public:
     GraphNodeStateTable graphNodeIdToState;
   };
 
-  // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
-  // issue.
   using ExternIdToStateMap =
       ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
@@ -95,6 +116,17 @@ protected:
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
     threadState.dataToEntry.clear();
+  }
+
+  void flushDataPhases(
+      std::map<Data *, size_t> &dataFlushedPhases,
+      const std::map<Data *,
+                     std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
+          &dataPhases,
+      PendingGraphPool *pendingGraphPool) {
+    detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
+                                dataFlushedPhases, dataPhases,
+                                pendingGraphPool);
   }
 
   // Profiler
@@ -191,6 +223,10 @@ protected:
   };
 
   static thread_local ThreadState threadState;
+
+  std::unique_ptr<MetricBuffer> metricBuffer;
+  std::unique_ptr<PendingGraphPool> pendingGraphPool;
+
   Correlation correlation;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
@@ -214,26 +250,27 @@ protected:
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
         // Launch metric kernels
-        metricBuffer->receive(
+        profiler.metricBuffer->receive(
             scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
             profiler.scalarMetricKernel, profiler.metricKernelStream);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics
-        auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
-            tensorMetrics, profiler.metricKernelStream);
+        auto tensorMetricsHost =
+            collectTensorMetrics(profiler.metricBuffer->getRuntime(),
+                                 tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntry = threadState.dataToEntry;
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope
           for (auto *data : profiler.dataSet) {
-            data->addScopeMetrics(scopeId, scalarMetrics);
-            data->addScopeMetrics(scopeId, tensorMetricsHost);
+            data->addMetrics(scopeId, scalarMetrics);
+            data->addMetrics(scopeId, tensorMetricsHost);
           }
         } else {
           // Add metrics to the current op
           for (auto [data, entry] : dataToEntry) {
-            data->addEntryMetrics(entry.id, scalarMetrics);
-            data->addEntryMetrics(entry.id, tensorMetricsHost);
+            data->addMetrics(entry.phase, entry.id, scalarMetrics);
+            data->addMetrics(entry.phase, entry.id, tensorMetricsHost);
           }
         }
       }
@@ -241,13 +278,13 @@ protected:
 
   protected:
     ConcreteProfilerT &profiler;
-    std::unique_ptr<MetricBuffer> metricBuffer;
-    Runtime *runtime{nullptr};
   };
 
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
+  bool periodicFlushingEnabled{false};
+  std::string periodicFlushingFormat{};
 };
 
 } // namespace proton

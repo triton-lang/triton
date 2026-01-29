@@ -6,6 +6,8 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 
+#include <array>
+
 namespace mlir::triton::instrument {
 
 constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
@@ -78,6 +80,7 @@ struct AuxDataMap {
   RegionToValueMap aliasMatrices[numMemTypes];
   RegionToValueMap lock;
   RegionToValueMap waiting;
+  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 

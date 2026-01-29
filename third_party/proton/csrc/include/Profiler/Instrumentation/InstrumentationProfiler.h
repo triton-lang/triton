@@ -9,8 +9,6 @@
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
 
-#include <set>
-
 namespace proton {
 
 class InstrumentationProfiler : public Profiler,

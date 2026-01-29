@@ -116,7 +116,8 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   // ops cannot be located within a cluster
   // barrier/wait still require border op
   auto isIgnorable = [](Operation *op) {
-    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, tt::amdgpu::AsyncTDMWait>(op);
+    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
+               tt::amdgpu::AsyncTDMWait>(op);
   };
 
   auto isBorder = [](Operation *op) {
