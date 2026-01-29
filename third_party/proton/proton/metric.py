@@ -9,11 +9,11 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr, num_metric_values: tl.uint64):
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr, metric_value_size: tl.uint64):
     device_offset = tl.load(device_offset_ptr)
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
-    for i in range(0, num_metric_values):
+    for i in range(0, metric_value_size):
         metric_value = tl.load(metric_value_ptr + i)
         tl.store(device_ptr + device_offset, metric_value)
         device_offset = (device_offset + 1) % size
@@ -42,7 +42,7 @@ def set_metric_kernels():
     mock_ptr = MockTensor(tl.uint64)
     mock_metric_id = 0
     mock_size = 1
-    mock_num_metric_values = 1
+    mock_metric_value_size = 1
     tensor_metric_kernel_fn = _get_kernel(
         tensor_metric_kernel,
         mock_ptr,
@@ -50,7 +50,7 @@ def set_metric_kernels():
         mock_size,
         mock_metric_id,
         mock_ptr,
-        mock_num_metric_values,
+        mock_metric_value_size,
     )
     scalar_metric_kernel_fn = _get_kernel(
         scalar_metric_kernel,
