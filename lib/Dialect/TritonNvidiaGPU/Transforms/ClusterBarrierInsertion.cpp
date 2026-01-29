@@ -92,8 +92,14 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (isa<triton::CallOp>(op)) {
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
-      curBlockInfo = funcBlockInfoMap->lookup(callee);
+            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
+      auto calleeBlockInfo = funcBlockInfoMap->lookup(callee);
+      auto callBufferId = allocation->getBufferId(op);
+      size_t callOffset = 0;
+      if (callBufferId != Allocation::InvalidBufferId)
+        callOffset = allocation->getAllocatedInterval(callBufferId).start();
+      curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
+    }
   } else {
     if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
       SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>

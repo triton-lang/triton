@@ -55,6 +55,16 @@ public:
 
   Allocation::BufferId getBufferId() const { return bufferId; }
 
+  AllocationSlice translated(size_t offset,
+                             bool invalidateBufferId = false) const {
+    AllocationSlice shifted = *this;
+    shifted.allocationInterval = Interval<size_t>(
+        allocationInterval.start() + offset, allocationInterval.end() + offset);
+    if (invalidateBufferId)
+      shifted.bufferId = Allocation::InvalidBufferId;
+    return shifted;
+  }
+
   void print(raw_ostream &os) const;
 
 private:
@@ -166,6 +176,26 @@ private:
     return false;
   }
 };
+
+inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
+                                              size_t callOffset) {
+  BlockInfo translatedBlockInfo;
+  auto translateSlices = [&](const BlockInfo::SliceMapT &srcSlices,
+                             BlockInfo::SliceMapT &dstSlices) {
+    for (const auto &[slice, ops] : srcSlices) {
+      auto translatedSlice =
+          slice.translated(callOffset, /*invalidateBufferId=*/true);
+      auto &dstOps = dstSlices[translatedSlice];
+      dstOps.insert(ops.begin(), ops.end());
+    }
+  };
+
+  translateSlices(calleeBlockInfo.syncReadSlices,
+                  translatedBlockInfo.syncReadSlices);
+  translateSlices(calleeBlockInfo.syncWriteSlices,
+                  translatedBlockInfo.syncWriteSlices);
+  return translatedBlockInfo;
+}
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
