@@ -477,8 +477,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       hipSymbolTable.hipModuleLoadDataEx(&mod, data, 5, opt, optval))
   HIP_CHECK_AND_RETURN_NULL(
       hipSymbolTable.hipModuleGetFunction(&fun, mod, name));
-  // HIP_CHECK_AND_RETURN_NULL(
-  //     hipSymbolTable.hipModuleUnload(mod))
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
