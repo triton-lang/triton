@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -148,6 +149,7 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
+    std::deque<size_t> metricKernelNumWordsQueue;
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
@@ -249,6 +251,14 @@ protected:
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
+        for (const auto &[_, metric] : tensorMetrics) {
+          threadState.metricKernelNumWordsQueue.push_back(
+              1 + metric.size);
+        }
+        for (const auto &[_, metric] : scalarMetrics) {
+          threadState.metricKernelNumWordsQueue.push_back(
+              1 + 1); // scalar metric has 1 value
+        }
         // Launch metric kernels
         profiler.metricBuffer->receive(
             scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,

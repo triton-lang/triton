@@ -44,16 +44,21 @@ static void initProton(pybind11::module &&m) {
   // in transform_tensor_metrics.
   pybind11::class_<TensorMetric>(m, "TensorMetric")
       .def(pybind11::init<>())
-      .def(pybind11::init([](uintptr_t ptr, size_t index) {
-             return TensorMetric{reinterpret_cast<uint8_t *>(ptr), index};
+      .def(pybind11::init([](uintptr_t ptr, size_t index, uint64_t size) {
+             return TensorMetric{reinterpret_cast<uint8_t *>(ptr), index, size};
            }),
-           pybind11::arg("ptr"), pybind11::arg("index"))
+           pybind11::arg("ptr"), pybind11::arg("index"),
+           pybind11::arg("size") = 1)
       .def_property_readonly("ptr",
                              [](const TensorMetric &metric) {
                                return reinterpret_cast<uintptr_t>(metric.ptr);
                              })
       .def_property_readonly(
-          "index", [](const TensorMetric &metric) { return metric.index; });
+          "index", [](const TensorMetric &metric) { return metric.index; })
+      .def_property_readonly("size",
+                             [](const TensorMetric &metric) {
+                               return metric.size;
+                             });
 
   m.attr("metric_int64_index") =
       pybind11::cast(variant_index_v<int64_t, MetricValueType>);

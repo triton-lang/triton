@@ -385,10 +385,11 @@ private:
   const static inline std::string name = "CycleMetric";
 };
 
-/// Each TensorMetric represents a scalar metric stored in a device buffer.
+/// Each TensorMetric represents a metric stored in a device buffer.
 struct TensorMetric {
   uint8_t *ptr{}; // device pointer
   size_t index{}; // MetricValueType index
+  uint64_t size{1}; // number of uint64 words stored at ptr
 };
 
 /// Collect tensor metrics from device to host.
@@ -417,6 +418,7 @@ public:
   struct MetricDescriptor {
     size_t id{};
     size_t typeIndex{};
+    size_t numValues{};
     std::string name{};
   };
 
@@ -506,17 +508,32 @@ private:
     }
   }
 
+  template <typename MetricT>
+  size_t getMetricSize(const MetricT &metric) const {
+    using MetricType = std::decay_t<MetricT>;
+    if constexpr (std::is_same_v<MetricValueType, MetricType>) {
+      return 1;
+    } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
+      return metric.size;
+    } else {
+      static_assert(always_false<MetricType>::value,
+                    "Unsupported metric type for getMetricSize");
+    }
+  }
+
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
     for (const auto &[name, metric] : metrics) {
       size_t index = getMetricIndex(metric);
-      auto descriptor = getOrCreateMetricDescriptor(name, index);
+      size_t size = getMetricSize(metric);
+      auto descriptor = getOrCreateMetricDescriptor(name, index, size);
       queue(descriptor.id, metric, kernel, stream);
     }
   }
 
   MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
-                                               size_t typeIndex);
+                                               size_t typeIndex,
+                                               size_t numValues);
 
 protected:
   static std::atomic<size_t> metricId;

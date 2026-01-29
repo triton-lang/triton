@@ -37,7 +37,8 @@ void MetricBuffer::receive(
 
 MetricBuffer::MetricDescriptor
 MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
-                                          size_t typeIndex) {
+                                          size_t typeIndex,
+                                          size_t numValues) {
   {
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto nameIt = metricNameToId.find(name);
@@ -48,6 +49,12 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
             "[PROTON] MetricBuffer: type mismatch for metric " + name +
             ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
             ", new=" + getTypeNameForIndex(typeIndex));
+      }
+      if (descriptor.numValues != numValues) {
+        throw std::runtime_error(
+            "[PROTON] MetricBuffer: numValues mismatch for metric " + name +
+            ": current=" + std::to_string(descriptor.numValues) +
+            ", new=" + std::to_string(numValues));
       }
       return descriptor;
     }
@@ -65,11 +72,17 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
           ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
           ", new=" + getTypeNameForIndex(typeIndex));
     }
+    if (descriptor.numValues != numValues) {
+      throw std::runtime_error(
+          "[PROTON] MetricBuffer: numValues mismatch for metric " + name +
+          ": current=" + std::to_string(descriptor.numValues) +
+          ", new=" + std::to_string(numValues));
+    }
     return descriptor;
   }
 
   auto newMetricId = metricId.fetch_add(1);
-  MetricDescriptor descriptor{newMetricId, typeIndex, name};
+  MetricDescriptor descriptor{newMetricId, typeIndex, numValues, name};
   metricDescriptors.emplace(newMetricId, descriptor);
   metricNameToId.emplace(name, newMetricId);
   return descriptor;
@@ -81,19 +94,37 @@ collectTensorMetrics(Runtime *runtime,
                      void *stream) {
   std::map<std::string, MetricValueType> tensorMetricsHost;
   for (auto &[name, tensorMetric] : tensorMetrics) {
-    uint64_t metricBits = 0;
-    runtime->copyDeviceToHostAsync(&metricBits, tensorMetric.ptr,
-                                   sizeof(uint64_t), stream);
+    std::vector<uint64_t> metricVector(tensorMetric.size);
+    runtime->copyDeviceToHostAsync(metricVector.data(), tensorMetric.ptr,
+                                   sizeof(uint64_t) * tensorMetric.size, stream);
     runtime->synchronizeStream(stream);
     if (tensorMetric.index == variant_index_v<double, MetricValueType>) {
       double value = 0.0;
-      std::memcpy(&value, &metricBits, sizeof(value));
+      std::memcpy(&value, &metricVector[0], sizeof(value));
       tensorMetricsHost[name] = value;
     } else if (tensorMetric.index ==
                variant_index_v<int64_t, MetricValueType>) {
       int64_t value = 0;
-      std::memcpy(&value, &metricBits, sizeof(value));
+      std::memcpy(&value, &metricVector[0], sizeof(value));
       tensorMetricsHost[name] = value;
+    } else if (tensorMetric.index ==
+               variant_index_v<std::vector<double>, MetricValueType>) {
+      std::vector<double> values(tensorMetric.size);
+      for (size_t i = 0; i < tensorMetric.size; ++i) {
+        std::memcpy(&values[i], &metricVector[i], sizeof(double));
+      }
+      tensorMetricsHost[name] = std::move(values);
+    } else if (tensorMetric.index ==
+               variant_index_v<std::vector<int64_t>, MetricValueType>) {
+      std::vector<int64_t> values(tensorMetric.size);
+      for (size_t i = 0; i < tensorMetric.size; ++i) {
+        std::memcpy(&values[i], &metricVector[i], sizeof(int64_t));
+      }
+      tensorMetricsHost[name] = std::move(values);
+    } else {
+      throw std::runtime_error(
+          "[PROTON] Unsupported tensor metric type index: " +
+          std::to_string(tensorMetric.index));
     }
   }
   return tensorMetricsHost;
@@ -103,6 +134,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
   uint64_t size = capacity / sizeof(uint64_t);
+  uint64_t metricValueSize = tensorMetric.size;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
@@ -110,6 +142,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                           reinterpret_cast<void *>(&size),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
+                          reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
   runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,

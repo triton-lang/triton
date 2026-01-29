@@ -416,6 +416,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         }
         if (threadState.isMetricKernelLaunching) {
           nodeState.isMetricNode = true;
+          auto metricKernelNumWords = threadState.metricKernelNumWordsQueue.front();
+          threadState.metricKernelNumWordsQueue.pop_front();
+          nodeState.metricNumWords = metricKernelNumWords;
           graphState.metricKernelNodeIds.insert(nodeId);
         }
         for (auto *data : profiler.dataSet) {
@@ -627,13 +630,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
         auto phase = Data::kNoCompletePhase;
-        auto numNodes = graphExecState.metricKernelNodeIds.size();
+        const auto numMetricNodes = graphExecState.metricKernelNodeIds.size();
+        size_t numMetricWords = 0;
         for (auto nodeId : graphExecState.metricKernelNodeIds) {
           auto *nodeState = graphNodeIdToState.find(nodeId);
           if (!nodeState) {
             throw std::runtime_error(
                 "[PROTON] Missing graph node state for metric node.");
           }
+          const auto &capturedNodeState = graphExecState.nodeIdToState.at(nodeId);
+          numMetricWords += capturedNodeState.metricNumWords;
           nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
             metricNodeEntryIds[data].push_back(entry.id);
             if (phase == Data::kNoCompletePhase) {
@@ -646,14 +652,15 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         }
         // Check if all data contains the same number of metric nodes
         for (const auto &[data, entryIds] : metricNodeEntryIds) {
-          if (entryIds.size() != numNodes) {
+          if (entryIds.size() != numMetricNodes) {
             throw std::runtime_error(
                 "[PROTON] Inconsistent number of metric nodes in graph.");
           }
         }
         if (callbackData->context != nullptr)
-          profiler.pendingGraphPool->flushIfNeeded(numNodes);
-        profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numNodes);
+          profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
+        profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numMetricNodes,
+                                       numMetricWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();
