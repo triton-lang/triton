@@ -498,14 +498,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
 static PyObject *unLoadModule(PyObject *self, PyObject *args) {
   hipModule_t mod;
-  if (!PyArg_ParseTuple(args, "p", &mod)) {
+  if (!PyArg_ParseTuple(args, "K", &mod)) {
     return NULL;
   }
 
   HIP_CHECK_AND_RETURN_NULL(
       hipSymbolTable.hipModuleUnload(mod))
 
-  return NULL;
+  return Py_None;
 }
 
 static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
