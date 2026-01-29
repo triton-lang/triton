@@ -2067,8 +2067,9 @@ def test_convert_auto_layout_to_coalesced_layout():
 
 
 @gluon.jit
-def convert_layout_kernel(input, output, M: ttgl.constexpr, N: ttgl.constexpr, first_layout: ttgl.constexpr,
-                          second_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: ttgl.constexpr,
+                                         first_layout: ttgl.constexpr, second_layout: ttgl.constexpr,
+                                         shared_layout: ttgl.constexpr):
     offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, first_layout))[:, None]
     offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, first_layout))[None, :]
 
@@ -2102,9 +2103,10 @@ def test_in_thread_convert_layout_8bit(reg_bases):
     shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0, 1])
     input_buffer = (torch.randn((M, N), device="cuda") * 100).to(dtype)
     output_buffer = torch.zeros((M, N), device="cuda", dtype=dtype)
-    convert_layout_kernel[(1, )](input_buffer, output_buffer, M, N, first_layout, second_layout, shared_layout,
-                                 num_warps=1)
+    pgm = in_thread_transpose_roundtrip_kernel[(1, )](input_buffer, output_buffer, M, N, first_layout, second_layout,
+                                                      shared_layout, num_warps=1)
 
+    assert re.search(r"v_perm", pgm.asm['amdgcn'], re.MULTILINE)
     torch.testing.assert_close(input_buffer, output_buffer, atol=1e-3, rtol=1e-3)
 
 

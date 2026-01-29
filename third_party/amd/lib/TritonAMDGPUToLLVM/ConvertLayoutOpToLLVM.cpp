@@ -285,7 +285,7 @@ public:
   };
 
   // Creates v_perm operation:
-  // It copies 4 bytes in dst value from tow provided registers in accordance
+  // It copies 4 bytes in dst value from two provided registers in accordance
   // with indexes in shuffleIds.
   //
   // index | copied contents
@@ -344,7 +344,7 @@ public:
   // regContents[output reg no][output reg byte no] -> ByteLocation(input
   // regiser no, byte index in this register)
   static std::vector<std::array<ByteLocation, regBytes>>
-  generateDstRegContents(std::vector<int> fullLayout) {
+  generateDstRegContents(const std::vector<int> &fullLayout) {
     int numRegs = fullLayout.size() / regBytes;
     // mapping for dst register bytes to source bytes
     std::vector<std::array<ByteLocation, regBytes>> dstRegContents;
@@ -724,11 +724,6 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto &amdTargInfo =
         static_cast<const mlir::triton::AMD::TargetInfo &>(targetInfo);
-
-    auto ISAFamily = amdTargInfo.getISAFamily();
-    if (!(isCDNA(ISAFamily) || isRDNA(ISAFamily) ||
-          ISAFamily == AMD::ISAFamily::GFX1250))
-      return failure();
 
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
