@@ -892,8 +892,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0
-    assert len(children) == 7
+    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
+    assert len(children) == 8
     test0_frame = None
     for child in children:
         if child["frame"]["name"] == "test0":
