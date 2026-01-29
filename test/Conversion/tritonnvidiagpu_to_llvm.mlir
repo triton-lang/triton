@@ -6,7 +6,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier
   tt.func @init_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-    ttng.init_barrier %alloc {count = 1 : i32} : !ttg.memdesc<1xi64, #shared0, #smem>
+    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
 }

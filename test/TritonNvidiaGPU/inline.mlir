@@ -15,7 +15,7 @@ tt.func public @inline_ttng_ops() {
 
 tt.func private @function_with_ttng_ops() {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
-  ttng.init_barrier %0 {count = 1 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  ttng.init_barrier %0, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   tt.return
 }
 

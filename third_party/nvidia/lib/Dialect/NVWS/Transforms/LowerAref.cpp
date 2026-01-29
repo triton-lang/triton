@@ -248,7 +248,7 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
       InitBarrierOp::create(b1, barrierView, arrivalCount);
     } else {
       InitBarrierOp::create(
-          b1, barrierView,
+          b1, barrierView, arrivalCount,
           DenseI32ArrayAttr::get(b1.getContext(), dependentPartitionIds));
     }
   }

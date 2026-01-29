@@ -33,8 +33,8 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>, %
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   //      CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.init_barrier
-  ttng.init_barrier %barrier {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.init_barrier %barrier {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttg.barrier local

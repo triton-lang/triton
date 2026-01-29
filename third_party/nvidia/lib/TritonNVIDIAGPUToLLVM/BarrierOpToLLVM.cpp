@@ -116,11 +116,8 @@ struct InitBarrierOpConversion
     // which results in better codegen.
     Value pred = getElectWarp0OrThread0(*targetInfo, b);
     ::mlir::triton::PTXBuilder ptxBuilder;
-    if (!op.getCount().has_value()) {
-      return op.emitError("count attribute is required");
-    }
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(*op.getCount()) + ";";
+                            std::to_string(op.getCount()) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},

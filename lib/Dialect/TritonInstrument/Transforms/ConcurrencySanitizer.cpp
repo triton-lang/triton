@@ -207,12 +207,8 @@ private:
         }
       }
       if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
-        if (auto count = initOp.getCount()) {
-          funcBuilder.createInitBarrierStateCall(b, initOp.getAlloc(), *count,
-                                                 initOp);
-        } else {
-          return;
-        }
+        funcBuilder.createInitBarrierStateCall(b, initOp.getAlloc(),
+                                               initOp.getCount(), initOp);
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         // Pre-wait: mark waiting threads and check for deadlock.

@@ -170,18 +170,6 @@ LogicalResult WarpGroupDotWaitOp::verify() {
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
-
-  bool hasCount = getCount().has_value();
-  bool hasDependentPartitionIds = getDependentPartitionIds().has_value();
-
-  if (hasCount && hasDependentPartitionIds) {
-    return emitOpError("cannot specify both 'count' and "
-                       "'dependentPartitionIds' attributes");
-  }
-  if (!hasCount && !hasDependentPartitionIds) {
-    return emitOpError("must specify either 'count' or "
-                       "'dependentPartitionIds' attribute");
-  }
   return success();
 }
 

@@ -137,7 +137,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @barrier_regions() {
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // expected-remark @below {{Buffers: [8192, 8]}}
-    ttng.init_barrier %bar {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
 
@@ -157,7 +157,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<2x1xi64, #shared1, #smem, mutable>
     %view = ttg.memdesc_index %bar[%idx] : !ttg.memdesc<2x1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // expected-remark @below {{Buffers: [8192, 8], [8200, 8]}}
-    ttng.init_barrier %view {count = 1 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.init_barrier %view, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
 

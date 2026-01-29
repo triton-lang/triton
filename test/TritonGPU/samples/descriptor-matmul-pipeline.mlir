@@ -59,11 +59,11 @@
 // CHECK:           %[[VAL_44:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_45:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_46:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.init_barrier %[[VAL_46]] {count = 1 : i32} : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.init_barrier %[[VAL_46]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_47:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.init_barrier %[[VAL_47]] {count = 1 : i32} : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.init_barrier %[[VAL_47]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_48:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_7]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.init_barrier %[[VAL_48]] {count = 1 : i32} : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.init_barrier %[[VAL_48]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_49:.*]] = arith.cmpi sgt, %[[VAL_42]], %[[VAL_12]] : i32
 // CHECK:           %[[VAL_50:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.barrier_expect %[[VAL_50]], 49152, %[[VAL_49]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
