@@ -19,11 +19,6 @@ namespace proton {
 
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
-// MetricValueType is used for both:
-// - internal scalar metrics (e.g. MetricBuffer, tensor/scalar metric kernels)
-// - user-provided flexible metrics (via add_metrics)
-//
-// Vector-valued metrics are intended for FlexibleMetric only
 using MetricValueType =
     std::variant<uint64_t, int64_t, double, std::string, std::vector<uint64_t>,
                  std::vector<int64_t>, std::vector<double>>;
@@ -384,7 +379,7 @@ private:
 /// Each TensorMetric represents a metric stored in a device buffer.
 struct TensorMetric {
   uint8_t *ptr{};   // device pointer
-  size_t index{};   // MetricValueType index
+  size_t typeIndex{};   // MetricValueType variant index
   uint64_t size{1}; // number of uint64 words stored at ptr
 };
 
@@ -497,7 +492,7 @@ private:
     if constexpr (std::is_same_v<MetricValueType, MetricType>) {
       return metric.index();
     } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
-      return metric.index;
+      return metric.typeIndex;
     } else {
       static_assert(always_false<MetricType>::value,
                     "Unsupported metric type for getMetricIndex");
@@ -520,9 +515,9 @@ private:
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
     for (const auto &[name, metric] : metrics) {
-      size_t index = getMetricIndex(metric);
+      size_t typeIndex = getMetricIndex(metric);
       size_t size = getMetricSize(metric);
-      auto descriptor = getOrCreateMetricDescriptor(name, index, size);
+      auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
       queue(descriptor.id, metric, kernel, stream);
     }
   }

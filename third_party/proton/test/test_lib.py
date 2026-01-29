@@ -90,6 +90,6 @@ def test_set_metric_kernels():
 
 
 def test_tensor_metric_construction():
-    metric = libproton.TensorMetric(123, libproton.metric_double_index)
+    metric = libproton.TensorMetric(123, libproton.metric_type_double_index)
     assert metric.ptr == 123
-    assert metric.index == libproton.metric_double_index
+    assert metric.index == libproton.metric_type_double_index

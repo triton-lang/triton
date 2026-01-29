@@ -87,15 +87,15 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
                 if value.is_floating_point():
                     value = value.double()
                     if value.numel() > 1:
-                        metric_index = libproton.metric_vector_double_index
+                        metric_index = libproton.metric_type_vector_double_index
                     else:
-                        metric_index = libproton.metric_double_index
+                        metric_index = libproton.metric_type_double_index
                 else:
                     value = value.long()
                     if value.numel() > 1:
-                        metric_index = libproton.metric_vector_int64_index
+                        metric_index = libproton.metric_type_vector_int64_index
                     else:
-                        metric_index = libproton.metric_int64_index
+                        metric_index = libproton.metric_type_int64_index
                 exit_state()
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:

@@ -98,23 +98,23 @@ collectTensorMetrics(Runtime *runtime,
                                    sizeof(uint64_t) * tensorMetric.size,
                                    stream);
     runtime->synchronizeStream(stream);
-    if (tensorMetric.index == variant_index_v<double, MetricValueType>) {
+    if (tensorMetric.typeIndex == variant_index_v<double, MetricValueType>) {
       double value = 0.0;
       std::memcpy(&value, &metricVector[0], sizeof(value));
       tensorMetricsHost[name] = value;
-    } else if (tensorMetric.index ==
+    } else if (tensorMetric.typeIndex ==
                variant_index_v<int64_t, MetricValueType>) {
       int64_t value = 0;
       std::memcpy(&value, &metricVector[0], sizeof(value));
       tensorMetricsHost[name] = value;
-    } else if (tensorMetric.index ==
+    } else if (tensorMetric.typeIndex ==
                variant_index_v<std::vector<double>, MetricValueType>) {
       std::vector<double> values(tensorMetric.size);
       for (size_t i = 0; i < tensorMetric.size; ++i) {
         std::memcpy(&values[i], &metricVector[i], sizeof(double));
       }
       tensorMetricsHost[name] = std::move(values);
-    } else if (tensorMetric.index ==
+    } else if (tensorMetric.typeIndex ==
                variant_index_v<std::vector<int64_t>, MetricValueType>) {
       std::vector<int64_t> values(tensorMetric.size);
       for (size_t i = 0; i < tensorMetric.size; ++i) {
@@ -124,7 +124,7 @@ collectTensorMetrics(Runtime *runtime,
     } else {
       throw std::runtime_error(
           "[PROTON] Unsupported tensor metric type index: " +
-          std::to_string(tensorMetric.index));
+          std::to_string(tensorMetric.typeIndex));
     }
   }
   return tensorMetricsHost;
