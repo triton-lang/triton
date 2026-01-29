@@ -88,7 +88,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         break;
       }
 
-      wordOffset = (wordOffset + 1 + metricDesc.size) % capacityWords;
+      wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
       for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
         const auto entryId = entryIds[i];
