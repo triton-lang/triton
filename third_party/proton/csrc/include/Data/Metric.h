@@ -23,8 +23,7 @@ enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 // - internal scalar metrics (e.g. MetricBuffer, tensor/scalar metric kernels)
 // - user-provided flexible metrics (via add_metrics)
 //
-// Vector-valued metrics are intended for FlexibleMetric only; internal
-// metric-buffer paths reject non-scalar alternatives at runtime.
+// Vector-valued metrics are intended for FlexibleMetric only
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string,
                                      std::vector<uint64_t>,
                                      std::vector<int64_t>,
@@ -418,7 +417,7 @@ public:
   struct MetricDescriptor {
     size_t id{};
     size_t typeIndex{};
-    size_t numValues{};
+    size_t size{};
     std::string name{};
   };
 
@@ -429,8 +428,8 @@ public:
 
   ~MetricBuffer();
 
-  void receive(const std::map<std::string, MetricValueType> &scalarMetrics,
-               const std::map<std::string, TensorMetric> &tensorMetrics,
+  void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
+               const std::map<std::string, MetricValueType> &scalarMetrics,
                void *tensorMetricKernel, void *scalarMetricKernel,
                void *stream);
 
@@ -533,7 +532,7 @@ private:
 
   MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
                                                size_t typeIndex,
-                                               size_t numValues);
+                                               size_t size);
 
 protected:
   static std::atomic<size_t> metricId;

@@ -28,8 +28,8 @@ MetricBuffer::~MetricBuffer() {
 }
 
 void MetricBuffer::receive(
-    const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics,
+    const std::map<std::string, MetricValueType> &scalarMetrics,
     void *tensorMetricKernel, void *scalarMetricKernel, void *stream) {
   queueMetrics(tensorMetrics, tensorMetricKernel, stream);
   queueMetrics(scalarMetrics, scalarMetricKernel, stream);
@@ -38,7 +38,7 @@ void MetricBuffer::receive(
 MetricBuffer::MetricDescriptor
 MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
                                           size_t typeIndex,
-                                          size_t numValues) {
+                                          size_t size) {
   {
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto nameIt = metricNameToId.find(name);
@@ -50,11 +50,11 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
             ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
             ", new=" + getTypeNameForIndex(typeIndex));
       }
-      if (descriptor.numValues != numValues) {
+      if (descriptor.size != size) {
         throw std::runtime_error(
-            "[PROTON] MetricBuffer: numValues mismatch for metric " + name +
-            ": current=" + std::to_string(descriptor.numValues) +
-            ", new=" + std::to_string(numValues));
+            "[PROTON] MetricBuffer: size mismatch for metric " + name +
+            ": current=" + std::to_string(descriptor.size) +
+            ", new=" + std::to_string(size));
       }
       return descriptor;
     }
@@ -72,17 +72,17 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
           ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
           ", new=" + getTypeNameForIndex(typeIndex));
     }
-    if (descriptor.numValues != numValues) {
+    if (descriptor.size != size) {
       throw std::runtime_error(
-          "[PROTON] MetricBuffer: numValues mismatch for metric " + name +
-          ": current=" + std::to_string(descriptor.numValues) +
-          ", new=" + std::to_string(numValues));
+          "[PROTON] MetricBuffer: size mismatch for metric " + name +
+          ": current=" + std::to_string(descriptor.size) +
+          ", new=" + std::to_string(size));
     }
     return descriptor;
   }
 
   auto newMetricId = metricId.fetch_add(1);
-  MetricDescriptor descriptor{newMetricId, typeIndex, numValues, name};
+  MetricDescriptor descriptor{newMetricId, typeIndex, size, name};
   metricDescriptors.emplace(newMetricId, descriptor);
   metricNameToId.emplace(name, newMetricId);
   return descriptor;
@@ -133,13 +133,13 @@ collectTensorMetrics(Runtime *runtime,
 void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
-  uint64_t size = capacity / sizeof(uint64_t);
+  uint64_t numWords = capacity / sizeof(uint64_t);
   uint64_t metricValueSize = tensorMetric.size;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
-                          reinterpret_cast<void *>(&size),
+                          reinterpret_cast<void *>(&numWords),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
@@ -152,7 +152,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
 void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                          void *kernel, void *stream) {
   auto &buffer = getOrCreateBuffer();
-  uint64_t size = capacity / sizeof(uint64_t);
+  uint64_t numWords = capacity / sizeof(uint64_t);
   uint64_t metricBits = std::visit(
       [](auto &&value) -> uint64_t {
         using T = std::decay_t<decltype(value)>;
@@ -175,7 +175,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
-                          reinterpret_cast<void *>(&size),
+                          reinterpret_cast<void *>(&numWords),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),

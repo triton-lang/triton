@@ -253,15 +253,15 @@ protected:
         threadState.isMetricKernelLaunching = true;
         for (const auto &[_, metric] : tensorMetrics) {
           threadState.metricKernelNumWordsQueue.push_back(
-              1 + metric.size);
+              /*metric_id=*/1 + metric.size); // metric_id + num_values
         }
         for (const auto &[_, metric] : scalarMetrics) {
           threadState.metricKernelNumWordsQueue.push_back(
-              1 + 1); // scalar metric has 1 value
+              /*metric_id=*/1 + 1); // scalar metric has 1 value
         }
         // Launch metric kernels
         profiler.metricBuffer->receive(
-            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
+            tensorMetrics, scalarMetrics, profiler.tensorMetricKernel,
             profiler.scalarMetricKernel, profiler.metricKernelStream);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
