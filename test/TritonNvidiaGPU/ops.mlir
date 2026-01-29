@@ -105,21 +105,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_im2col_3d
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}] {{.*}} tensorMode = im2col
-  tt.func public @tma_load_im2col_3d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}] {{.*}} : !ttng.tensordesc_im2col
+  tt.func public @tma_load_im2col_3d(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off = arith.constant 1 : i16
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0] offsets = [%off] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0] offsets = [%off] %buf, %bar, %true : !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_im2col_4d
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}] {{.*}} tensorMode = im2col
-  tt.func public @tma_load_im2col_4d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col
+  tt.func public @tma_load_im2col_4d(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off1 = arith.constant 1 : i16
@@ -127,13 +127,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true : !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_im2col_5d
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}, {{.*}}] {{.*}} tensorMode = im2col
-  tt.func public @tma_load_im2col_5d(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col
+  tt.func public @tma_load_im2col_5d(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off1 = arith.constant 1 : i16
@@ -142,14 +142,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2, %off3] %buf, %bar, %true tensorMode = im2col : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2, %off3] %buf, %bar, %true : !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_tiled_mode
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}[{{.*}}, {{.*}}] %{{.*}}, %{{.*}}, {{.*}} : !tt.tensordesc
   // CHECK-NOT: offsets
-  // CHECK-NOT: tensorMode
   tt.func public @tma_load_tiled_mode(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
@@ -157,6 +156,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true : !tt.tensordesc<tensor<64x128xf16, #nvmma_128>>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tensordesc_im2col
+  // CHECK-SAME: !ttng.tensordesc_im2col<tensor<64x128xf16, {{.*}}>>
+  tt.func public @tensordesc_im2col(%desc: !ttng.tensordesc_im2col<tensor<64x128xf16, #nvmma_128>>) {
+    // CHECK: tt.return
     tt.return
   }
 }

@@ -2,6 +2,7 @@
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 
 #include "mlir/IR/Operation.h"
+#include "triton/Analysis/Allocation.h"
 
 namespace mlir::triton::AMD {
 
@@ -25,7 +26,7 @@ namespace mlir::triton::AMD {
 //      # Requires ttg.barrier but filter will prevent it
 //     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
 //     scf.yield
-bool membarFilter(Operation *op1, Operation *op2);
+bool membarFilter(Operation *op1, Operation *op2, Allocation *allocation);
 } // namespace mlir::triton::AMD
 
 #endif

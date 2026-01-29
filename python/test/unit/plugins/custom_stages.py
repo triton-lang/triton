@@ -19,6 +19,8 @@ def get_hash():
 
 # Keep custom pipeline stages in a seperate file from kernels as any change to the file
 # will trigger a recompile.
+
+
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
     # actually execute the pipeline yet
@@ -34,5 +36,24 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
         return mod
 
     stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
+
+    return get_key(), get_hash()
+
+
+def inspect_stages_hook_dialect(self=None, stages=None, options=None, language=None, capability=None):
+    # If the hook is called with no arguments we assume were just after the key and hash and don't want to
+    # actually execute the pipeline yet
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
+
+    def make_ttgir_wrapper(mod, metadata, opt, capability):
+        mod = self.make_ttgir(mod, metadata, opt, capability)
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.plugin.plugingpu_conversion(pm)
+        pm.run(mod, 'make_ttgir_plugin')
+        return mod
+
+    stages["ttgir"] = lambda src, metadata: make_ttgir_wrapper(src, metadata, options, capability)
 
     return get_key(), get_hash()

@@ -6,9 +6,6 @@
 #include "triton/Tools/PluginUtils.h"
 #include <unordered_map>
 
-#define TRITON_PLUGIN_API                                                      \
-  extern "C" __attribute__((visibility("default"))) TritonPluginResult
-
 namespace mlir {
 namespace triton {
 namespace plugin {
@@ -81,7 +78,7 @@ tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
     return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
-    passNames[i] = passName;
+    passNames[i++] = passName;
   }
   return TP_SUCCESS;
 }

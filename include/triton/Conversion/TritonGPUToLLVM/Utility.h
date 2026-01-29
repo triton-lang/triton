@@ -527,27 +527,29 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Emits the required padding given shared memory offset
-// - If `offsetInBytes` is true, smemOffset and padding is assumed in bytes.
-// - If false, smemOffset and padding are assumed to be scaled by element
-// bitwidth, in which case, `bitwidth` is not used.
-Value emitPadding(Location loc, RewriterBase &rewriter,
-                  triton::gpu::PaddedSharedEncodingAttr layout,
-                  unsigned bitwidth, Value smemOffset, bool offsetInBytes);
+// Calculates the required interval chunking and padding logical-shift values
+// for shared memory padding, depending on elements' bit width and whether
+// offsets count the number of bytes or number of elements.
+SmallVector<std::pair<unsigned, unsigned>>
+getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes);
+
+// Applies padding to base offset values in shared memory.
+Value applyPadding(Location loc, RewriterBase &rewriter, Value baseOffset,
+                   ArrayRef<std::pair<unsigned, unsigned>> shifts);
+uint32_t applyPadding(uint32_t baseOffset,
+                      ArrayRef<std::pair<unsigned, unsigned>> shifts);
 
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
-// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
-// and computes a new offset (mlir::Value) by applying padding based on
-// shared memory layout.
+// `paddingShifts` encodes shared memory padding if any.
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> calcPaddedOffset,
+                ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
                 std::optional<int> maybeMaxVecElems = {},
@@ -563,7 +565,7 @@ SmallVector<Value> lowerLdSt(
     Location loc, MLIRContext *ctx, LinearLayout cvt,
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, Value smemBase,
-    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
+    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
     uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
     RewriterBase &rewriter, const TargetInfoBase &targetInfo,
     std::optional<int> maybeMaxVecElems,

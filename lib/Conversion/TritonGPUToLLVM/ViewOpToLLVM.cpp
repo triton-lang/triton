@@ -546,9 +546,9 @@ struct MemDescIndexOpConversion
     // Apply padding based on the amount we move the base ptr
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
       auto bitwidth = dstTy.getElementTypeBitWidth();
-      Value padOffset = emitPadding(loc, rewriter, padEnc, bitwidth, offset,
-                                    /*offsetInBytes=*/false);
-      offset = b.add(offset, padOffset);
+      auto paddingShifts = getPaddedSharedShifts(padEnc, bitwidth,
+                                                 /*offsetInBytes=*/false);
+      offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }
 
     // Advance the pointer and keep the opOffsets as the new shape

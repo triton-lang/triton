@@ -233,7 +233,7 @@ private:
           continue;
         }
         const bool needFence = clusterInfo[src].isIntersected(
-            clusterInfo[next], mlir::triton::AMD::membarFilter);
+            clusterInfo[next], mlir::triton::AMD::membarFilter, allocation);
         // insert fence/barrier in front of this cluster
         LDBG("need fence?: " << needFence);
         if (needFence) {

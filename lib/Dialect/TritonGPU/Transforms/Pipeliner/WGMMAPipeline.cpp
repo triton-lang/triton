@@ -438,21 +438,30 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     // come from an MemDescIndex op.  Only ConvertLayout and view ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
-                           ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
-               transitiveOperand.getDefiningOp()) ||
-           isa<BlockArgument>(transitiveOperand)) {
-      auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);
-      if (blockArg && blockArg.getOwner() == forOp.getBody()) {
-        transitiveOperand =
-            cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
-                .getOperand(blockArg.getArgNumber() - 1);
-      } else if (Operation *def = transitiveOperand.getDefiningOp()) {
-        transitiveOperand = def->getOperand(0);
+    DenseSet<BlockArgument> visitedBlockArgs;
+    while (!forOp.isDefinedOutsideOfLoop(transitiveOperand)) {
+      if (auto *definingOp = transitiveOperand.getDefiningOp()) {
+        if (isa<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
+                ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(definingOp)) {
+          transitiveOperand = definingOp->getOperand(0);
+          continue;
+        }
+        return isa<ttg::MemDescIndexOp>(definingOp);
       }
+      auto blockArg = cast<BlockArgument>(transitiveOperand);
+      // We know that the dotOp is a top level operation in the loop body, and
+      // we have already checked that transitiveOperand is not defined outside
+      // the loop, therefore the block arg must be an iter arg of this loop.
+      assert(dotOp->getParentOp() == forOp);
+      assert(blockArg.getOwner() == forOp.getBody());
+      // If we have already visited this block arg, that means that it
+      // participates in a cycle containing only permitted operations. The
+      // initial value therefore originates outside the loop, making this valid.
+      if (!visitedBlockArgs.insert(blockArg).second)
+        return true;
+      transitiveOperand = forOp.getTiedLoopYieldedValue(blockArg)->get();
     }
-    return forOp.isDefinedOutsideOfLoop(transitiveOperand) ||
-           transitiveOperand.getDefiningOp<ttg::MemDescIndexOp>();
+    return true;
   };
 
   // Rule 1: All shmem operands are multi-buffered.
@@ -510,6 +519,12 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
+
+  // The dot result is not used by the loop yield. This could happen if it is
+  // dead, or if it is only used inside (but not yielded by) an scf::IfOp.
+  if (!iterArg)
+    return std::nullopt;
+
   // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
   if (!dotOp.getC().getType().getElementType().isF32()) {
     LDBG("Can't make dot async because the accumulator is not fp32");
