@@ -5,7 +5,8 @@ import torch
 
 import triton
 from triton.experimental import gluon
-from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon import language as gl
+from triton import language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_interpreter
 from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
                                                                  tcgen05_mma, get_tmem_reg_layout)
@@ -82,15 +83,20 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
     return _u32_to_i32(out_u32)
 
 
+def _compare_bitwise_equal(ref_out: torch.Tensor, tri_out: torch.Tensor) -> bool:
+    ref_out_bits = ref_out.contiguous().view(torch.int8)
+    tri_out_bits = tri_out.contiguous().view(torch.int8)
+    return torch.equal(ref_out_bits, tri_out_bits)
+
+
 @gluon.jit
-def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: ttgl.constexpr, BLOCK: ttgl.constexpr):
-    pid = ttgl.program_id(0)
-    layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4],
-                                                order=[0])
-    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=layout)
+def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
     mask = offs < n_elements
-    x = ttgl.load(x_ptr + offs, mask=mask, other=0.0)
-    y = ttgl.load(y_ptr + offs, mask=mask, other=0.0)
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
 
     if OP == "add":
         z = x + y
@@ -101,13 +107,13 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: ttgl.constexpr, BLOCK: 
     elif OP == "truediv":
         z = x / y
     elif OP == "fdiv":
-        z = ttgl.fdiv(x, y)
+        z = gl.fdiv(x, y)
     elif OP == "mod":
         z = x % y
     else:
-        ttgl.static_assert(False, "unsupported OP")
+        gl.static_assert(False, "unsupported OP")
 
-    ttgl.store(out_ptr + offs, z, mask=mask)
+    gl.store(out_ptr + offs, z, mask=mask)
 
 
 @pytest.mark.parametrize(
@@ -121,7 +127,7 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: ttgl.constexpr, BLOCK: 
         ("mod", _expected_srem_i32),
     ],
 )
-def test_fpsan_binops_payload_semantics(device, op, expected_fn):
+def test_binops_payload_semantics(device, op, expected_fn):
     _require_cuda_backend(device)
 
     # Use int32 storage but treat it as float32 via TensorWrapper so fpsan operates on payload bits.
@@ -147,15 +153,14 @@ def test_fpsan_binops_payload_semantics(device, op, expected_fn):
 
 
 @gluon.jit
-def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: ttgl.constexpr, BLOCK: ttgl.constexpr):
-    pid = ttgl.program_id(0)
-    layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4],
-                                                order=[0])
-    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=layout)
+def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
     mask = offs < n_elements
-    x = ttgl.load(x_ptr + offs, mask=mask, other=0.0)
-    z = getattr(ttgl, OP)(x)
-    ttgl.store(out_ptr + offs, z, mask=mask)
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    z = getattr(gl, OP)(x)
+    gl.store(out_ptr + offs, z, mask=mask)
 
 
 @pytest.mark.parametrize(
@@ -175,7 +180,7 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: ttgl.constexpr, BLOCK: tt
         "ceil",
     ],
 )
-def test_fpsan_unary_math_identity(device, op):
+def test_unary_math_identity(device, op):
     _require_cuda_backend(device)
 
     n_elements = 1024
@@ -221,33 +226,33 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return out.astype(np.uint32).view(np.int32)
 
 
-def test_fpsan_dot_fma_payload_semantics(device):
+def test_dot_fma(device):
     _require_cuda_backend(device)
 
     B = 16
-    BLOCK = ttgl.constexpr(B)
+    BLOCK = gl.constexpr(B)
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
-        lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
-        rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
+        lhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
 
-        offs_m = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
-        offs_n = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
         # Important: build separate offsets for A and B.
         # dot_fma expects operands to represent A[M,K] and B[K,N]. Using the same
         # linearized (m,n) offsets for both makes B effectively transposed.
-        offs_k = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_k = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
         a_offs = offs_m * BLOCK + offs_k
         b_offs = offs_n * BLOCK + offs_m  # load B^T so dot_fma produces A @ B
         out_offs = offs_m * BLOCK + offs_n
 
-        a = ttgl.convert_layout(ttgl.load(a_ptr + a_offs), lhs_layout)
-        b = ttgl.convert_layout(ttgl.load(b_ptr + b_offs), rhs_layout)
-        c = ttgl.load(c_ptr + out_offs)
-        out = ttgl.dot_fma(a, b, c)
-        ttgl.store(out_ptr + out_offs, out)
+        a = gl.convert_layout(gl.load(a_ptr + a_offs), lhs_layout)
+        b = gl.convert_layout(gl.load(b_ptr + b_offs), rhs_layout)
+        c = gl.load(c_ptr + out_offs)
+        out = gl.dot_fma(a, b, c)
+        gl.store(out_ptr + out_offs, out)
 
     rs = np.random.RandomState(0)
     a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
@@ -272,11 +277,11 @@ def test_fpsan_dot_fma_payload_semantics(device):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_fpsan_tcgen05_mma_payload_semantics(device):
+def test_tcgen05_mma(device):
     _require_cuda_backend(device)
 
     B = 64
-    BLOCK = ttgl.constexpr(B)
+    BLOCK = gl.constexpr(B)
 
     def allocator(size: int, alignment: int, stream):
         return torch.empty(size, device="cuda", dtype=torch.int32)
@@ -285,33 +290,32 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, out_ptr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [ttgl.num_warps(), 1], [1, 0])
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
 
-        offs_m = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
-        offs_n = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
-        offs_k_row = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))[:, None]
-        offs_k_col = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_k_row = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k_col = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
 
         a_offs = offs_m * BLOCK + offs_k_col
         b_offs = offs_k_row * BLOCK + offs_n
         out_offs = offs_m * BLOCK + offs_n
 
-        a_tile = ttgl.load(a_ptr + a_offs)
-        b_tile = ttgl.load(b_ptr + b_offs)
+        a_tile = gl.load(a_ptr + a_offs)
+        b_tile = gl.load(b_ptr + b_offs)
 
-        smem_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
-        smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], ttgl.float32)
-        smem_a = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK, BLOCK], smem_layout_a)
-        smem_b = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK, BLOCK], smem_layout_b)
+        smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
+        smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
+        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout_a)
+        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout_b)
         smem_a.store(a_tile)
         smem_b.store(b_tile)
 
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
-        acc_reg_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float32, (BLOCK, BLOCK), tmem_layout,
-                                                             ttgl.num_warps())
-        acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK, BLOCK), tmem_layout, gl.num_warps())
+        acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
 
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
 
         smem_b_T = smem_b.permute((1, 0))
@@ -321,14 +325,13 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
         mbarrier.invalidate(bar)
 
         out = acc_tmem.load(acc_reg_layout)
-        out = ttgl.convert_layout(out, layout)
-        ttgl.store(out_ptr + out_offs, out)
+        out = gl.convert_layout(out, layout)
+        gl.store(out_ptr + out_offs, out)
 
     rs = np.random.RandomState(0)
     a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    #b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = np.eye(B, dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits.T)  # match the transposed b in the kernel
 
     a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
     b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
@@ -341,3 +344,35 @@ def test_fpsan_tcgen05_mma_payload_semantics(device):
     kernel[(1, )](aw, bw, outw, fpsan=True, num_warps=4)
 
     np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
+
+
+def test_reduction(device, fresh_knobs):
+
+    @triton.jit
+    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
+                      ORDER: tl.constexpr):
+        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_ak)
+        a = tl.load(a_ptrs)
+        r1 = tl.sum(a, axis=ORDER)
+        r2 = tl.sum(r1, axis=ORDER - 1)
+        tl.store(c_ptr, r2)
+
+    M, N = 512, 512
+    a = torch.randn((M, N), dtype=torch.float32).to('cuda')
+    c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
+    c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
+
+    def alloc_fn(size: int, alignment: int, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
+    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    assert not _compare_bitwise_equal(c1, c2)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
+    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    assert _compare_bitwise_equal(c1, c2)
