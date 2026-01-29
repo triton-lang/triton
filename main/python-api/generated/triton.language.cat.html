@@ -126,17 +126,17 @@
 <h1>triton.language.cat<a class="headerlink" href="#triton-language-cat" title="Link to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.cat">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">cat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">can_reorder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.cat" title="Link to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">cat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">can_reorder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.cat" title="Link to this definition">¶</a></dt>
 <dd><p>Concatenate the given blocks</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> (<em>Tensor</em>) – The first input tensor.</p></li>
 <li><p><strong>other</strong> (<em>Tensor</em>) – The second input tensor.</p></li>
-<li><p><strong>reorder</strong> – Compiler hint. If true, the compiler is
+<li><p><strong>can_reorder</strong> (<em>bool</em>) – Compiler hint. If true, the compiler is
 allowed to reorder elements while concatenating inputs.  Only use if the
-order does not matter (e.g., result is only used in reduction ops).
-Current implementation of <cite>cat</cite> supports only can_reorder=True.</p></li>
+order does not matter (e.g., result is only used in reduction ops).</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – The dimension to concatenate along (used when can_reorder is False).</p></li>
 </ul>
 </dd>
 </dl>
