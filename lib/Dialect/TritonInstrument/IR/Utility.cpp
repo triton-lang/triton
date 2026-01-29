@@ -284,58 +284,45 @@ static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
 
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
                                  RankedTensorType tensorType) {
-  if (!base) {
-    return {};
-  }
   auto baseTy = base.getType();
-  if (!baseTy) {
-    return {};
-  }
   auto encoding = tensorType.getEncoding();
-  if (!encoding)
-    return {};
-
-  if (auto distributed = dyn_cast<DistributedEncodingTrait>(encoding)) {
-    Value ptrTensor = SplatOp::create(
-        b, loc,
-        RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
-        base);
-    auto offsetsType =
-        RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-    SmallVector<int> strides(tensorType.getRank());
-    strides[0] = 1;
-    for (int i = 1; i < tensorType.getRank(); ++i) {
-      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
-    }
-    for (int i = 0; i < tensorType.getRank(); ++i) {
-      auto partialEncoding =
-          getSingleDimSliceEncoding(distributed, i, tensorType.getRank());
-      auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                              b.getI32Type(), partialEncoding);
-      auto arange =
-          MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
-      auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
-      auto arangeTimesStride =
-          arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-      auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
-      if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-          tensorType.getShape()) {
-        expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
-      }
-      ptrTensor =
-          AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
-    }
-    return ptrTensor;
+  auto distributed = dyn_cast<DistributedEncodingTrait>(encoding);
+  assert(distributed && "expected distributed encoding");
+  Value ptrTensor = SplatOp::create(
+      b, loc,
+      RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
+      base);
+  auto offsetsType =
+      RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
+  SmallVector<int> strides(tensorType.getRank());
+  strides[0] = 1;
+  for (int i = 1; i < tensorType.getRank(); ++i) {
+    strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
   }
-
-  return {};
+  for (int i = 0; i < tensorType.getRank(); ++i) {
+    auto partialEncoding =
+        getSingleDimSliceEncoding(distributed, i, tensorType.getRank());
+    auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
+                                            b.getI32Type(), partialEncoding);
+    auto arange =
+        MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
+    auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
+    auto arangeTimesStride =
+        arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
+    auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
+    if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
+        tensorType.getShape()) {
+      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
+    }
+    ptrTensor =
+        AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
+  }
+  return ptrTensor;
 }
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  if (!ptrTensor)
-    return nullptr;
   return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
                          EvictionPolicy::NORMAL);
 }
@@ -343,8 +330,6 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  if (!ptrTensor)
-    return {};
   return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
                         EvictionPolicy::NORMAL, false);
 }
