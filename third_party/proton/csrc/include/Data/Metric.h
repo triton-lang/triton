@@ -24,10 +24,9 @@ enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 // - user-provided flexible metrics (via add_metrics)
 //
 // Vector-valued metrics are intended for FlexibleMetric only
-using MetricValueType = std::variant<uint64_t, int64_t, double, std::string,
-                                     std::vector<uint64_t>,
-                                     std::vector<int64_t>,
-                                     std::vector<double>>;
+using MetricValueType =
+    std::variant<uint64_t, int64_t, double, std::string, std::vector<uint64_t>,
+                 std::vector<int64_t>, std::vector<double>>;
 
 inline const char *getTypeNameForIndex(std::size_t idx) {
   switch (idx) {
@@ -49,7 +48,6 @@ inline const char *getTypeNameForIndex(std::size_t idx) {
     return "<unknown>";
   }
 }
-
 
 /// A metric is a class that can be associated with a context.
 /// `Metric` is the base class for all metrics.
@@ -121,8 +119,7 @@ public:
                     std::string("[PROTON] Metric aggregation not supported for "
                                 "valueId ") +
                     std::to_string(valueId) + " (" + getValueName(valueId) +
-                    "): type=" +
-                    getTypeNameForIndex(values[valueId].index()));
+                    "): type=" + getTypeNameForIndex(values[valueId].index()));
               }
             }
           },
@@ -386,8 +383,8 @@ private:
 
 /// Each TensorMetric represents a metric stored in a device buffer.
 struct TensorMetric {
-  uint8_t *ptr{}; // device pointer
-  size_t index{}; // MetricValueType index
+  uint8_t *ptr{};   // device pointer
+  size_t index{};   // MetricValueType index
   uint64_t size{1}; // number of uint64 words stored at ptr
 };
 
@@ -531,8 +528,7 @@ private:
   }
 
   MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
-                                               size_t typeIndex,
-                                               size_t size);
+                                               size_t typeIndex, size_t size);
 
 protected:
   static std::atomic<size_t> metricId;

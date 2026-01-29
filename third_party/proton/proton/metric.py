@@ -1,5 +1,4 @@
 from typing import Any
-from numbers import Number
 from triton._C.libproton import proton as libproton
 import triton.runtime.driver as driver
 import triton.language as tl
@@ -9,7 +8,8 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr, metric_value_size: tl.uint64):
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr,
+                         metric_value_size: tl.uint64):
     device_offset = tl.load(device_offset_ptr)
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
@@ -66,6 +66,7 @@ def set_metric_kernels():
 
 
 class _TensorMetric(libproton.TensorMetric):
+
     def __init__(self, value, metric_index):
         size = int(value.numel()) if hasattr(value, "numel") else 1
         super().__init__(value.data_ptr(), metric_index, size)

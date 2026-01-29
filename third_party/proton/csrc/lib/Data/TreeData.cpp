@@ -266,10 +266,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
                               std::is_same_v<T, double> ||
                               std::is_same_v<T, std::string>) {
                   metricsJson[valueName] = v;
-                } else if constexpr (std::is_same_v<T,
-                                                    std::vector<uint64_t>> ||
-                                     std::is_same_v<T,
-                                                    std::vector<int64_t>> ||
+                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
+                                     std::is_same_v<T, std::vector<int64_t>> ||
                                      std::is_same_v<T, std::vector<double>>) {
                   metricsJson[valueName] = json::array();
                   auto &arr = metricsJson[valueName];
@@ -555,8 +553,7 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
                   writer.packDouble(v);
                 } else if constexpr (std::is_same_v<T, std::string>) {
                   writer.packStr(v);
-                } else if constexpr (std::is_same_v<T,
-                                                    std::vector<uint64_t>>) {
+                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>>) {
                   writer.packArray(static_cast<uint32_t>(v.size()));
                   for (auto value : v) {
                     writer.packUInt(value);

@@ -662,8 +662,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         size_t numMetricWords = graphExecState.numMetricWords;
         if (callbackData->context != nullptr)
           profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
-        profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numMetricNodes,
-                                        numMetricWords);
+        profiler.pendingGraphPool->push(phase, metricNodeEntryIds,
+                                        numMetricNodes, numMetricWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

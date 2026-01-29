@@ -82,9 +82,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         break;
       }
       default:
-        throw std::runtime_error(
-            "[PROTON] Unsupported metric type index: " +
-            std::to_string(metricTypeIndex));
+        throw std::runtime_error("[PROTON] Unsupported metric type index: " +
+                                 std::to_string(metricTypeIndex));
         break;
       }
 

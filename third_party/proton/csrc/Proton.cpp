@@ -55,10 +55,8 @@ static void initProton(pybind11::module &&m) {
                              })
       .def_property_readonly(
           "index", [](const TensorMetric &metric) { return metric.index; })
-      .def_property_readonly("size",
-                             [](const TensorMetric &metric) {
-                               return metric.size;
-                             });
+      .def_property_readonly(
+          "size", [](const TensorMetric &metric) { return metric.size; });
 
   m.attr("metric_int64_index") =
       pybind11::cast(variant_index_v<int64_t, MetricValueType>);

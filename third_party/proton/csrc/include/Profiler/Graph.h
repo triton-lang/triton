@@ -85,7 +85,8 @@ struct PendingGraphQueue {
 
   void push(size_t numNodes, size_t numWords,
             const std::map<Data *, std::vector<size_t>> &dataToEntryIds) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataToEntryIds});
+    pendingGraphs.emplace_back(
+        PendingGraph{numNodes, numWords, dataToEntryIds});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }

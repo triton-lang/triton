@@ -37,8 +37,7 @@ void MetricBuffer::receive(
 
 MetricBuffer::MetricDescriptor
 MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
-                                          size_t typeIndex,
-                                          size_t size) {
+                                          size_t typeIndex, size_t size) {
   {
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto nameIt = metricNameToId.find(name);
@@ -96,7 +95,8 @@ collectTensorMetrics(Runtime *runtime,
   for (auto &[name, tensorMetric] : tensorMetrics) {
     std::vector<uint64_t> metricVector(tensorMetric.size);
     runtime->copyDeviceToHostAsync(metricVector.data(), tensorMetric.ptr,
-                                   sizeof(uint64_t) * tensorMetric.size, stream);
+                                   sizeof(uint64_t) * tensorMetric.size,
+                                   stream);
     runtime->synchronizeStream(stream);
     if (tensorMetric.index == variant_index_v<double, MetricValueType>) {
       double value = 0.0;
