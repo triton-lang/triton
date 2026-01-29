@@ -57,7 +57,7 @@ struct GraphState {
   // Total number of GPU kernels launched by this graph
   size_t numNodes{1};
   // Total number of uint64 words written by all metric nodes in this graph.
-  size_t numMetricWords{};
+  size_t metricNumWords{};
 };
 
 struct PendingGraphQueue {

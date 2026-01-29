@@ -421,7 +421,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           threadState.metricKernelNumWordsQueue.pop_front();
           nodeState.metricNumWords = metricKernelNumWords;
           graphState.metricKernelNodeIds.insert(nodeId);
-          graphState.numMetricWords += metricKernelNumWords;
+          graphState.metricNumWords += metricKernelNumWords;
         }
         for (auto *data : profiler.dataSet) {
           auto contexts = data->getContexts();
@@ -453,7 +453,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               originalNodeId) !=
           graphStates[originalGraphId].metricKernelNodeIds.end()) {
         graphState.metricKernelNodeIds.insert(nodeId);
-        graphState.numMetricWords += nodeState.metricNumWords;
+        graphState.metricNumWords += nodeState.metricNumWords;
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
@@ -462,7 +462,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     auto &graphState = graphStates[graphId];
-    graphState.numMetricWords -=
+    graphState.metricNumWords -=
         graphState.nodeIdToState[nodeId].metricNumWords;
     for (const auto &[data, callpath] :
          graphState.nodeIdToState[nodeId].captureContexts) {
@@ -659,11 +659,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 "[PROTON] Inconsistent number of metric nodes in graph.");
           }
         }
-        size_t numMetricWords = graphExecState.numMetricWords;
+        size_t metricNumWords = graphExecState.metricNumWords;
         if (callbackData->context != nullptr)
-          profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
+          profiler.pendingGraphPool->flushIfNeeded(metricNumWords);
         profiler.pendingGraphPool->push(phase, metricNodeEntryIds,
-                                        numMetricNodes, numMetricWords);
+                                        numMetricNodes, metricNumWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

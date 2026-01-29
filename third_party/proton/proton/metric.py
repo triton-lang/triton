@@ -68,8 +68,7 @@ def set_metric_kernels():
 class _TensorMetric(libproton.TensorMetric):
 
     def __init__(self, value, metric_index):
-        size = int(value.numel()) if hasattr(value, "numel") else 1
-        super().__init__(value.data_ptr(), metric_index, size)
+        super().__init__(value.data_ptr(), metric_index, value.numel())
         # Hold a reference to the backing tensor so its device memory stays alive.
         self._value = value
 

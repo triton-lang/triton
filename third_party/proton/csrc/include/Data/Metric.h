@@ -487,7 +487,7 @@ private:
   void synchronize(DeviceBuffer &buffer);
 
   template <typename MetricT>
-  size_t getMetricIndex(const MetricT &metric) const {
+  size_t getMetricTypeIndex(const MetricT &metric) const {
     using MetricType = std::decay_t<MetricT>;
     if constexpr (std::is_same_v<MetricValueType, MetricType>) {
       return metric.index();
@@ -495,7 +495,7 @@ private:
       return metric.typeIndex;
     } else {
       static_assert(always_false<MetricType>::value,
-                    "Unsupported metric type for getMetricIndex");
+                    "Unsupported metric type for getMetricTypeIndex");
     }
   }
 
@@ -503,7 +503,7 @@ private:
   size_t getMetricSize(const MetricT &metric) const {
     using MetricType = std::decay_t<MetricT>;
     if constexpr (std::is_same_v<MetricValueType, MetricType>) {
-      return 1;
+      return 1; // FIXME: We don't queue a scalar metric with vector type yet
     } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
       return metric.size;
     } else {
@@ -515,7 +515,7 @@ private:
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
     for (const auto &[name, metric] : metrics) {
-      size_t typeIndex = getMetricIndex(metric);
+      size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
       queue(descriptor.id, metric, kernel, stream);
