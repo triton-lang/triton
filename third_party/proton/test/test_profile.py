@@ -869,7 +869,6 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         with proton.scope("scope_d", metrics={"vec": d}):
             e = d * 2  # noqa: F841
 
-
     temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
