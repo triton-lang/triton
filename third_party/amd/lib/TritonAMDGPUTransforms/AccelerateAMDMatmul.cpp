@@ -679,12 +679,15 @@ public:
     if (!isDotChainTail)
       kWidth *= kPack;
 
-    // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
-    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
-    // to #dotOp (operand 0 of 2nd dot) is a no-op.
+    // For FA fwd kernel with f16 elementTy, unless the k dim of the operands is
+    // too samll, we limit the 2nd dot to have kWidth = 8 so that the coversion
+    // from #mma (result of 1st dot) to #dotOp (operand 0 of 2nd dot) is a
+    // no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    if (is16BitElemTy && isDotChainTail) {
-      kWidth = 4;
+    auto kDimInstrSize = mfmaEnc.getInstrShapeForOperand(8, 0)[1];
+    if (is16BitElemTy && isDotChainTail &&
+        kDimInstrSize <= oldAType.getShape()[rank - 1]) {
+      kWidth = 8;
     }
 
     Value newDot;
