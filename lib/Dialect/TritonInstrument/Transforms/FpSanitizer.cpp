@@ -1269,14 +1269,15 @@ public:
     patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+      llvm::errs() << "Failed to apply patterns\n";
       signalPassFailure();
     }
 
     auto onlyUsedByWarpSpecialize = [](Value value) -> bool {
       for (OpOperand &use : value.getUses()) {
         if (isa<ttg::WarpSpecializeOp, ttg::MemDescIndexOp,
-                ttng::TMEMSubSliceOp, ttg::MemDescReinterpretOp>(
-                use.getOwner()))
+                ttng::TMEMSubSliceOp, ttg::MemDescReinterpretOp,
+                ttng::WaitBarrierOp>(use.getOwner()))
           continue;
         return false;
       }
@@ -1322,8 +1323,10 @@ public:
 
     for (Operation *op : eraseOps)
       op->erase();
-    if (hasUnsupported)
+    if (hasUnsupported) {
+      llvm::errs() << "Has unsupported operations\n";
       signalPassFailure();
+    }
   }
 };
 
