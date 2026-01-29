@@ -864,6 +864,11 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
             b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
+        with proton.metadata_state():
+            d = torch.arange(4, device="cuda")
+        with proton.scope("scope_d", metrics={"vec": d}):
+            e = d * 2  # noqa: F841
+
 
     temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
@@ -900,6 +905,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     foo_test_frame = None
     scope_a_frame = None
     scope_b_frame = None
+    scope_d_frame = None
     for child in capture_at_frame["children"]:
         if child["frame"]["name"] == "foo_test":
             foo_test_frame = child
@@ -907,6 +913,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
             scope_a_frame = child
         if child["frame"]["name"] == "scope_b":
             scope_b_frame = child
+        if child["frame"]["name"] == "scope_d":
+            scope_d_frame = child
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40
@@ -917,6 +925,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert scope_b_frame is not None
     assert scope_b_frame["metrics"]["sum"] == 40.0
     assert "count" not in scope_b_frame["metrics"]
+    assert scope_d_frame is not None
+    assert scope_d_frame["metrics"]["vec"] == [0, 20, 40, 60]
 
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
