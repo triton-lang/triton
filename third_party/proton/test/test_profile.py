@@ -224,7 +224,7 @@ def test_metrics(tmp_path: pathlib.Path):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
-    with proton.scope("test0", {"foo": 1.0}):
+    with proton.scope("test0", {"foo": 1.0, "bar": [1, 2, 3], "baz": [1.0, 2.0, 3.0]}):
         foo[(1, )](x, y)
     proton.finalize()
     with temp_file.open() as f:
@@ -232,6 +232,7 @@ def test_metrics(tmp_path: pathlib.Path):
     assert len(data[0]["children"]) == 1
     assert data[0]["children"][0]["frame"]["name"] == "test0"
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
+    assert data[0]["children"][0]["metrics"]["bar"] == [1, 2, 3]
 
 
 def test_scope_backward(tmp_path: pathlib.Path):
