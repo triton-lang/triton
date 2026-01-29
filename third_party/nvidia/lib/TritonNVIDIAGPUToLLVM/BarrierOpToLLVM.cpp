@@ -325,7 +325,7 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *> operands;
 
     std::optional<Value> pred;
-    if (!op.getPerWarp().has_value()) {
+    if (op.getFrequency() == triton::nvidia_gpu::ArriveFrequency::PER_GRID) {
       TritonLLVMOpBuilder b(op.getLoc(), rewriter);
       Value id = getThreadId(rewriter, op.getLoc());
       pred = b.icmp_eq(id, b.i32_val(0));

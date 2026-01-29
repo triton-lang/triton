@@ -301,9 +301,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If this op is may be signalling other threads asynchronously, make sure
     // all shared memory transactions are complete beforehand.
     if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
-      if (!dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(op)
-               .getPerWarp()
-               .has_value()) {
+      if (dyn_cast<triton::nvidia_gpu::ArriveBarrierOp>(op).getFrequency() ==
+          triton::nvidia_gpu::ArriveFrequency::PER_GRID) {
         Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
         auto allMemorySlice = AllocationSlice(allIntervals);
         curBlockInfo.syncWriteSlices[allMemorySlice].insert(op);

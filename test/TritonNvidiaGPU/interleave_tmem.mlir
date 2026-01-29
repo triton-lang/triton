@@ -111,7 +111,7 @@ tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #barrier_shared, #smem, mutab
   %0 = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #linear128>
   ttng.tmem_store %cst, %noalias_alloc, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: arrive_barrier
-  ttng.arrive_barrier %arg0, 1 {per_grid} : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.arrive_barrier %arg0, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   "user"(%0) : (tensor<128x128xf32, #linear128>) -> ()
   tt.return
 }

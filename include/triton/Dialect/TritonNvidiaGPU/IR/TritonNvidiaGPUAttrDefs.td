@@ -109,5 +109,13 @@ def TTNG_TensorModeAttr : I32EnumAttr<
   }];
 }
 
+def TTNG_ArriveFrequencyAttr : I32EnumAttr<
+    "ArriveFrequency", "",
+    [
+        I32EnumAttrCase<"PER_GRID", 0, "per_grid">,
+        I32EnumAttrCase<"PER_WARP", 1, "per_warp">
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
 
 #endif

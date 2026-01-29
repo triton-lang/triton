@@ -198,10 +198,6 @@ LogicalResult WaitBarrierOp::verify() {
 LogicalResult ArriveBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
-  if (getPerGrid().has_value() == getPerWarp().has_value()) {
-    return emitOpError(
-        "must specify exactly one of 'per_grid' or 'per_warp' attributes");
-  }
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();

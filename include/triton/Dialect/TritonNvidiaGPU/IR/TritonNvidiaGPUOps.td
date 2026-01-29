@@ -263,10 +263,10 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
     mbarrier object in shared memory. The operation requires a `count` operand
-    of at least 1 and exactly one of `per_grid` or `per_warp` attributes. The
-    pending arrival count of the mbarrier is decreased by the specified count.
+    of at least 1. The `frequency` attribute controls how the arrive is
+    performed:
 
-    `per_grid`: only the lead thread of the grid performs the operation.
+    `per_grid` (default): only the lead thread of the grid performs the operation.
     `per_warp`: only the lead thread of each warp performs the operation.
 
     The operation accepts an optional predicate.
@@ -274,51 +274,46 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
     Example:
 
     ```mlir
-    ttng.arrive_barrier %barrier, 2 {per_grid} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.arrive_barrier %barrier, 1, %pred {per_warp} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred {frequency = per_warp} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ```
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
-    OptionalAttr<UnitAttr>:$per_grid,
-    OptionalAttr<UnitAttr>:$per_warp,
+    DefaultValuedAttr<TTNG_ArriveFrequencyAttr, "::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID">:$frequency,
     Optional<I1>:$pred
   );
 
   let assemblyFormat = [{
-    $alloc `,` $count (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+    $alloc `,` $count (`,` $pred^)? oilist(`frequency` `=` $frequency) attr-dict `:` qualified(type($alloc))
   }];
 
   let builders = [
-    // Default builders - isPerWarp defaults to false (per_grid)
+    // Default builders - frequency defaults to PER_GRID
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = $_builder.getUnitAttr();
-      return build($_builder, $_state, alloc, countAttr, perGridAttr,
-                   /*per_warp=*/nullptr, /*pred=*/Value());
+      return build($_builder, $_state, alloc, count,
+                   ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID,
+                   /*pred=*/Value());
     }]>,
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
-      auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = $_builder.getUnitAttr();
-      return build($_builder, $_state, alloc, countAttr, perGridAttr,
-                   /*per_warp=*/nullptr, pred);
+      return build($_builder, $_state, alloc, count,
+                   ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID,
+                   pred);
     }]>,
     // Explicit builders for when you need to specify isPerWarp
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp), [{
-      auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = isPerWarp ? nullptr : $_builder.getUnitAttr();
-      auto perWarpAttr = isPerWarp ? $_builder.getUnitAttr() : nullptr;
-      return build($_builder, $_state, alloc, countAttr, perGridAttr,
-                   perWarpAttr, /*pred=*/Value());
+      auto freq = isPerWarp
+        ? ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_WARP
+        : ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID;
+      return build($_builder, $_state, alloc, count, freq, /*pred=*/Value());
     }]>,
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp, "Value":$pred), [{
-      auto countAttr = $_builder.getI32IntegerAttr(count);
-      auto perGridAttr = isPerWarp ? nullptr : $_builder.getUnitAttr();
-      auto perWarpAttr = isPerWarp ? $_builder.getUnitAttr() : nullptr;
-      return build($_builder, $_state, alloc, countAttr, perGridAttr,
-                   perWarpAttr, pred);
+      auto freq = isPerWarp
+        ? ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_WARP
+        : ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID;
+      return build($_builder, $_state, alloc, count, freq, pred);
     }]>
   ];
 
