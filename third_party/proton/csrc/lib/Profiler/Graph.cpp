@@ -26,6 +26,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   for (const auto &pendingGraph : pendingGraphs) {
     for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
       const uint64_t metricId = readWord(wordOffset);
+      wordOffset = (wordOffset + 1) % capacityWords;
 
       auto metricDesc = metricBuffer.getMetricDescriptor(metricId);
       const auto &metricName = metricDesc.name;
@@ -34,7 +35,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       MetricValueType metricValueVariant{};
       switch (metricTypeIndex) {
       case variant_index_v<uint64_t, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset + 1);
+        const uint64_t bits = readWord(wordOffset);
         uint64_t typedValue{};
         std::memcpy(&typedValue, &bits, sizeof(typedValue));
         metricValueVariant = typedValue;
@@ -42,40 +43,40 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         break;
       }
       case variant_index_v<int64_t, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset + 1);
+        const uint64_t bits = readWord(wordOffset);
         int64_t typedValue{};
         std::memcpy(&typedValue, &bits, sizeof(typedValue));
         metricValueVariant = typedValue;
         break;
       }
       case variant_index_v<double, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset + 1);
+        const uint64_t bits = readWord(wordOffset);
         double typedValue{};
         std::memcpy(&typedValue, &bits, sizeof(typedValue));
         metricValueVariant = typedValue;
         break;
       }
       case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
-        std::vector<uint64_t> values(metricDesc.numValues);
-        for (size_t j = 0; j < metricDesc.numValues; ++j) {
-          values[j] = readWord(wordOffset + 1 + j);
+        std::vector<uint64_t> values(metricDesc.size);
+        for (size_t j = 0; j < metricDesc.size; ++j) {
+          values[j] = readWord((wordOffset + j) % capacityWords);
         }
         metricValueVariant = std::move(values);
         break;
       }
       case variant_index_v<std::vector<int64_t>, MetricValueType>: {
-        std::vector<int64_t> values(metricDesc.numValues);
-        for (size_t j = 0; j < metricDesc.numValues; ++j) {
-          const uint64_t bits = readWord(wordOffset + 1 + j);
+        std::vector<int64_t> values(metricDesc.size);
+        for (size_t j = 0; j < metricDesc.size; ++j) {
+          const uint64_t bits = readWord((wordOffset + j) % capacityWords);
           std::memcpy(&values[j], &bits, sizeof(bits));
         }
         metricValueVariant = std::move(values);
         break;
       }
       case variant_index_v<std::vector<double>, MetricValueType>: {
-        std::vector<double> values(metricDesc.numValues);
-        for (size_t j = 0; j < metricDesc.numValues; ++j) {
-          const uint64_t bits = readWord(wordOffset + 1 + j);
+        std::vector<double> values(metricDesc.size);
+        for (size_t j = 0; j < metricDesc.size; ++j) {
+          const uint64_t bits = readWord((wordOffset + j) % capacityWords);
           std::memcpy(&values[j], &bits, sizeof(bits));
         }
         metricValueVariant = std::move(values);
@@ -87,7 +88,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         break;
       }
 
-      wordOffset = (wordOffset + 1 + metricDesc.numValues) % capacityWords;
+      wordOffset = (wordOffset + 1 + metricDesc.size) % capacityWords;
 
       for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
         const auto entryId = entryIds[i];
