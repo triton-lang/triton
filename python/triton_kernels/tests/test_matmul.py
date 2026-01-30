@@ -424,12 +424,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     maxtol, rmstol = None, None
     if c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
-    elif b_dtype.has_mx_scale:
-        # Higher tolerance needed for float8 x mx combinations
-        if "float8" in act_dtype_str:
-            maxtol, rmstol = 2e-1, None
-        else:
-            maxtol, rmstol = 3e-2, None
+    elif b_dtype.is_mxfloat4:
+        maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
