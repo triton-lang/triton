@@ -24,8 +24,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto &amdTargInfo =
         static_cast<const mlir::triton::AMD::TargetInfo &>(targetInfo);
-    if (!(amdTargInfo.getISAFamily() == AMD::ISAFamily::CDNA4 ||
-          amdTargInfo.getISAFamily() == AMD::ISAFamily::GFX1250))
+    if (!amdTargInfo.supportsPermlaneSwap())
       return failure();
 
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
