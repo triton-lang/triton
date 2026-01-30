@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -1261,13 +1262,15 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
+static LinearLayout
+getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                           ttg::TMAMode mode = ttg::TMAMode::Tiled) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
   auto shapePerCTA = ttg::getShapePerCTA(ty);
   int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
   auto outDimNames = standardOutDimNames(ctx, rank);
   LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {
@@ -1312,6 +1315,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     if (op.getIsVolatile())
       return op.emitError("volatile not supported yet");
 
+    // Determine the TMA mode based on the descriptor type
+    auto descType = op.getDesc().getType();
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
+    ttg::TMAMode tmaMode =
+        isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
+
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     ttg::MemDescType dstTy = op.getResult().getType();
@@ -1340,7 +1349,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
@@ -1416,7 +1425,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
           "shared::" + ((clusterBarrier || multicast) ? "cluster" : "cta") +
-          ".global.mbarrier::complete_tx::bytes";
+          ".global" + (isIm2Col ? ".im2col" : "") +
+          ".mbarrier::complete_tx::bytes";
       if (multicast)
         tmaInst += ".multicast::cluster";
       tmaInst += " [$1], [$2, {";
@@ -1426,13 +1436,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       int operandIdx = 3;
       auto encoding = op.getDesc().getType().getBlockType().getEncoding();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
+
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (fp4Padded && i == 0) {
           coord = b.mul(coord, b.i32_val(2));
         }
-        if (i < offsets.size())
+        if (i < offsets.size()) {
           coord = b.add(coord, offsets[offsets.size() - i - 1].second);
+        }
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
@@ -1444,6 +1456,24 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       if (multicast) {
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
+      }
+      // Add im2col offsets if in IM2COL mode.
+      // Offsets are reversed to match PTX/CUDA order (innermost to outermost),
+      // similar to how coordinates are reversed above.
+      if (isIm2Col) {
+        auto im2colOffsets = adaptor.getOffsets();
+        if (!im2colOffsets.empty()) {
+          tmaInst += ", {";
+          for (size_t i = 0; i < im2colOffsets.size(); i++) {
+            // Reverse the order: im2colOffsets[size - 1 - i]
+            operands.push_back(ptxBuilderTMA.newOperand(
+                im2colOffsets[im2colOffsets.size() - 1 - i], "h"));
+            tmaInst += "$" + std::to_string(operandIdx++);
+            if (i != im2colOffsets.size() - 1)
+              tmaInst += ", ";
+          }
+          tmaInst += "}";
+        }
       }
       tmaInst += ";";
 

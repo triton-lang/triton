@@ -89,6 +89,95 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_global_to_local_im2col
+  // CHECK: elect.sync
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.4d.shared::cta.global.mbarrier
+  // CHECK: return
+  tt.func @tma_copy_global_to_local_im2col(%tma: !ttng.tensordesc_im2col<tensor<16x64xf32, #shared1>>, %alloc: !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
+    %off_w = arith.constant 1 : i16
+    %off_h = arith.constant 2 : i16
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<tensor<16x64xf32, #shared1>>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Test im2col with multiple TMA messages in the channel dimension (no swizzle).
+// Channel dim = 1024 exceeds max 256, requiring 1024/256 = 4 messages.
+// With num-warps = 1, the loop iterates 4 times, generating 4 TMA instructions.
+// Channel offsets: 0, 256, 512, 768 (computed as copyIdx << 8).
+// Pixel offset is always 0 for im2col mode.
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: tma_copy_global_to_local_im2col_multi_msg
+  // CHECK: elect.sync
+  // Verify 4 TMA messages are generated with offsets computed via shift-left by 8 (multiply by 256)
+  // CHECK-DAG: llvm.mlir.constant(8 : i32)
+  // Message 1 (copyIdx=0): offset = 0 << 8 = 0
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 2 (copyIdx=1): offset = 1 << 8 = 256
+  // CHECK: llvm.mlir.constant(1 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 3 (copyIdx=2): offset = 2 << 8 = 512
+  // CHECK: llvm.mlir.constant(2 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 4 (copyIdx=3): offset = 3 << 8 = 768
+  // CHECK: llvm.mlir.constant(3 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // CHECK: return
+  tt.func @tma_copy_global_to_local_im2col_multi_msg(%tma: !ttng.tensordesc_im2col<tensor<64x1024xf32, #shared2>>, %alloc: !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
+    %off_w = arith.constant 1 : i16
+    %off_h = arith.constant 2 : i16
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<tensor<64x1024xf32, #shared2>>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Test im2col with multiple TMA messages with swizzle enabled.
+// swizzlingByteWidth=128, f16 (16-bit) -> block size = (8 * 128) / 16 = 64 elements.
+// Channel dim = 256 requires 256/64 = 4 messages.
+// Channel offsets: 0, 64, 128, 192 (computed as copyIdx << 6).
+// Pixel offset is always 0 for im2col mode.
+#shared0_swz = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared_swz = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem_swz = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: tma_copy_global_to_local_im2col_multi_msg_swizzle
+  // CHECK: elect.sync
+  // Verify 4 TMA messages are generated with offsets computed via shift-left by 6 (multiply by 64)
+  // CHECK-DAG: llvm.mlir.constant(6 : i32)
+  // Message 1 (copyIdx=0): offset = 0 << 6 = 0
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 2 (copyIdx=1): offset = 1 << 6 = 64
+  // CHECK: llvm.mlir.constant(1 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 3 (copyIdx=2): offset = 2 << 6 = 128
+  // CHECK: llvm.mlir.constant(2 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // Message 4 (copyIdx=3): offset = 3 << 6 = 192
+  // CHECK: llvm.mlir.constant(3 : i32)
+  // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
+  // CHECK: return
+  tt.func @tma_copy_global_to_local_im2col_multi_msg_swizzle(%tma: !ttng.tensordesc_im2col<tensor<64x256xf16, #shared_swz>>, %alloc: !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_swz, #smem_swz>, %pred: i1) {
+    %off_w = arith.constant 1 : i16
+    %off_h = arith.constant 2 : i16
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<tensor<64x256xf16, #shared_swz>>, !ttg.memdesc<1xi64, #shared0_swz, #smem_swz> -> !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
