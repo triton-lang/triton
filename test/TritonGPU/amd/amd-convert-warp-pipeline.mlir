@@ -325,3 +325,88 @@ tt.func @no_total_stages(%n: index, %ptr: !tt.ptr<f32>) {
 // CHECK: scf.for
 // CHECK:   scf.execute_region
 // CHECK: tt.return
+
+// -----
+
+// ---- Priority reset: stages without priority reset to 0 when others have it ----
+
+tt.func @priority_reset_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
+  %c0  = arith.constant 0 : index
+  %c1  = arith.constant 1 : index
+  %v0  = arith.constant 0.0 : f32
+  %v1  = arith.constant 1.0 : f32
+
+  scf.for %i = %c0 to %n step %c1 {
+    // Stage 0 - has priority 3
+    scf.execute_region {
+      tt.store %ptr, %v0 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "load", triton.warp_pipeline.priority = 3 : i32}
+
+    // Stage 1 - no priority, should reset to 0
+    scf.execute_region {
+      tt.store %ptr, %v1 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "compute"}
+
+    scf.yield
+  } {triton.warp_pipeline.pipelined_for}
+
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @priority_reset_between_stages
+// Before loop: priority for first cluster
+// CHECK: rocdl.setprio 3
+// CHECK: scf.for
+// End of loop: priority reset for second cluster (wraps around)
+// CHECK: rocdl.setprio 0
+// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.s.barrier
+// CHECK: rocdl.sched.barrier
+// Before first cluster in loop body
+// CHECK: rocdl.setprio 3
+// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.s.barrier
+// CHECK: rocdl.sched.barrier
+// CHECK: scf.yield
+// After loop: reset to 0
+// CHECK: rocdl.setprio 0
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return
+
+// -----
+
+// ---- No priority: no setprio emitted when no stage uses priority ----
+
+tt.func @no_priority_no_setprio(%n: index, %ptr: !tt.ptr<f32>) {
+  %c0  = arith.constant 0 : index
+  %c1  = arith.constant 1 : index
+  %v0  = arith.constant 0.0 : f32
+  %v1  = arith.constant 1.0 : f32
+
+  scf.for %i = %c0 to %n step %c1 {
+    scf.execute_region {
+      tt.store %ptr, %v0 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage0"}
+
+    scf.execute_region {
+      tt.store %ptr, %v1 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage1"}
+
+    scf.yield
+  } {triton.warp_pipeline.pipelined_for}
+
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @no_priority_no_setprio
+// CHECK-NOT: rocdl.setprio
+// CHECK: scf.for
+// CHECK-NOT: rocdl.setprio
+// CHECK: scf.yield
+// CHECK-NOT: rocdl.setprio
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return

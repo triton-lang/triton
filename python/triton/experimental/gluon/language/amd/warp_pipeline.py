@@ -17,8 +17,9 @@ class warp_pipeline_stage:
 	An optional integer priority may be specified to express the relative
 	scheduling priority of the warp the stage belongs to. The priority applies
 	to the entire cluster. Valid values range from 0 (lowest) to 3 (highest)
-    as it's lowered to the operand of `s_setprio`. If unspecified, HW keeps
-    the current priority.
+    as it's lowered to the operand of `s_setprio`. If unspecified, priority
+    resets to zero when any other stage in the loop uses explicit priority;
+    otherwise no priority instruction is emitted.
     N.B., This is a performance hint to the hardware scheduler, and its effect
 	may vary depending on the dynamic interaction of instruction streams
 	across different warps. It is optional and should be used judiciously,

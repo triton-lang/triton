@@ -89,12 +89,14 @@ static void emitClusterBarrier(PatternRewriter &r, Location loc,
   ROCDL::SchedBarrier::create(r, loc, 0);
 }
 
-static void emitClusterPriorityIfPresent(PatternRewriter &r, Location loc,
-                                         Operation *clusterOp) {
+static void emitClusterPriority(PatternRewriter &r, Location loc,
+                                Operation *clusterOp, bool anyHasPriority) {
   if (auto intAttr = clusterOp->getAttrOfType<IntegerAttr>(
           "triton.warp_pipeline.priority")) {
-    int priority = intAttr.getInt();
-    ROCDL::SetPrioOp::create(r, loc, priority);
+    ROCDL::SetPrioOp::create(r, loc, intAttr.getInt());
+  } else if (anyHasPriority) {
+    // Reset to default when other stages use priority.
+    ROCDL::SetPrioOp::create(r, loc, 0);
   }
 }
 
@@ -153,10 +155,6 @@ private:
 
     mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpHigh);
 
-    // Insert condbarrier::first_half after the end of the loop
-    b.setInsertionPointAfter(forOp);
-    mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpLow);
-
     // 2. Collect existing barrier information.
     // Scanning the loop body and classifying each consecutive block of
     // operations into a pipeline cluster (one cluster per execute_region).
@@ -202,6 +200,11 @@ private:
     for (auto cb : clusterBlocks)
       clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
     int numClusters = clusterInfo.size();
+
+    // Check if any cluster has explicit priority.
+    bool anyHasPriority = llvm::any_of(clusterOps, [](Operation *op) {
+      return op->hasAttr("triton.warp_pipeline.priority");
+    });
     LDBG("total clusters : " << numClusters);
 
     // Normally, we don't expect a pipelined loop begins with a barrier
@@ -273,7 +276,7 @@ private:
           exBar != existingBarrierMap.end()) {
         auto exBarOp = exBar->second;
         b.setInsertionPoint(exBarOp);
-        emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
+        emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
         ROCDL::SchedBarrier::create(b, loc, 0);
         b.setInsertionPointAfter(exBarOp);
         ROCDL::SchedBarrier::create(b, loc, 0);
@@ -283,14 +286,20 @@ private:
         if (i == 0 && topBar == existingBarrierMap.end()) {
           // Extra setprio needed before the loop for the first cluster
           b.setInsertionPoint(forOp);
-          emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
+          emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
           // inserts just before yield (=End of the loop).
           b.setInsertionPoint(terminatorOp);
         }
-        emitClusterPriorityIfPresent(b, loc, clusterOps[i]);
+        emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
         emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
       }
     }
+
+    // Insert condbarrier and priority reset after the loop.
+    b.setInsertionPointAfter(forOp);
+    if (anyHasPriority)
+      ROCDL::SetPrioOp::create(b, loc, 0);
+    mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpLow);
     return success();
   }
 
