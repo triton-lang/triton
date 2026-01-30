@@ -4103,7 +4103,6 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (fp4Padded)
     blockShape[contigDim] *= 2;
 
-  // Tiled mode specific logic
   // All dimensions must be at most 256
   constexpr int64_t dimMax = 256;
   for (auto &size : blockShape)
