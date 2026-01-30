@@ -236,9 +236,6 @@ def make_default_opt_flags_nvidia(
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
     a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
-    if isinstance(b_mx_scale_layout, HopperMXScaleLayout) and b_mx_scale_layout.num_warps == 4:
-        # TODO: persistent kernel is broken due with 4 warps due to a ptxas bug
-        supports_persistent = False
 
     def _is_layout_strided(layout: Layout | None) -> bool:
         return layout is None or isinstance(layout, StridedLayout)

@@ -27,25 +27,15 @@ from triton.experimental.gluon.language.amd.gfx1250 import tdm
 from triton.experimental.gluon.language.amd.gfx1250 import buffer_load, buffer_store
 from triton.experimental.gluon.language.amd.gfx1250 import async_copy as cp
 
+# Handle imports for both pytest (module context) and direct execution
+try:
+    from .gfx1250_utils import static_profile, composition
+except ImportError:
+    from gfx1250_utils import static_profile, composition
+
 # ===-----------------------------------------------------------------------===#
 # Kernel Utilities
 # ===-----------------------------------------------------------------------===#
-
-
-def composition(cls):
-    """ A decorator lets aggregate type to directly access attributes from its aggregate member. """
-
-    def __getattr__(self, name):
-        if name in self.__dict__:
-            return object.__getattribute__(self, name)
-        for member in self.__dict__.values():
-            if getattr(member, "__triton_aggregate__", False) and not hasattr(member, name):
-                continue
-            return getattr(member, name)
-        raise AttributeError(f"{type(self).__name__} object has no attribute '{name}'")
-
-    cls.__getattr__ = __getattr__
-    return cls
 
 
 @gluon.constexpr_function
@@ -170,7 +160,7 @@ class MemoryUnit:
         return off
 
     @gluon.jit
-    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=1):
         axis_off = self._compute_axis_offset(idx, sub_idx)
         num_subtile: ttgl.constexpr = 2 if self.sub_axis is not None else 1
         smem = self.smem.index(buf * num_subtile + sub_idx)
@@ -403,11 +393,11 @@ class GlobalScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
@@ -568,6 +558,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -577,7 +569,7 @@ class GlobalScaledAttentionProgram:
 
             self.async_wait(2)  # ............................................. iter i
             v = self.shared_load_v(buf=a)
-            self.issue_global_load_k(i + 3, buf=b, pred=i != end - 3)  # ...... iter i+3
+            self.issue_global_load_k(i + 3, buf=b, pred=pred)  # ...... iter i+3
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
             m = ttgl.max(qk, 1)  # ............................................ iter i+1
@@ -741,7 +733,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k_scale, zero)  # ....................... iter i+1
             self.async_wait(4)  # ............................................. iter i+1
@@ -1074,19 +1067,19 @@ class BlockScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_k_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_k_scale(self, idx, buf=0, pred=1):
         self.k_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
-    def issue_global_load_v_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_v_scale(self, idx, buf=0, pred=1):
         self.v_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
@@ -1329,7 +1322,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -1517,7 +1511,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k0_scale, zero)  # ...................... iter i+1
             self.async_wait(5)  # ............................................. iter i+1
@@ -1838,26 +1833,6 @@ def create_global_scale(dtype: str):
     scale = torch.randint(low, high + 1, (), dtype=torch.uint8).item()
     scale_ref = 2**(scale - 0x7F)
     return scale, scale_ref
-
-
-def static_profile(kernel):
-    amdgcn = kernel.asm['amdgcn']
-
-    sgpr_count = int(re.search(r'\.sgpr_count:\s+(\d+)', amdgcn).group(1))
-    sgpr_spill_count = int(re.search(r'\.sgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_count = int(re.search(r'\.vgpr_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_spill_count = int(re.search(r'\.vgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    scratch_size = int(re.search(r';\s+ScratchSize:\s+(\d+)', amdgcn).group(1))
-    code_len_in_byte = int(re.search(r';\s+codeLenInByte\s+=\s+(\d+)', amdgcn).group(1))
-    occupancy = int(re.search(r';\s+Occupancy:\s+(\d+)', amdgcn).group(1))
-
-    print(f"- sgpr_count: {sgpr_count}\n"
-          f"- sgpr_spill_count: {sgpr_spill_count}\n"
-          f"- vgpr_count: {vgpr_count}\n"
-          f"- vgpr_spill_count: {vgpr_spill_count}\n"
-          f"- scratch_size: {scratch_size}\n"
-          f"- code_len_in_byte: {code_len_in_byte}\n"
-          f"- occupancy: {occupancy}\n")
 
 
 def get_source_mapping(block_scaling, subtile, pipelined, amdgcn):

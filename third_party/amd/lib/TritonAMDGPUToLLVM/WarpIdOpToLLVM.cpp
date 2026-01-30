@@ -39,11 +39,10 @@ public:
           &funcOp.getFunctionBody().getBlocks().front().front());
     }
 
-    auto isaFamily = targetInfo.getISAFamily();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value warpId;
 
-    if (ISAFamily::RDNA4 == isaFamily || ISAFamily::GFX1250 == isaFamily) {
+    if (targetInfo.supportsWaveId()) {
       auto warpIdOp = LLVM::createLLVMIntrinsicCallOp(
           rewriter, loc, "llvm.amdgcn.wave.id", {i32_ty}, ValueRange{});
       warpId = warpIdOp.getResult(0);
@@ -52,6 +51,7 @@ public:
       Value warpSizeVal = b.i32_val(threadsPerWarp);
       Value tid = getThreadId(rewriter, loc);
       warpId = b.udiv(tid, warpSizeVal);
+      auto isaFamily = targetInfo.getISAFamily();
       if (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily) {
         // On GFX9, there is no dedicated hardware instruction to read
         // `wave_id`. The value is instead computed from `workitem.id.x`. Per

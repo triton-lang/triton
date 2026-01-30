@@ -7,6 +7,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, SymmetricMemoryPool
+from triton_kernels.distributed_details.mesh import Mesh
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.matmul import matmul
@@ -197,7 +198,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         y_indx=y_indx_global,
     )
 
-    symm_mem_pool = SymmetricMemoryPool()
+    symm_mem_pool = SymmetricMemoryPool(Mesh(dist.group.WORLD))
     symm_mem_pool.initialize_matmul(
         n_tokens_global=n_tokens_global,
         d_input=d_model,
@@ -205,8 +206,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         n_expts_act=n_expts_act,
         n_expts_tot=n_expts_tot,
         dtype=torch.bfloat16,
-        n_ranks=world_size,
-        group=dist.group.WORLD,
         device=dev,
     )
 
@@ -239,7 +238,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     g.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri_graph)
     triton.testing.assert_close(y_global_ref, y_global_tri)
-    symm_mem_pool.release()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)

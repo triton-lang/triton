@@ -779,7 +779,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I1:$pred,
+    I32:$pred,
     Optional<TTG_MemDescType>:$barrier
   );
 
@@ -826,6 +826,45 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
   let assemblyFormat = [{
     $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMScatterOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
+  let summary = "Scatter data from local memory to non-contiguous global memory rows asynchronously";
+
+  let description = [{
+    This operation scatters data from local memory to non-contiguous rows in global
+    memory using TDM scatter mode.
+    Unlike the regular async_tdm_copy_local_to_global which copies to contiguous memory,
+    this operation uses dst_row_indices to specify which rows in global memory to write to.
+
+    The descriptor must be 2D. The dst_row_indices specify which rows in global memory
+    to write to. The element type of dst_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The dst_col_offset specifies the starting column in the destination tensor for
+    all scattered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$dst_row_indices,
+    I32:$dst_col_offset,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_MemDescType>:$barrier
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
   let hasVerifier = 1;
