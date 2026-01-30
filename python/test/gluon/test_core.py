@@ -113,6 +113,53 @@ def test_tma():
 
 
 @gluon.jit
+def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    mbarrier.invalidate(bar)
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_gluon_tma_round_f32_to_tf32():
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32)
+        bits_i64 = bits.to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits_i64 & exp_mask) == exp_mask
+        round_bias = ((bits_i64 >> 13) & 1) + 0x00000FFF
+        rounded = (bits_i64 + round_bias) & 0xFFFFE000
+        out_bits = torch.where(is_special, bits_i64, rounded)
+        return (out_bits & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((16, 16), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=32,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [16, 16], layout, round_f32_to_tf32=True)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
+
+    tma_round_f32_to_tf32_kernel[(1, )](in_desc, out_desc)
+
+    expected = round_to_tf32(inp)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@gluon.jit
 def tma_multicast_copy_kernel(in_desc, out_desc):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
 
