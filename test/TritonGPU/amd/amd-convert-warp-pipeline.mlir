@@ -330,29 +330,31 @@ tt.func @no_total_stages(%n: index, %ptr: !tt.ptr<f32>) {
 
 // ---- Priority reset: stages without priority reset to 0 when others have it ----
 
-tt.func @priority_reset_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
-  %c0  = arith.constant 0 : index
-  %c1  = arith.constant 1 : index
-  %v0  = arith.constant 0.0 : f32
-  %v1  = arith.constant 1.0 : f32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @priority_reset_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
 
-  scf.for %i = %c0 to %n step %c1 {
-    // Stage 0 - has priority 3
-    scf.execute_region {
-      tt.store %ptr, %v0 : !tt.ptr<f32>
+    scf.for %i = %c0 to %n step %c1 {
+      // Stage 0 - has priority 3
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "load", triton.warp_pipeline.priority = 3 : i32}
+
+      // Stage 1 - no priority, should reset to 0
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "compute"}
+
       scf.yield
-    } {triton.warp_pipeline.stage = "load", triton.warp_pipeline.priority = 3 : i32}
+    } {triton.warp_pipeline.pipelined_for}
 
-    // Stage 1 - no priority, should reset to 0
-    scf.execute_region {
-      tt.store %ptr, %v1 : !tt.ptr<f32>
-      scf.yield
-    } {triton.warp_pipeline.stage = "compute"}
-
-    scf.yield
-  } {triton.warp_pipeline.pipelined_for}
-
-  tt.return
+    tt.return
+  }
 }
 
 // CHECK-LABEL: tt.func @priority_reset_between_stages
@@ -379,27 +381,29 @@ tt.func @priority_reset_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
 
 // ---- No priority: no setprio emitted when no stage uses priority ----
 
-tt.func @no_priority_no_setprio(%n: index, %ptr: !tt.ptr<f32>) {
-  %c0  = arith.constant 0 : index
-  %c1  = arith.constant 1 : index
-  %v0  = arith.constant 0.0 : f32
-  %v1  = arith.constant 1.0 : f32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @no_priority_no_setprio(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
 
-  scf.for %i = %c0 to %n step %c1 {
-    scf.execute_region {
-      tt.store %ptr, %v0 : !tt.ptr<f32>
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+
       scf.yield
-    } {triton.warp_pipeline.stage = "stage0"}
+    } {triton.warp_pipeline.pipelined_for}
 
-    scf.execute_region {
-      tt.store %ptr, %v1 : !tt.ptr<f32>
-      scf.yield
-    } {triton.warp_pipeline.stage = "stage1"}
-
-    scf.yield
-  } {triton.warp_pipeline.pipelined_for}
-
-  tt.return
+    tt.return
+  }
 }
 
 // CHECK-LABEL: tt.func @no_priority_no_setprio
