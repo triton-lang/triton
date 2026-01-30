@@ -70,6 +70,7 @@ def _matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             Y_TRANSPOSE: tl.constexpr = False,  # Unused
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,

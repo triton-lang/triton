@@ -99,6 +99,7 @@ def _p_matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             Y_TRANSPOSE: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
@@ -522,8 +523,13 @@ def _p_matmul(
                 tl.static_assert(Y_TMA_MODE == "dense" or Y_TMA_MODE is None)
                 if Y_TMA_MODE == "dense":
                     off_kz = pid_k * batch_size + start_z1
-                    acc = Y.load([off_kz, off_m1, out_off_n])
-                    acc = acc.reshape(out.shape)
+                    if Y_TRANSPOSE:
+                        acc = Y.load([off_kz, out_off_n, off_m1])
+                        acc = acc.reshape([OUT_BLOCK_N, BLOCK_M])
+                        acc = tl.trans(acc)
+                    else:
+                        acc = Y.load([off_kz, off_m1, out_off_n])
+                        acc = acc.reshape(out.shape)
                     out += acc * load_scale(ScalePtr)
                 else:
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
@@ -594,9 +600,14 @@ def _p_matmul(
                     offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                     Y.scatter(out, offs_y_m, out_off_n)
                 elif Y_TMA_MODE == "dense":
-                    out = tl.reshape(out, [1] + out.shape)
                     off_kz = pid_k * batch_size + start_z1
-                    Y.store([off_kz, off_m1, out_off_n], out)
+                    if Y_TRANSPOSE:
+                        out_t = tl.trans(out)
+                        out_t = tl.reshape(out_t, [1] + out_t.shape)
+                        Y.store([off_kz, out_off_n, off_m1], out_t)
+                    else:
+                        out = tl.reshape(out, [1] + out.shape)
+                        Y.store([off_kz, off_m1, out_off_n], out)
                 elif Y_TMA_MODE == "ragged":
                     out = tl.reshape(out, [1] + out.shape)
                     store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)

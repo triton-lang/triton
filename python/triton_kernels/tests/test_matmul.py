@@ -447,3 +447,46 @@ def test_set_idle_sms():
     flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
+
+
+@pytest.mark.parametrize("shape", [(128, 128, 128), (256, 192, 320)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("use_c_acc", [False, True])
+def test_persistent_with_tma_supports_colmajor_output(shape, dtype, use_c_acc, device, opt_flags_scope):
+    if not is_cuda():
+        pytest.skip("Only supported on CUDA")
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Only supported for Hopper or newer")
+
+    prev_constraints = opt_flags._opt_flags_constraints.copy()
+    try:
+        # Force the persistent kernel that uses TMA.
+        opt_flags.update_opt_flags_constraints({"is_persistent": True})
+
+        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+            torch.manual_seed(0)
+            torch.cuda.manual_seed(0)
+
+            m, n, k = shape
+            a = torch.randn((m, k), device=device, dtype=dtype)
+            b = torch.randn((k, n), device=device, dtype=dtype)
+
+            c = torch.empty((m, n), device=device, dtype=dtype)
+            c = c.mT.contiguous().mT  # Make the tensor column-major
+            assert c.stride(-1) != 1 and c.stride(-2) == 1
+
+            precision_config = PrecisionConfig(allow_tf32=False, out_dtype=dtype)
+            if use_c_acc:
+                c.copy_(torch.randn_like(c))
+                c_acc_ref = c.clone()
+                y = matmul(a, b, None, precision_config=precision_config, c=c, c_acc_in=c)
+                ref = a @ b + c_acc_ref
+            else:
+                y = matmul(a, b, None, precision_config=precision_config, c=c)
+                ref = a @ b
+
+            assert_close(ref, y)
+            assert y.data_ptr() == c.data_ptr()
+    finally:
+        opt_flags.reset_opt_flags_constraints()
+        opt_flags.update_opt_flags_constraints(prev_constraints)
