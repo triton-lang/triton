@@ -812,6 +812,49 @@ LogicalResult AsyncTDMScatterOp::verify() {
   return success();
 }
 
+LogicalResult AsyncTDMGatherOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getDst().getType();
+
+  // TDM gather mode only supports 2D tensors
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  if (blockShape.size() != 2)
+    return emitOpError("TDM gather only supports 2D tensors, got ")
+           << blockShape.size() << "D";
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
+  auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
+  if (srcRowIndicesType.getRank() != 1)
+    return emitOpError("src_row_indices must be a 1D tensor");
+
+  // Element type (i16 or i32) is already verified by ODS constraint
+  // TensorOf<[I16, I32]>
+
+  int64_t numIndices = srcRowIndicesType.getShape()[0];
+  if (!llvm::isPowerOf2_64(numIndices))
+    return emitOpError("src_row_indices size must be a power of 2, got ")
+           << numIndices;
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc)
+    return emitOpError("TDM gather does not support padding");
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
+}
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
