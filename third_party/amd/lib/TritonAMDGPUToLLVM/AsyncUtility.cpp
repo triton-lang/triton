@@ -14,7 +14,8 @@ constexpr const char *syncedViaAsyncWaitAttrName =
 // if all defining operations are an AsyncWait
 bool comesFromAsyncWait(Value token) {
   if (auto defOp = token.getDefiningOp()) {
-    return isa<triton::gpu::AsyncWaitOp, amdgpu::AsyncWaitOp>(defOp);
+    return isa<triton::gpu::AsyncWaitOp, amdgpu::AsyncWaitOp,
+               amdgpu::AsyncTDMWait>(defOp);
   }
 
   auto blockArg = dyn_cast<BlockArgument>(token);
