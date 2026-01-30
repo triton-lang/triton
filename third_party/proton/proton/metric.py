@@ -13,7 +13,6 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
     BLOCK_SIZE: tl.constexpr = 256
     device_offset = tl.load(device_offset_ptr)
     tl.store(device_ptr + device_offset, metric_id)
-    device_offset = (device_offset + 1) % size
     num_iters = tl.cdiv(metric_value_size, BLOCK_SIZE)
     offsets = tl.arange(0, BLOCK_SIZE)
     for i in range(num_iters):
