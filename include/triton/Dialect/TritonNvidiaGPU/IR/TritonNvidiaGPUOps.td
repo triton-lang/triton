@@ -289,6 +289,46 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
 }
 
+def TTNG_AsyncCLCTryCancelOp : TTNG_Op<"async_clc_try_cancel", []> {
+  let summary = "Requests cancellation of cluster which is not launched yet";
+
+  let description = [{
+    Requests atomically cancelling the launch of a cluster that has not started running yet.
+
+    This lowers using PTX instruction
+    clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128
+
+    It asynchronously writes an opaque response (16-byte CLC response) to shared memory. The completion of the asynchronous operation is tracked using the mbarrier object in `alloc`.
+
+    https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-clusterlaunchcontrol-try-cancel
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarAlloc,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$clcResAlloc
+  );
+
+  let assemblyFormat = "$mbarAlloc`,` $clcResAlloc attr-dict `:` type(operands)";
+}
+
+def TTNG_CLCQueryCancelOp : TTNG_Op<"clc_query_cancel", []> {
+  let summary = "Extract CTA ID from CLC response";
+
+  let description = [{
+    Extract CTA ID from CLC response if try_cancel was successful.
+    Otherwise, returns -1.
+
+    https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-clusterlaunchcontrol-query-cancel
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$clcResAlloc
+  );
+
+  let results = (outs I32:$ctaId);
+
+  let assemblyFormat = "$clcResAlloc attr-dict `:` functional-type(operands, $ctaId)";
+}
 
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [AttrSizedOperandSegments]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
