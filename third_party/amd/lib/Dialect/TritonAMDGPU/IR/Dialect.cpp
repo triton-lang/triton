@@ -858,8 +858,10 @@ LogicalResult AsyncTDMGatherOp::verify() {
 
   auto paddedEnc =
       llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
-  if (paddedEnc)
-    return emitOpError("TDM gather does not support padding");
+  if (paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
+                     paddedEnc.getPaddings().size() == 1))
+    return emitOpError(
+        "TDM gather does not support multiple interval-padding pairs");
 
   if (!paddedEnc && !swizzledEnc)
     return emitOpError("Invalid shared memory layout for TDM");
