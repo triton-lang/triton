@@ -86,9 +86,9 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
 namespace mlir::triton::NVIDIA {
 
 // Check if the reduction can use a redux op and return the kind.
-static std::optional<NVVM::ReductionKind> matchReduxKind(triton::ReduceOp op,
-                                                         int computeCapability,
-                                                         bool &useNanQualifier) {
+static std::optional<NVVM::ReductionKind>
+matchReduxKind(triton::ReduceOp op, int computeCapability,
+               bool &useNanQualifier) {
   useNanQualifier = false;
   if (computeCapability < 80)
     return std::nullopt;
