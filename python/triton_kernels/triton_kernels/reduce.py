@@ -58,6 +58,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     YMx, stride_ymx0, stride_ymx1,  # y mx scale
                     Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
                     Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
+                    UnpaddedBatchSize,  # optional scalar tensor
                     # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
                     K: tl.constexpr, S0, X_S1, Y_S1,  #
                     POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
@@ -86,7 +87,13 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
     offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
     offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
-    valid_s0 = offs_s0 < S0
+    if UnpaddedBatchSize is not None:
+        unpadded = tl.load(UnpaddedBatchSize).to(tl.int32)
+        if pid_s0 * BLOCK_S0 >= unpadded:
+            return
+        valid_s0 = offs_s0 < unpadded
+    else:
+        valid_s0 = offs_s0 < S0
     valid_x_s1 = offs_x_s1 < X_S1
     valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
     y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
@@ -160,6 +167,7 @@ def reduce_forward(
     postprocess_fn1: Optional[PostprocessFn] = None,
     # TODO: keeping for backward compatibility, but will remove !
     postprocess_fn2: Optional[PostprocessFn] = None,
+    unpadded_batch_size: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Performs a reduction over the specified dimension of the input tensor,
@@ -178,6 +186,8 @@ def reduce_forward(
           scale factors of the same shape as `x` (or broadcastable to it).
           the reduction is performed over `x * scale`. If `scale is None`,
           a value of 1 is used everywhere.
+        - unpadded_batch_size: Optional[torch.Tensor]
+          Optional single-element tensor specifying the number of entries to reduce along the first dimension.
 
     Returns:
         - output: torch.Tensor
@@ -250,6 +260,7 @@ def reduce_forward(
         y_mxscale, stride_ymx0, stride_ymx1,  #
         mask, stride_mr, stride_m0, stride_m1,  #
         scale, stride_sr, stride_s0, stride_s1,  #
+        unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
         *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
         x_flex.scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
@@ -295,6 +306,7 @@ def _reduce_backward(
     stride_sr,
     stride_s0,
     stride_s1,  # scale (optional)
+    UnpaddedBatchSize,  # optional scalar tensor
     K,
     S0,
     X_S1,
@@ -323,7 +335,13 @@ def _reduce_backward(
     offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
     offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
 
-    valid_s0 = offs_s0 < S0
+    if UnpaddedBatchSize is not None:
+        unpadded = tl.load(UnpaddedBatchSize).to(tl.int32)
+        if pid_s0 * BLOCK_S0 >= unpadded:
+            return
+        valid_s0 = offs_s0 < unpadded
+    else:
+        valid_s0 = offs_s0 < S0
     valid_x_s1 = offs_x_s1 < X_S1
     valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
 
@@ -385,6 +403,7 @@ def reduce_backward(
     mask_strides: Optional[tuple[int, int, int]],
     scale_strides: Optional[tuple[int, int, int]],
     dx: torch.Tensor,
+    unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
     # Shapes/axes handling mirrors `reduce(...)`
     if dim < 0:
@@ -436,6 +455,7 @@ def reduce_backward(
         stride_sr,
         stride_s0,
         stride_s1,
+        unpadded_batch_size,
         K,
         S0,
         X_S1,
@@ -475,7 +495,7 @@ class _ReduceAutograd(torch.autograd.Function):
                 x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], y_dtype: Optional[torch.dtype],
                 y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool, y_has_mx: Optional[bool],
                 y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
-                postprocess_fn2: Optional[PostprocessFn]):
+                postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
             x=x,
@@ -491,6 +511,7 @@ class _ReduceAutograd(torch.autograd.Function):
             y=y,
             postprocess_fn1=postprocess_fn1,
             postprocess_fn2=postprocess_fn2,
+            unpadded_batch_size=unpadded_batch_size,
         )
 
         # Save everything needed for backward (no tensors are modified)
@@ -508,6 +529,7 @@ class _ReduceAutograd(torch.autograd.Function):
         ctx.mask_strides = tuple(mask.stride()) if mask is not None else None
         ctx.scale_strides = tuple(scale.stride()) if scale is not None else None
         ctx.y_has_mx = bool(y_mx is not None)
+        ctx.unpadded_batch_size = unpadded_batch_size
 
         return y, y_mx
 
@@ -534,8 +556,9 @@ class _ReduceAutograd(torch.autograd.Function):
             mask_strides=ctx.mask_strides,
             scale_strides=ctx.scale_strides,
             dx=dx,
+            unpadded_batch_size=ctx.unpadded_batch_size,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(
@@ -552,9 +575,11 @@ def reduce(
     y_has_mx: Optional[bool] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
+    unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
     return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, y_dtype, y_flex,  #
-                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2)
+                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2,
+                                 unpadded_batch_size)
 
 
 # ------------------------------------------------------------
@@ -574,7 +599,8 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
                  scale: Optional[torch.Tensor] = None,  #
                  x_mxscale: Optional[torch.Tensor] = None,  #
                  x_flex: Optional[InFlexData] = InFlexData(), y_flex: Optional[OutFlexData] = OutFlexData(),
-                 y_flex_saturate_inf: bool = False, postprocess_fn1: Optional[callable] = None):
+                 y_flex_saturate_inf: bool = False, postprocess_fn1: Optional[callable] = None,
+                 unpadded_batch_size: Optional[torch.Tensor] = None):
     from triton_kernels.numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
     x_dtype = x.dtype
     # upcast input
