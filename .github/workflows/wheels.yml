@@ -93,7 +93,7 @@ jobs:
           export CIBW_ENABLE=cpython-freethreading
           python3 -m cibuildwheel . --output-dir wheelhouse
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cibw-wheels-manylinux_2_28_${{ matrix.config.arch }}-wheels-upload
           path: ./wheelhouse/*.whl
