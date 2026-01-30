@@ -101,6 +101,10 @@ def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
 
 
+def is_hip_rdna():
+    return is_hip_rdna3() or is_hip_rdna4()
+
+
 def get_hip_lds_size():
     return 163840 if is_hip_cdna4() else 65536
 
