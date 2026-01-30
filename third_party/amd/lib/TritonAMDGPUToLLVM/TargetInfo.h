@@ -105,6 +105,7 @@ public:
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
 
   bool supportsMultiCTALaunch() const;
+  bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

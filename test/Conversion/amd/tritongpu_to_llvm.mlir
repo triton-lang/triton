@@ -432,14 +432,15 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // CHECK-DAG: %[[CST8:.+]] = llvm.mlir.constant(8 : i32)
     // CHECK-DAG: %[[CST9:.+]] = llvm.mlir.constant(9 : i32)
 
-    //      CHECK: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST8]] : i32
+    //      CHECK: %[[SHR0:.+]] = llvm.lshr %[[ADD:.+]], %[[CST8]] : i32
     // CHECK-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST3]] : i32
     // CHECK-NEXT: %[[ADD0:.+]] = llvm.add %[[SHL0]], %[[CST0]] : i32
-    // CHECK-NEXT: %[[SHR1:.+]] = llvm.ashr %[[ADD]], %[[CST9]] : i32
+    // CHECK-NEXT: %[[SHR1:.+]] = llvm.lshr %[[ADD]], %[[CST9]] : i32
     // CHECK-NEXT: %[[SHL1:.+]] = llvm.shl %[[SHR1]], %[[CST4]] : i32
     // CHECK-NEXT: %[[ADD1:.+]] = llvm.add %[[ADD0]], %[[SHL1]] : i32
     // CHECK-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32
-    // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD2]]]
+    // CHECK-NEXT: %[[ADD3:.+]] = llvm.add %[[ADD2]], %[[CST0]] : i32
+    // CHECK: llvm.getelementptr inbounds %{{.+}}[%[[ADD3]]]
 
     // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
     %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
@@ -484,7 +485,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // GFX950-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)
     // GFX950-DAG: %[[CST2:.+]] = llvm.mlir.constant(2 : i32)
 
-    // GFX950: %[[SHR0:.+]] = llvm.ashr %[[ADD:.+]], %[[CST7]] : i32
+    // GFX950-DAG: %[[SHR0:.+]] = llvm.lshr %[[ADD:.+]], %[[CST7]] : i32
     // GFX950-NEXT: %[[SHL0:.+]] = llvm.shl %[[SHR0]], %[[CST2]] : i32
     // GFX950-NEXT: %[[ADD1:.+]] = llvm.add %[[CST0]], %[[SHL0]] : i32
     // GFX950-NEXT: %[[ADD2:.+]] = llvm.add %[[ADD]], %[[ADD1]] : i32

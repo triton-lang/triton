@@ -105,7 +105,10 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return ROCDL::ClusterIdXOp::create(rewriter, loc, rewriter.getI32Type());
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                         "llvm.amdgcn.cluster.workgroup.id.x",
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -676,6 +679,10 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 }
 
 bool TargetInfo::supportsMultiCTALaunch() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsTDM() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
 

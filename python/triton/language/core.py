@@ -1795,7 +1795,7 @@ def permute(input, *dims, _semantic=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, _semantic=None):
+def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     """
     Concatenate the given blocks
 
@@ -1803,12 +1803,30 @@ def cat(input, other, can_reorder=False, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param reorder: Compiler hint. If true, the compiler is
+    :param can_reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
         order does not matter (e.g., result is only used in reduction ops).
-        Current implementation of `cat` supports only can_reorder=True.
+    :type can_reorder: bool
+    :param dim: The dimension to concatenate along (used when can_reorder is False).
+    :type dim: int
     """
-    return _semantic.cat(input, other, can_reorder)
+    if can_reorder:
+        return _semantic.cat(input, other, can_reorder)
+
+    rank = len(input.shape)
+    assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
+    dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
+               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+
+    # Join introduces a new minor dim; move it before the concat dim and merge.
+    c = join(input, other, _semantic=_semantic)
+    order = list(builtins.range(rank))
+    order.insert(dim, rank)
+    c = permute(c, order, _semantic=_semantic)
+    new_shape = list(input.shape)
+    new_shape[dim] = input.shape[dim] + other.shape[dim]
+    return reshape(c, new_shape, _semantic=_semantic)
 
 
 @builtin
