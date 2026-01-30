@@ -172,6 +172,11 @@ void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands);
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
+// Get backward slice of tensor values starting from the root node along with
+// encoding propagation. Backwards propagation can be controlled via
+// propagationAction to stop the current chain or aborting signalling an error
+enum class TraversalAction { Continue, Stop, AbortWithError };
+
 /// For a given \p root value with desired layout \p rootEncoding, get the
 /// backward slice of values that would have to be recreated to produce the
 /// value of \p root with that layout (without an intervening layout
@@ -179,13 +184,13 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 /// the following:
 ///   1. has the desired layout
 ///   2. \p getExistingConversion returns an existing converted value
-///   3. \p stopPropagation returns true for an op.
+///   3. \p propagateAction does not return Continue.
 /// The slice is returned in \p slice, and the desired layout of each value in
 /// the slice is stored in \p layouts.
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<TraversalAction(Operation *)> propagationAction = nullptr,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion =
         nullptr);
 
