@@ -14,12 +14,7 @@ constexpr size_t bytesForWords(size_t numWords) {
 }
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
-                       PendingGraphQueue &queue) {
-  if (queue.phase == Data::kNoCompletePhase) {
-    // Finished phase
-    return;
-  }
-
+                       const PendingGraphQueue &queue) {
   const size_t phase = queue.phase;
   const auto &pendingGraphs = queue.pendingGraphs;
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
@@ -100,8 +95,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       }
     }
   }
-
-  queue.phase = Data::kNoCompletePhase;
 }
 } // namespace
 
@@ -111,19 +104,19 @@ void PendingGraphPool::push(
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;
+  auto startBufferOffset = 0;
   {
     std::lock_guard<std::mutex> lock(mutex);
     auto &devicePool = pool[device];
     auto [poolIt, inserted] = devicePool.try_emplace(phase);
     if (inserted)
       poolIt->second = std::make_shared<Slot>();
+    startBufferOffset = deviceBufferOffset.try_emplace(device, 0).first->second;
     slot = poolIt->second;
   }
   {
     std::lock_guard<std::mutex> slotLock(slot->mutex);
     if (slot->queue == std::nullopt) {
-      const auto startBufferOffset =
-          deviceBufferOffset.try_emplace(device, 0).first->second;
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
     slot->queue->push(numNodes, numWords, dataToEntryIds);
@@ -149,25 +142,27 @@ void PendingGraphPool::peek(size_t phase) {
         slots.emplace_back(device, slotIt->second);
       }
     }
+    for (auto &[device, slotPtr] : slots) {
+      pool[device].erase(phase);
+    }
   }
   std::vector<std::pair<void *, size_t>> deviceNumWords;
   for (auto &[device, slotPtr] : slots) {
-    auto numWords = size_t{0};
     std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
-    if (slotPtr->queue == std::nullopt)
+    if (!slotPtr->queue.has_value())
       continue;
     auto &queue = slotPtr->queue.value();
-    numWords = queue.numWords;
+    auto numWords = queue.numWords;
     metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
       emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                         queue);
     });
     deviceNumWords.emplace_back(device, numWords);
+    slotPtr->queue.reset();
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto &[device, numWords] : deviceNumWords) {
-      pool[device].erase(phase);
       deviceRemainingCapacity[device] += bytesForWords(numWords);
     }
   }
@@ -196,6 +191,7 @@ bool PendingGraphPool::flushAll() {
       return false;
     poolCopy.swap(pool);
   }
+  std::vector<std::pair<void *, size_t>> deviceNumWords;
   metricBuffer->flush(
       [&](void *device, uint8_t *hostPtr) {
         auto deviceIt = poolCopy.find(device);
@@ -203,23 +199,20 @@ bool PendingGraphPool::flushAll() {
           return;
         for (auto &[_, slot] : deviceIt->second) {
           std::lock_guard<std::mutex> lock(slot->mutex);
-          if (slot->queue == std::nullopt)
+          if (!slot->queue.has_value())
             continue;
+          deviceNumWords.emplace_back(device, slot->queue->numWords);
           emitMetricRecords(*metricBuffer,
                             reinterpret_cast<uint64_t *>(hostPtr),
                             *slot->queue);
+          slot->queue.reset();
         }
       },
       true);
   {
     std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[device, devicePool] : poolCopy) {
-      for (auto &[_, slot] : devicePool) {
-        std::lock_guard<std::mutex> slotLock(slot->mutex);
-        if (slot->queue == std::nullopt)
-          continue;
-        deviceRemainingCapacity[device] += bytesForWords(slot->queue->numWords);
-      }
+    for (auto &[device, numWords] : deviceNumWords) {
+      deviceRemainingCapacity[device] += bytesForWords(numWords);
     }
   }
   return true;
