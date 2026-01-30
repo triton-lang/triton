@@ -4027,3 +4027,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %9 : tensor<4x1xi64, #blocked>
   }
 }
+
+// -----
+
+// CHECK-LABEL: remat_cycle_single_use
+// CHECK-NOT: ttg.convert_layout
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @remat_cycle_single_use(%arg0: !tt.ptr<f32>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #blocked>
+    %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    %1 = scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32 iter_args(%arg3 = %cst) -> (tensor<32xf32, #blocked>)  : i32 {
+      %2 = arith.muli %arg2, %c32_i32 : i32
+      %3 = tt.splat %2 : i32 -> tensor<32xi32, #blocked>
+      %4 = tt.addptr %0, %3 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
+      %5 = tt.load %4 : tensor<32x!tt.ptr<f32>, #blocked>
+      %6 = math.exp %5 : tensor<32xf32, #blocked>
+      %7 = math.exp %6 : tensor<32xf32, #blocked>
+      %8 = math.exp %7 : tensor<32xf32, #blocked>
+      %9 = math.exp %8 : tensor<32xf32, #blocked>
+      %10 = math.exp %9 : tensor<32xf32, #blocked>
+      %11 = arith.addf %arg3, %10 : tensor<32xf32, #blocked>
+      %12 = ttg.convert_layout %11 : tensor<32xf32, #blocked> -> tensor<32xf32, #blocked1>
+      "use"(%12) : (tensor<32xf32, #blocked1>) -> ()
+      scf.yield %11 : tensor<32xf32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: remat_for_iter_arg
+// CHECK-NOT: ttg.convert_layout
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @remat_for_iter_arg(%arg0: tensor<32x!tt.ptr<f32>, #blocked>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %0 = tt.load %arg0 : tensor<32x!tt.ptr<f32>, #blocked>
+    %1 = math.exp %0 : tensor<32xf32, #blocked>
+    %2 = math.exp %1 : tensor<32xf32, #blocked>
+    %3 = math.exp %2 : tensor<32xf32, #blocked>
+    %4 = math.exp %3 : tensor<32xf32, #blocked>
+    %5 = math.exp %4 : tensor<32xf32, #blocked>
+    %6 = scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32 iter_args(%arg3 = %5) -> (tensor<32xf32, #blocked>)  : i32 {
+      %7 = ttg.convert_layout %arg3 : tensor<32xf32, #blocked> -> tensor<32xf32, #blocked1>
+      "use"(%7) : (tensor<32xf32, #blocked1>) -> ()
+      scf.yield %arg3 : tensor<32xf32, #blocked>
+    }
+    tt.return
+  }
+}

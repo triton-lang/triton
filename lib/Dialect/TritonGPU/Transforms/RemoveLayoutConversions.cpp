@@ -1152,42 +1152,93 @@ void LayoutRematerialization::backwardRematerialization(
     }
   }
 
-  // Compute single-use operations
-  DenseMap<Operation *, bool> isSingleUse;
-  std::function<bool(Operation *)> isOpSingleUse;
-  isOpSingleUse = [&](Operation *op) -> bool {
-    // lookup in memoization array:
-    auto it = isSingleUse.find(op);
-    if (it != isSingleUse.end()) {
-      return it->second;
-    }
+  // Determine which values used by operations outside the slice. We can use
+  // this to determine whether they will actually survive and therefore need to
+  // contribute to the cost.
+  SetVector<Value> nonSliceOnlyValues;
 
-    bool singleUse = true;
-
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp) {
+  // Identify values that directly have uses outside the slice.
+  for (Value v : slice) {
+    for (auto &use : v.getUses()) {
+      auto *user = use.getOwner();
+      if (user == convertOp || sliceOps.contains(user))
+        continue;
+      // For yields and for ops, check whether the corresponding values are in
+      // the slice or unused instead.
+      SmallVector<Value> correspondingValues;
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto *parentOp = yieldOp->getParentOp();
+        unsigned idx = use.getOperandNumber();
+        if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+          correspondingValues.push_back(forOp.getRegionIterArg(idx));
+          correspondingValues.push_back(forOp.getResult(idx));
+        } else if (auto ifOp = dyn_cast<scf::IfOp>(parentOp)) {
+          correspondingValues.push_back(ifOp.getResult(idx));
+        }
+      } else if (auto forOp = dyn_cast<scf::ForOp>(user); forOp && forOp->getRegion(0).hasOneBlock()) {
+        correspondingValues.push_back(forOp.getTiedLoopRegionIterArg(&use));
+        correspondingValues.push_back(forOp.getTiedLoopResult(&use));
+      }
+      if (!correspondingValues.empty()) {
+        bool isSliceOnly = llvm::all_of(correspondingValues, [&](Value v) {
+          return slice.contains(v) || v.use_empty();
+        });
+        if (isSliceOnly)
           continue;
-        }
-        if (sliceOps.contains(user)) {
-          if (!isOpSingleUse(user)) {
-            singleUse = false;
-            break;
-          }
-        } else {
-          singleUse = false;
-          break;
-        }
       }
-      if (!singleUse) {
-        break;
+      nonSliceOnlyValues.insert(v);
+      break;
+    }
+  }
+
+  // Expand the set to all transitive operands in the slice.
+  for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
+    Value v = nonSliceOnlyValues[i];
+    if (auto *op = v.getDefiningOp()) {
+      // For for and if ops, find the yield operands that flow into this
+      // result.
+      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        auto result = cast<OpResult>(v);
+        Value init = forOp.getInits()[result.getResultNumber()];
+        if (slice.contains(init))
+          nonSliceOnlyValues.insert(init);
+        Value yieldOperand =
+            forOp.getYieldedValues()[result.getResultNumber()];
+        if (slice.contains(yieldOperand))
+          nonSliceOnlyValues.insert(yieldOperand);
+        continue;
       }
+      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        auto result = cast<OpResult>(v);
+        Value thenYield =
+            ifOp.thenYield().getOperand(result.getResultNumber());
+        if (slice.contains(thenYield))
+          nonSliceOnlyValues.insert(thenYield);
+        Value elseYield =
+            ifOp.elseYield().getOperand(result.getResultNumber());
+        if (slice.contains(elseYield))
+          nonSliceOnlyValues.insert(elseYield);
+        continue;
+      }
+      for (auto operand : op->getOperands())
+        if (slice.contains(operand))
+          nonSliceOnlyValues.insert(operand);
+      continue;
     }
 
-    // insert into memoization array:
-    isSingleUse[op] = singleUse;
-    return singleUse;
-  };
+    // For iter args of for loops, find the operands that flow into this
+    // argument.
+    auto arg = cast<BlockArgument>(v);
+    auto *parentOp = arg.getOwner()->getParentOp();
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      OpOperand *operand = forOp.getTiedLoopInit(arg);
+      assert(slice.contains(operand->get()));
+      nonSliceOnlyValues.insert(operand->get());
+      OpOperand *yieldOperand = forOp.getTiedLoopYieldedValue(arg);
+      assert(slice.contains(yieldOperand->get()));
+      nonSliceOnlyValues.insert(yieldOperand->get());
+    }
+  }
 
   // Measure the number of bytes that we're manipulating with the
   // ConvertLayoutOp. We pessimistically assume that we round-trip
@@ -1206,11 +1257,16 @@ void LayoutRematerialization::backwardRematerialization(
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
-    if (isOpSingleUse(op)) {
-      // when we rematerialise, this operation does not get duplicated
-      // so it does not contribute to our cost model:
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+      return nonSliceOnlyValues.contains(v);
+    });
+    if (!isOpUsedOutsideSlice)
       continue;
-    } else if (isa<arith::ConstantOp>(op)) {
+
+    if (isa<arith::ConstantOp>(op)) {
       // special-case: arith.constant has zero cost
       continue;
     } else if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
