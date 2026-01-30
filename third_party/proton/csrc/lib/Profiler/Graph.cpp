@@ -14,7 +14,12 @@ constexpr size_t bytesForWords(size_t numWords) {
 }
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
-                       const PendingGraphQueue &queue) {
+                       PendingGraphQueue &queue) {
+  if (queue.phase == Data::kNoCompletePhase) {
+    // Finished phase
+    return;
+  }
+
   const size_t phase = queue.phase;
   const auto &pendingGraphs = queue.pendingGraphs;
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
@@ -58,7 +63,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
         std::vector<uint64_t> values(metricDesc.size);
         for (size_t j = 0; j < metricDesc.size; ++j) {
-          values[j] = readWord((wordOffset + j) % capacityWords);
+          values[j] = readWord(wordOffset + j);
         }
         metricValueVariant = std::move(values);
         break;
@@ -66,7 +71,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       case variant_index_v<std::vector<int64_t>, MetricValueType>: {
         std::vector<int64_t> values(metricDesc.size);
         for (size_t j = 0; j < metricDesc.size; ++j) {
-          const uint64_t bits = readWord((wordOffset + j) % capacityWords);
+          const uint64_t bits = readWord(wordOffset + j);
           std::memcpy(&values[j], &bits, sizeof(bits));
         }
         metricValueVariant = std::move(values);
@@ -75,7 +80,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       case variant_index_v<std::vector<double>, MetricValueType>: {
         std::vector<double> values(metricDesc.size);
         for (size_t j = 0; j < metricDesc.size; ++j) {
-          const uint64_t bits = readWord((wordOffset + j) % capacityWords);
+          const uint64_t bits = readWord(wordOffset + j);
           std::memcpy(&values[j], &bits, sizeof(bits));
         }
         metricValueVariant = std::move(values);
@@ -95,6 +100,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       }
     }
   }
+
+  queue.phase = Data::kNoCompletePhase;
 }
 } // namespace
 
