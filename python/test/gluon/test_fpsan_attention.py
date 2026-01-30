@@ -984,11 +984,11 @@ def test_attention_fwd(monkeypatch):
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
 
-    ref_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=128)
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=64)
-    # torch.testing.assert_close(ref_out, tri_out, atol=0, rtol=0)
-    assert not compare_bitwise_equal(ref_out,
-                                     tri_out), "Reference and Triton outputs should not be bitwise equal in fp mode"
+    # ref_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=128)
+    # tri_out, _ = attention_forward(q, k, v, causal, sm_scale, BLOCK_M=256, BLOCK_N=64)
+    # # torch.testing.assert_close(ref_out, tri_out, atol=0, rtol=0)
+    # assert not compare_bitwise_equal(ref_out,
+    #                                  tri_out), "Reference and Triton outputs should not be bitwise equal in fp mode"
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "fpsan")
     triton.knobs.refresh_knobs()

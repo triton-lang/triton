@@ -1,6 +1,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -98,32 +99,6 @@ Value resolveMemdescRoot(Value memdesc) {
     return cur;
   }
   return Value();
-}
-
-void recordPreferredLayout(
-    DenseMap<Value, ttg::BlockedEncodingAttr> &preferredLayouts,
-    DenseSet<Value> &conflictingLayouts, Value memdesc, Type tensorTy) {
-  memdesc = resolveMemdescRoot(memdesc);
-  if (!memdesc)
-    return;
-  auto ranked = dyn_cast<RankedTensorType>(tensorTy);
-  if (!ranked)
-    return;
-  auto encoding =
-      dyn_cast_or_null<ttg::BlockedEncodingAttr>(ranked.getEncoding());
-  if (!encoding)
-    return;
-  if (conflictingLayouts.contains(memdesc))
-    return;
-  auto it = preferredLayouts.find(memdesc);
-  if (it == preferredLayouts.end()) {
-    preferredLayouts[memdesc] = encoding;
-    return;
-  }
-  if (it->second != encoding) {
-    preferredLayouts.erase(it);
-    conflictingLayouts.insert(memdesc);
-  }
 }
 
 Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
@@ -364,25 +339,9 @@ bool isValueDefinedInRegion(Value value, Region *region) {
 
 class TmemScratchManager {
 public:
-  TmemScratchManager(
-      const DenseMap<Value, ttg::BlockedEncodingAttr> *preferredLayouts,
-      const DenseSet<Value> *conflictingLayouts)
-      : preferredLayouts(preferredLayouts),
-        conflictingLayouts(conflictingLayouts) {}
-
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
                                               Value memdesc,
                                               ttg::MemDescType memTy) {
-    Value key = resolveMemdescRoot(memdesc);
-    if (!key)
-      key = memdesc;
-    if (preferredLayouts && conflictingLayouts &&
-        !conflictingLayouts->contains(key)) {
-      if (auto it = preferredLayouts->find(key);
-          it != preferredLayouts->end() &&
-          isEncodingCompatible(it->second, rewriter))
-        return it->second;
-    }
     return getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
                                        memTy.getElementType());
   }
@@ -607,26 +566,7 @@ public:
   }
 
 private:
-  static unsigned productUnsigned(ArrayRef<unsigned> dims) {
-    unsigned prod = 1;
-    for (unsigned d : dims)
-      prod *= d;
-    return prod;
-  }
-
-  static bool isEncodingCompatible(ttg::BlockedEncodingAttr encoding,
-                                   PatternRewriter &rewriter) {
-    unsigned encWarps = productUnsigned(encoding.getWarpsPerCTA());
-    unsigned encThreads = productUnsigned(encoding.getThreadsPerWarp());
-    unsigned numWarps =
-        ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
-    unsigned threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
-    return encWarps == numWarps && encThreads == threadsPerWarp;
-  }
-
   DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
-  const DenseMap<Value, ttg::BlockedEncodingAttr> *preferredLayouts = nullptr;
-  const DenseSet<Value> *conflictingLayouts = nullptr;
 };
 
 std::optional<ScratchInfo>
@@ -1059,128 +999,6 @@ private:
   TmemScratchManager *scratch;
 };
 
-struct TCGen5MMAScaledPattern
-    : public OpRewritePattern<ttng::TCGen5MMAScaledOp> {
-  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch)
-      : OpRewritePattern(ctx), scratch(scratch) {}
-
-  LogicalResult matchAndRewrite(ttng::TCGen5MMAScaledOp op,
-                                PatternRewriter &rewriter) const override {
-    auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
-    auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
-    auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
-
-    if (!isa<FloatType>(aMemTy.getElementType()) ||
-        !isa<FloatType>(bMemTy.getElementType()) ||
-        !isa<FloatType>(dMemTy.getElementType()))
-      return failure();
-
-    auto scope = getScratchScopeRegion(op);
-    auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
-    if (!dInfo)
-      return failure();
-
-    auto loc = op.getLoc();
-
-    bool aIsTmem = isa<ttng::TensorMemorySpaceAttr>(aMemTy.getMemorySpace());
-    bool bIsTmem = isa<ttng::TensorMemorySpaceAttr>(bMemTy.getMemorySpace());
-
-    if ((aIsTmem && aMemTy.getRank() != 2) ||
-        (bIsTmem && bMemTy.getRank() != 2) || dMemTy.getRank() != 2)
-      return failure();
-
-    auto aShape = aMemTy.getShape();
-    auto bShape = bMemTy.getShape();
-    if (aShape.size() != 2 || bShape.size() != 2)
-      return failure();
-    if (aShape[1] != bShape[0])
-      return failure();
-    int64_t m = aShape[0];
-    int64_t k = aShape[1];
-    int64_t n = bShape[1];
-
-    auto *ctx = rewriter.getContext();
-    auto accElem =
-        IntegerType::get(ctx, dMemTy.getElementType().getIntOrFloatBitWidth());
-    Value useDInt =
-        arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseD());
-    Value predInt =
-        arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
-    rewriter.setInsertionPoint(op);
-    auto aScratch = createOperandScratch(rewriter, loc, *scratch, op.getA(),
-                                         aMemTy, aIsTmem, scope);
-    if (!aScratch)
-      return failure();
-    auto bScratch = createOperandScratch(rewriter, loc, *scratch, op.getB(),
-                                         bMemTy, bIsTmem, scope);
-    if (!bScratch)
-      return failure();
-
-    int64_t tileM = std::min<int64_t>(kTileM, m);
-    int64_t tileN = std::min<int64_t>(kTileN, n);
-    if ((m % tileM) != 0 || (n % tileN) != 0)
-      return failure();
-
-    auto accTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {tileM, tileN}, dMemTy.getElementType());
-    auto accTileTy = RankedTensorType::get(
-        {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
-    auto aTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {tileM, k}, aMemTy.getElementType());
-    auto aTileTy =
-        RankedTensorType::get({tileM, k}, aMemTy.getElementType(), aTileLayout);
-    auto bTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {k, tileN}, bMemTy.getElementType());
-    auto bTileTy =
-        RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
-
-    Value zero =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(0));
-    Value mUpper =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(m));
-    Value nUpper =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(n));
-    Value mStep =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(tileM));
-    Value nStep =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(tileN));
-
-    auto mLoop = emitMmaEmulationLoops(
-        rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
-        tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
-        predInt, /*aStride=*/m, /*bStride=*/k, /*dStride=*/m);
-    if (!mLoop)
-      return failure();
-    rewriter.setInsertionPointAfter(*mLoop);
-
-    if (!op.getBarriers().empty()) {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointAfter(*mLoop);
-      auto barriers = op.getBarriers();
-      auto barrierPreds = op.getBarrierPreds();
-      for (size_t i = 0; i < barriers.size(); ++i) {
-        Value pred =
-            arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
-        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
-      }
-    }
-
-    if (op.getNumResults() == 0) {
-      rewriter.eraseOp(op);
-      return success();
-    }
-    SmallVector<Value> deps;
-    if (op.getAccDep())
-      deps.push_back(op.getAccDep());
-    Value token = createAsyncToken(rewriter, loc, deps);
-    rewriter.replaceOp(op, token);
-    return success();
-  }
-
-private:
-  TmemScratchManager *scratch;
-};
-
 template <typename OpTy>
 struct IdentityPattern : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
@@ -1197,29 +1015,21 @@ class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
   void runOnOperation() override {
-    DenseMap<Value, ttg::BlockedEncodingAttr> preferredLayouts;
-    DenseSet<Value> conflictingLayouts;
-    getOperation().walk([&](Operation *op) {
-      if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
-        if (Value src = alloc.getSrc()) {
-          recordPreferredLayout(preferredLayouts, conflictingLayouts,
-                                alloc.getResult(), src.getType());
-        }
-        return;
+    bool hasUnsupportedOperations = false;
+    getOperation()->walk([&hasUnsupportedOperations](Operation *op) {
+      if (isa<ttng::TCGen5MMAScaledOp>(op)) {
+        hasUnsupportedOperations = true;
+        llvm::errs() << "FpSanitizer error: Unsupported operation found: "
+                     << op->getName() << "\n";
+        return WalkResult::interrupt();
       }
-      if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
-        recordPreferredLayout(preferredLayouts, conflictingLayouts,
-                              load.getSrc(), load.getType());
-        return;
-      }
-      if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
-        recordPreferredLayout(preferredLayouts, conflictingLayouts,
-                              store.getDst(), store.getSrc().getType());
-        return;
-      }
+      return WalkResult::advance();
     });
+    if (hasUnsupportedOperations) {
+      signalPassFailure();
+    }
 
-    TmemScratchManager scratch(&preferredLayouts, &conflictingLayouts);
+    TmemScratchManager scratch;
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
@@ -1233,69 +1043,16 @@ public:
                  IdentityPattern<math::FloorOp>, IdentityPattern<math::CeilOp>,
                  IdentityPattern<tt::PreciseSqrtOp>>(&getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
-                 TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
-                                                           &scratch);
+                 TCGen5MMAPattern>(&getContext(), &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
-      llvm::errs() << "Failed to apply patterns\n";
+      llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();
     }
 
-    auto onlyUsedByWarpSpecialize = [](Value value) -> bool {
-      for (OpOperand &use : value.getUses()) {
-        if (isa<ttg::WarpSpecializeOp, ttg::MemDescIndexOp,
-                ttng::TMEMSubSliceOp, ttg::MemDescReinterpretOp,
-                ttng::WaitBarrierOp>(use.getOwner()))
-          continue;
-        return false;
-      }
-      return true;
-    };
-
-    SmallVector<Operation *> eraseOps;
-    bool hasUnsupported = false;
-    getOperation().walk([&](Operation *op) {
-      if (isa<ttng::TMEMAllocOp, ttng::TMEMSubSliceOp>(op)) {
-        if (op->use_empty()) {
-          eraseOps.push_back(op);
-        } else if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
-          if (!onlyUsedByWarpSpecialize(alloc.getResult()))
-            hasUnsupported = true;
-        } else {
-          hasUnsupported = true;
-        }
-        return;
-      }
-      if (auto view = dyn_cast<ttg::MemDescIndexOp>(op)) {
-        auto memTy = dyn_cast<ttg::MemDescType>(view.getType());
-        if (memTy && isa<ttng::TensorMemorySpaceAttr>(memTy.getMemorySpace()) &&
-            view->use_empty()) {
-          eraseOps.push_back(op);
-        }
-        return;
-      }
-      if (auto view = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
-        auto memTy = dyn_cast<ttg::MemDescType>(view.getType());
-        if (memTy && isa<ttng::TensorMemorySpaceAttr>(memTy.getMemorySpace()) &&
-            view->use_empty()) {
-          eraseOps.push_back(op);
-        }
-        return;
-      }
-      if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp, ttng::TMEMCopyOp,
-              ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp, ttng::TCGen5CommitOp>(
-              op)) {
-        hasUnsupported = true;
-      }
-    });
-
-    for (Operation *op : eraseOps)
-      op->erase();
-    if (hasUnsupported) {
-      llvm::errs() << "Has unsupported operations\n";
-      signalPassFailure();
-    }
+    // TODO: Remove unused tmem usages. This requires unwiring them from the
+    // warp specialize partitions.
   }
 };
 
