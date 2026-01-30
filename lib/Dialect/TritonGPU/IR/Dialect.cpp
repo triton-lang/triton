@@ -4032,61 +4032,76 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   return dst;
 }
 
-FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
-    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
-    bool fp4Padded, bool isTransposed, bool packedSize,
-    function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
-  SmallVector<int64_t> blockShape(shapePerCTA);
+// Helper function for im2col mode block shape calculation.
+// Im2col mode produces a 2D block: [pixelsPerColumn, channelsPerPixel]
+// Constraints:
+// - channelsPerPixel (contigDim): max 256, or swizzle byte size if enabled
+// - pixelsPerColumn (otherDim): max 1024, no splitting (single TMA message)
+// Doc:
+// https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                       int swizzleBytes, bool fp4Padded, bool isTransposed,
+                       bool packedSize,
+                       function_ref<InFlightDiagnostic()> emitError) {
+  assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
 
-  // Common logic for both tiled and im2col modes
+  SmallVector<int64_t> blockShape(shapePerCTA);
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
   if (fp4Padded)
     blockShape[contigDim] *= 2;
 
-  if (mode == TMAMode::Im2Col) {
-    // Im2col mode produces a 2D block: [pixelsPerColumn, channelsPerPixel]
-    assert(blockShape.size() == 2 && "im2col mode requires a 2D block shape");
-    // Im2col mode block shape constraints:
-    // - contigDim (channelsPerPixel): max 256
-    // - other dimension (pixelsPerColumn): max 1024
-    // - Both dimensions must be powers of 2
-    // - Doc:
-    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
-    constexpr int64_t contigDimMax = 256;
-    constexpr int64_t otherDimMax = 1024;
-    int otherDim = (contigDim == 0) ? 1 : 0;
-    // Check that pixelsPerColumn doesn't exceed the hardware maximum of 1024.
-    // This constraint ensures a single TMA message can cover all pixels,
-    // avoiding the need for multiple messages along spatial dimensions (N, D,
-    // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
-    // that depend on input tensor shape and padding, which is non-trivial.
-    // TODO: Add support for pixelsPerColumn > 1024 in the future.
-    if (blockShape[otherDim] > otherDimMax) {
-      return emitError() << "im2col mode: pixelsPerColumn dimension "
-                         << blockShape[otherDim]
-                         << " exceeds the maximum supported value of "
-                         << otherDimMax;
-    }
-    // Clamp the contiguous dimension (channelsPerPixel) to max 256
-    blockShape[contigDim] = std::min(blockShape[contigDim], contigDimMax);
-    // Last dim must equal the swizzle byte size
-    if (swizzleBytes != 0) {
-      auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
-      if (blockShape[contigDim] < contigDimSize) {
-        return emitError() << "im2col mode: block shape along the contiguous "
-                              "dimension "
-                           << contigDim
-                           << " is too small for the swizzle byte size "
-                           << swizzleBytes << ", got " << blockShape[contigDim]
-                           << " but expected at least " << contigDimSize;
-      }
-      blockShape[contigDim] = contigDimSize;
-    }
-    if (fp4Padded && packedSize) {
-      blockShape[contigDim] /= 2;
-    }
-    return blockShape;
+  constexpr int64_t contigDimMax = 256;
+  constexpr int64_t otherDimMax = 1024;
+  int otherDim = (contigDim == 0) ? 1 : 0;
+
+  // Check that pixelsPerColumn doesn't exceed the hardware maximum of 1024.
+  // This constraint ensures a single TMA message can cover all pixels,
+  // avoiding the need for multiple messages along spatial dimensions (N, D,
+  // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
+  // that depend on input tensor shape and padding, which is non-trivial.
+  // TODO: Add support for pixelsPerColumn > 1024 in the future.
+  if (blockShape[otherDim] > otherDimMax) {
+    return emitError() << "im2col mode: pixelsPerColumn dimension "
+                       << blockShape[otherDim]
+                       << " exceeds the maximum supported value of "
+                       << otherDimMax;
   }
+
+  // Clamp the contiguous dimension (channelsPerPixel) to max 256
+  blockShape[contigDim] = std::min(blockShape[contigDim], contigDimMax);
+
+  // Contiguous dim must equal the swizzle byte size if swizzle is enabled
+  if (swizzleBytes != 0) {
+    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+    if (blockShape[contigDim] < contigDimSize) {
+      return emitError() << "im2col mode: block shape along the contiguous "
+                            "dimension "
+                         << contigDim
+                         << " is too small for the swizzle byte size "
+                         << swizzleBytes << ", got " << blockShape[contigDim]
+                         << " but expected at least " << contigDimSize;
+    }
+    blockShape[contigDim] = contigDimSize;
+  }
+
+  if (fp4Padded && packedSize) {
+    blockShape[contigDim] /= 2;
+  }
+  return blockShape;
+}
+
+// Tiled mode block shape calculation.
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                      int swizzleBytes, bool fp4Padded, bool isTransposed,
+                      bool packedSize,
+                      function_ref<InFlightDiagnostic()> emitError) {
+  SmallVector<int64_t> blockShape(shapePerCTA);
+
+  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
+  if (fp4Padded)
+    blockShape[contigDim] *= 2;
 
   // Tiled mode specific logic
   // All dimensions must be at most 256
@@ -4111,18 +4126,33 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
   }
   return blockShape;
 }
+// Public API with emitError - dispatches to static helpers based on mode.
+FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
+  if (mode == TMAMode::Im2Col) {
+    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, swizzleBytes,
+                                  fp4Padded, isTransposed, packedSize,
+                                  emitError);
+  }
+  // Tiled mode
+  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
+                               fp4Padded, isTransposed, packedSize, emitError);
+}
+
+// Convenience wrapper that calls report_fatal_error on failure.
 SmallVector<int64_t> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
-  return *getTMABlockShape(
-      shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded, isTransposed,
-      packedSize,
-      []() -> InFlightDiagnostic {
-        llvm::report_fatal_error(
-            "Block shape is too small for the swizzle byte "
-            "size in NVMMA Shared Layout.");
-      },
-      mode);
+  auto emitFatalError = []() -> InFlightDiagnostic {
+    llvm::report_fatal_error("getTMABlockShape failed: invalid block shape "
+                             "for TMA operation.");
+  };
+
+  return *getTMABlockShape(shapePerCTA, elementBitWidth, swizzleBytes,
+                           fp4Padded, isTransposed, packedSize, emitFatalError,
+                           mode);
 }
 
 SetVector<int> triton::gpu::getPartitionIds(Operation *op) {

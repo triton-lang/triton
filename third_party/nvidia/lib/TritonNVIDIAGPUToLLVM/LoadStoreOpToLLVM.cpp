@@ -1299,27 +1299,6 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
   return unpackLayout * packedLayout;
 }
 
-// Validate im2col mode constraints for TMA operations.
-// Returns success if valid, or emits an error and returns failure.
-static LogicalResult
-validateIm2ColConstraints(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op) {
-  // Im2col mode requires offsets to be provided
-  if (op.getOffsets().empty()) {
-    return op.emitError("im2col mode requires offsets to be provided");
-  }
-  // The number of offsets should be coord.size() - 2
-  // For 3D tensors (NWC): 1 offset (offset_w)
-  // For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
-  // For 5D tensors (NDHWC): 3 offsets (offset_w, offset_h, offset_d)
-  size_t expectedOffsets = op.getCoord().size() - 2;
-  if (op.getOffsets().size() != expectedOffsets) {
-    return op.emitError("im2col mode expects ")
-           << expectedOffsets << " offsets for a " << op.getCoord().size()
-           << "D tensor, but got " << op.getOffsets().size();
-  }
-  return success();
-}
-
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1341,12 +1320,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
     ttg::TMAMode tmaMode =
         isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
-
-    // Validate im2col mode constraints
-    if (isIm2Col) {
-      if (failed(validateIm2ColConstraints(op)))
-        return failure();
-    }
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1470,24 +1443,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           coord = b.mul(coord, b.i32_val(2));
         }
         if (i < offsets.size()) {
-          Value offset = offsets[offsets.size() - i - 1].second;
-
-          // For im2col mode, only the channel dimension (i=0, corresponding to
-          // the last input coordinate C) should get a non-zero offset. The
-          // pixelsPerColumn dimension is constrained to <= 1024, so it always
-          // fits in a single TMA message (offset should be 0 for i > 0).
-          if (isIm2Col && i > 0) {
-            // Verify offset is 0 if it's a compile-time constant
-            if (auto constOp = offset.getDefiningOp<LLVM::ConstantOp>()) {
-              auto constVal =
-                  dyn_cast<mlir::IntegerAttr>(constOp.getValue()).getInt();
-              assert(constVal == 0 &&
-                     "im2col: pixelsPerColumn offset must be 0 (dimension "
-                     "constrained to <= 1024)");
-            }
-          }
-
-          coord = b.add(coord, offset);
+          coord = b.add(coord, offsets[offsets.size() - i - 1].second);
         }
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1557,8 +1513,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto rank = coords.size();
 
   // TMA store only supports tiled mode
-  auto msgToPackedOffset =
-      getMsgToPackedOffsetLayout(srcTy);
+  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
