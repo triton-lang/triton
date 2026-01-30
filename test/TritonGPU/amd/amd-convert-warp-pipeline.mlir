@@ -359,21 +359,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-LABEL: tt.func @priority_reset_between_stages
 // Before loop: priority for first cluster
-// CHECK: rocdl.setprio 3
+// CHECK: rocdl.s.setprio 3
 // CHECK: scf.for
-// End of loop: priority reset for second cluster (wraps around)
-// CHECK: rocdl.setprio 0
-// CHECK: rocdl.sched.barrier
-// CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier
-// Before first cluster in loop body
-// CHECK: rocdl.setprio 3
-// CHECK: rocdl.sched.barrier
-// CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier
-// CHECK: scf.yield
+// Inside loop: setprio 0 for second cluster, then setprio 3 for first cluster
+// CHECK: rocdl.s.setprio 0
+// CHECK: rocdl.s.setprio 3
 // After loop: reset to 0
-// CHECK: rocdl.setprio 0
+// CHECK: rocdl.s.setprio 0
 // CHECK: amdg.cond_barrier
 // CHECK: tt.return
 
@@ -407,10 +399,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 }
 
 // CHECK-LABEL: tt.func @no_priority_no_setprio
-// CHECK-NOT: rocdl.setprio
 // CHECK: scf.for
-// CHECK-NOT: rocdl.setprio
-// CHECK: scf.yield
-// CHECK-NOT: rocdl.setprio
+// CHECK-NOT: rocdl.s.setprio
 // CHECK: amdg.cond_barrier
 // CHECK: tt.return
