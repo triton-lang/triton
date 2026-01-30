@@ -112,6 +112,13 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return arith::TruncIOp::create(rewriter, loc, targetTy, v);
 }
 
+Value convertLayoutIfNeeded(PatternRewriter &rewriter, Location loc, Value v,
+                            RankedTensorType targetTy) {
+  if (v.getType() == targetTy)
+    return v;
+  return ttg::ConvertLayoutOp::create(rewriter, loc, targetTy, v).getResult();
+}
+
 Value bitcastToInt(PatternRewriter &rewriter, Location loc, Value v) {
   auto intTy = getIntTypeLike(v.getType());
   return tt::BitcastOp::create(rewriter, loc, intTy, v);
@@ -150,6 +157,22 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
   Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aI);
   Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bI);
   return arith::MulIOp::create(rewriter, loc, aFull, bFull);
+}
+
+Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
+                            RankedTensorType tensorTy) {
+  int64_t elSize = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+  int64_t alignment = std::max<int64_t>(elSize, 16);
+  int64_t sizeInBytes = product(tensorTy.getShape()) * elSize;
+  auto ptrTy = triton::getPointerType(tensorTy.getElementType());
+  auto allocOp = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
+                                                   sizeInBytes, alignment);
+  allocOp->setDiscardableAttr("tt.divisibility",
+                              rewriter.getI64IntegerAttr(alignment));
+  if (!createStoreScratchMemory(rewriter, loc, allocOp.getResult(), val,
+                                tensorTy))
+    return Value();
+  return allocOp.getResult();
 }
 
 Value fpsanPow2ModInv(PatternRewriter &rewriter, Location loc, Value input) {
@@ -463,7 +486,7 @@ public:
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
-      if (baseTy.getRank() != 2 || memTy.getRank() != 2)
+      if (baseTy.getRank() < 2 || memTy.getRank() != 2)
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
@@ -475,6 +498,8 @@ public:
       }
       auto loc = subslice.getLoc();
       int64_t stride = baseTy.getShape().front();
+      if (baseTy.getRank() > 2)
+        stride = product(baseTy.getShape().drop_front(1));
       int64_t offset = subslice.getN();
       auto offsetVal = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(offset));
@@ -623,7 +648,7 @@ Value expandAllSlicedDims(PatternRewriter &rewriter, Location loc,
 Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
                                    Value base, ArrayRef<int64_t> shape,
                                    int64_t stride1,
-                                   ttg::BlockedEncodingAttr encoding) {
+                                   ttg::DistributedEncodingTrait encoding) {
   auto ptrTy = base.getType();
   auto ptrTensorTy = RankedTensorType::get(shape, ptrTy, encoding);
   Value ptrTensor = tt::SplatOp::create(rewriter, loc, ptrTensorTy, base);
@@ -661,8 +686,9 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType resultTy, int64_t stride1) {
   auto shape = resultTy.getShape();
-  auto encoding = dyn_cast<ttg::BlockedEncodingAttr>(resultTy.getEncoding());
-  assert(encoding && "expected encoded tensor type");
+  auto encoding =
+      dyn_cast<ttg::DistributedEncodingTrait>(resultTy.getEncoding());
+  assert(encoding && "expected distributed encoding");
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, shape,
                                                 stride1, encoding);
   return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
@@ -673,8 +699,9 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                  Value base, Value tensor,
                                  RankedTensorType tensorTy, int64_t stride1) {
   auto shape = tensorTy.getShape();
-  auto encoding = dyn_cast<ttg::BlockedEncodingAttr>(tensorTy.getEncoding());
-  assert(encoding && "expected encoded tensor type");
+  auto encoding =
+      dyn_cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding());
+  assert(encoding && "expected distributed encoding");
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, shape,
                                                 stride1, encoding);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
@@ -758,20 +785,72 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
+    auto aTy = dyn_cast<RankedTensorType>(op.getA().getType());
+    auto bTy = dyn_cast<RankedTensorType>(op.getB().getType());
+    auto cTy = dyn_cast<RankedTensorType>(op.getC().getType());
+    if (!aTy || !bTy || !cTy)
+      return failure();
+    if (aTy.getRank() != 2 || bTy.getRank() != 2 || cTy.getRank() != 2)
+      return failure();
+    if (!aTy.getEncoding() || !bTy.getEncoding() || !cTy.getEncoding())
+      return failure();
+
+    auto aShape = aTy.getShape();
+    auto bShape = bTy.getShape();
+    auto cShape = cTy.getShape();
+    if (aShape[1] != bShape[0] || aShape[0] != cShape[0] ||
+        bShape[1] != cShape[1])
+      return failure();
+
     auto loc = op.getLoc();
-    auto aI = bitcastToInt(rewriter, loc, op.getA());
-    auto bI = bitcastToInt(rewriter, loc, op.getB());
-    auto cI = bitcastToInt(rewriter, loc, op.getC());
-    auto accElem = cast<IntegerType>(getElementType(cI.getType()));
-    aI = castIntValueToType(rewriter, loc, aI,
-                            getTypeWithElement(aI.getType(), accElem));
-    bI = castIntValueToType(rewriter, loc, bI,
-                            getTypeWithElement(bI.getType(), accElem));
-    auto dotI =
-        tt::DotOp::create(rewriter, loc, aI, bI, cI, op.getInputPrecision(),
-                          op.getMaxNumImpreciseAcc());
-    auto resF = bitcastToFloat(rewriter, loc, dotI, op.getType());
-    rewriter.replaceOp(op, resF);
+    int64_t m = aShape[0];
+    int64_t k = aShape[1];
+    int64_t n = bShape[1];
+
+    auto accElem = IntegerType::get(
+        rewriter.getContext(), cTy.getElementType().getIntOrFloatBitWidth());
+    Value useDInt = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
+    Value predInt = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
+
+    int64_t tileM = std::min<int64_t>(kTileM, m);
+    int64_t tileN = std::min<int64_t>(kTileN, n);
+
+    auto accLayout = dyn_cast<ttg::BlockedEncodingAttr>(cTy.getEncoding());
+    auto accTileLayout = accLayout;
+    if (!accLayout)
+      return failure();
+    auto aLayout = dyn_cast<ttg::DistributedEncodingTrait>(aTy.getEncoding());
+    auto bLayout = dyn_cast<ttg::DistributedEncodingTrait>(bTy.getEncoding());
+    if (!aLayout || !bLayout)
+      return failure();
+
+    auto accTileTy =
+        RankedTensorType::get({tileM, tileN}, cTy.getElementType(), accLayout);
+    auto aTileTy =
+        RankedTensorType::get({tileM, k}, aTy.getElementType(), aLayout);
+    auto bTileTy =
+        RankedTensorType::get({k, tileN}, bTy.getElementType(), bLayout);
+
+    Value aPtr = createScratchAndStore(rewriter, loc, op.getA(), aTy);
+    Value bPtr = createScratchAndStore(rewriter, loc, op.getB(), bTy);
+    Value dPtr = createScratchAndStore(rewriter, loc, op.getC(), cTy);
+    if (!aPtr || !bPtr || !dPtr)
+      return failure();
+
+    auto mLoop = emitMmaEmulationLoops(
+        rewriter, loc, aPtr, bPtr, dPtr, m, n, k, tileM, tileN, aTileTy,
+        bTileTy, accTileTy, accTileLayout, accElem, useDInt, predInt,
+        /*aStride=*/m, /*bStride=*/k, /*dStride=*/m);
+    if (!mLoop)
+      return failure();
+    rewriter.setInsertionPointAfter(*mLoop);
+
+    Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
+    if (!out)
+      return failure();
+    rewriter.replaceOp(op, out);
     return success();
   }
 };
