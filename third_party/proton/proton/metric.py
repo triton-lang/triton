@@ -18,8 +18,8 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
     offsets = tl.arange(0, BLOCK_SIZE)
     for i in range(num_iters):
         mask = offsets + i * BLOCK_SIZE < metric_value_size
-        metric_value = tl.load(metric_value_ptr + i * BLOCK_SIZE, mask=mask)
-        tl.store(device_ptr + i * BLOCK_SIZE, metric_value, mask=mask)
+        metric_value = tl.load(metric_value_ptr + i * BLOCK_SIZE + offsets, mask=mask)
+        tl.store(device_ptr + i * BLOCK_SIZE + offsets, metric_value, mask=mask)
     tl.debug_barrier()
     device_offset = (device_offset + metric_value_size) % size
     tl.store(device_offset_ptr, device_offset)
