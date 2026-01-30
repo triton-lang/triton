@@ -406,8 +406,8 @@ LogicalResult Fp4ToFpOp::verify() {
   auto axis = getAxis();
 
   auto elemType = resTy.getElementType();
-  if (!(elemType.isBF16() || elemType.isF16()))
-    return emitError() << "only bf16 or f16 is supported for now, got "
+  if (!(elemType.isBF16() || elemType.isF16() || elemType.isF32()))
+    return emitError() << "only bf16, f16 or f32 is supported for now, got "
                        << elemType;
 
   return verifyFp4ToFp(*this, srcTy, resTy, axis);
