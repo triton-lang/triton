@@ -1,22 +1,28 @@
 import os
-import sysconfig
-import sys
 from pathlib import Path
 
-
-def get_base_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+# base_dir: Root of source code
 
 
-def _get_cmake_dir():
-    plat_name = sysconfig.get_platform()
-    python_version = sysconfig.get_python_version()
-    dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
-    return Path(get_base_dir()) / "build" / dir_name
+def _get_base_dir() -> Path:
+    return Path(__file__).parent.parent
 
 
-def get_cmake_dir():
-    cmake_dir = os.getenv("TRITON_BUILD_DIR", default=_get_cmake_dir())
-    cmake_dir = Path(cmake_dir)
+def get_base_dir() -> str:
+    return _get_base_dir().absolute().as_posix()
+
+
+def get_build_base() -> str:
+    build_base = os.getenv("TRITON_BUILD_DIR", default=(_get_base_dir() / "build"))
+    build_base = Path(build_base)
+    build_base.mkdir(parents=True, exist_ok=True)
+    return build_base.as_posix()
+
+
+# cmd: setuptools.Command
+# ext: setuptools.Extension
+# Cannot use type hints due to ruff F821
+def get_cmake_dir(cmd, ext):
+    cmake_dir = Path(cmd.build_temp) / ext.name
     cmake_dir.mkdir(parents=True, exist_ok=True)
-    return cmake_dir
+    return cmake_dir.absolute()
