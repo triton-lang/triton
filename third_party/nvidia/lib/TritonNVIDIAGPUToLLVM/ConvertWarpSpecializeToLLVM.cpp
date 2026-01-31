@@ -51,9 +51,8 @@ static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
 
 static void createAllBarrier(TritonLLVMIRRewriter &b, unsigned barIdx) {
   assert(barIdx < kNumBarriers && "not enough barriers");
-  LLVM::createLLVMIntrinsicCallOp(b, b.getLoc(),
-                                  "llvm.nvvm.barrier.cta.sync.all",
-                                  void_ty(b.getContext()), b.i32_val(barIdx));
+  LLVM::createLLVMIntrinsicCallOp(
+      b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
 }
 
 //===----------------------------------------------------------------------===//
