@@ -154,12 +154,14 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   ];
 }
 
-def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
-  let summary = "Reorder instructions";
+def TritonAMDGPUMoveUpPrologueLoads
+    : Pass<"tritonamdgpu-move-up-prologue-loads", "mlir::triton::FuncOp"> {
+  let summary = "Move up global loads in prologue for better GEMM performance";
 
-  let description = "This pass reorder instructions so as to (1) decrease register pressure (e.g., by moving "
-                    "conversions from shared memory before their first use) and (2) promote LLVM instruction "
-                    "order more friendly to `ptxas`.";
+  let description =
+      "This pass moves global load ops early to prefetch in the prologue. "
+      "This may increase register pressure but it enables issuing global loads "
+      "early.";
 
   let dependentDialects = [];
 }
