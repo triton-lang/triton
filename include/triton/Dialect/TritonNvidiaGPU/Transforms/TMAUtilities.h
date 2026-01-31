@@ -56,4 +56,17 @@ FailureOr<int> getTMAElementType(Location loc, TensorDescType ty);
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);
 
+// Compute a LinearLayout mapping TMA message indices to tensor coordinates.
+// Maps from input dimension "msg" (and "block" for CGA) to output dimensions
+// "dim0", "dim1", etc.
+//
+// For a tensor with shape [512, 64] and TMA block shape [256, 32]:
+//   - numMsgs = (512/256) * (64/32) = 4
+//   - msg=0 -> (0, 0), msg=1 -> (256, 0), msg=2 -> (0, 32), msg=3 -> (256, 32)
+//
+// The `packedSize` parameter controls whether the block shape accounts for
+// FP4 padding (true for address computation, false for descriptor setup).
+LinearLayout getMsgToPackedOffsetLayout(gpu::MemDescType ty, gpu::TMAMode mode,
+                                        bool packedSize = true);
+
 } // namespace mlir::triton::nvidia_gpu

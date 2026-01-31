@@ -4060,7 +4060,6 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   // avoiding the need for multiple messages along spatial dimensions (N, D,
   // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
   // that depend on input tensor shape and padding, which is non-trivial.
-  // TODO: Add support for pixelsPerColumn > 1024 in the future.
   if (blockShape[otherDim] > otherDimMax) {
     return emitError() << "im2col mode: pixelsPerColumn dimension "
                        << blockShape[otherDim]
