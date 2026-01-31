@@ -127,6 +127,12 @@
 <p>The two blocks must both be two-dimensional or three-dimensional and have compatible inner dimensions.
 For three-dimensional blocks, <cite>tl.dot</cite> performs the batched matrix product,
 where the first dimension of each block represents the batch dimension.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>When using TF32 precision, the float32 inputs may be truncated to TF32 format (19-bit floating point)
+without rounding which may bias the result. For best results, you must round to TF32 explicitly, or load
+the data using <cite>TensorDescriptor</cite> with <cite>round_f32_to_tf32=True</cite>.</p>
+</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
