@@ -22,6 +22,7 @@ namespace mlir::triton {
 class FuncOp;
 
 namespace instrument {
+std::string mangleType(Type t);
 
 class ManglingArgs {
 public:
@@ -51,8 +52,7 @@ public:
 
   std::string mangleArg(Arg arg) const {
     if (auto type = std::get_if<Type>(&arg)) {
-      auto hash = static_cast<uint64_t>(mlir::hash_value(*type));
-      return std::string("_T") + llvm::utohexstr(hash);
+      return std::string("_") + mangleType(*type);
     } else if (auto intVal = std::get_if<int>(&arg)) {
       return std::string("_I") + std::to_string(*intVal);
     } else if (auto stringVal = std::get_if<std::string>(&arg)) {
@@ -73,13 +73,6 @@ public:
 private:
   SmallVector<Arg> args;
 };
-
-/// Utility to mangle helper function names produced by the instrumentation
-/// passes. The mangled name encodes the base name, number of warps and the
-/// participating types.
-std::string mangleInstrumentHelperName(const std::string &baseName,
-                                       int numWarps,
-                                       llvm::ArrayRef<Type> types);
 
 class FunctionBuilder {
 public:

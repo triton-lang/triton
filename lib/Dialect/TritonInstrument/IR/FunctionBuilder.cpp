@@ -6,6 +6,7 @@
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -14,6 +15,29 @@ namespace mlir::triton::instrument {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace tti = mlir::triton::instrument;
+
+std::string mangleType(Type t) {
+  if (auto intType = dyn_cast<IntegerType>(t)) {
+    return ("I" + Twine(intType.getWidth())).str();
+  }
+  if (auto floatType = dyn_cast<FloatType>(t)) {
+    return ("F" + Twine(floatType.getWidth())).str();
+  }
+  if (auto ptrType = dyn_cast<PointerType>(t)) {
+    return "P";
+  }
+  if (auto tensorType = dyn_cast<RankedTensorType>(t)) {
+    std::string result = "T";
+    llvm::raw_string_ostream os(result);
+    for (int s : tensorType.getShape()) {
+        os << s << "x";
+    }
+    os << mangleType(tensorType.getElementType());
+    return result;
+  }
+  // Fallback to hash of the type's string representation.
+  return "U" + llvm::utohexstr(llvm::hash_value(mlir::debugString(t)));
+}
 
 namespace {
 
