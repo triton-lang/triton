@@ -1491,7 +1491,6 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   auto rank = coords.size();
 
-  // TMA store only supports tiled mode
   auto msgToPackedOffset =
       ttng::getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);

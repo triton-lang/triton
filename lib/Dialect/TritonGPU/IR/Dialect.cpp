@@ -4124,7 +4124,7 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   }
   return blockShape;
 }
-// Public API with emitError - dispatches to static helpers based on mode.
+
 FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
@@ -4139,7 +4139,6 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
                                fp4Padded, isTransposed, packedSize, emitError);
 }
 
-// Convenience wrapper that calls report_fatal_error on failure.
 SmallVector<int64_t> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
