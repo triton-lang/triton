@@ -17,9 +17,10 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
     num_iters = tl.cdiv(metric_value_size, BLOCK_SIZE)
     offsets = tl.arange(0, BLOCK_SIZE)
     for i in tl.range(0, num_iters):
-        mask = offsets + i * BLOCK_SIZE < metric_value_size
-        metric_value = tl.load(metric_value_ptr + i * BLOCK_SIZE + offsets, mask=mask)
-        tl.store(device_ptr + (device_offset + i * BLOCK_SIZE + offsets) % size, metric_value, mask=mask)
+        cur_offsets = offsets + i * BLOCK_SIZE
+        mask = cur_offsets < metric_value_size
+        metric_value = tl.load(metric_value_ptr + cur_offsets, mask=mask)
+        tl.store(device_ptr + (device_offset + cur_offsets) % size, metric_value, mask=mask)
     tl.debug_barrier()
     device_offset = (device_offset + metric_value_size) % size
     tl.store(device_offset_ptr, device_offset)
@@ -71,8 +72,8 @@ def set_metric_kernels():
 
 class _TensorMetric(libproton.TensorMetric):
 
-    def __init__(self, value, metric_index):
-        super().__init__(value.data_ptr(), metric_index, value.numel())
+    def __init__(self, value, metric_type_index):
+        super().__init__(value.data_ptr(), metric_type_index, value.numel())
         # Hold a reference to the backing tensor so its device memory stays alive.
         self._value = value
 
