@@ -120,6 +120,16 @@ dev-install-llvm:
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install
 
+.PHONY: dev-install-llvm-shared
+.NOPARALLEL: dev-install-llvm-shared
+dev-install-llvm-shared:
+	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) LLVM_BUILD_SHARED_LIBS=1 scripts/build-llvm-project.sh
+	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
+		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
+		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
+	$(MAKE) dev-install
+
 # Updating lit tests
 
 .PHONY: golden-samples
