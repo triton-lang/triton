@@ -78,12 +78,17 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
 
 def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
     let summary = "Emit conditional barrier and inlines scf.execute_region for warp-pipeline";
-    let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass()";
+    let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass(\"\")";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect",
                              "mlir::gpu::GPUDialect",
                              "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+    let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"",
+               "gfx target device architecture, e.g., gfx942">,
+    ];
 }
 
 def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {

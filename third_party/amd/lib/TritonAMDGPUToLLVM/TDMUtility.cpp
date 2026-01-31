@@ -544,9 +544,10 @@ void fillTDMDescriptor(
   }
   dstPtr = b.gep(sharedPtrTy, elementType, dstPtr, dstOffset);
 
-  // Update tensor shapes based on offset
+  // Update tensor shapes based on offset and cgaOffset
   for (size_t i = 0; i < numDims; ++i) {
-    tensorShape[i] = b.smax(b.i32_val(0), b.sub(tensorShape[i], offset[i]));
+    auto fullOffset = b.add(offset[i], cgaOffsets[i].second);
+    tensorShape[i] = b.smax(b.i32_val(0), b.sub(tensorShape[i], fullOffset));
   }
 
   // Update group0 with addresses

@@ -1275,20 +1275,25 @@ def tensor_device_tdm_multi_cta_load_and_store_kernel(a_ptr, b_ptr, M, N,  #
 def test_runtime_tensor_load_and_store_multi_cta(M, N, BLOCK_M, BLOCK_N, NUM_WARPS, CGALayout, USE_TDM_LOAD,
                                                  USE_TDM_STORE):
     torch.manual_seed(42)
-    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
-    b = torch.zeros_like(a)
+    # Overallocate to catch out of bounds writes, the padding of our input is random and the pading of the output is 0
+    # to catch out of bounds writes.
+    overallocation_factor = 4
+    a = torch.randint(0x0, 0xFFFF, (M * overallocation_factor, N), dtype=torch.uint16)
+    out = torch.zeros((M * overallocation_factor, N), dtype=a.dtype)
 
     a_device = a.cuda()
-    b_device = b.cuda()
+    out_device = out.cuda()
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     num_ctas = 2**len(CGALayout)
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0], CGALayout)
-    tensor_device_tdm_multi_cta_load_and_store_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, block_layout,
+    tensor_device_tdm_multi_cta_load_and_store_kernel[grid](a_device, out_device, M, N, BLOCK_M, BLOCK_N, block_layout,
                                                             smem_layout, USE_TDM_LOAD, USE_TDM_STORE,
                                                             num_warps=NUM_WARPS, num_ctas=num_ctas)
 
-    assert torch.equal(a, b_device.cpu())
+    out_ref = out
+    out_ref[:M, :N] = a[:M, :N]
+    assert torch.equal(out_ref, out_device.cpu())
 
 
 @gluon.jit
