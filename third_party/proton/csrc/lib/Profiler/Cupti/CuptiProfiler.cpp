@@ -416,7 +416,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         }
         if (threadState.isMetricKernelLaunching) {
           nodeState.isMetricNode = true;
+          auto metricKernelNumWords =
+              threadState.metricKernelNumWordsQueue.front();
+          threadState.metricKernelNumWordsQueue.pop_front();
+          nodeState.metricNumWords = metricKernelNumWords;
           graphState.metricKernelNodeIds.insert(nodeId);
+          graphState.metricNumWords += metricKernelNumWords;
         }
         for (auto *data : profiler.dataSet) {
           auto contexts = data->getContexts();
@@ -448,6 +453,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               originalNodeId) !=
           graphStates[originalGraphId].metricKernelNodeIds.end()) {
         graphState.metricKernelNodeIds.insert(nodeId);
+        graphState.metricNumWords += nodeState.metricNumWords;
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
@@ -456,6 +462,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     auto &graphState = graphStates[graphId];
+    graphState.metricNumWords -=
+        graphState.nodeIdToState[nodeId].metricNumWords;
     for (const auto &[data, callpath] :
          graphState.nodeIdToState[nodeId].captureContexts) {
       auto &nodeStates = graphState.dataToCallpathToNodeStates[data][callpath];
@@ -627,7 +635,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<size_t>> metricNodeEntryIds;
         auto phase = Data::kNoCompletePhase;
-        auto numNodes = graphExecState.metricKernelNodeIds.size();
         for (auto nodeId : graphExecState.metricKernelNodeIds) {
           auto *nodeState = graphNodeIdToState.find(nodeId);
           if (!nodeState) {
@@ -645,15 +652,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           });
         }
         // Check if all data contains the same number of metric nodes
+        const auto numMetricNodes = graphExecState.metricKernelNodeIds.size();
         for (const auto &[data, entryIds] : metricNodeEntryIds) {
-          if (entryIds.size() != numNodes) {
+          if (entryIds.size() != numMetricNodes) {
             throw std::runtime_error(
                 "[PROTON] Inconsistent number of metric nodes in graph.");
           }
         }
+        size_t metricNumWords = graphExecState.metricNumWords;
         if (callbackData->context != nullptr)
-          profiler.pendingGraphPool->flushIfNeeded(numNodes);
-        profiler.pendingGraphPool->push(phase, metricNodeEntryIds, numNodes);
+          profiler.pendingGraphPool->flushIfNeeded(metricNumWords);
+        profiler.pendingGraphPool->push(phase, metricNodeEntryIds,
+                                        numMetricNodes, metricNumWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

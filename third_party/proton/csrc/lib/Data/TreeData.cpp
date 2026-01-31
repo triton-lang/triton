@@ -258,8 +258,28 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree) const {
         }
         for (auto &[_, flexibleMetric] : treeNode.flexibleMetrics) {
           const auto &valueName = flexibleMetric.getValueName(0);
-          std::visit([&](auto &&value) { metricsJson[valueName] = value; },
-                     flexibleMetric.getValues()[0]);
+          std::visit(
+              [&](auto &&v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, uint64_t> ||
+                              std::is_same_v<T, int64_t> ||
+                              std::is_same_v<T, double> ||
+                              std::is_same_v<T, std::string>) {
+                  metricsJson[valueName] = v;
+                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
+                                     std::is_same_v<T, std::vector<int64_t>> ||
+                                     std::is_same_v<T, std::vector<double>>) {
+                  metricsJson[valueName] = json::array();
+                  auto &arr = metricsJson[valueName];
+                  arr.get_ref<json::array_t &>().reserve(v.size());
+                  for (const auto &value : v) {
+                    arr.push_back(value);
+                  }
+                } else {
+                  static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
+                }
+              },
+              flexibleMetric.getValues()[0]);
         }
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
@@ -533,6 +553,21 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(TreeData::Tree *tree) const {
                   writer.packDouble(v);
                 } else if constexpr (std::is_same_v<T, std::string>) {
                   writer.packStr(v);
+                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packUInt(value);
+                  }
+                } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packInt(value);
+                  }
+                } else if constexpr (std::is_same_v<T, std::vector<double>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packDouble(value);
+                  }
                 } else {
                   static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
                 }

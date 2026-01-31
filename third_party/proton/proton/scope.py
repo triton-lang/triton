@@ -1,7 +1,7 @@
 import threading
 import time
 from functools import wraps
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, Sequence
 
 from .flags import flags
 from .metric import transform_tensor_metrics, set_metric_kernels
@@ -9,7 +9,7 @@ from triton._C.libproton import proton as libproton
 
 thread_local_scopes = threading.local()
 
-MetricValueType = Union[float, int]
+MetricValueType = Union[float, int, Sequence[float], Sequence[int]]
 
 
 class scope:

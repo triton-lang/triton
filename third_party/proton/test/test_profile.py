@@ -224,7 +224,7 @@ def test_metrics(tmp_path: pathlib.Path):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
-    with proton.scope("test0", {"foo": 1.0}):
+    with proton.scope("test0", {"foo": 1.0, "bar": [1, 2, 3], "baz": [1.0, 2.0, 3.0]}):
         foo[(1, )](x, y)
     proton.finalize()
     with temp_file.open() as f:
@@ -232,6 +232,7 @@ def test_metrics(tmp_path: pathlib.Path):
     assert len(data[0]["children"]) == 1
     assert data[0]["children"][0]["frame"]["name"] == "test0"
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
+    assert data[0]["children"][0]["metrics"]["bar"] == [1, 2, 3]
 
 
 def test_scope_backward(tmp_path: pathlib.Path):
@@ -863,6 +864,10 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
             b = torch.ones((2, 2), device="cuda")
         c = a + b
         foo[(1, )](a, b, c)
+        with proton.metadata_state():
+            d = torch.arange(4, device="cuda")
+        with proton.scope("scope_d", metrics={"vec": d}):
+            e = d * 2  # noqa: F841
 
     temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
@@ -886,8 +891,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0
-    assert len(children) == 7
+    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
+    assert len(children) == 8
     test0_frame = None
     for child in children:
         if child["frame"]["name"] == "test0":
@@ -899,6 +904,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     foo_test_frame = None
     scope_a_frame = None
     scope_b_frame = None
+    scope_d_frame = None
     for child in capture_at_frame["children"]:
         if child["frame"]["name"] == "foo_test":
             foo_test_frame = child
@@ -906,6 +912,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
             scope_a_frame = child
         if child["frame"]["name"] == "scope_b":
             scope_b_frame = child
+        if child["frame"]["name"] == "scope_d":
+            scope_d_frame = child
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40
@@ -916,6 +924,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert scope_b_frame is not None
     assert scope_b_frame["metrics"]["sum"] == 40.0
     assert "count" not in scope_b_frame["metrics"]
+    assert scope_d_frame is not None
+    assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")

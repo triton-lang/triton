@@ -4,6 +4,7 @@
 #include <map>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -11,11 +12,12 @@
 
 using namespace proton;
 
-// For simplicity, the Python interface restricts metrics to int64_t and double.
-// without uint64_t. Allowing types such as uint64_t vs. int64_t would force
-// users to handle subtle type differences for the same metric name, which would
-// be confusing and error-prone.
-using PythonMetricValueType = std::variant<int64_t, double>;
+// For simplicity, the Python interface restricts *scalar* metrics to int64_t
+// and double (i.e. no uint64_t) to avoid subtle signed-vs-unsigned differences
+// for the same metric name. For vector-valued (FlexibleMetric) metrics, mirror
+// the scalar restriction (int64_t / double).
+using PythonMetricValueType =
+    std::variant<int64_t, double, std::vector<int64_t>, std::vector<double>>;
 namespace {
 
 std::map<std::string, MetricValueType> convertPythonMetrics(
@@ -42,21 +44,34 @@ static void initProton(pybind11::module &&m) {
   // in transform_tensor_metrics.
   pybind11::class_<TensorMetric>(m, "TensorMetric")
       .def(pybind11::init<>())
-      .def(pybind11::init([](uintptr_t ptr, size_t index) {
-             return TensorMetric{reinterpret_cast<uint8_t *>(ptr), index};
+      .def(pybind11::init([](uintptr_t ptr, size_t typeIndex, uint64_t size) {
+             return TensorMetric{reinterpret_cast<uint8_t *>(ptr), typeIndex,
+                                 size};
            }),
-           pybind11::arg("ptr"), pybind11::arg("index"))
+           pybind11::arg("ptr"), pybind11::arg("index"),
+           pybind11::arg("size") = 1)
       .def_property_readonly("ptr",
                              [](const TensorMetric &metric) {
                                return reinterpret_cast<uintptr_t>(metric.ptr);
                              })
       .def_property_readonly(
-          "index", [](const TensorMetric &metric) { return metric.index; });
+          "index", [](const TensorMetric &metric) { return metric.typeIndex; })
+      .def_property_readonly(
+          "size", [](const TensorMetric &metric) { return metric.size; });
 
-  m.attr("metric_int64_index") =
+  auto metricTypeInt64Index =
       pybind11::cast(variant_index_v<int64_t, MetricValueType>);
-  m.attr("metric_double_index") =
+  auto metricTypeDoubleIndex =
       pybind11::cast(variant_index_v<double, MetricValueType>);
+  auto metricTypeVectorInt64Index =
+      pybind11::cast(variant_index_v<std::vector<int64_t>, MetricValueType>);
+  auto metricTypeVectorDoubleIndex =
+      pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);
+
+  m.attr("metric_type_int64_index") = metricTypeInt64Index;
+  m.attr("metric_type_double_index") = metricTypeDoubleIndex;
+  m.attr("metric_type_vector_int64_index") = metricTypeVectorInt64Index;
+  m.attr("metric_type_vector_double_index") = metricTypeVectorDoubleIndex;
 
   m.def(
       "start",
