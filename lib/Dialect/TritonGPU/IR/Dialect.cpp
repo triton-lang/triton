@@ -2006,9 +2006,12 @@ LogicalResult PaddedSharedEncodingAttr::verify(
 
   const auto &bases = ll.getBases();
 
-  // Check that we are not broadcasting or having repeated bases
-  if (!ll.isInvertible()) {
-    return emitError() << "Broadcasting is not supported.";
+  // Check that the offset input dimension produces no broadcasts or has
+  // repeated rows. Broadcasts introduced by the block dimension are allowed.
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto ctaLayout = ll.sublayout(kOffset, to_vector(ll.getOutDimNames()));
+  if (!ctaLayout.isInjective()) {
+    return emitError() << "Broadcasting in offset dimension is not supported.";
   }
 
   auto nonZero = [](auto val) { return val != 0; };
