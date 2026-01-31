@@ -33,7 +33,8 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   bool isSigned = false);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
-getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
+getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim,
+                          int rank);
 
 struct ValueType {
   Value value;
