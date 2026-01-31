@@ -487,9 +487,9 @@ LinearLayout LinearLayout::resizeOutDim(StringAttr outDim,
     }
   }
   auto outDims = getOutDims();
-  for (auto &[outDim, outDimSize] : outDims) {
-    if (outDim == outDim) {
-      outDimSize = newSize;
+  for (auto &[dim, size] : outDims) {
+    if (dim == outDim) {
+      size = newSize;
     }
   }
   return LinearLayout(std::move(newBases), outDims,
