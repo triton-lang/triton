@@ -3490,18 +3490,11 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 //===----------------------------------------------------------------------===//
 // getMsgToPackedOffsetLayout Tests
 //
-// Verify that Tiled and Im2Col modes produce consistent message ordering:
-// - Tiled mode: msg0 -> msg1 -> msg2 -> msg3 (more messages, smaller blocks)
-// - Im2Col mode: msg0 -> msg1 (fewer messages, larger blocks)
-// - Every N tiled messages cover the same region as 1 im2col message
+// Verify that Tiled and Im2Col modes produce consistent message ordering.
+// Im2Col allows larger non-contiguous dimension (up to 1024 vs 256 for Tiled),
+// resulting in fewer but larger messages that cover the same total region.
 //===----------------------------------------------------------------------===//
 
-// Test: Verify message ordering - every 2 tiled messages cover same region as 1 im2col message
-// Shape [512, 64] f16 with 64B swizzle:
-//   Tiled:  blockShape=[256,32], 4 msgs: msg0->(0,0), msg1->(256,0), msg2->(0,32), msg3->(256,32)
-//   Im2Col: blockShape=[512,32], 2 msgs: msg0->(0,0), msg1->(0,32)
-//   Tiled msg0+msg1 cover [0:512, 0:32] = Im2Col msg0's region
-//   Tiled msg2+msg3 cover [0:512, 32:64] = Im2Col msg1's region
 TEST_F(LinearLayoutConversionsTest, MsgToPackedOffsetLayout_TiledAndIm2ColOrdering) {
   auto encoding = nvmmaShared(64, /*transposed=*/false, /*elementBitWidth=*/16,
                               {1, 1}, {1, 1}, {1, 0}, {1, 0});

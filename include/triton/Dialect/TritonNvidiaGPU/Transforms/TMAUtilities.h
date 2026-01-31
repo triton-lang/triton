@@ -66,8 +66,7 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 //
 // The `packedSize` parameter controls whether the block shape accounts for
 // FP4 padding (true for address computation, false for descriptor setup).
-LinearLayout getMsgToPackedOffsetLayout(gpu::MemDescType ty,
-                                        gpu::TMAMode mode = gpu::TMAMode::Tiled,
+LinearLayout getMsgToPackedOffsetLayout(gpu::MemDescType ty, gpu::TMAMode mode,
                                         bool packedSize = true);
 
 } // namespace mlir::triton::nvidia_gpu
