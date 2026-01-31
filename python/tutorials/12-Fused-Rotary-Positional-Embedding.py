@@ -1,5 +1,5 @@
 """
-Fused Rotary Positional Embedding (RoPE)
+Fused Rotary Positional Embedding(RoPE)
 ========================================
 
 In this tutorial, you will write a high-performance kernel for Rotary Positional Embeddings (RoPE).
