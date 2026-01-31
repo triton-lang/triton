@@ -287,4 +287,24 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   return success();
 }
 
+LinearLayout getMsgToPackedOffsetLayout(gpu::MemDescType ty, gpu::TMAMode mode,
+                                        bool packedSize) {
+  auto ctx = ty.getContext();
+  auto kMsg = StringAttr::get(ctx, "msg");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto shapePerCTA = ttg::getShapePerCTA(ty);
+  int rank = shapePerCTA.size();
+  auto blockShape = getTMABlockShape(ty, packedSize, mode);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  LinearLayout msgToOffset;
+  for (int dim = 0; dim < rank; ++dim) {
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
+  }
+  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
+  return msgToOffset;
+}
+
 } // namespace mlir::triton::nvidia_gpu

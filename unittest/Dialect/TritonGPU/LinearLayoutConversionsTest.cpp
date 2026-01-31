@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -3484,6 +3485,131 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
       {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
+}
+
+//===----------------------------------------------------------------------===//
+// getMsgToPackedOffsetLayout Tests
+//
+// Verify that Tiled and Im2Col modes produce consistent message ordering:
+// - Tiled mode: msg0 -> msg1 -> msg2 -> msg3 (more messages, smaller blocks)
+// - Im2Col mode: msg0 -> msg1 (fewer messages, larger blocks)
+// - Every N tiled messages cover the same region as 1 im2col message
+//===----------------------------------------------------------------------===//
+
+// Test: Verify message ordering - every 2 tiled messages cover same region as 1 im2col message
+// Shape [512, 64] f16 with 64B swizzle:
+//   Tiled:  blockShape=[256,32], 4 msgs: msg0->(0,0), msg1->(256,0), msg2->(0,32), msg3->(256,32)
+//   Im2Col: blockShape=[512,32], 2 msgs: msg0->(0,0), msg1->(0,32)
+//   Tiled msg0+msg1 cover [0:512, 0:32] = Im2Col msg0's region
+//   Tiled msg2+msg3 cover [0:512, 32:64] = Im2Col msg1's region
+TEST_F(LinearLayoutConversionsTest, MsgToPackedOffsetLayout_TiledAndIm2ColOrdering) {
+  auto encoding = nvmmaShared(64, /*transposed=*/false, /*elementBitWidth=*/16,
+                              {1, 1}, {1, 1}, {1, 0}, {1, 0});
+  Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(&ctx);
+  auto kMsg = S("msg");
+  auto kBlock = S("block");
+
+  // Case 1: [512, 64] - Tiled has 4 msgs, Im2Col has 2 msgs
+  // Tiled:  blockShape=[256,32], msgs: (0,0)->(256,0)->(0,32)->(256,32)
+  // Im2Col: blockShape=[512,32], msgs: (0,0)->(0,32)
+  // Every 2 tiled messages cover same region as 1 im2col message
+  //
+  // Tiled (4 messages):                    Im2Col (2 messages):
+  //          dim1=0-31   dim1=32-63                dim1=0-31   dim1=32-63
+  //         ┌──────────┬──────────┐               ┌──────────┬──────────┐
+  // dim0=0  │  msg0    │  msg2    │               │          │          │
+  //         │  (0,0)   │  (0,32)  │               │   msg0   │   msg1   │
+  // dim0=256├──────────┼──────────┤               │   (0,0)  │  (0,32)  │
+  //         │  msg1    │  msg3    │               │          │          │
+  //         │ (256,0)  │ (256,32) │               │          │          │
+  //         └──────────┴──────────┘               └──────────┴──────────┘
+  //
+  // Tiled msg0-1 (dim1=0) = Im2Col msg0
+  // Tiled msg2-3 (dim1=32) = Im2Col msg1
+  {
+    auto memTy = MemDescType::get({512, 64}, Float16Type::get(&ctx), encoding,
+                                  sharedMemorySpace, /*mutableMemory=*/true);
+    auto tiledLL =
+        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Tiled);
+    auto im2colLL =
+        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Im2Col);
+
+    EXPECT_EQ(tiledLL.getInDimSize(kMsg), 4);
+    EXPECT_EQ(im2colLL.getInDimSize(kMsg), 2);
+
+    // Tiled msg0,msg1 at dim1=0; msg2,msg3 at dim1=32
+    for (int i = 0; i < 2; i++) {
+      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
+      EXPECT_EQ(tiledCoord[1].second, 0);
+    }
+    for (int i = 2; i < 4; i++) {
+      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
+      EXPECT_EQ(tiledCoord[1].second, 32);
+    }
+
+    // Im2Col msg0 at dim1=0, msg1 at dim1=32
+    auto im2col0 = im2colLL.apply({{kMsg, 0}, {kBlock, 0}});
+    auto im2col1 = im2colLL.apply({{kMsg, 1}, {kBlock, 0}});
+    EXPECT_EQ(im2col0[1].second, 0);
+    EXPECT_EQ(im2col1[1].second, 32);
+  }
+
+  // Case 2: [1024, 64] - Tiled has 8 msgs, Im2Col has 2 msgs
+  // Tiled:  blockShape=[256,32], 4 msgs in dim0, 2 in dim1
+  // Im2Col: blockShape=[1024,32], 1 msg in dim0, 2 in dim1
+  // Every 4 tiled messages cover same region as 1 im2col message
+  //
+  // Tiled (8 messages):                    Im2Col (2 messages):
+  //          dim1=0-31   dim1=32-63                dim1=0-31   dim1=32-63
+  //         ┌──────────┬──────────┐               ┌──────────┬──────────┐
+  // dim0=0  │  msg0    │  msg4    │               │          │          │
+  //         │  (0,0)   │  (0,32)  │               │          │          │
+  // dim0=256├──────────┼──────────┤               │          │          │
+  //         │  msg1    │  msg5    │               │   msg0   │   msg1   │
+  //         │ (256,0)  │ (256,32) │               │   (0,0)  │  (0,32)  │
+  // dim0=512├──────────┼──────────┤               │          │          │
+  //         │  msg2    │  msg6    │               │          │          │
+  //         │ (512,0)  │ (512,32) │               │          │          │
+  // dim0=768├──────────┼──────────┤               │          │          │
+  //         │  msg3    │  msg7    │               │          │          │
+  //         │ (768,0)  │ (768,32) │               │          │          │
+  //         └──────────┴──────────┘               └──────────┴──────────┘
+  //
+  // Tiled msg0-3 (dim1=0) = Im2Col msg0
+  // Tiled msg4-7 (dim1=32) = Im2Col msg1
+  {
+    auto memTy = MemDescType::get({1024, 64}, Float16Type::get(&ctx), encoding,
+                                  sharedMemorySpace, /*mutableMemory=*/true);
+    auto tiledLL =
+        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Tiled);
+    auto im2colLL =
+        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Im2Col);
+
+    EXPECT_EQ(tiledLL.getInDimSize(kMsg), 8);
+    EXPECT_EQ(im2colLL.getInDimSize(kMsg), 2);
+
+    // Tiled msg0-3 at dim1=0; msg4-7 at dim1=32
+    for (int i = 0; i < 4; i++) {
+      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
+      EXPECT_EQ(tiledCoord[1].second, 0) << "msg " << i;
+    }
+    for (int i = 4; i < 8; i++) {
+      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
+      EXPECT_EQ(tiledCoord[1].second, 32) << "msg " << i;
+    }
+
+    // Im2Col msg0 at dim1=0, msg1 at dim1=32
+    auto im2col0 = im2colLL.apply({{kMsg, 0}, {kBlock, 0}});
+    auto im2col1 = im2colLL.apply({{kMsg, 1}, {kBlock, 0}});
+    EXPECT_EQ(im2col0[1].second, 0);
+    EXPECT_EQ(im2col1[1].second, 32);
+
+    // Verify tiled dim0 ordering: 0, 256, 512, 768 for first 4 msgs
+    for (int i = 0; i < 4; i++) {
+      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
+      EXPECT_EQ(tiledCoord[0].second, i * 256) << "msg " << i;
+    }
+  }
 }
 
 } // anonymous namespace

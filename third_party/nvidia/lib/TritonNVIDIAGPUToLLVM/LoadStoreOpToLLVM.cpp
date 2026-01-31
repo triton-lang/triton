@@ -33,7 +33,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
@@ -1263,26 +1262,6 @@ struct AsyncCopyGlobalToLocalOpConversion
 };
 
 static LinearLayout
-getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                           ttg::TMAMode mode = ttg::TMAMode::Tiled) {
-  auto ctx = ty.getContext();
-  auto kMsg = str_attr("msg");
-  auto kBlock = str_attr("block");
-  auto shapePerCTA = ttg::getShapePerCTA(ty);
-  int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
-  auto outDimNames = standardOutDimNames(ctx, rank);
-  LinearLayout msgToOffset;
-  for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
-  }
-  msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
-  return msgToOffset;
-}
-
-static LinearLayout
 getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
                              ttg::MemDescType ty) {
   auto isFp4Padded =
@@ -1349,7 +1328,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
+    auto msgToPackedOffset = ttng::getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
@@ -1513,7 +1492,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto rank = coords.size();
 
   // TMA store only supports tiled mode
-  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
+  auto msgToPackedOffset = ttng::getMsgToPackedOffsetLayout(srcTy);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
