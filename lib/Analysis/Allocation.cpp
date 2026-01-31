@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Support/LLVM.h"
@@ -14,6 +15,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "allocation-shared-memory"
@@ -42,6 +44,36 @@ unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   return smem.getTotalOutDimSize() / reps;
 }
 
+namespace {
+constexpr int64_t kReduceScratchAlign = 16;
+
+Type getReduceMemElemTy(Type elemTy, MLIRContext *ctx) {
+  if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
+    return IntegerType::get(ctx, 8);
+  return elemTy;
+}
+
+int64_t getReduceScratchSizeBytes(triton::ReduceOp op,
+                                  ArrayRef<unsigned> bytesPerOperand) {
+  std::vector<unsigned> indices(op.getNumOperands());
+  std::iota(indices.begin(), indices.end(), 0);
+  auto *ctx = op.getContext();
+  std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
+    auto lhsTy = getReduceMemElemTy(op.getElementTypes()[i], ctx);
+    auto rhsTy = getReduceMemElemTy(op.getElementTypes()[j], ctx);
+    return getIntOrFloatOrPtrBitWidth(lhsTy) >
+           getIntOrFloatOrPtrBitWidth(rhsTy);
+  });
+  // Aling to 16 bytes to allow for vectorisation
+  int64_t offset = 0;
+  for (unsigned idx : indices) {
+    offset += llvm::alignTo(bytesPerOperand[idx], kReduceScratchAlign);
+  }
+  return offset;
+}
+
+} // namespace
+
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
 // because Triton's block-based programming model ensures that
 // all threads sharing the same partition of the tensor see the same values,
@@ -69,7 +101,14 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     ReduceOpHelper helper(reduceOp);
-    return helper.getScratchSizeInBytes();
+    if (helper.isWarpSynchronous())
+      return 0;
+
+    auto regLl = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(),
+                                                      reduceOp.getAxis());
+    auto tmpLl = ReduceOpHelper::getInterLayout(regLl, reduceOp.getAxis());
+    auto bytesRegToTmp = helper.getScratchBytesForCvt(regLl, tmpLl);
+    return getReduceScratchSizeBytes(reduceOp, bytesRegToTmp);
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     ScanLoweringHelper helper(scanOp);
