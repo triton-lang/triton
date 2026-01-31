@@ -195,13 +195,14 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
-                                       bool disableSwizzle) {
+                                       TMAMode mode, bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
-  auto tmaShape = triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
-                                                       /*packedSize=*/true);
+  auto tmaShape =
+      triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
+                                           /*packedSize=*/true, mode);
   if (shared.getSwizzlingByteWidth() == 0) {
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
@@ -1186,7 +1187,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       result = shared.toLinearLayout(shape);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(shape, shared);
+      // Use Tiled mode as default. Callers that need Im2Col mode should call
+      // nvmmaSharedToLinearLayout directly with the appropriate mode.
+      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else if (auto tensorMemoryEncoding =

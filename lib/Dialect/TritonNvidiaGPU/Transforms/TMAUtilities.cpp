@@ -216,8 +216,9 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   int paddingScale = fp4Padded ? 2 : 1;
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
-  auto blockShape =
-      getTMABlockShape(encoding, shapePerCTA, /*packedSize=*/false);
+  // MakeTensorDescOp creates tiled descriptors (not im2col)
+  auto blockShape = getTMABlockShape(encoding, shapePerCTA,
+                                     /*packedSize=*/false, gpu::TMAMode::Tiled);
   auto contigDimSize = blockShape.back();
 
   llvm::SmallVector<Value> boxDim;

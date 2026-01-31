@@ -3495,7 +3495,8 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 // resulting in fewer but larger messages that cover the same total region.
 //===----------------------------------------------------------------------===//
 
-TEST_F(LinearLayoutConversionsTest, MsgToPackedOffsetLayout_TiledAndIm2ColOrdering) {
+TEST_F(LinearLayoutConversionsTest,
+       MsgToPackedOffsetLayout_TiledAndIm2ColOrdering) {
   auto encoding = nvmmaShared(64, /*transposed=*/false, /*elementBitWidth=*/16,
                               {1, 1}, {1, 1}, {1, 0}, {1, 0});
   Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(&ctx);

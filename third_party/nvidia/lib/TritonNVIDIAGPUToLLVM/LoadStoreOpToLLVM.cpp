@@ -1607,9 +1607,10 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
     return ttg::toLinearLayout(type);
   }
   assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
+  // TMA gather/scatter only supports tiled mode
   return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      /*disableSwizzle=*/true);
+      ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It
@@ -1670,8 +1671,10 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
 
   // Each gather4 instructions reads contigDimSize columns, 4 rows at a time.
+  // TMA gather/scatter only supports tiled mode
   auto shapePerCTA = ttg::getShapePerCTA(smemType);
-  auto tmaBlockShape = ttng::getTMABlockShape(smemType, /*packedSize=*/true);
+  auto tmaBlockShape = ttng::getTMABlockShape(smemType, /*packedSize=*/true,
+                                              ttg::TMAMode::Tiled);
   unsigned innerBlockSize = shapePerCTA.back();
   unsigned contigDimSize = tmaBlockShape.back();
   unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);

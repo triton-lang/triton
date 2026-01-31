@@ -304,12 +304,11 @@ FailureOr<SmallVector<int64_t>>
 getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                  int swizzleBytes, bool fp4Padded, bool isTransposed,
                  bool packedSize, function_ref<InFlightDiagnostic()> emitError,
-                 TMAMode mode = TMAMode::Tiled);
+                 TMAMode mode);
 SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
                                       int elementBitWidth, int swizzleBytes,
                                       bool fp4Padded, bool isTransposed,
-                                      bool packedSize,
-                                      TMAMode mode = TMAMode::Tiled);
+                                      bool packedSize, TMAMode mode);
 
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,

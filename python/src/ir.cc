@@ -224,7 +224,9 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
       if (failed(swizzle) || failed(elemType))
         throw py::type_error("invalid TMA descriptor type");
-      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+      // TensorDescType is for tiled mode (not im2col)
+      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false,
+                                              ttg::TMAMode::Tiled);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
           descTy.getBlockType().getElementTypeBitWidth() / 8;

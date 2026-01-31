@@ -27,9 +27,10 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
-inline SmallVector<int64_t>
-getTMABlockShape(Attribute encoding, ArrayRef<int64_t> shapePerCTA,
-                 bool packedSize, gpu::TMAMode mode = gpu::TMAMode::Tiled) {
+inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
+                                             ArrayRef<int64_t> shapePerCTA,
+                                             bool packedSize,
+                                             gpu::TMAMode mode) {
   auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
   return triton::gpu::getTMABlockShape(
       shapePerCTA, mmaEnc.getElementBitWidth(), mmaEnc.getSwizzlingByteWidth(),
@@ -37,15 +38,14 @@ getTMABlockShape(Attribute encoding, ArrayRef<int64_t> shapePerCTA,
 }
 
 inline SmallVector<int64_t>
-getTMABlockShape(RankedTensorType ty, bool packedSize,
-                 gpu::TMAMode mode = gpu::TMAMode::Tiled) {
+getTMABlockShape(RankedTensorType ty, bool packedSize, gpu::TMAMode mode) {
   auto shapePerCTA = gpu::getShapePerCTA(ty);
   return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
 }
 
-inline SmallVector<int64_t>
-getTMABlockShape(triton::gpu::MemDescType ty, bool packedSize,
-                 gpu::TMAMode mode = gpu::TMAMode::Tiled) {
+inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
+                                             bool packedSize,
+                                             gpu::TMAMode mode) {
   auto shapePerCTA = gpu::getShapePerCTA(ty);
   return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
 }
