@@ -8,7 +8,10 @@ module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.
     // GFX1250: %[[INIT_VAL1:.+]] = llvm.mlir.constant(4294967297 : i64) : i64
     // GFX1250: %[[ALLOC_PTR:.+]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // GFX1250: llvm.store %[[INIT_VAL1]], %[[ALLOC_PTR]] : i64, !llvm.ptr<3>
-    // GFX1250: rocdl.barrier
+    // GFX1250: llvm.fence syncscope("workgroup") release
+    // GFX1250: rocdl.s.barrier.signal{{.*}}
+    // GFX1250: rocdl.s.barrier.wait{{.*}}
+    // GFX1250: llvm.fence syncscope("workgroup") acquire
     amdg.init_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
   }
