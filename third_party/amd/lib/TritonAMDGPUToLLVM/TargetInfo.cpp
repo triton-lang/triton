@@ -106,10 +106,6 @@ size_t TargetInfo::getSharedMemoryPartitionSize() const {
   }
 }
 
-bool TargetInfo::hasSharedMemoryPartitions() const {
-  return getSharedMemoryPartitionSize() > 0;
-}
-
 bool TargetInfo::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4;
 }

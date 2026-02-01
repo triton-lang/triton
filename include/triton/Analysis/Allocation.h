@@ -212,36 +212,7 @@ private:
   /// \param partitionSize Size of each partition buffer in bytes
   /// \param alignment Required alignment for each buffer
   void addPartitionBuffers(Value key, unsigned numPartitions,
-                           size_t partitionSize, size_t alignment) {
-    SmallVector<BufferT *> partitionBuffers;
-    partitionBuffers.reserve(numPartitions);
-
-    Operation *ownerOp = key.getDefiningOp();
-
-    // Create all partition buffers first
-    for (unsigned i = 0; i < numPartitions; ++i) {
-      BufferId nextId = bufferIdCounter++;
-      auto [it, inserted] = bufferSet.insert_or_assign(
-          nextId, BufferT(BufferT::BufferKind::Explicit, nextId, ownerOp,
-                          partitionSize, alignment));
-      partitionBuffers.push_back(&it->second);
-    }
-
-    // Link all different partitions as neighbors.
-    // This ensures they are placed in different physical shared memory
-    // partitions.
-    for (unsigned i = 0; i < numPartitions; ++i) {
-      for (unsigned j = 0; j < numPartitions; ++j) {
-        if (i != j) {
-          partitionBuffers[i]->neighbors.push_back(partitionBuffers[j]);
-        }
-      }
-    }
-
-    // Store all partition buffers in valueBuffer
-    // (all partitions share the same liveness range via their owner)
-    valueBuffer[key] = std::move(partitionBuffers);
-  }
+                           size_t partitionSize, size_t alignment);
 
   void addAlias(Value value, Value alloc) {
     for (auto *buffer : valueBuffer[alloc]) {

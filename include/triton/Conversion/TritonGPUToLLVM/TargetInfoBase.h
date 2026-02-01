@@ -104,12 +104,9 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool isCuda() const { return false; }
 
-  // Shared memory partitioning support.
-  // Returns the partition size in bytes. A value of 0 means shared memory
-  // is not partitioned.
+  // Returns the shared memory partition size in bytes. A value of 0 means
+  // shared memory is not partitioned.
   virtual size_t getSharedMemoryPartitionSize() const { return 0; }
-  // Returns true if shared memory is partitioned on this target.
-  virtual bool hasSharedMemoryPartitions() const { return false; }
 
   // Annotate target specific information to local load operations during
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
