@@ -4,9 +4,9 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
-#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -30,7 +30,7 @@ std::string mangleType(Type t) {
     std::string result = "T";
     llvm::raw_string_ostream os(result);
     for (int s : tensorType.getShape()) {
-        os << s << "x";
+      os << s << "x";
     }
     os << mangleType(tensorType.getElementType());
     return result;
@@ -860,7 +860,7 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "set_write_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {buffersType, writeVisibilityType, (int)memType},
+      {buffersType, writeVisibilityType, (uint64_t)memType},
       [buffersType, writeVisibilityType](ImplicitLocOpBuilder &fb,
                                          Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
@@ -918,7 +918,7 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "set_read_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {buffersType, readVisibilityType, (int)memType},
+      {buffersType, readVisibilityType, (uint64_t)memType},
       [buffersType, readVisibilityType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
@@ -981,7 +981,7 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "clear_write_tracking", args,
       /*assertInfo=*/std::nullopt,
-      {buffersType, writeTrackingType, (int)memType},
+      {buffersType, writeTrackingType, (uint64_t)memType},
       [buffersType, writeTrackingType](ImplicitLocOpBuilder &fb,
                                        Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
@@ -1035,7 +1035,7 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "clear_read_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {buffersType, readVisibilityType, (int)memType},
+      {buffersType, readVisibilityType, (uint64_t)memType},
       [buffersType, readVisibilityType](ImplicitLocOpBuilder &fb,
                                         Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
@@ -1090,7 +1090,7 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "clear_read_tracking", args,
       /*assertInfo=*/std::nullopt,
-      {buffersType, readTrackingType, (int)memType},
+      {buffersType, readTrackingType, (uint64_t)memType},
       [buffersType, readTrackingType](ImplicitLocOpBuilder &fb,
                                       Block *entryBlock) {
         Value bufOffset = entryBlock->getArgument(0);
@@ -1152,7 +1152,7 @@ void FunctionBuilder::createTrackVisibleWritesCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "track_visible_writes", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeVisibilityType, writeTrackingType, (int)memType},
+      {barriersType, writeVisibilityType, writeTrackingType, (uint64_t)memType},
       [barriersType, writeVisibilityType,
        writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1234,7 +1234,7 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "track_visible_reads", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, readVisibilityType, readTrackingType, (int)memType},
+      {barriersType, readVisibilityType, readTrackingType, (uint64_t)memType},
       [barriersType, readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1310,7 +1310,7 @@ void FunctionBuilder::createTransferVisibleWritesCall(
   createCallToCachedFunction(
       b, "transfer_visible_writes", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeVisibilityType, writeTrackingType, (int)memType},
+      {barriersType, writeVisibilityType, writeTrackingType, (uint64_t)memType},
       [barriersType, writeVisibilityType,
        writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1397,7 +1397,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
   createCallToCachedFunction(
       b, "transfer_visible_reads", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, readVisibilityType, readTrackingType, (int)memType},
+      {barriersType, readVisibilityType, readTrackingType, (uint64_t)memType},
       [barriersType, readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1469,7 +1469,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   AssertInfo assertInfo{message,
                         buffersType.cloneWith(std::nullopt, b.getI1Type())};
   Type aliasMatrixTypeBase;
-  auto buildVerifyWriteBody = [&](bool useAlias) {
+  auto buildVerifyWriteBody = [&writeVisibilityType,
+                               &aliasMatrixTypeBase](bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -1526,15 +1527,15 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
                                aliasMatrixVal};
     createCallToCachedFunction(
         b, "verify_write_visibility", args, assertInfo,
-        {buffersType, writeVisibilityType, aliasMatrixType, (int)memType},
+        {buffersType, writeVisibilityType, aliasMatrixType, (uint64_t)memType},
         buildVerifyWriteBody(/*useAlias=*/true));
   } else {
     SmallVector<Value> args = {bufOffset, lengthVal,  pred,
                                threadVal, buffersVal, writeVisibilityVal};
-    createCallToCachedFunction(b, "verify_write_visibility_noalias", args,
-                               assertInfo,
-                               {buffersType, writeVisibilityType, (int)memType},
-                               buildVerifyWriteBody(/*useAlias=*/false));
+    createCallToCachedFunction(
+        b, "verify_write_visibility_noalias", args, assertInfo,
+        {buffersType, writeVisibilityType, (uint64_t)memType},
+        buildVerifyWriteBody(/*useAlias=*/false));
   }
 }
 
@@ -1566,7 +1567,8 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   AssertInfo assertInfo{message,
                         buffersType.cloneWith(std::nullopt, b.getI1Type())};
   Type aliasMatrixTypeBase;
-  auto buildVerifyReadBody = [&](bool useAlias) {
+  auto buildVerifyReadBody = [&buffersType, &readVisibilityType,
+                              &aliasMatrixTypeBase](bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -1624,15 +1626,15 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
                                aliasMatrixVal};
     createCallToCachedFunction(
         b, "verify_read_visibility", args, assertInfo,
-        {buffersType, readVisibilityType, aliasMatrixType, (int)memType},
+        {buffersType, readVisibilityType, aliasMatrixType, (uint64_t)memType},
         buildVerifyReadBody(/*useAlias=*/true));
   } else {
     SmallVector<Value> args = {bufOffset, lengthVal,  pred,
                                threadVal, buffersVal, readVisibilityVal};
-    createCallToCachedFunction(b, "verify_read_visibility_noalias", args,
-                               assertInfo,
-                               {buffersType, readVisibilityType, (int)memType},
-                               buildVerifyReadBody(/*useAlias=*/false));
+    createCallToCachedFunction(
+        b, "verify_read_visibility_noalias", args, assertInfo,
+        {buffersType, readVisibilityType, (uint64_t)memType},
+        buildVerifyReadBody(/*useAlias=*/false));
   }
 }
 
@@ -1655,7 +1657,7 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
                              writeVis.value};
   createCallToCachedFunction(
       b, "copy_write_visibility", args,
-      /*assertInfo=*/std::nullopt, {writeVisibilityType, (int)memType},
+      /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
       [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
         Value destMaskVal = entryBlock->getArgument(1);
@@ -1729,7 +1731,8 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
                              pred, readVis.value};
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
-      /*assertInfo=*/std::nullopt, {readVisibilityType, (int)memType},
+      /*assertInfo=*/std::nullopt,
+      {readVisibilityType, destMask, (uint64_t)memType},
       [readVisibilityType, destMask](ImplicitLocOpBuilder &fb,
                                      Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
@@ -2073,7 +2076,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   AssertInfo assertInfo{message,
                         commitsType.cloneWith(std::nullopt, b.getI1Type())};
   Type aliasMatrixTypeBase;
-  auto buildCheckOutstandingCommitsBody = [&](bool useAlias) {
+  auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase](
+                                              bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2118,7 +2122,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
         aliasMatrix.value};
     createCallToCachedFunction(
         b, "check_outstanding_commits", args, assertInfo,
-        {buffersType, commitsType, aliasMatrixType, (int)thread},
+        {buffersType, commitsType, aliasMatrixType, (uint64_t)thread},
         buildCheckOutstandingCommitsBody(/*useAlias=*/true));
   } else {
     SmallVector<Value> args = {bufOffset,     lengthVal,
@@ -2126,7 +2130,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                                buffers.value, outstandingCommits.value};
     createCallToCachedFunction(
         b, "check_outstanding_commits_noalias", args, assertInfo,
-        {buffersType, commitsType, (int)thread},
+        {buffersType, commitsType, (uint64_t)thread},
         buildCheckOutstandingCommitsBody(/*useAlias=*/false));
   }
 }

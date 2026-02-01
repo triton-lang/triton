@@ -26,7 +26,7 @@ std::string mangleType(Type t);
 
 class ManglingArgs {
 public:
-  using Arg = std::variant<Type, int, std::string>;
+  using Arg = std::variant<Type, uint64_t, std::string>;
 
   ManglingArgs() = default;
   ManglingArgs(const ManglingArgs &) = default;
@@ -53,7 +53,7 @@ public:
   std::string mangleArg(Arg arg) const {
     if (auto type = std::get_if<Type>(&arg)) {
       return std::string("_") + mangleType(*type);
-    } else if (auto intVal = std::get_if<int>(&arg)) {
+    } else if (auto intVal = std::get_if<uint64_t>(&arg)) {
       return std::string("_I") + std::to_string(*intVal);
     } else if (auto stringVal = std::get_if<std::string>(&arg)) {
       return *stringVal;
