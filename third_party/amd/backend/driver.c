@@ -494,7 +494,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                        n_spills, n_max_threads);
 }
 
-static PyObject *unLoadModule(PyObject *self, PyObject *args) {
+static PyObject *unloadModule(PyObject *self, PyObject *args) {
   hipModule_t mod;
   if (!PyArg_ParseTuple(args, "K", &mod)) {
     return NULL;
@@ -1103,7 +1103,7 @@ cleanup:
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided hsaco into HIP driver"},
-    {"unload_module", unLoadModule, METH_VARARGS,
+    {"unload_module", unloadModule, METH_VARARGS,
      "unload provided module to free memory"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
