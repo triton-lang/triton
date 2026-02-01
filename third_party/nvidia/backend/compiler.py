@@ -359,6 +359,8 @@ class CUDABackend(BaseBackend):
         if "consan" in options.instrumentation_mode:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
