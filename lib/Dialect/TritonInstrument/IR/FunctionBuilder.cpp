@@ -131,6 +131,12 @@ FuncOp getOrCreateFunction(
   func.setVisibility(SymbolTable::Visibility::Private);
   func->setAttr(ttg::AttrNumWarpsName,
                 moduleBuilder.getI32IntegerAttr(numWarps));
+  for (auto [i, argType] : llvm::enumerate(argTypes)) {
+    if (isa<PointerType>(argType)) {
+      func.setArgAttr(i, "tt.divisibility",
+                      moduleBuilder.getI32IntegerAttr(16));
+    }
+  }
   Block *entryBlock = func.addEntryBlock();
   OpBuilder bodyBuilder = OpBuilder::atBlockBegin(entryBlock);
   ImplicitLocOpBuilder fb(loc, bodyBuilder);
@@ -340,6 +346,21 @@ Value createColumnMask(ImplicitLocOpBuilder &b, Value column,
 }
 
 } // namespace
+
+void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
+                                                 Value ptr,
+                                                 RankedTensorType type,
+                                                 Value scalar) {
+  createCallToCachedFunction(
+      b, "fill_global_tensor", {ptr, scalar}, /*assertInfo=*/std::nullopt,
+      {type}, [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value ptr = entryBlock->getArgument(0);
+        Value scalar = entryBlock->getArgument(1);
+        Value tensor = triton::SplatOp::create(fb, type, scalar);
+        createStoreScratchMemory(fb, fb.getLoc(), ptr, tensor, type);
+        triton::ReturnOp::create(fb);
+      });
+}
 
 void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
                                            int thread, Value phase, Value pred,

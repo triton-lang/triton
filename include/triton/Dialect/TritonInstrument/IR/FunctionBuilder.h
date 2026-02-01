@@ -79,6 +79,9 @@ public:
   FunctionBuilder(ModuleOp module, AuxDataMap &auxData)
       : module(module), auxData(auxData) {}
 
+  // Create a function that fills a global tensor with a scalar value.
+  void createFillGlobalTensorCall(ImplicitLocOpBuilder &b, Value ptr,
+                                  RankedTensorType type, Value scalar);
   // setWaiting: mark the base thread as waiting on the given barrier phase and
   // record that phase for deadlock detection.
   void createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
