@@ -605,9 +605,10 @@ void fillTDMDescriptor(
   }
 }
 
-// Fill TDM descriptor for scatter operation (2D only).
-// Scatter writes data from LDS to non-contiguous rows in global memory.
-void fillTDMDescriptorForScatter(
+// Fill TDM descriptor for gather/scatter operations (2D only).
+// Gather reads from non-contiguous rows in global memory to LDS.
+// Scatter writes from LDS to non-contiguous rows in global memory.
+void fillTDMDescriptorForGatherScatter(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
     SmallVector<int64_t> blockShape, SmallVector<Value> &group0,
@@ -616,7 +617,7 @@ void fillTDMDescriptorForScatter(
     Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices) {
-  assert(!rowIndices.empty() && "Scatter requires row indices.");
+  assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -649,17 +650,17 @@ void fillTDMDescriptorForScatter(
   Value ldsOffset = b.mul(ldsRowOffset, b.i32_val(blockShape[1]));
   ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
 
-  // Update group0 with addresses and enable scatter
+  // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, ldsPtr);
 
-  // Set scatter bits: bit 31 = enable, bit 30 = 32-bit indices
-  Value predWithScatter = b.or_(pred, b.i32_val(1 << 31));
+  // Set gather/scatter bits: bit 31 = enable, bit 30 = 32-bit indices
+  Value predWithGatherScatter = b.or_(pred, b.i32_val(1 << 31));
   if (use32BitIndices) {
-    predWithScatter = b.or_(predWithScatter, b.i32_val(1 << 30));
+    predWithGatherScatter = b.or_(predWithGatherScatter, b.i32_val(1 << 30));
   }
 
-  group0[0] = predWithScatter;
+  group0[0] = predWithGatherScatter;
   group0[1] = ldsAddr;
   group0[2] = b.trunc(i32_ty, globalAddr);
 
@@ -784,28 +785,29 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   }
 }
 
-// Emit a TDM scatter operation to write non-contiguous rows from LDS to global.
-void emitTDMScatter(RewriterBase &rewriter, Location loc,
-                    const LLVMTypeConverter *typeConverter,
-                    ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
-                    Value srcPtr, Value pred, Type elementType,
-                    Value barrierPtr, const triton::LinearLayout &cgaLayout,
-                    Value ctaId, ArrayRef<Value> rowIndices, Value colOffset,
-                    bool use32BitIndices) {
+// Emit a TDM gather or scatter operation for non-contiguous row access.
+void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
+                          const LLVMTypeConverter *typeConverter,
+                          ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                          Value ldsPtr, Value pred, Type elementType,
+                          Value barrierPtr,
+                          const triton::LinearLayout &cgaLayout, Value ctaId,
+                          ArrayRef<Value> rowIndices, Value colOffset,
+                          bool use32BitIndices, bool isGather) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  assert(!rowIndices.empty() && "Scatter requires row indices");
-  assert(colOffset && "Scatter requires column offset");
+  assert(!rowIndices.empty() && "Gather/scatter requires row indices");
+  assert(colOffset && "Gather/scatter requires column offset");
 
   // Determine max indices per instruction based on index size
   size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
   size_t numIndices = rowIndices.size();
 
-  // Get the descriptor groups (scatter uses 2D format: 12 dwords)
+  // Get the descriptor groups (gather/scatter uses 2D format: 12 dwords)
   auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
   auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-  // For TDM scatter, we need group2 and group3 for indices
+  // For TDM gather/scatter, we need group2 and group3 for indices
   SmallVector<Value> group2Vec(4, b.i32_val(0));
   SmallVector<Value> group3Vec(4, b.i32_val(0));
 
@@ -824,12 +826,12 @@ void emitTDMScatter(RewriterBase &rewriter, Location loc,
     auto g2 = group2Vec;
     auto g3 = group3Vec;
 
-    // Fill the descriptor for scatter:
+    // Fill the descriptor for gather/scatter:
     // - ldsRowOffset: row offset within shared memory for this batch
     // - colOffset: starting column in global memory
-    fillTDMDescriptorForScatter(
+    fillTDMDescriptorForGatherScatter(
         rewriter, loc, typeConverter, elementType, to_vector(blockShape), g0,
-        g1, g2, g3, b.i32_val(startIdx), colOffset, srcPtr, pred, barrierPtr,
+        g1, g2, g3, b.i32_val(startIdx), colOffset, ldsPtr, pred, barrierPtr,
         cgaLayout, ctaId, batchIndices, use32BitIndices);
 
     // Pack and emit the instruction
@@ -838,10 +840,13 @@ void emitTDMScatter(RewriterBase &rewriter, Location loc,
     auto group2 = packLLVector(loc, g2, rewriter);
     auto group3 = packLLVector(loc, g3, rewriter);
 
-    // Scatter uses tensor.store.from.lds (not the d2 variant) because it
-    // needs group2/group3 for indices
+    // Gather/scatter uses full 4-group format (not the d2 variant) for indices
+    // Gather: tensor.load.to.lds (global -> LDS)
+    // Scatter: tensor.store.from.lds (LDS -> global)
+    const char *intrinsicName = isGather ? "llvm.amdgcn.tensor.load.to.lds"
+                                         : "llvm.amdgcn.tensor.store.from.lds";
     LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, "llvm.amdgcn.tensor.store.from.lds", {},
+        rewriter, loc, intrinsicName, {},
         {group0, group1, group2, group3, b.i32_val(0)});
   }
 }
