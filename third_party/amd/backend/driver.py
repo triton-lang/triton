@@ -239,6 +239,7 @@ def expand_signature(signature, tensordesc_meta):
                 for _ in range(2 * ndim):
                     output.append("i64")
                 output.append("i1")
+                output.append("i1")
             else:
                 output.append("tensordesc")
 
@@ -306,7 +307,15 @@ def make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
+        return [
+            arg.base,
+            *arg.shape,
+            *arg.strides,
+            arg.padding == "nan",
+            arg.round_f32_to_tf32,
+            *arg.shape,
+            *arg.strides,
+        ]
 
     shape = arg.shape
     strides = arg.strides
