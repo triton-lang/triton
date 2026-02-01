@@ -5,7 +5,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Support/DebugStringHelper.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -254,40 +256,26 @@ Value expandAliases(ImplicitLocOpBuilder &b, Value bufferMask,
   return createConvertLayout(b, aliasVector, bufferMaskType.getEncoding());
 }
 
-Value createOneHot(ImplicitLocOpBuilder &b, int size, int index,
-                   Attribute encoding) {
-  auto loc = b.getLoc();
-  auto type = RankedTensorType::get({size}, b.getI32Type(), encoding);
-  Value arange =
-      triton::MakeRangeOp::create(b, type, /*start=*/0, /*end=*/size);
-  Value indexTensor =
-      tti::createConstIntTensor(b, loc, index, type, /*isSigned=*/false);
-  return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, arange,
-                               indexTensor);
-}
-
-Value createColumnMask(ImplicitLocOpBuilder &b, int column,
-                       RankedTensorType tensorType) {
-  auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
-  auto columnEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
-  Value oneHot =
-      createOneHot(b, tensorType.getShape()[1], column, columnEncoding);
-  return convertAndBroadcast(b, oneHot, /*dim=*/0, tensorType);
-}
-
+// Given a constexpr integer mask `columnMask` and `tensor<MxNxiD>`, codegen
+// a mask `tensor<Nxi1>` whose elements correspond to the bits in `columnMask`.
+// Then, it is broadcasted to the shape of the tensor.
 Value createMultiColumnMask(ImplicitLocOpBuilder &b, uint64_t columnMask,
                             RankedTensorType tensorType) {
-  auto loc = b.getLoc();
-  auto i1TensorType =
-      cast<RankedTensorType>(tensorType.cloneWith(std::nullopt, b.getI1Type()));
-  Value maskTensor = tti::createConstIntTensor(b, loc, 0, i1TensorType);
-  for (int i = 0; i < 64; ++i) {
-    if (columnMask & (1ULL << i)) {
-      Value columnMaskTensor = createColumnMask(b, i, tensorType);
-      maskTensor = arith::OrIOp::create(b, maskTensor, columnMaskTensor);
-    }
-  }
-  return maskTensor;
+  unsigned size = tensorType.getShape()[1];
+  SmallVector<bool> maskBits(size);
+  for (unsigned i : llvm::seq(size))
+    maskBits[i] = (columnMask >> i) & 1;
+
+  SmallVector<bool> allMaskBits;
+  for (unsigned i : llvm::seq(tensorType.getShape()[0]))
+    allMaskBits.append(maskBits);
+
+  // This will lower because the tensors have a thread-local layout with the
+  // same number of elements per thread as the whole tensor.
+  auto maskType = RankedTensorType::get(tensorType.getShape(), b.getI1Type(),
+                                        tensorType.getEncoding());
+  auto valueAttr = DenseElementsAttr::get(maskType, allMaskBits);
+  return arith::ConstantOp::create(b, valueAttr);
 }
 
 Value adjustIntegerWidth(ImplicitLocOpBuilder &b, Value value,

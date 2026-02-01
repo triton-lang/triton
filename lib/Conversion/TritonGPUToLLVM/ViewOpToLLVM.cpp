@@ -122,6 +122,19 @@ struct ArithConstantSplatOpConversion
   }
 };
 
+static void generateIntegerConstants(PatternRewriter &b, Location loc,
+                                     Type elemType, SmallVector<Value> &llVals,
+                                     DenseElementsAttr values) {
+  // Reduce IR bloat by deduplicating constants.
+  DenseMap<APInt, Value> constMap;
+  for (auto v : values.getValues<APInt>()) {
+    Value &cst = constMap[v];
+    if (!cst)
+      cst = LLVM::ConstantOp::create(b, loc, elemType, v);
+    llVals.push_back(cst);
+  }
+}
+
 // Convert arith::ConstantOp with an array DenseElementsAttr to a
 // LLVM::StructType value.
 struct ArithConstantArrayOpConversion
@@ -136,14 +149,14 @@ struct ArithConstantArrayOpConversion
     if (mlir::isa<SplatElementsAttr>(value))
       return failure();
     auto tensorTy = cast<RankedTensorType>(op.getType());
+    if (!isa<IntegerType, IndexType>(tensorTy.getElementType()))
+      return failure();
+
     auto loc = op->getLoc();
-    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
+    auto values = cast<DenseElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     SmallVector<Value> llVals;
-    for (auto v : values.getValues<APInt>()) {
-      auto ll = LLVM::ConstantOp::create(rewriter, loc, elemType, v);
-      llVals.push_back(ll);
-    }
+    generateIntegerConstants(rewriter, loc, elemType, llVals, values);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
 
     if (elemsPerThread != llVals.size()) {
