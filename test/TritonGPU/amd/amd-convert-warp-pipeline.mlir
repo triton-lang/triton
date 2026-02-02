@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -convert-warp-pipeline | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx1250" | FileCheck %s --check-prefixes CHECK,WAVE32
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx950" | FileCheck %s --check-prefixes CHECK,WAVE64
 
 // ---- 2-stage pipeline (basic) ----
 //
@@ -8,6 +9,7 @@ tt.func @two_stage_backend(%n: index, %ptr: !tt.ptr<f32>) {
   %c1  = arith.constant 1 : index
   %v0  = arith.constant 0.0 : f32
   %v1  = arith.constant 1.0 : f32
+
 
   scf.for %i = %c0 to %n step %c1 {
 
@@ -37,6 +39,8 @@ tt.func @two_stage_backend(%n: index, %ptr: !tt.ptr<f32>) {
 // === Pre-loop sync + role setup ===
 // CHECK: ttg.barrier local
 // CHECK: arith.divsi
+// WAVE64-SAME: %c256
+// WAVE32-SAME: %c128
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne
 // CHECK: amdg.cond_barrier %[[WARPHIGH]]
@@ -320,4 +324,82 @@ tt.func @no_total_stages(%n: index, %ptr: !tt.ptr<f32>) {
 // CHECK-NOT: amdg.cond_barrier
 // CHECK: scf.for
 // CHECK:   scf.execute_region
+// CHECK: tt.return
+
+// -----
+
+// ---- Priority reset: stages without priority reset to 0 when others have it ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @priority_reset_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
+
+    scf.for %i = %c0 to %n step %c1 {
+      // Stage 0 - has priority 3
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "load", triton.warp_pipeline.priority = 3 : i32}
+
+      // Stage 1 - no priority, should reset to 0
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "compute"}
+
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @priority_reset_between_stages
+// Before loop: priority for first cluster
+// CHECK: rocdl.s.setprio 3
+// CHECK: scf.for
+// Inside loop: setprio 0 for second cluster, then setprio 3 for first cluster
+// CHECK: rocdl.s.setprio 0
+// CHECK: rocdl.s.setprio 3
+// After loop: reset to 0
+// CHECK: rocdl.s.setprio 0
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return
+
+// -----
+
+// ---- No priority: no setprio emitted when no stage uses priority ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @no_priority_no_setprio(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
+
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @no_priority_no_setprio
+// CHECK: scf.for
+// CHECK-NOT: rocdl.s.setprio
+// CHECK: amdg.cond_barrier
 // CHECK: tt.return

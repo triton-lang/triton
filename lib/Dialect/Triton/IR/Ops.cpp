@@ -1445,7 +1445,8 @@ LogicalResult DescriptorScatterOp::verify() {
 }
 
 // -- DescriptorLoadOp --
-LogicalResult verifyDescriptorLoadStoreOp(Operation *op, TensorDescType desc,
+LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
+                                          TensorDescInterface desc,
                                           ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
   if (block.getElementType() != tensor.getElementType()) {

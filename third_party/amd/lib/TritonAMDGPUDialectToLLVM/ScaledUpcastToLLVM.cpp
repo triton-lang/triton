@@ -36,7 +36,7 @@ struct ScaledUpcastFp4OpPattern
     results.reserve(inputVals.size() * 2);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    if (targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250) {
+    if (targetInfo.supportsCvtPkScalePk8()) {
       assert(scaleVals.size() == 2 * inputVals.size());
       for (int i = 0; i < inputVals.size(); i += 4) {
 
@@ -98,10 +98,9 @@ struct ScaledUpcastFp8OpPattern
     assert(inputVals.size() == scaleVals.size());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto isaFamily = targetInfo.getISAFamily();
     SmallVector<Value> results;
     results.reserve(inputVals.size());
-    if (isaFamily == AMD::ISAFamily::GFX1250) {
+    if (targetInfo.supportsCvtPkScalePk8()) {
       for (int i = 0; i < inputVals.size(); i += 8) {
         const auto &converted =
             elemType.isF16()

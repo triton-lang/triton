@@ -84,7 +84,8 @@ class CudaUtils(object):
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
-        self.fill_tma_descriptor = mod.fill_tma_descriptor
+        self.fill_tma_descriptor_tiled = mod.fill_tma_descriptor_tiled
+        self.fill_tma_descriptor_im2col = mod.fill_tma_descriptor_im2col
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
 
@@ -145,6 +146,7 @@ def expand_signature(signature, tensordesc_meta):
                 for _ in range(2 * ndim):
                     output.append("i64")
                 output.append("i1")
+                output.append("i1")
             else:
                 output.append("nvTmaDesc")
 
@@ -202,6 +204,7 @@ TMA_DTYPE_DEVICE_TO_HOST = dict((i, i) for i in range(16))
 TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
+TMA_TF32 = 11
 
 
 def make_tensordesc_arg(arg, metadata):
@@ -212,7 +215,15 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
+        return [
+            arg.base,
+            *arg.shape,
+            *arg.strides,
+            arg.padding == "nan",
+            arg.round_f32_to_tf32,
+            *arg.shape,
+            *arg.strides,
+        ]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -231,7 +242,10 @@ def make_tensordesc_arg(arg, metadata):
     else:
         expanded_shape = shape
 
-    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor(
+    if arg.round_f32_to_tf32:
+        elem_type = TMA_TF32
+
+    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
         arg.base.data_ptr(),
         swizzle,
         elem_size,
