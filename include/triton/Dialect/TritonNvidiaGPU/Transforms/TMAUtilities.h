@@ -4,7 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-#include "llvm/Support/Casting.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -51,7 +51,9 @@ inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
 }
 
 FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty);
+FailureOr<int> getTMASwizzleMode(Location loc, TensorDescIm2ColType ty);
 FailureOr<int> getTMAElementType(Location loc, TensorDescType ty);
+FailureOr<int> getTMAElementType(Location loc, TensorDescIm2ColType ty);
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);

@@ -106,8 +106,9 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
-  auto encoding = ty.getBlockType().getEncoding();
+static FailureOr<int> getTMASwizzleModeImpl(Location loc,
+                                            RankedTensorType blockType) {
+  auto encoding = blockType.getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
@@ -140,6 +141,14 @@ FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
   return swizzleMode;
 }
 
+FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
+  return getTMASwizzleModeImpl(loc, ty.getBlockType());
+}
+
+FailureOr<int> getTMASwizzleMode(Location loc, TensorDescIm2ColType ty) {
+  return getTMASwizzleModeImpl(loc, ty.getBlockType());
+}
+
 enum TMA_ELEMENT_TYPES {
   TMA_U8 = 0,
   TMA_U16 = 1,
@@ -160,15 +169,15 @@ enum TMA_ELEMENT_TYPES {
   TMA_B6P2X16 = 15,
 };
 
-FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
-  auto encoding = ty.getBlockType().getEncoding();
-  auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+static FailureOr<int> getTMAElementTypeImpl(Location loc,
+                                             RankedTensorType blockType) {
+  auto encoding = blockType.getEncoding();
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
     return TMA_B4X16_P64;
 
-  auto elemTy = ty.getBlockType().getElementType();
+  auto elemTy = blockType.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {
@@ -195,6 +204,14 @@ FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
   return emitError(loc)
          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
          << elemSize;
+}
+
+FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
+  return getTMAElementTypeImpl(loc, ty.getBlockType());
+}
+
+FailureOr<int> getTMAElementType(Location loc, TensorDescIm2ColType ty) {
+  return getTMAElementTypeImpl(loc, ty.getBlockType());
 }
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
