@@ -141,8 +141,9 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
+    stored_value, offsets = _semantic.broadcast_impl_value(stored_value, offsets)
     if mask is not None:
-        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+        stored_value, mask = _semantic.broadcast_impl_value(stored_value, mask)
 
     mask = mask.handle if mask is not None else ir.value()
     cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
