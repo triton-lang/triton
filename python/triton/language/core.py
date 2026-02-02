@@ -2034,6 +2034,11 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     For three-dimensional blocks, `tl.dot` performs the batched matrix product,
     where the first dimension of each block represents the batch dimension.
 
+    .. warning::
+      When using TF32 precision, the float32 inputs may be truncated to TF32 format (19-bit floating point)
+      without rounding which may bias the result. For best results, you must round to TF32 explicitly, or load
+      the data using `TensorDescriptor` with `round_f32_to_tf32=True`.
+
     :param input: The first tensor to be multiplied.
     :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.

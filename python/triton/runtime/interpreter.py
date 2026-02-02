@@ -1269,6 +1269,7 @@ class GridExecutor:
                     arg.strides,
                     arg.block_shape,
                     arg.padding,
+                    arg.round_f32_to_tf32,
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg

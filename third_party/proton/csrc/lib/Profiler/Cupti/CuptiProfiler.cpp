@@ -729,7 +729,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-    if (getBoolEnv("TRITON_ENABLE_HW_TRACE", true))
+    if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/1);
   }
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
@@ -780,7 +780,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-    if (getBoolEnv("TRITON_ENABLE_HW_TRACE", true))
+    if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/0);
   }
   profiler.periodicFlushingEnabled = false;
