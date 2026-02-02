@@ -1261,6 +1261,27 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+  ttg::TMAMode mode,
+  bool packedSize = true) {
+auto ctx = ty.getContext();
+auto kMsg = str_attr("msg");
+auto kBlock = str_attr("block");
+auto shapePerCTA = ttg::getShapePerCTA(ty);
+int rank = shapePerCTA.size();
+auto blockShape = ttng::getTMABlockShape(ty, packedSize, mode);
+auto outDimNames = standardOutDimNames(ctx, rank);
+
+LinearLayout msgToOffset;
+for (int dim = 0; dim < rank; ++dim) {
+msgToOffset *=
+LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+blockShape[dim], kMsg, outDimNames[dim]);
+}
+msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
+return msgToOffset;
+}
+
 static LinearLayout
 getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
                              ttg::MemDescType ty) {
@@ -1276,27 +1297,6 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
   // Multiply to offset by 2 in the last dimension
   auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
   return unpackLayout * packedLayout;
-}
-
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                               ttg::TMAMode mode,
-                                               bool packedSize = true) {
-  auto ctx = ty.getContext();
-  auto kMsg = str_attr("msg");
-  auto kBlock = str_attr("block");
-  auto shapePerCTA = ttg::getShapePerCTA(ty);
-  int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, packedSize, mode);
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout msgToOffset;
-  for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
-  }
-  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
-  return msgToOffset;
 }
 
 struct AsyncTMACopyGlobalToLocalOpConversion
@@ -1512,7 +1512,6 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   auto rank = coords.size();
 
-  // TMA store only supports tiled mode
   auto msgToPackedOffset =
       getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
