@@ -210,31 +210,22 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   assert(kernelFunc);
 
   for (auto [i, arg] : llvm::enumerate(kernelFunc.getArguments())) {
-    auto tiledDescTy = dyn_cast<TensorDescType>(arg.getType());
-    auto im2colDescTy = dyn_cast<ttng::TensorDescIm2ColType>(arg.getType());
-    if (!tiledDescTy && !im2colDescTy)
+    auto descTy = dyn_cast<TensorDescInterface>(arg.getType());
+    if (!descTy)
       continue;
 
-    auto blockType =
-        tiledDescTy ? tiledDescTy.getBlockType() : im2colDescTy.getBlockType();
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
+    auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
 
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-      FailureOr<int> swizzle, elemType;
-      ttg::TMAMode tmaMode;
-      if (tiledDescTy) {
-        swizzle = ttng::getTMASwizzleMode(arg.getLoc(), tiledDescTy);
-        elemType = ttng::getTMAElementType(arg.getLoc(), tiledDescTy);
-        tmaMode = ttg::TMAMode::Tiled;
-      } else {
-        swizzle = ttng::getTMASwizzleMode(arg.getLoc(), im2colDescTy);
-        elemType = ttng::getTMAElementType(arg.getLoc(), im2colDescTy);
-        tmaMode = ttg::TMAMode::Im2Col;
-      }
+      auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
+      auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
       if (failed(swizzle) || failed(elemType))
         throw py::type_error("invalid TMA descriptor type");
+      auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
           ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
@@ -243,7 +234,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
-      metadata["is_im2col"] = im2colDescTy != nullptr;
+      metadata["is_im2col"] = isIm2Col;
     } else {
       auto blockShape = blockType.getShape();
       metadata["block_size"] =

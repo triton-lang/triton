@@ -1262,14 +1262,13 @@ struct AsyncCopyGlobalToLocalOpConversion
 };
 
 static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                               ttg::TMAMode mode,
-                                               bool packedSize = true) {
+                                               ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
   auto shapePerCTA = ttg::getShapePerCTA(ty);
   int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, packedSize, mode);
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
   auto outDimNames = standardOutDimNames(ctx, rank);
   LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {

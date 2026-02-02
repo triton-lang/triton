@@ -106,8 +106,8 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-static FailureOr<int> getTMASwizzleModeImpl(Location loc,
-                                            RankedTensorType blockType) {
+FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
+  auto blockType = ty.getBlockType();
   auto encoding = blockType.getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
@@ -141,14 +141,6 @@ static FailureOr<int> getTMASwizzleModeImpl(Location loc,
   return swizzleMode;
 }
 
-FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
-  return getTMASwizzleModeImpl(loc, ty.getBlockType());
-}
-
-FailureOr<int> getTMASwizzleMode(Location loc, TensorDescIm2ColType ty) {
-  return getTMASwizzleModeImpl(loc, ty.getBlockType());
-}
-
 enum TMA_ELEMENT_TYPES {
   TMA_U8 = 0,
   TMA_U16 = 1,
@@ -169,8 +161,8 @@ enum TMA_ELEMENT_TYPES {
   TMA_B6P2X16 = 15,
 };
 
-static FailureOr<int> getTMAElementTypeImpl(Location loc,
-                                            RankedTensorType blockType) {
+FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
+  auto blockType = ty.getBlockType();
   auto encoding = blockType.getEncoding();
   bool fp4Padded = isFp4Padded(encoding);
 
@@ -204,14 +196,6 @@ static FailureOr<int> getTMAElementTypeImpl(Location loc,
   return emitError(loc)
          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
          << elemSize;
-}
-
-FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
-  return getTMAElementTypeImpl(loc, ty.getBlockType());
-}
-
-FailureOr<int> getTMAElementType(Location loc, TensorDescIm2ColType ty) {
-  return getTMAElementTypeImpl(loc, ty.getBlockType());
 }
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
