@@ -177,7 +177,8 @@ private:
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
       } else if (isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-                     triton::amdgpu::AsyncTDMWait>(op)) {
+                     triton::amdgpu::AsyncTDMWait,
+                     triton::amdgpu::AsyncTDMIntrinsicWait>(op)) {
         int currCluster = clusterBlocks.size();
         // Reject if multiple barriers appear without an intervening cluster.
         // This is functionally valid but may cause unpredictable timing. Users

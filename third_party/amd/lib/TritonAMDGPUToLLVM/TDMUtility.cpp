@@ -786,6 +786,17 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 }
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
+size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
+                                          bool use32BitIndices) {
+  if (numIndices == 0)
+    return 0;
+
+  // Determine max indices per instruction based on index size
+  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
+
+  return llvm::divideCeil(numIndices, maxIndicesPerInstr);
+}
+
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
                           ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
@@ -799,9 +810,12 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   assert(!rowIndices.empty() && "Gather/scatter requires row indices");
   assert(colOffset && "Gather/scatter requires column offset");
 
-  // Determine max indices per instruction based on index size
-  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
   size_t numIndices = rowIndices.size();
+  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
+
+  // Calculate the number of TDM instructions we'll emit
+  size_t numInstructions =
+      getTDMGatherScatterInstrinsicCount(numIndices, use32BitIndices);
 
   // Get the descriptor groups (gather/scatter uses 2D format: 12 dwords)
   auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
@@ -812,8 +826,8 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   SmallVector<Value> group3Vec(4, b.i32_val(0));
 
   // Issue multiple TDM instructions if needed
-  for (size_t startIdx = 0; startIdx < numIndices;
-       startIdx += maxIndicesPerInstr) {
+  for (size_t instrIdx = 0; instrIdx < numInstructions; ++instrIdx) {
+    size_t startIdx = instrIdx * maxIndicesPerInstr;
     size_t endIdx = std::min(startIdx + maxIndicesPerInstr, numIndices);
 
     // Get the subset of indices for this batch
