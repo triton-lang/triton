@@ -181,6 +181,42 @@ Traits: `AttrSizedOperandSegments`
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+### `amdg.async_tdm_gather` (triton::amdgpu::AsyncTDMGatherOp)
+
+_Gather data from non-contiguous global memory rows to local memory asynchronously_
+
+Syntax:
+
+```
+operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+              attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+```
+
+This operation gathers data from non-contiguous rows in global memory to local
+memory using TDM gather mode.
+Unlike the regular async_tdm_copy_global_to_local which reads from contiguous memory,
+this operation uses src_row_indices to specify which rows in global memory to read from.
+
+The descriptor must be 2D. The src_row_indices specify which rows in global memory
+to read from. The element type of src_row_indices determines the index size:
+- I16: 16-bit indices, up to 16 rows per instruction
+- I32: 32-bit indices, up to 8 rows per instruction
+If more rows are needed, multiple TDM instructions will be issued.
+
+The src_col_offset specifies the starting column in the source tensor for
+all gathered rows.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `src_row_indices` | tensor of 16-bit signless integer or 32-bit signless integer values |
+| `src_col_offset` | 32-bit signless integer |
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `amdg.async_tdm_scatter` (triton::amdgpu::AsyncTDMScatterOp)
 
 _Scatter data from local memory to non-contiguous global memory rows asynchronously_
