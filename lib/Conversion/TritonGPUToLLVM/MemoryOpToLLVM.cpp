@@ -104,10 +104,10 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
     if (paddedEnc) {
       // Convert offset to bytes for padding calculation
       Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                    offsetBytes, /*offsetInBytes=*/true);
+      auto shifts = getPaddedSharedShifts(paddedEnc, bitwidth,
+                                          /*offsetInBytes=*/true);
       // GEP in bytes: base + offset*elemSize + padOffset
-      Value totalOffset = b.add(offsetBytes, padOffset);
+      Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
       ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
                   totalOffset);
     } else {

@@ -70,8 +70,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpilogue);
   ADD_PASS_WRAPPER_0("add_warp_pipeline", mlir::createTritonAMDGPUWarpPipeline);
-  ADD_PASS_WRAPPER_0("add_warp_pipeline_conversion",
-                     mlir::triton::AMD::createConvertWarpPipelinePass);
+  ADD_PASS_OPTION_WRAPPER_1("add_warp_pipeline_conversion",
+                            mlir::triton::AMD::createConvertWarpPipelinePass,
+                            const std::string &);
   ADD_PASS_OPTION_WRAPPER_1(
       "add_optimize_dot_operands",
       mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
@@ -84,17 +85,23 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUSinkLayoutConversions());
   });
+  m.def("add_prepare_if_combining", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUPrepareIfCombining());
+  });
   m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUCanonicalizePointers());
+  });
+  m.def("add_move_up_prologue_loads", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUMoveUpPrologueLoads());
   });
   ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
                             const std::string &, bool, bool);
   ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
                           mlir::createTritonAMDGPUOptimizeBufferOpPtr);
-  ADD_PASS_WRAPPER_0("add_reorder_instructions",
-                     mlir::createTritonAMDGPUReorderInstructions);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
 
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",

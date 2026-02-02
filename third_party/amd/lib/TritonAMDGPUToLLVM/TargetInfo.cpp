@@ -105,7 +105,10 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return ROCDL::ClusterIdXOp::create(rewriter, loc, rewriter.getI32Type());
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                         "llvm.amdgcn.cluster.workgroup.id.x",
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -137,16 +140,37 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 std::optional<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
   auto isaFamily = getISAFamily();
-  bool isGFX1250 = isaFamily == AMD::ISAFamily::GFX1250;
-  bool isCDNA4 = isaFamily == AMD::ISAFamily::CDNA4;
-  bool canUseTransLoad =
-      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitWidth);
-  if (!canUseTransLoad)
+  // Determine LDSTrans version: V1 (CDNA4), V2 (GFX1250)
+  enum { V1, V2, NONE } version = NONE;
+  if (isaFamily == AMD::ISAFamily::CDNA4) {
+    version = V1;
+  } else if (isaFamily == AMD::ISAFamily::GFX1250) {
+    version = V2;
+  }
+
+  if (version == NONE || !llvm::is_contained({16, 8, 4, 6}, bitWidth))
     return std::nullopt;
+
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
+  unsigned instBitWidth;
+  bool doubleB8Contiguity;
+
+  switch (version) {
+  case V1:
+    instBitWidth = 64;
+    doubleB8Contiguity = false;
+    break;
+  case V2:
+    instBitWidth = (bitWidth == 16) ? 128 : 64;
+    doubleB8Contiguity = (bitWidth == 8);
+    break;
+  default:
+    return std::nullopt;
+  }
+
   unsigned tileSize = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize};
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize,
+                            doubleB8Contiguity};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -695,6 +719,20 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
     return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
+}
+
+bool TargetInfo::supportsWaveId() const {
+  return getISAFamily() == ISAFamily::RDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsPermlaneSwap() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsCvtPkScalePk8() const {
+  return getISAFamily() == ISAFamily::GFX1250;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

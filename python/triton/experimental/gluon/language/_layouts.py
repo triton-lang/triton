@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 import itertools
+import math
 from typing import List
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-import math
+from triton._C.libtriton import gluon_ir
 
 
 class DistributedLayout:
@@ -19,6 +20,12 @@ class DistributedLayout:
     @property
     def rank(self):
         raise NotImplementedError("DistributedLayout subclasses must define rank")
+
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
 
 
 @dataclass(frozen=True)
@@ -315,6 +322,12 @@ class SharedLayout:
     @property
     def type(self):
         return constexpr_type(self)
+
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
 
 
 @constexpr_function

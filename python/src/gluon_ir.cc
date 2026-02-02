@@ -975,6 +975,18 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src, barrier);
            })
+      .def("create_async_tdm_scatter",
+           [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
+              Value dstColOffset, Value src, Value barrier) {
+             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices,
+                                                  dstColOffset, src, barrier);
+           })
+      .def("create_async_tdm_gather",
+           [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
+              Value srcColOffset, Value dst, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices,
+                                                 srcColOffset, dst, barrier);
+           })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value pred, bool speculative, bool returnOffsets) -> Value {
@@ -1013,11 +1025,16 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::ClusterBarrierWaitOp>();
            })
       .def("create_warp_pipeline_border",
-           [](GluonOpBuilder &self, const std::string &marker) {
+           [](GluonOpBuilder &self, const std::string &marker, int priority) {
              auto border = self.create<ROCDL::SchedBarrier>(0);
              auto ctx = self.getContext();
              border->setAttr("triton.warp_pipeline.border",
                              StringAttr::get(ctx, marker));
+             if (priority > -1) {
+               auto i32Ty = IntegerType::get(ctx, 32);
+               border->setAttr("triton.warp_pipeline.priority",
+                               IntegerAttr::get(i32Ty, priority));
+             }
            });
 
   m.def(
@@ -1129,6 +1146,37 @@ void init_gluon_ir(py::module &&m) {
                                                      wmmaMDim, ctaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
+        });
+
+  m.def("get_layout_view",
+        [](py::object layout, std::vector<int64_t> shape,
+           bool useHwView) -> std::string {
+          DialectRegistry registry;
+          registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                          ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+          MLIRContext ctx(MLIRContext::Threading::DISABLED);
+          ctx.appendDialectRegistry(registry);
+          ctx.loadAllAvailableDialects();
+
+          GluonOpBuilder builder(&ctx);
+          auto builderObj =
+              py::cast(&builder, py::return_value_policy::reference);
+          Attribute attr = layout.attr("_to_ir")(builderObj).cast<Attribute>();
+
+          if (isa<gluon::AutoEncodingAttr>(attr))
+            throw py::value_error("AutoLayout cannot be visualized");
+          if (isa<gluon::CoalescedEncodingAttr>(attr))
+            throw py::value_error("CoalescedLayout cannot be visualized");
+          if (isa<ttg::PaddedSharedEncodingAttr>(attr))
+            throw py::value_error("PaddedSharedLayout cannot be visualized: "
+                                  "toLinearLayout not implemented");
+
+          auto ll = ttg::toLinearLayout(shape, attr);
+          if (isa<ttg::DistributedEncodingTrait>(attr)) {
+            return ttg::getDistributedLayoutStr(ll, useHwView);
+          } else {
+            return ttg::getSharedLayoutStr(ll, useHwView);
+          }
         });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",

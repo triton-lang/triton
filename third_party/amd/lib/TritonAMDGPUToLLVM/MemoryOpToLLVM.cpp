@@ -66,22 +66,14 @@ public:
     auto smemBase = smemObj.getBase();
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-    auto calcPaddedOffset = [&](Value smemOffset) {
-      TritonLLVMOpBuilder b(loc, rewriter);
-      if (paddedEnc) {
-        // Apply the offset needed for padding.
-        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitWidth,
-                                      smemOffset, /*offsetInBytes=*/true);
-        smemOffset = b.add(smemOffset, padOffset);
-      }
-      return smemOffset;
-    };
+    auto paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(),
+                                               srcTy.getElementTypeBitWidth(),
+                                               /*offsetInBytes=*/true);
 
     llvm::SmallVector<Value> values;
-    auto result =
-        lowerDsReadTr(op, ldsParams.value(), loc, cvtDstLL, values, smemBase,
-                      affineOffset, maskSpanAffineOffset, calcPaddedOffset,
-                      llvmElemTy, rewriter, targetInfo);
+    auto result = lowerDsReadTr(
+        op, ldsParams.value(), loc, cvtDstLL, values, smemBase, affineOffset,
+        maskSpanAffineOffset, paddingShifts, llvmElemTy, rewriter, targetInfo);
     if (failed(result)) {
       return failure();
     }
@@ -101,7 +93,7 @@ private:
       LinearLayout cvt,
       SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
       Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
-      std::function<Value(Value)> calcPaddedOffset, Type llvmElemTy,
+      ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Type llvmElemTy,
       ConversionPatternRewriter &rewriter,
       const ::triton::AMD::TargetInfo &targetInfo) const {
 
@@ -148,21 +140,17 @@ private:
     // memory. We require N number of lanes to be contiguous since they read
     // consecutive 64 bits loaded from the same lanes.
     tile = LinearLayout::identity1D(ldsParams.tileSize, kLane, kOffset);
-
     const auto isaFamily = targetInfo.getISAFamily();
-    // B8 types on gfx1250 require a different tile with double the contiguity
-    bool doubleB8Contiguity =
-        isaFamily == AMD::ISAFamily::GFX1250 && bitWidth == 8;
     const unsigned missingLanes =
         targetInfo.getWarpSize() / tile.getInDimSize(kLane);
     unsigned otherLanes = 1;
     if (isaFamily == AMD::ISAFamily::CDNA4) {
       otherLanes = (bitWidth == 8) ? 2 : 4;
-    } else if (doubleB8Contiguity) {
+    } else if (ldsParams.needsDoubleB8Contiguity) {
       otherLanes = 2;
     }
 
-    if (doubleB8Contiguity) {
+    if (ldsParams.needsDoubleB8Contiguity) {
       fullTile =
           tile * LinearLayout::identity1D(ldsParams.tileSize / 2, kReg, kAddr) *
           LinearLayout::identity1D(otherLanes, kLane, kAddr) *
@@ -293,15 +281,19 @@ private:
       auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxI8 = regIdx * (bitWidth / 8);
       Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
+      offset = applyPadding(loc, rewriter, offset, paddingShifts);
       for (int i2 = 0; i2 < nAdditive; i2 += elemsPerInstr) {
         // all these constants will go as immediate values to ds_read_tr
         auto regIdxAdd =
             reps.apply({{kReg, i2}, {kLane, 0}, {kWarp, 0}})[0].second;
         auto regIdxAddI8 = regIdxAdd * (bitWidth / 8);
+        // `actionAdditiveStrides` forces `regIdxAddI8` and `offset` to be
+        // bitwise disjoint, so we can calculate their padding contributions
+        // separately.
+        regIdxAddI8 = applyPadding(regIdxAddI8, paddingShifts);
         Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-        auto vecAddr =
-            b.gep(smemPtrTy, i8_ty, smemBase, calcPaddedOffset(innerOffset),
-                  LLVM::GEPNoWrapFlags::inbounds);
+        auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
+                             LLVM::GEPNoWrapFlags::inbounds);
         llvm::append_range(vals,
                            lowerInst(rewriter, loc, vecAddr, i + i2, vecTy));
       }
@@ -375,18 +367,8 @@ private:
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-    auto calcPaddedOffset = [&](Value smemOffset) {
-      TritonLLVMOpBuilder b(loc, rewriter);
-      auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
-      if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-              srcTy.getEncoding())) {
-        // Apply the offset needed for padding.
-        Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitWidth,
-                                      smemOffset, /*offsetInBytes=*/true);
-        smemOffset = b.add(smemOffset, padOffset);
-      }
-      return smemOffset;
-    };
+    auto paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitWidth,
+                                               /*offsetInBytes=*/true);
 
     auto shape = srcTy.getShape();
     auto ldsTransLoadParams = targetInfo.queryLDSTransLoadParams(bitWidth);
@@ -447,7 +429,7 @@ private:
 
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
-        llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
+        llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
         maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
         ldsTransLoadParams->tileSize, lowerInst);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);

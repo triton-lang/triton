@@ -4,6 +4,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
+include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 
 //
 // Types
@@ -92,18 +93,33 @@ def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
 
+// Type constraint for any type implementing TensorDescInterface
+def TT_AnyTensorDescType : Type<
+  CPred<"::mlir::isa<::mlir::triton::TensorDescInterface>($_self)">,
+  "tensor descriptor type",
+  "::mlir::triton::TensorDescInterface"
+>;
+
 // Result type of MakeTensorDescriptor
-def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
+def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDescInterface]> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
 
   let description = [{
-      A portable abstraction for nvidia-TMA descriptors.
+      A portable abstraction for TMA descriptors.
+      This is the base tensor descriptor type for tiled tensor memory access.
+
+      For specialized access patterns like im2col, see TensorDescIm2ColType
+      in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins "RankedTensorType":$blockType);
+  let parameters = (ins
+    "RankedTensorType":$blockType
+  );
+
   let assemblyFormat = "`<` $blockType `>`";
 
   let builders = [
+    // Builder with signedness
     TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
@@ -113,17 +129,6 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
       return Base::get($_ctxt, blockType);
     }]>,
   ];
-  let extraClassDeclaration = [{
-    RankedTensorType getSignlessBlockType() const {
-      auto resTy = getBlockType();
-      if (auto intTy = llvm::dyn_cast<IntegerType>(resTy.getElementType())) {
-        auto width = resTy.getElementTypeBitWidth();
-        auto signlessTy = IntegerType::get(getContext(), width);
-        resTy = resTy.clone(signlessTy);
-      }
-      return resTy;
-    }
-  }];
 }
 
 #endif

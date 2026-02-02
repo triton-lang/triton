@@ -832,6 +832,84 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
 }
 
 //===----------------------------------------------------------------------===//
+// AsyncTDMScatterOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
+  let summary = "Scatter data from local memory to non-contiguous global memory rows asynchronously";
+
+  let description = [{
+    This operation scatters data from local memory to non-contiguous rows in global
+    memory using TDM scatter mode.
+    Unlike the regular async_tdm_copy_local_to_global which copies to contiguous memory,
+    this operation uses dst_row_indices to specify which rows in global memory to write to.
+
+    The descriptor must be 2D. The dst_row_indices specify which rows in global memory
+    to write to. The element type of dst_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The dst_col_offset specifies the starting column in the destination tensor for
+    all scattered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$dst_row_indices,
+    I32:$dst_col_offset,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_MemDescType>:$barrier
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMGatherOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather"> {
+  let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
+
+  let description = [{
+    This operation gathers data from non-contiguous rows in global memory to local
+    memory using TDM gather mode.
+    Unlike the regular async_tdm_copy_global_to_local which reads from contiguous memory,
+    this operation uses src_row_indices to specify which rows in global memory to read from.
+
+    The descriptor must be 2D. The src_row_indices specify which rows in global memory
+    to read from. The element type of src_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The src_col_offset specifies the starting column in the source tensor for
+    all gathered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$src_row_indices,
+    I32:$src_col_offset,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Optional<TTG_MemDescType>:$barrier
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // AsyncTDMWait
 //===----------------------------------------------------------------------===//
 

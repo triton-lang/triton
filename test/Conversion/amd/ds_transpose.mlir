@@ -696,12 +696,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   //  CHECK-LABEL: ds_transpose_with_padding
   tt.func @ds_transpose_with_padding(%arg0: !ttg.memdesc<128x64xf16, #padding, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK: [[ADD1:%.*]] = llvm.add [[VAL1:%.*]], [[VAL2:%.*]] : i32
-    // CHECK-NEXT: [[ASHR:%.*]] = llvm.ashr [[ADD1]], [[SHIFT_AMT1:%.*]] : i32
-    // CHECK-NEXT: [[SHL:%.*]] = llvm.shl [[ASHR]], [[SHIFT_AMT2:%.*]] : i32
-    // CHECK-NEXT: [[ADD2:%.*]] = llvm.add [[SHL]], [[VAL3:%.*]] : i32
-    // CHECK-NEXT: [[ADD3:%.*]] = llvm.add [[ADD1]], [[ADD2]] : i32
-    // CHECK-NEXT: [[GEP:%.*]] = llvm.getelementptr inbounds [[BASE:%.*]]{{\[}}[[ADD3]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:      [[CST0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:      [[SHR:%.*]]  = llvm.lshr [[OFF:%.*]], [[SHIFT_AMT0:%.*]] : i32
+    // CHECK-NEXT: [[SHL:%.*]]  = llvm.shl [[SHR]], [[SHIFT_AMT1:%.*]] : i32
+    // CHECK-NEXT: [[ADD0:%.*]] = llvm.add [[SHL:%.*]], [[CST0:%.*]] : i32
+    // CHECK-NEXT: [[ADD1:%.*]] = llvm.add [[OFF]], [[ADD0:%.*]] : i32
+    // CHECK-NEXT: [[ADD2:%.*]] = llvm.add [[ADD1]], [[CST0]] : i32
+    // CHECK-NEXT: [[GEP:%.*]] = llvm.getelementptr inbounds [[BASE:%.*]]{{\[}}[[ADD2]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT: [[RESULT:%.*]] = rocdl.ds.read.tr16.b64 [[GEP]] : <3> -> vector<4xf16>
     // CHECK-COUNT-15: rocdl.ds.read.tr16.b64 %{{.*}} : <3> -> vector<4xf16>
     // CHECK-NOT: rocdl.ds.read.tr16.b64

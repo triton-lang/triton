@@ -15,6 +15,7 @@ class TensorDescriptor:
     block_shape: List[int]
     layout: NVMMASharedLayout
     padding: str = "zero"
+    round_f32_to_tf32: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -35,6 +36,8 @@ class TensorDescriptor:
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
         if self.padding == "nan":
             assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
+        if self.round_f32_to_tf32:
+            assert dtype_str == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
         assert elem_bytes * 8 == self.layout.element_bitwidth
         padding_factor = 2 if self.layout.fp4_padded else 1
         min_block = self.layout.swizzle_byte_width // (elem_bytes * padding_factor)
@@ -51,7 +54,8 @@ class TensorDescriptor:
         ], f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {self.layout.element_bitwidth}"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero"):
+    def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero",
+                    round_f32_to_tf32=False):
         return TensorDescriptor(
             tensor,
             tensor.shape,
@@ -59,4 +63,5 @@ class TensorDescriptor:
             block_shape,
             layout,
             padding,
+            round_f32_to_tf32,
         )

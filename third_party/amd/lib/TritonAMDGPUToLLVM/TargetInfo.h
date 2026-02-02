@@ -49,6 +49,8 @@ public:
     unsigned instBitWidth;
     // Number of elements that the instruction needs to be contiguous in LDS
     unsigned tileSize;
+    // Whether B8 types require double contiguity (for certain architectures)
+    bool needsDoubleB8Contiguity;
   };
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularty specified by bitWidth
@@ -107,6 +109,10 @@ public:
   bool supportsMultiCTALaunch() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
+
+  bool supportsWaveId() const;
+  bool supportsPermlaneSwap() const;
+  bool supportsCvtPkScalePk8() const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
