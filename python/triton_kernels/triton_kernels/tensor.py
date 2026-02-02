@@ -9,7 +9,8 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64
+from .tensor_details.dtype import IntegerType, FloatType, DataType
+from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64, INT16, INT32, INT64
 
 
 # storage
@@ -246,6 +247,9 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
         FP32: torch.float32,
         FP16: torch.float16,
         FP64: torch.float64,
+        INT16: torch.int16,
+        INT32: torch.int32,
+        INT64: torch.int64,
     }[dtype]
 
 
@@ -262,6 +266,9 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         "bfloat16": BF16,
         "float32": FP32,
         "float64": FP64,
+        "int16": INT16,
+        "int32": INT32,
+        "int64": INT64,
     }
     if id in vals:
         return vals[id]
