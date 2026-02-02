@@ -173,9 +173,9 @@ def topk_torch(
     # fill bitmatrix
     if apply_softmax:
         y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
-    sort_indices = torch.argsort(y_vals[:n_rows, :], dim=1, descending=True, stable=True)
-    y_vals[:n_rows, :] = torch.gather(y_vals[:n_rows, :], 1, sort_indices)
-    y_indx[:n_rows, :] = torch.gather(y_indx[:n_rows, :], 1, sort_indices)
+    if not has_user_provided_indx:
+        y_indx, sort_indices = torch.sort(y_indx, dim=1)
+        y_vals = torch.gather(y_vals, 1, sort_indices)
     y_indx[n_rows:, :] = -1
     rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
     cols = y_indx.reshape(-1)  # 64-bit safe for div/mod
