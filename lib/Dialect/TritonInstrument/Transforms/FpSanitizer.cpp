@@ -105,11 +105,34 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
                          Type targetTy) {
   if (v.getType() == targetTy)
     return v;
+
+  auto getShiftLike = [&](Type ty, int64_t shiftAmount) -> Value {
+    if (auto ranked = dyn_cast<RankedTensorType>(ty)) {
+      auto elemTy = cast<IntegerType>(ranked.getElementType());
+      auto attr = DenseElementsAttr::get(
+          ranked, rewriter.getIntegerAttr(elemTy, shiftAmount));
+      return arith::ConstantOp::create(rewriter, loc, attr);
+    }
+    auto intTy = cast<IntegerType>(ty);
+    return arith::ConstantIntOp::create(rewriter, loc, shiftAmount,
+                                        intTy.getWidth());
+  };
+
   unsigned srcWidth = getIntBitwidth(v.getType());
   unsigned dstWidth = getIntBitwidth(targetTy);
-  if (dstWidth > srcWidth)
-    return arith::ExtUIOp::create(rewriter, loc, targetTy, v);
-  return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+  if (dstWidth > srcWidth) {
+    auto ext = arith::ExtUIOp::create(rewriter, loc, targetTy, v);
+    auto shift =
+        getShiftLike(targetTy, static_cast<int64_t>(dstWidth - srcWidth));
+    return arith::ShLIOp::create(rewriter, loc, ext, shift);
+  }
+  if (srcWidth > dstWidth) {
+    auto shift =
+        getShiftLike(v.getType(), static_cast<int64_t>(srcWidth - dstWidth));
+    auto shifted = arith::ShRUIOp::create(rewriter, loc, v, shift);
+    return arith::TruncIOp::create(rewriter, loc, targetTy, shifted);
+  }
+  return v;
 }
 
 Value convertLayoutIfNeeded(PatternRewriter &rewriter, Location loc, Value v,
@@ -779,6 +802,38 @@ struct FmaPattern : public OpRewritePattern<math::FmaOp> {
   }
 };
 
+struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::ExtFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    auto loc = op.getLoc();
+    auto inI = bitcastToInt(rewriter, loc, op.getIn());
+    auto outI =
+        castIntValueToType(rewriter, loc, inI, getIntTypeLike(op.getType()));
+    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    rewriter.replaceOp(op, outF);
+    return success();
+  }
+};
+
+struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    auto loc = op.getLoc();
+    auto inI = bitcastToInt(rewriter, loc, op.getIn());
+    auto outI =
+        castIntValueToType(rewriter, loc, inI, getIntTypeLike(op.getType()));
+    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    rewriter.replaceOp(op, outF);
+    return success();
+  }
+};
+
 struct DotPattern : public OpRewritePattern<tt::DotOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(tt::DotOp op,
@@ -1110,17 +1165,19 @@ public:
 
     TmemScratchManager scratch;
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-                 DotPattern, IdentityPattern<math::ExpOp>,
-                 IdentityPattern<math::LogOp>, IdentityPattern<math::Exp2Op>,
-                 IdentityPattern<math::Log2Op>, IdentityPattern<math::CosOp>,
-                 IdentityPattern<math::SinOp>, IdentityPattern<math::SqrtOp>,
-                 IdentityPattern<math::RsqrtOp>, IdentityPattern<math::ErfOp>,
-                 IdentityPattern<math::FloorOp>, IdentityPattern<math::CeilOp>,
-                 IdentityPattern<tt::PreciseSqrtOp>>(&getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
+             ExtFOpPattern, TruncFOpPattern, DotPattern,
+             IdentityPattern<math::ExpOp>, IdentityPattern<math::LogOp>,
+             IdentityPattern<math::Exp2Op>, IdentityPattern<math::Log2Op>,
+             IdentityPattern<math::CosOp>, IdentityPattern<math::SinOp>,
+             IdentityPattern<math::SqrtOp>, IdentityPattern<math::RsqrtOp>,
+             IdentityPattern<math::ErfOp>, IdentityPattern<math::FloorOp>,
+             IdentityPattern<math::CeilOp>, IdentityPattern<tt::PreciseSqrtOp>>(
+            &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern>(&getContext(), &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext());

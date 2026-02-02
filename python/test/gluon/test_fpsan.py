@@ -249,6 +249,18 @@ def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -
     return _expected_add_i32(_expected_mul_i32(x_i32, y_i32), z_i32)
 
 
+def _expected_trunc_ext_roundtrip_i32(x_i32: np.ndarray) -> np.ndarray:
+    x_u32 = _as_u32(x_i32)
+    out_u32 = x_u32 & np.uint32(0xFFFF0000)
+    return _u32_to_i32(out_u32)
+
+
+def _expected_ext_f16_to_f32_i32(x_i16: np.ndarray) -> np.ndarray:
+    x_u16 = x_i16.view(np.uint16).astype(np.uint32)
+    out_u32 = (x_u16 << np.uint32(16)).astype(np.uint32)
+    return out_u32.view(np.int32)
+
+
 @gluon.jit
 def _fma_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, BLOCK: gl.constexpr):
     pid = gl.program_id(0)
@@ -291,6 +303,77 @@ def test_fma_payload_semantics(device, fresh_knobs):
         y.cpu().numpy().astype(np.int32, copy=False),
         z.cpu().numpy().astype(np.int32, copy=False),
     )
+    np.testing.assert_array_equal(out_np, exp_np)
+
+
+@gluon.jit
+def _cast_trunc_ext_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = x.to(gl.float16)
+    z = y.to(gl.float32)
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+def test_cast_trunc_ext_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(17)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _cast_trunc_ext_kernel[grid](xw, outw, n_elements, BLOCK=BLOCK)
+
+    out_np = out.cpu().numpy().astype(np.int32, copy=False)
+    exp_np = _expected_trunc_ext_roundtrip_i32(x.cpu().numpy().astype(np.int32, copy=False))
+    np.testing.assert_array_equal(out_np, exp_np)
+
+
+@gluon.jit
+def _cast_ext_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    z = x.to(gl.float32)
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+def test_cast_ext_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(19)
+    x = torch.randint(-(2**15), 2**15 - 1, (n_elements, ), dtype=torch.int16, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float16)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _cast_ext_kernel[grid](xw, outw, n_elements, BLOCK=BLOCK)
+
+    out_np = out.cpu().numpy().astype(np.int32, copy=False)
+    exp_np = _expected_ext_f16_to_f32_i32(x.cpu().numpy().astype(np.int16, copy=False))
     np.testing.assert_array_equal(out_np, exp_np)
 
 

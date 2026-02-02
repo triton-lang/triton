@@ -232,6 +232,30 @@ tt.func public @unary_id(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
+// CHECK-LABEL: @cast_extf
+tt.func public @cast_extf(%a: tensor<4xf16>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.extui
+  // CHECK: arith.shli
+  // CHECK-NOT: arith.extf
+  %0 = arith.extf %a : tensor<4xf16> to tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @cast_truncf
+tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.shrui
+  // CHECK: arith.trunci
+  // CHECK-NOT: arith.truncf
+  %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
+  tt.return %0 : tensor<4xf16>
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
