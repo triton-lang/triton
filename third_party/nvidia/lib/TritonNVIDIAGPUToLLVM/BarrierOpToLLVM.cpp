@@ -323,22 +323,20 @@ struct ArriveBarrierOpConversion
     PTXBuilder ptxBuilder;
     std::string ptxAsm = "mbarrier.arrive.shared::cta.b64 _, [$0]";
     SmallVector<PTXBuilder::Operand *> operands;
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
 
-    std::optional<Value> pred;
-    if (op.getFrequency() == triton::nvidia_gpu::ArriveFrequency::PER_GRID) {
-      TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-      Value id = getThreadId(rewriter, op.getLoc());
-      pred = b.icmp_eq(id, b.i32_val(0));
-      if (op.getPred())
-        pred = b.and_(*pred, adaptor.getPred());
-    } else if (op.getPred()) {
-      pred = adaptor.getPred();
+    Value id = getThreadId(rewriter, op.getLoc());
+    if (op.getFrequency() == triton::nvidia_gpu::ArriveFrequency::PER_WARP) {
+      LLVM::NVIDIA::createSyncWarp(op.getLoc(), rewriter);
+      id = b.urem(id, b.i32_val(32));
     }
 
-    if (pred) {
-      ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
-      operands.push_back(ptxBuilder.newOperand(*pred, "b"));
-    }
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+    if (op.getPred())
+      pred = b.and_(pred, adaptor.getPred());
+
+    ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
+    operands.push_back(ptxBuilder.newOperand(pred, "b"));
 
     if (op.getCount() > 1)
       ptxAsm += ", " + std::to_string(op.getCount());
