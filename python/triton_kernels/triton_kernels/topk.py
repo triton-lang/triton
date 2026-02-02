@@ -23,7 +23,6 @@ def make_empty(offset, shape, dtype, device, symm_mem_pool):
 
 
 def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None):
-
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
@@ -68,6 +67,9 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     if all_gather:
         symm_mem_pool.hdl.barrier(channel=0)
 
+    sort_idx = torch.argsort(y_vals[:], dim=1, descending=True, stable=True)
+    y_vals[:].copy_(torch.gather(y_vals[:], 1, sort_idx))
+    y_indx[:].copy_(torch.gather(y_indx[:], 1, sort_idx))
     bitmatrix_shape = [n_rows * (symm_mem_pool.mesh.world_size - 1) + n_rows if all_gather else n_rows_max, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
@@ -170,9 +172,9 @@ def topk_torch(
     # fill bitmatrix
     if apply_softmax:
         y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
-    if not has_user_provided_indx:
-        y_indx, sort_indices = torch.sort(y_indx, dim=1)
-        y_vals = torch.gather(y_vals, 1, sort_indices)
+    sort_indices = torch.argsort(y_vals[:n_rows, :], dim=1, descending=True, stable=True)
+    y_vals[:n_rows, :] = torch.gather(y_vals[:n_rows, :], 1, sort_indices)
+    y_indx[:n_rows, :] = torch.gather(y_indx[:n_rows, :], 1, sort_indices)
     y_indx[n_rows:, :] = -1
     rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
     cols = y_indx.reshape(-1)  # 64-bit safe for div/mod
