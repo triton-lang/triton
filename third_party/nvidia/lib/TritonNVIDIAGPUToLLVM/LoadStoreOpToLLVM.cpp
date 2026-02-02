@@ -18,7 +18,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -33,6 +32,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
+using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
@@ -1271,14 +1271,13 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
   int rank = shapePerCTA.size();
   auto blockShape = ttng::getTMABlockShape(ty, packedSize, mode);
   auto outDimNames = standardOutDimNames(ctx, rank);
-
   LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {
     msgToOffset *=
         LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
                                 blockShape[dim], kMsg, outDimNames[dim]);
   }
-  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
+  msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
   return msgToOffset;
 }
 
@@ -1436,15 +1435,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       int operandIdx = 3;
       auto encoding = op.getDesc().getType().getBlockType().getEncoding();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
-
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (fp4Padded && i == 0) {
           coord = b.mul(coord, b.i32_val(2));
         }
-        if (i < offsets.size()) {
+        if (i < offsets.size())
           coord = b.add(coord, offsets[offsets.size() - i - 1].second);
-        }
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
@@ -1457,9 +1454,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
       }
-      // Add im2col offsets if in IM2COL mode.
-      // Offsets are reversed to match PTX/CUDA order (innermost to outermost),
-      // similar to how coordinates are reversed above.
       if (isIm2Col) {
         auto im2colOffsets = adaptor.getOffsets();
         if (!im2colOffsets.empty()) {
