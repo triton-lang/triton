@@ -12,7 +12,8 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
                                        Allocation *allocation) {
   auto isAsyncLoad = [](Operation *op) {
     return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
-                     triton::amdgpu::BufferLoadToLocalOp>(op);
+                     triton::amdgpu::BufferLoadToLocalOp,
+                     triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>(op);
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
