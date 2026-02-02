@@ -4,7 +4,6 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -3488,120 +3487,53 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 }
 
 //===----------------------------------------------------------------------===//
-// getMsgToPackedOffsetLayout Tests
+// nvmmaSharedToLinearLayout TMA Mode Independence Tests
 //
-// Verify that Tiled and Im2Col modes produce consistent message ordering.
-// Im2Col allows larger non-contiguous dimension (up to 1024 vs 256 for Tiled),
-// resulting in fewer but larger messages that cover the same total region.
+// Verify that nvmmaSharedToLinearLayout produces the same result regardless
+// of TMA mode. This is critical because MMA lowering uses toLinearLayout()
+// to read from shared memory, and it doesn't know which TMA mode was used
+// to load the data. If the layouts differ, MMA would compute wrong addresses.
+//
+// Note: We only test non-transposed encodings because TMA descriptors cannot
+// be transposed (see AsyncTMACopyGlobalToLocalOp verification which emits
+// "TMA descriptor layout must not be transposed"). Transposed layouts are
+// created after TMA load or used for conceptual access patterns, not for
+// TMA descriptor configuration.
 //===----------------------------------------------------------------------===//
 
 TEST_F(LinearLayoutConversionsTest,
-       MsgToPackedOffsetLayout_TiledAndIm2ColOrdering) {
-  auto encoding = nvmmaShared(64, /*transposed=*/false, /*elementBitWidth=*/16,
-                              {1, 1}, {1, 1}, {1, 0}, {1, 0});
-  Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(&ctx);
-  auto kMsg = S("msg");
-  auto kBlock = S("block");
-
-  // Case 1: [512, 64] - Tiled has 4 msgs, Im2Col has 2 msgs
-  // Tiled:  blockShape=[256,32], msgs: (0,0)->(256,0)->(0,32)->(256,32)
-  // Im2Col: blockShape=[512,32], msgs: (0,0)->(0,32)
-  // Every 2 tiled messages cover same region as 1 im2col message
+       NvmmaSharedToLinearLayout_TMAModeIndependence) {
+  // Test various non-transposed shapes and configurations to ensure the shared
+  // memory layout is independent of TMA mode.
   //
-  // Tiled (4 messages):                    Im2Col (2 messages):
-  //          dim1=0-31   dim1=32-63                dim1=0-31   dim1=32-63
-  //         ┌──────────┬──────────┐               ┌──────────┬──────────┐
-  // dim0=0  │  msg0    │  msg2    │               │          │          │
-  //         │  (0,0)   │  (0,32)  │               │   msg0   │   msg1   │
-  // dim0=256├──────────┼──────────┤               │   (0,0)  │  (0,32)  │
-  //         │  msg1    │  msg3    │               │          │          │
-  //         │ (256,0)  │ (256,32) │               │          │          │
-  //         └──────────┴──────────┘               └──────────┴──────────┘
-  //
-  // Tiled msg0-1 (dim1=0) = Im2Col msg0
-  // Tiled msg2-3 (dim1=32) = Im2Col msg1
-  {
-    auto memTy = MemDescType::get({512, 64}, Float16Type::get(&ctx), encoding,
-                                  sharedMemorySpace, /*mutableMemory=*/true);
-    auto tiledLL =
-        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Tiled);
-    auto im2colLL =
-        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Im2Col);
+  // Test matrix:
+  // - swizzleSizeInBytes: 0, 32, 64, 128
+  // - non-contiguous dim (dim0): 512, 1024 (exceeds Tiled mode limit of 256)
+  // - contiguous dim (dim1): large enough for multiple messages
 
-    EXPECT_EQ(tiledLL.getInDimSize(kMsg), 4);
-    EXPECT_EQ(im2colLL.getInDimSize(kMsg), 2);
+  constexpr int elementBitWidth = 16; // f16
+  constexpr int elementBytes = elementBitWidth / 8;
 
-    // Tiled msg0,msg1 at dim1=0; msg2,msg3 at dim1=32
-    for (int i = 0; i < 2; i++) {
-      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
-      EXPECT_EQ(tiledCoord[1].second, 0);
-    }
-    for (int i = 2; i < 4; i++) {
-      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
-      EXPECT_EQ(tiledCoord[1].second, 32);
-    }
+  for (int swizzleBytes : {0, 32, 64, 128}) {
+    for (int64_t dim0 : {512, 1024}) {
+      // For contiguous dim, use a size that requires multiple messages.
+      // With swizzle, the contiguous dim block size = swizzleBytes / elemBytes.
+      // Use 2x the max swizzle size to ensure multiple messages in dim1.
+      int64_t dim1 = (swizzleBytes == 0) ? 64 : (128 / elementBytes) * 2;
 
-    // Im2Col msg0 at dim1=0, msg1 at dim1=32
-    auto im2col0 = im2colLL.apply({{kMsg, 0}, {kBlock, 0}});
-    auto im2col1 = im2colLL.apply({{kMsg, 1}, {kBlock, 0}});
-    EXPECT_EQ(im2col0[1].second, 0);
-    EXPECT_EQ(im2col1[1].second, 32);
-  }
+      auto encoding =
+          nvmmaShared(swizzleBytes, /*transposed=*/false, elementBitWidth,
+                      {1, 1}, {1, 1}, {1, 0}, {1, 0});
+      llvm::SmallVector<int64_t> shape = {dim0, dim1};
 
-  // Case 2: [1024, 64] - Tiled has 8 msgs, Im2Col has 2 msgs
-  // Tiled:  blockShape=[256,32], 4 msgs in dim0, 2 in dim1
-  // Im2Col: blockShape=[1024,32], 1 msg in dim0, 2 in dim1
-  // Every 4 tiled messages cover same region as 1 im2col message
-  //
-  // Tiled (8 messages):                    Im2Col (2 messages):
-  //          dim1=0-31   dim1=32-63                dim1=0-31   dim1=32-63
-  //         ┌──────────┬──────────┐               ┌──────────┬──────────┐
-  // dim0=0  │  msg0    │  msg4    │               │          │          │
-  //         │  (0,0)   │  (0,32)  │               │          │          │
-  // dim0=256├──────────┼──────────┤               │          │          │
-  //         │  msg1    │  msg5    │               │   msg0   │   msg1   │
-  //         │ (256,0)  │ (256,32) │               │   (0,0)  │  (0,32)  │
-  // dim0=512├──────────┼──────────┤               │          │          │
-  //         │  msg2    │  msg6    │               │          │          │
-  //         │ (512,0)  │ (512,32) │               │          │          │
-  // dim0=768├──────────┼──────────┤               │          │          │
-  //         │  msg3    │  msg7    │               │          │          │
-  //         │ (768,0)  │ (768,32) │               │          │          │
-  //         └──────────┴──────────┘               └──────────┴──────────┘
-  //
-  // Tiled msg0-3 (dim1=0) = Im2Col msg0
-  // Tiled msg4-7 (dim1=32) = Im2Col msg1
-  {
-    auto memTy = MemDescType::get({1024, 64}, Float16Type::get(&ctx), encoding,
-                                  sharedMemorySpace, /*mutableMemory=*/true);
-    auto tiledLL =
-        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Tiled);
-    auto im2colLL =
-        triton::nvidia_gpu::getMsgToPackedOffsetLayout(memTy, TMAMode::Im2Col);
+      auto tiledLayout =
+          nvmmaSharedToLinearLayout(shape, encoding, TMAMode::Tiled);
+      auto im2colLayout =
+          nvmmaSharedToLinearLayout(shape, encoding, TMAMode::Im2Col);
 
-    EXPECT_EQ(tiledLL.getInDimSize(kMsg), 8);
-    EXPECT_EQ(im2colLL.getInDimSize(kMsg), 2);
-
-    // Tiled msg0-3 at dim1=0; msg4-7 at dim1=32
-    for (int i = 0; i < 4; i++) {
-      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
-      EXPECT_EQ(tiledCoord[1].second, 0) << "msg " << i;
-    }
-    for (int i = 4; i < 8; i++) {
-      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
-      EXPECT_EQ(tiledCoord[1].second, 32) << "msg " << i;
-    }
-
-    // Im2Col msg0 at dim1=0, msg1 at dim1=32
-    auto im2col0 = im2colLL.apply({{kMsg, 0}, {kBlock, 0}});
-    auto im2col1 = im2colLL.apply({{kMsg, 1}, {kBlock, 0}});
-    EXPECT_EQ(im2col0[1].second, 0);
-    EXPECT_EQ(im2col1[1].second, 32);
-
-    // Verify tiled dim0 ordering: 0, 256, 512, 768 for first 4 msgs
-    for (int i = 0; i < 4; i++) {
-      auto tiledCoord = tiledLL.apply({{kMsg, i}, {kBlock, 0}});
-      EXPECT_EQ(tiledCoord[0].second, i * 256) << "msg " << i;
+      EXPECT_EQ(tiledLayout, im2colLayout)
+          << "Shared memory layout must be independent of TMA mode for shape ["
+          << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
     }
   }
 }

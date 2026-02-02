@@ -1278,6 +1278,27 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
   return unpackLayout * packedLayout;
 }
 
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                                               ttg::TMAMode mode,
+                                               bool packedSize = true) {
+  auto ctx = ty.getContext();
+  auto kMsg = str_attr("msg");
+  auto kBlock = str_attr("block");
+  auto shapePerCTA = ttg::getShapePerCTA(ty);
+  int rank = shapePerCTA.size();
+  auto blockShape = ttng::getTMABlockShape(ty, packedSize, mode);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  LinearLayout msgToOffset;
+  for (int dim = 0; dim < rank; ++dim) {
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
+  }
+  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
+  return msgToOffset;
+}
+
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1328,7 +1349,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset = ttng::getMsgToPackedOffsetLayout(smemTy, tmaMode);
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
@@ -1491,8 +1512,9 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   auto rank = coords.size();
 
+  // TMA store only supports tiled mode
   auto msgToPackedOffset =
-      ttng::getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
+      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
