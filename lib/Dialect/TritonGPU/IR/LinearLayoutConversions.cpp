@@ -1187,8 +1187,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       result = shared.toLinearLayout(shape);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      // Use Tiled mode as default. Callers that need Im2Col mode should call
-      // nvmmaSharedToLinearLayout directly with the appropriate mode.
+      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+      // for non-transposed layouts, so we can use either mode here.
       result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);

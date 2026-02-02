@@ -170,7 +170,7 @@ enum TMA_ELEMENT_TYPES {
 };
 
 static FailureOr<int> getTMAElementTypeImpl(Location loc,
-                                             RankedTensorType blockType) {
+                                            RankedTensorType blockType) {
   auto encoding = blockType.getEncoding();
   bool fp4Padded = isFp4Padded(encoding);
 

@@ -195,8 +195,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
     SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
     auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
-    // Use Tiled mode for validation - both modes have the same contiguous
-    // dimension constraint which is what this validation checks.
     if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
                                 enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
                                 enc.getTransposed(), /*packedSize=*/false,
