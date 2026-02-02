@@ -739,7 +739,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     assert names == expected
 
 
-@pytest.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
+@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
 def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
