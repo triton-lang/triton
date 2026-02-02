@@ -22,8 +22,8 @@ def make_empty(offset, shape, dtype, device, symm_mem_pool):
     return (ret, ), ret, 0
 
 
-def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None,
-                 sort_y_indx=False):
+def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None):
+
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
@@ -89,9 +89,8 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool, sort_y_indx):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool,
-                                                 sort_y_indx)
+    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool)
         ctx.save_for_backward(x, y_indx)
         ctx.apply_softmax = apply_softmax
         ctx.k = k
@@ -114,7 +113,6 @@ def topk(
     n_rows: Optional[int] = None,
     all_gather: bool = False,
     symm_mem_pool: SymmetricMemoryPool | None = None,
-    sort_y_indx: bool = False,
 ):
     """
     Computes the top-k values and indices along a specified dimension of a tensor.
@@ -140,8 +138,7 @@ def topk(
     -------
     SparseMatrix: sparse matrix equal to `x` with non-selected entries set to 0
     """
-    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool,
-                                           sort_y_indx)
+    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
 
 
