@@ -83,10 +83,26 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
     return _u32_to_i32(out_u32)
 
 
-def _compare_bitwise_equal(ref_out: torch.Tensor, tri_out: torch.Tensor) -> bool:
-    ref_out_bits = ref_out.contiguous().view(torch.int8)
-    tri_out_bits = tri_out.contiguous().view(torch.int8)
-    return torch.equal(ref_out_bits, tri_out_bits)
+def _as_payload_np_i32(x) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
+    if not isinstance(x, np.ndarray):
+        raise TypeError(f"unsupported input type: {type(x)}")
+    if x.dtype == np.int32:
+        return x.astype(np.int32, copy=False)
+    if x.dtype == np.uint32:
+        return x.view(np.int32)
+    if x.dtype == np.float32:
+        return x.view(np.int32)
+    raise TypeError(f"unsupported dtype for payload comparison: {x.dtype}")
+
+
+def _assert_payload_equal(actual, expected) -> None:
+    np.testing.assert_array_equal(_as_payload_np_i32(actual), _as_payload_np_i32(expected))
+
+
+def _payload_equal(a, b) -> bool:
+    return np.array_equal(_as_payload_np_i32(a), _as_payload_np_i32(b))
 
 
 @gluon.jit
@@ -151,7 +167,7 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
-    np.testing.assert_array_equal(out_np, exp_np)
+    _assert_payload_equal(out_np, exp_np)
 
 
 @pytest.mark.parametrize(
@@ -187,7 +203,7 @@ def test_binops_payload_semantics_zero_denominator(device, op, expected_fn, fres
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
-    np.testing.assert_array_equal(out_np, exp_np)
+    _assert_payload_equal(out_np, exp_np)
 
 
 @gluon.jit
@@ -242,7 +258,7 @@ def test_unary_math_identity(device, op, fresh_knobs):
         BLOCK=BLOCK,
     )
 
-    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), x_bits)
+    _assert_payload_equal(out, x_bits)
 
 
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:
@@ -303,7 +319,7 @@ def test_fma_payload_semantics(device, fresh_knobs):
         y.cpu().numpy().astype(np.int32, copy=False),
         z.cpu().numpy().astype(np.int32, copy=False),
     )
-    np.testing.assert_array_equal(out_np, exp_np)
+    _assert_payload_equal(out_np, exp_np)
 
 
 @gluon.jit
@@ -339,7 +355,7 @@ def test_cast_trunc_ext_payload_semantics(device, fresh_knobs):
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = _expected_trunc_ext_roundtrip_i32(x.cpu().numpy().astype(np.int32, copy=False))
-    np.testing.assert_array_equal(out_np, exp_np)
+    _assert_payload_equal(out_np, exp_np)
 
 
 @gluon.jit
@@ -374,7 +390,7 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = _expected_ext_f16_to_f32_i32(x.cpu().numpy().astype(np.int16, copy=False))
-    np.testing.assert_array_equal(out_np, exp_np)
+    _assert_payload_equal(out_np, exp_np)
 
 
 def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
@@ -450,7 +466,7 @@ def test_dot_fma(device, fresh_knobs):
 
     kernel[(1, )](aw, bw, cw, outw)
 
-    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
+    _assert_payload_equal(out, exp_bits)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -530,7 +546,7 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
 
     kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc)
 
-    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
+    _assert_payload_equal(out, exp_bits)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -582,7 +598,7 @@ def test_tmem_index_subslice(device, fresh_knobs):
 
     kernel[(1, )](xw, outw)
 
-    np.testing.assert_array_equal(out.cpu().numpy().astype(np.int32, copy=False), exp_bits)
+    _assert_payload_equal(out, exp_bits)
 
 
 def test_reduction(device, fresh_knobs):
@@ -597,7 +613,11 @@ def test_reduction(device, fresh_knobs):
         tl.store(c_ptr, r2)
 
     M, N = 512, 512
-    a = torch.randn((M, N), dtype=torch.float32).to('cuda')
+    torch.manual_seed(0)
+    a = torch.randn((M, N), dtype=torch.float32, device="cuda")
+    # Make non-associativity visible and deterministic: large + tiny magnitudes.
+    a[:, :64] *= 1e10
+    a[:, 64:] *= 1e-10
     c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
     c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
 
@@ -608,10 +628,10 @@ def test_reduction(device, fresh_knobs):
 
     reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
     reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
-    assert not _compare_bitwise_equal(c1, c2)
+    assert not _payload_equal(c1, c2)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
     reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
-    assert _compare_bitwise_equal(c1, c2)
+    assert _payload_equal(c1, c2)
