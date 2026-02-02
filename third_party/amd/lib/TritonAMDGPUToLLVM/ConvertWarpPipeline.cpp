@@ -23,6 +23,7 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -62,7 +63,7 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
       mei.getEffects(effs);
       for (auto &eff : effs) {
         if (Value v = eff.getValue()) {
-          for (auto bufId : allocation->getBufferIds(v)) {
+          for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
             if (bufId == Allocation::InvalidBufferId)
               continue;
             auto interval = allocation->getAllocatedInterval(bufId);
@@ -357,8 +358,12 @@ public:
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    ModuleAllocation moduleAllocation(m);
+
     mlir::triton::AMD::TargetInfo targetInfo(arch.getValue());
+    size_t partitionSize = targetInfo.getSharedMemoryPartitionSize();
+    ModuleAllocation moduleAllocation(
+        m, triton::defaultAllocationAnalysisScratchSizeFn, partitionSize);
+
     if (targetInfo.getISAFamily() == mlir::triton::AMD::ISAFamily::Unknown) {
       m.emitError("unsupported target: '") << arch.getValue() << "'";
       return signalPassFailure();
