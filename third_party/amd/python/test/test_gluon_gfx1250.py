@@ -1391,14 +1391,8 @@ def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
-@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
-@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
-@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
-def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
-                                                              order=[ndim - 1 - i for i in range(ndim)])
-
+def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT):
+    """Utility function to run TDM load/store tests with a given shared layout."""
     alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
 
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
@@ -1442,6 +1436,36 @@ def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE)
     actual[idx].zero_()
     expect = expect.new_zeros(BLOCK_SHAPE)
     assert torch.equal(expect, actual)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
+@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
+    """Test TDM load/store with swizzled shared layout."""
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 64])
+@pytest.mark.parametrize("dtype_str", ["float16", "int32"])
+def test_tensor_descriptor_load_store_nd_with_padding(dtype_str, ndim, INNER_BLOCK):
+    """Test TDM load/store with padded shared memory layout.
+    TDM store only supports padding when:
+    1. There is a single padding interval
+    2. The padding interval equals the innermost block dimension
+    """
+    # Create padded shared layout where padding interval = innermost block dimension
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    PADDED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[INNER_BLOCK, 8]], BLOCK_SHAPE,
+                                                                              [ndim - 1 - i
+                                                                               for i in range(ndim)]  # standard order
+                                                                              )
+
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, "DEVICE_TDM", PADDED_LAYOUT)
 
 
 def test_tensor_descriptor_load_store_invalid_blocksize():

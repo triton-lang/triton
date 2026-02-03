@@ -462,7 +462,8 @@ void fillTDMDescriptor(
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, Value dstPtr, Value pred, Value multicastMask,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId) {
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
+    bool isStore) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
 
@@ -550,6 +551,32 @@ void fillTDMDescriptor(
     tensorShape[i] = b.smax(b.i32_val(0), b.sub(tensorShape[i], fullOffset));
   }
 
+  // TDM store does not support padding in general. However, if the padding
+  // interval equals the innermost dimension, we can support it by:
+  // 1. Adjusting fastest tile_dim0 to include padding (tile_dim0 + padding).
+  // Note that in triton numDims-1 is the fastest dim whereas dim0 is the
+  // fastest in the TDM descriptor.
+  // 2. Setting tensor_dim0 (fastest) to min(tensor_dim0, original_tile_dim0).
+  // We have to do this after adjusting the tensor shape based on the offset and
+  // cga offset.
+  // This leverages HW OOB checking to skip padding elements while
+  // preserving the original tensor shape if smaller. Note that the pre
+  // conditions are checked in the verifier already
+  bool adjustedBlockShape = false;
+  if (isStore && padInterval > 0 && padAmount > 0) {
+    adjustedBlockShape = true;
+    Value originalTileDim0 = decodedBlockShape[numDims - 1];
+
+    // Adjust block shape (tile dimension) to include padding
+    decodedBlockShape[numDims - 1] =
+        b.add(originalTileDim0, b.i32_val(padAmount));
+
+    // Adjust tensor dimension to be min(tensor_dim0, original_tile_dim0)
+    Value cmp = b.icmp_ult(tensorShape[numDims - 1], originalTileDim0);
+    tensorShape[numDims - 1] =
+        b.select(cmp, tensorShape[numDims - 1], originalTileDim0);
+  }
+
   // Update group0 with addresses
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
@@ -582,6 +609,14 @@ void fillTDMDescriptor(
                           b.i32_val(0x00FFFF)));
   } else {
     group1[0] = b.and_(group1[0], b.i32_val(0xFFFBFFFF));
+  }
+
+  if (adjustedBlockShape) {
+    // Re-encode the adjusted tile_dim0 (block shape) into upper 16 bits of
+    // group1[3]. This is the same for 1D-5D tensors.
+    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
+    group1[3] =
+        b.or_(group1[3], b.shl(decodedBlockShape[numDims - 1], b.i32_val(16)));
   }
 
   // Update group2/group3 for higher dimensions
@@ -752,7 +787,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       to_vector(blockShape), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::ref(group2Vec),
                       std::ref(group3Vec), to_vector(offset), dstPtr, pred,
-                      multicastMask, barrierPtr, cgaLayout, ctaId);
+                      multicastMask, barrierPtr, cgaLayout, ctaId, !isLoad);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -773,7 +808,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       to_vector(blockShape), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::nullopt, std::nullopt,
                       to_vector(offset), dstPtr, pred, multicastMask,
-                      barrierPtr, cgaLayout, ctaId);
+                      barrierPtr, cgaLayout, ctaId, !isLoad);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
