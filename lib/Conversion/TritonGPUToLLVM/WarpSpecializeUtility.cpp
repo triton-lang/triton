@@ -56,6 +56,7 @@ static LogicalResult lowerCallOp(LLVM::CallOp callOp, unsigned numWarps,
 
 static LogicalResult
 lowerKernelBarriers(LLVM::LLVMFuncOp func,
+                    const DenseSet<StringAttr> &innerFunctions,
                     WarpSpecializeBarrierHelper &barrierHelper) {
   unsigned defaultNumWarps = lookupNumWarps(func);
 
@@ -75,6 +76,8 @@ lowerKernelBarriers(LLVM::LLVMFuncOp func,
                                      barrierHelper));
     }
     if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+      if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+        return WalkResult::advance();
       return WalkResult(lowerCallOp(callOp, defaultNumWarps,
                                     /*partitionIdx=*/{}, barrierHelper));
     }
@@ -93,6 +96,8 @@ lowerKernelBarriers(LLVM::LLVMFuncOp func,
           return WalkResult(lowerBarrier(op, numWarps, idx, barrierHelper));
         }
         if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+          if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+            return WalkResult::advance();
           return WalkResult(lowerCallOp(callOp, numWarps, idx, barrierHelper));
         }
         return WalkResult::advance();
@@ -107,6 +112,7 @@ lowerKernelBarriers(LLVM::LLVMFuncOp func,
 
 static LogicalResult
 lowerInnerFunctionBarriers(LLVM::LLVMFuncOp func,
+                           const DenseSet<StringAttr> &innerFunctions,
                            WarpSpecializeBarrierHelper &barrierHelper) {
   // Append a barrier handle argument.
   LLVM::LLVMFunctionType type = func.getFunctionType();
@@ -127,8 +133,8 @@ lowerInnerFunctionBarriers(LLVM::LLVMFuncOp func,
   // Lower barrier ops.
   auto numWarpsAttr = func->getAttrOfType<IntegerAttr>("ws_num_warps");
   if (!numWarpsAttr) {
-    return func.emitError("function missing '")
-           << "ws_num_warps" << "' attribute";
+    return func.emitError("function missing '") << "ws_num_warps"
+                                                << "' attribute";
   }
   unsigned numWarps = numWarpsAttr.getInt();
 
@@ -138,6 +144,8 @@ lowerInnerFunctionBarriers(LLVM::LLVMFuncOp func,
       barrierHelper.createBarrier(b, numWarps, handle);
       op->erase();
     } else if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+      if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+        return;
       callOp.setCallee(mangleFunctionName(*callOp.getCallee()));
       callOp.getCalleeOperandsMutable().append(handle);
     }
@@ -162,19 +170,25 @@ LogicalResult mlir::triton::lowerWarpSpecializeBarriers(
     }
     wsKernels.push_back(func);
   }
-
   // No warp specialization found.
   if (wsKernels.empty())
     return success();
+
+  DenseSet<StringAttr> innerFunctions;
+  for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
+    if (func.getLinkage() != LLVM::Linkage::External)
+      innerFunctions.insert(func.getSymNameAttr());
+  }
+
   for (LLVM::LLVMFuncOp func : wsKernels) {
-    if (failed(lowerKernelBarriers(func, barrierHelper)))
+    if (failed(lowerKernelBarriers(func, innerFunctions, barrierHelper)))
       return failure();
   }
 
   for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
     if (func.getLinkage() == LLVM::Linkage::External)
       continue;
-    if (failed(lowerInnerFunctionBarriers(func, barrierHelper)))
+    if (failed(lowerInnerFunctionBarriers(func, innerFunctions, barrierHelper)))
       return failure();
   }
 

@@ -124,6 +124,8 @@ llvm.func internal @inner_func_nw1() attributes {"ws_num_warps" = 1 : i32} {
   llvm.return
 }
 
+llvm.func @__libdevice_function()
+
 // CHECK: llvm.func @rewrite_barriers()
 llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   // CHECK-DAG: [[CST:%.*]] = llvm.mlir.constant({{.*}}) : f32
@@ -139,6 +141,8 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   partition0() num_warps(4) {
     // CHECK: call @inner_func_nw4_ws([[C2]]) : (i32) -> ()
     llvm.call @inner_func_nw4() : () -> ()
+    // CHEC: call @__libdevice_function() : () -> ()
+    llvm.call @__libdevice_function() : () -> ()
     ttg.warp_return
   }
   partition1() num_warps(2) {
