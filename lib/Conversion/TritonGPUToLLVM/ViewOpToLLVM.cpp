@@ -371,7 +371,7 @@ struct MemDescTransOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(),
+        srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
         /*offsets=*/applyPermutation(srcSmemObj.getOffsets(), op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
@@ -404,8 +404,9 @@ struct MemDescReshapeOpConversion
     SmallVector<Value> delinearizedOffset =
         LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(), delinearizedOffset);
+    auto dstSmemObj =
+        SharedMemoryObject(srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
+                           delinearizedOffset);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -492,6 +493,15 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
+    if (auto partitionedEnc =
+            dyn_cast<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      if (partitionedEnc.getPartitionDim() == 0) {
+        return rewriter.notifyMatchFailure(
+            op, "memdesc_index into partitioned dimension (partitionDim=0) "
+                "is not yet supported");
+      }
+    }
+
     // getAllocationShapePerCTA returns the correct number fp4 elements that we
     // need to skip when we have fp4Padded=True. getShapePerCTA does not account
     // for this
@@ -500,8 +510,6 @@ struct MemDescIndexOpConversion
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
-    auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
     auto prevOffsets = smemObj.getOffsets();
     SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
@@ -514,10 +522,19 @@ struct MemDescIndexOpConversion
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }
 
-    // Advance the pointer and keep the opOffsets as the new shape
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    // For partitioned tensors (when partitionDim > 0), all partitions have the
+    // same layout structure. Each partition contains portions of every "buffer"
+    // along dimension 0. When we select buffer i, we advance all partition
+    // bases by the same offset.
+    SmallVector<Value> newBases;
+    for (Value base : smemObj.getBases()) {
+      auto elemPtrTy = base.getType();
+      newBases.push_back(b.gep(elemPtrTy, llvmElemTy, base, offset));
+    }
+
+    // Create new smemObj with advanced base pointers
+    auto newSmemObj = SharedMemoryObject(newBases, llvmElemTy, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, newSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
   }
@@ -539,6 +556,13 @@ struct MemDescSubsliceOpConversion
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy);
     auto enc = srcTy.getEncoding();
+
+    // PartitionedSharedEncoding is not yet supported for memdesc_subslice
+    if (isa<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op,
+          "PartitionedSharedEncoding not yet supported in memdesc_subslice");
+    }
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
@@ -570,6 +594,13 @@ struct MemDescReinterpretOpConversion
     MemDescType dstTy = op.getType();
     Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     Type dstElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+
+    // PartitionedSharedEncoding is not yet supported for memdesc_reinterpret
+    if (isa<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return b.notifyMatchFailure(
+          op,
+          "PartitionedSharedEncoding not yet supported in memdesc_reinterpret");
+    }
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);

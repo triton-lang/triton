@@ -98,6 +98,7 @@ from ._layouts import (
     SwizzledSharedLayout,
     PaddedSharedLayout,
     SharedLinearLayout,
+    PartitionedSharedLayout,
     CoalescedLayout,
 )
 from ._math import (

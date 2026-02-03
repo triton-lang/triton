@@ -1164,6 +1164,57 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   return ensureLayoutNotLargerThan(tile, shapeMap);
 }
 
+// Convert a PartitionedSharedEncodingAttr to a LinearLayout.
+//
+// PartitionedSharedEncoding splits a tensor along partitionDim into
+// numPartitions physical buffers to reduce partition conflicts.
+//
+// Example (numPartitions=2, numGroups=4, shape=[128,32], partitionDim=0):
+//   Logical pieces: [P0|P1|P2|P3|P4|P5|P6|P7]  (8 pieces of [16,32] each)
+//   Buffer 0: [P0|P2|P4|P6]  (partition=0 pieces, contiguous in buffer)
+//   Buffer 1: [P1|P3|P5|P7]  (partition=1 pieces, contiguous in buffer)
+//
+// LinearLayout inputs: "offset", "partition"
+// LinearLayout outputs: dim0, dim1, ... (tensor coordinates)
+LinearLayout
+partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                PartitionedSharedEncodingAttr partitioned) {
+  MLIRContext *ctx = partitioned.getContext();
+  unsigned numLogicalPieces = partitioned.getNumLogicalPieces();
+  unsigned numPartitions = partitioned.getNumPartitions();
+  unsigned numGroups = partitioned.getNumGroups();
+  unsigned partitionDim = partitioned.getPartitionDim();
+  auto partitionLayout = partitioned.getPartitionLayout();
+  auto outDimNames = standardOutDimNames(ctx, shape.size());
+
+  // Each logical piece has this size along the partition dimension
+  int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
+
+  // Shape of a single piece (full shape except partitionDim = pieceSize)
+  SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
+  partitionShape[partitionDim] = pieceSize;
+
+  // Step 1: baseLayout maps (offset, block) -> coordinates within ONE piece.
+  // Output size along partitionDim = pieceSize.
+  LinearLayout baseLayout;
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(partitionLayout)) {
+    baseLayout = padded.getLinearComponent();
+  } else {
+    baseLayout = toLinearLayout(partitionShape, partitionLayout);
+  }
+
+  // Step 2: partLayout maps "partition" -> piece selection along partitionDim.
+  LinearLayout partLayout = LinearLayout::identity1D(
+      numPartitions, S("partition"), outDimNames[partitionDim]);
+  auto groupLayout = baseLayout * partLayout;
+
+  // Step 3: extend "offset" to address across groups.
+  LinearLayout extension = LinearLayout::identity1D(numGroups, S("offset"),
+                                                    outDimNames[partitionDim]);
+
+  return groupLayout * extension;
+}
+
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                                               Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
@@ -1191,6 +1242,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
+    } else if (auto partitioned =
+                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
+      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);

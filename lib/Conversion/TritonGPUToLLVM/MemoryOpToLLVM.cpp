@@ -206,21 +206,16 @@ struct LocalAllocOpConversion
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
+    // Get all shared memory bases (one for non-partitioned, multiple for
+    // partitioned tensors)
+    SmallVector<Value> smemBases = LLVM::getSharedMemoryBases(
+        loc, rewriter, targetInfo, op.getOperation());
     auto memDescTy = cast<MemDescType>(op.getType());
-    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
-    // PRs.
-    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
-            memDescTy.getEncoding())) {
-      return rewriter.notifyMatchFailure(
-          op, "PartitionedSharedEncoding not yet supported in lowering");
-    }
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto typeConverter = getTypeConverter();
 
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, memDescTy.getRank(),
-                                      loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBases, llvmElemTy,
+                                      memDescTy.getRank(), loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       auto *ctx = op.getContext();
@@ -289,6 +284,7 @@ public:
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
+    auto kPartition = str_attr("partition");
     auto regLayout = toLinearLayout(regTy);
     auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
