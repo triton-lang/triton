@@ -342,8 +342,11 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto quot = divideLeft(wmmaLL, tile).value();
-  auto repLayout = zerosLike(tile) * quot;
+  auto maybeQuot = divideLeft(wmmaLL, tile);
+  if (!maybeQuot.has_value()) {
+    return op.emitError("failed to divide wmma layout by tile layout");
+  }
+  auto repLayout = zerosLike(tile) * maybeQuot.value();
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kDim), 1u);
 
   Value loadedA = adaptor.getA();
@@ -530,8 +533,11 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto quot = divideLeft(wmmaLL, tile).value();
-  auto repLayout = zerosLike(tile) * quot;
+  auto maybeQuot = divideLeft(wmmaLL, tile);
+  if (!maybeQuot.has_value()) {
+    return op.emitError("failed to divide wmma layout by tile layout");
+  }
+  auto repLayout = zerosLike(tile) * maybeQuot.value();
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();

@@ -338,7 +338,7 @@ class HIPBackend(BaseBackend):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, options.arch, __HIP_FTZ)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:

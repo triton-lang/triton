@@ -431,9 +431,16 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           arith::TruncFOp::create(rewriter, loc, castedType, convertedTensor);
-    else
-      castedTensor =
-          tt::FpToFpOp::create(rewriter, loc, castedType, convertedTensor);
+    else {
+      RoundingModeAttr rmode;
+      if (oldElemType.getIntOrFloatBitWidth() >
+          newElemType.getIntOrFloatBitWidth()) {
+        rmode =
+            RoundingModeAttr::get(rewriter.getContext(), RoundingMode::RTNE);
+      }
+      castedTensor = tt::FpToFpOp::create(rewriter, loc, castedType,
+                                          convertedTensor, rmode);
+    }
   }
   return castedTensor;
 }
