@@ -79,7 +79,8 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       condition = b.and_(condition, threadIdIsZero);
     }
 
-    auto [prevBlock, ifBlock, thenBlock] = createIfBlock(rewriter, loc, condition);
+    auto [prevBlock, ifBlock, thenBlock] =
+        createIfBlock(rewriter, loc, condition);
 
     rewriter.setInsertionPointToStart(ifBlock);
     targetInfo.assertFail(rewriter, loc, message, file, func, line);
