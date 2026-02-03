@@ -2447,8 +2447,8 @@ def buffer_load_store_kernel(x, y):
     layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
                                                 order=[1, 0])
 
-    offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
-    offsets = ttgl.convert_layout(offsets, layout=layout)
+    auto_layout_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
+    offsets = ttgl.convert_layout(auto_layout_offsets, layout=layout)
     mask = ttgl.full((64, 64), 1, tl.int1, layout=layout)
     other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
     a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
@@ -2456,6 +2456,12 @@ def buffer_load_store_kernel(x, y):
 
     a = ttgl.amd.cdna4.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
     ttgl.amd.cdna4.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
+
+    # Test auto layout support
+    auto_layout_mask = ttgl.full((64, 64), 1, tl.int1)
+    auto_layout_other = ttgl.full((64, 64), 1.0, tl.float32)
+    a = ttgl.amd.cdna4.buffer_load(ptr=x, offsets=offsets, mask=auto_layout_mask, other=auto_layout_other)
+    ttgl.amd.cdna4.buffer_store(stored_value=a, ptr=y, offsets=auto_layout_offsets, mask=auto_layout_mask)
 
 
 def test_buffer_load_store():
@@ -2479,6 +2485,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     amdg.buffer_store %3, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
     %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
     amdg.buffer_store %4, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
+    %true_2 = arith.constant true
+    %cst_3 = arith.constant dense<true> : tensor<64x64xi1, #gluon.auto_encoding>
+    %cst_4 = arith.constant 1.000000e+00 : f32
+    %cst_5 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #gluon.auto_encoding>
+    %5 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
+    %6 = gluon.set_auto_layout %cst_5 : tensor<64x64xf32, #gluon.auto_encoding> -> tensor<64x64xf32, #blocked>
+    %7 = amdg.buffer_load %arg0[%2], %5, %6 : tensor<64x64xf32, #blocked>
+    %8 = gluon.set_auto_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
+    %9 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
+    amdg.buffer_store %7, %arg1[%8], %9 : tensor<64x64xf32, #blocked>
     tt.return
   }
 }
