@@ -206,6 +206,8 @@ If more rows are needed, multiple TDM instructions will be issued.
 The src_col_offset specifies the starting column in the source tensor for
 all gathered rows.
 
+Interfaces: `InferTypeOpInterface`
+
 #### Operands:
 
 | Operand | Description |
@@ -215,6 +217,56 @@ all gathered rows.
 | `src_col_offset` | 32-bit signless integer |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `token` | async token type |
+
+
+### `amdg.async_tdm_intrinsic_wait` (triton::amdgpu::AsyncTDMIntrinsicWait)
+
+_Wait until there are less than or equal to the given number of outstanding TDM intrinsics_
+
+Syntax:
+
+```
+operation ::= `amdg.async_tdm_intrinsic_wait` ($asyncToken^)? attr-dict
+```
+
+This operation waits until there are less than or equal to the given number
+of outstanding TDM intrinsics (assembly instructions). This is necessary to
+ensure that data is available in LDS (load, gather) or HBM (store, scatter)
+before it is used.
+
+Unlike AsyncTDMWait which counts IR operations, this operation counts the
+actual number of TDM assembly instructions (e.g., tensor_load_to_lds,
+tensor_store_from_lds) that are emitted. Which is required for the lowering
+to LLVM.
+
+Traits: `MemWaitOpTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `asyncToken` | variadic of async token type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `retToken` | async token type |
 
 
 ### `amdg.async_tdm_scatter` (triton::amdgpu::AsyncTDMScatterOp)
@@ -242,6 +294,8 @@ If more rows are needed, multiple TDM instructions will be issued.
 The dst_col_offset specifies the starting column in the destination tensor for
 all scattered rows.
 
+Interfaces: `InferTypeOpInterface`
+
 #### Operands:
 
 | Operand | Description |
@@ -251,6 +305,12 @@ all scattered rows.
 | `dst_col_offset` | 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `retToken` | async token type |
 
 
 ### `amdg.async_tdm_wait` (triton::amdgpu::AsyncTDMWait)
@@ -264,8 +324,12 @@ operation ::= `amdg.async_tdm_wait` $asyncToken attr-dict
 ```
 
 This operation waits until there are less than or equal to the given number
-of outstanding TDM operations, including both loads and stores. This is
-necessary to ensure that data is available in the LDS before it is used.
+of outstanding async TDM operations.
+This is necessary to ensure that data is available in the LDS (load, gather)
+or HBM (store, scatter) before it is used.
+
+This operation counts the number of TDM IR operations (AsyncTDMCopyGlobalToLocalOp,
+AsyncTDMCopyLocalToGlobalOp, AsyncTDMScatterOp, AsyncTDMGatherOp).
 
 Traits: `MemWaitOpTrait`
 
