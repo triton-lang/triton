@@ -32,5 +32,8 @@ BF16 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=7, is_signed=True)
 FP16 = FloatType(bitwidth_exponent=5, bitwidth_mantissa=10, is_signed=True)
 FP32 = FloatType(bitwidth_exponent=8, bitwidth_mantissa=23, is_signed=True)
 FP64 = FloatType(bitwidth_exponent=11, bitwidth_mantissa=52, is_signed=True)
+INT16 = IntegerType(16, is_signed=True)
+INT32 = IntegerType(32, is_signed=True)
+INT64 = IntegerType(64, is_signed=True)
 
 DataType: TypeAlias = IntegerType | FloatType
