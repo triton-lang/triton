@@ -367,7 +367,7 @@ class CUDABackend(BaseBackend):
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
-        passes.llvmir.add_canonicalize_llvm_ir(pm)
+        passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)

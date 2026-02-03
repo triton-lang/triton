@@ -99,6 +99,72 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} 
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
+// CHECK: llvm.func internal @inner_func_nw4_ws(%arg0: i32)
+llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
+  // CHECK: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
+  // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C128]]
+  // CHECK: llvm.call @inner_func_nw4_ws(%arg0) : (i32) -> ()
+  nvvm.barrier0
+  llvm.call @inner_func_nw4() : () -> ()
+  llvm.return
+}
+
+// CHECK: llvm.func internal @inner_func_nw2_ws(%arg0: i32)
+llvm.func internal @inner_func_nw2() attributes {"ws_num_warps" = 2 : i32} {
+  // CHECK: [[C64:%.*]] = llvm.mlir.constant(64 : i32)
+  // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C64]]
+  nvvm.barrier0
+  llvm.return
+}
+
+// CHECK: llvm.func internal @inner_func_nw1_ws(%arg0: i32)
+llvm.func internal @inner_func_nw1() attributes {"ws_num_warps" = 1 : i32} {
+  // CHECK: nvvm.bar.warp.sync
+  nvvm.barrier0
+  llvm.return
+}
+
+// CHECK: llvm.func @rewrite_barriers()
+llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK-DAG: [[C2:%.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK-DAG: [[C3:%.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK-DAG: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 10>}
+  default {
+    llvm.call @inner_func_nw4() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // CHECK: call @inner_func_nw4_ws([[C2]]) : (i32) -> ()
+    llvm.call @inner_func_nw4() : () -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(2) {
+    // CHECK: call @inner_func_nw2_ws([[C3]]) : (i32) -> ()
+    llvm.call @inner_func_nw2() : () -> ()
+    ttg.warp_return
+  }
+  partition2() num_warps(1) {
+    // CHECK: call @inner_func_nw1_ws([[C4]]) : (i32) -> ()
+    llvm.call @inner_func_nw1() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  // CHECK: call @inner_func_nw4_ws([[C0]]) : (i32) -> ()
+
+  // CHECK: call @inner_func_nw4_ws([[C0]]) : (i32) -> ()
+  llvm.call @inner_func_nw4() : () -> ()
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
 // COMMON-LABEL: @generate_switch_loop
 llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-DAG: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i32)

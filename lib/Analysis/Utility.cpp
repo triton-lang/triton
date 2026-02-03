@@ -1007,8 +1007,6 @@ LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
     }
     comp = *quotient;
   }
-  for (StringAttr dim : to_vector(comp.getInDimNames()))
-    comp = comp.removeZeroBasesAlongDim(dim);
   return comp;
 }
 

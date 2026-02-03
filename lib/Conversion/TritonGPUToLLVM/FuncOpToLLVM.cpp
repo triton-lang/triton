@@ -23,7 +23,6 @@ using namespace mlir::triton;
 // allocation is still passed in as the last argument. Though here the scratch
 // memory is shared between all programs, so a linear offset based on the
 // program id is required to get the local scratch base.
-
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
@@ -31,7 +30,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
   // Map the MLIR attribute `tt.nv_tma_desc` to the appropriate LLVM and NVVM
   // attributes.
-  static void handleByvalTmaDescArgs(LLVM::LLVMFuncOp &llvmFuncOp) {
+  static LogicalResult handleByvalTmaDescArgs(LLVM::LLVMFuncOp &llvmFuncOp) {
     const bool isKernel = triton::isKernel(llvmFuncOp);
     for (unsigned i = 0; i < llvmFuncOp.getNumArguments(); ++i) {
       const auto attrs = llvmFuncOp.getArgAttrDict(i);
@@ -41,11 +40,12 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
       for (const auto &attr : attrs) {
         if (attr.getName() == "tt.nv_tma_desc") {
-          const auto i32_type =
-              mlir::IntegerType::get(llvmFuncOp.getContext(), 32);
+          const auto i32_type = IntegerType::get(llvmFuncOp.getContext(), 32);
           assert(attr.getValue() == mlir::IntegerAttr::get(i32_type, 1));
-          assert(isKernel &&
-                 "tt.nv_tma_desc is not supported for device functions");
+          if (!isKernel) {
+            return llvmFuncOp.emitError(
+                "tt.nv_tma_desc is not supported for device functions");
+          }
 
           // See
           // https://github.com/google/jax/blob/main/jaxlib/mosaic/gpu/passes.cc
@@ -63,39 +63,15 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
         }
       }
     }
+    return success();
   }
 
-  LogicalResult
-  matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // Prevent LLVM's inliner to inline this function
-    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
-
-    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
-        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                        *getTypeConverter());
-    if (failed(maybeNewFuncOp)) {
-      return failure();
-    }
-
-    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
-    handleArgPtrDatatype(funcOp, newFuncOp);
-
-    auto ctx = funcOp->getContext();
-
-    if (triton::isKernel(funcOp)) {
-      // Set an attribute to indicate this function is a kernel entry.
-      newFuncOp->setAttr(NVVM::NVVMDialect::getKernelFuncAttrName(),
-                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-      newFuncOp.setLinkage(LLVM::Linkage::External);
-    } else {
-      // The noinline attribute will be used by the LLVM codegen to prevent
-      // inlining.
-      // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
-      newFuncOp.setPassthroughAttr(
-          ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
-      newFuncOp.setLinkage(LLVM::Linkage::Internal);
-    }
+  static void attachKernelAttributes(LLVM::LLVMFuncOp newFuncOp,
+                                     triton::FuncOp funcOp,
+                                     ConversionPatternRewriter &rewriter) {
+    newFuncOp->setAttr(
+        NVVM::NVVMDialect::getKernelFuncAttrName(),
+        rewriter.getIntegerAttr(type::u1Ty(rewriter.getContext()), 1));
 
     // Determine the actual number of required warps.
     int numWarps = triton::gpu::lookupNumWarps(funcOp);
@@ -126,14 +102,46 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr(NVVM::NVVMDialect::getReqntidAttrName(),
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Prevent LLVM's inliner to inline this function
+    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
+
+    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
+        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
+                                        *getTypeConverter());
+    if (failed(maybeNewFuncOp)) {
+      return failure();
+    }
+
+    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
+
+    auto ctx = funcOp->getContext();
+
+    if (triton::isKernel(funcOp)) {
+      // Set an attribute to indicate this function is a kernel entry.
+      attachKernelAttributes(newFuncOp, funcOp, rewriter);
+      newFuncOp.setLinkage(LLVM::Linkage::External);
+    } else {
+      // The noinline attribute will be used by the LLVM codegen to prevent
+      // inlining.
+      // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
+      newFuncOp.setPassthroughAttr(
+          ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
+      newFuncOp.setLinkage(LLVM::Linkage::Internal);
+      if (Attribute numWarps = funcOp->getAttr(triton::gpu::AttrNumWarpsName))
+        newFuncOp->setAttr("ws_num_warps", numWarps);
+    }
 
     rewriter.eraseOp(funcOp);
     rewriter.eraseOp(amendedFuncOp);
 
     // Add attributes for by-value TMA descriptor args (nvidia)
-    handleByvalTmaDescArgs(newFuncOp);
-
-    return success();
+    return handleByvalTmaDescArgs(newFuncOp);
   }
 
 private:
