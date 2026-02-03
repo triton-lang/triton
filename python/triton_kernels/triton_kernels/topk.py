@@ -67,9 +67,9 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     if all_gather:
         symm_mem_pool.hdl.barrier(channel=0)
 
-    sort_idx = torch.argsort(y_vals[:], dim=1, descending=True, stable=True)
-    y_vals[:].copy_(torch.gather(y_vals[:], 1, sort_idx))
-    y_indx[:].copy_(torch.gather(y_indx[:], 1, sort_idx))
+    # sort_idx = torch.argsort(y_vals[:], dim=1, descending=True, stable=True)
+    # y_vals[:].copy_(torch.gather(y_vals[:], 1, sort_idx))
+    # y_indx[:].copy_(torch.gather(y_indx[:], 1, sort_idx))
     bitmatrix_shape = [n_rows * (symm_mem_pool.mesh.world_size - 1) + n_rows if all_gather else n_rows_max, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
