@@ -118,6 +118,11 @@ lowerInnerFunctionBarriers(LLVM::LLVMFuncOp func,
 
   // Mangle the function to distinguish it from non-warp-specialized versions.
   func.setSymName(mangleFunctionName(func.getSymName()));
+  if (ArrayAttr argAttrs = func.getArgAttrsAttr()) {
+    SmallVector<Attribute> newArgAttrs = to_vector(argAttrs.getValue());
+    newArgAttrs.push_back(DictionaryAttr::get(func.getContext(), {}));
+    func.setArgAttrsAttr(ArrayAttr::get(func.getContext(), newArgAttrs));
+  }
 
   // Lower barrier ops.
   auto numWarpsAttr = func->getAttrOfType<IntegerAttr>("ws_num_warps");

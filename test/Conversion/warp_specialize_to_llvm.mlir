@@ -109,10 +109,10 @@ llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
   llvm.return
 }
 
-// CHECK: llvm.func internal @inner_func_nw2_ws(%arg0: i32)
-llvm.func internal @inner_func_nw2() attributes {"ws_num_warps" = 2 : i32} {
+// CHECK: llvm.func internal @inner_func_nw2_ws(%arg0: f32 {some.attr = "some_value"}, %arg1: i32)
+llvm.func internal @inner_func_nw2(%arg0: f32 {some.attr = "some_value"}) attributes {"ws_num_warps" = 2 : i32} {
   // CHECK: [[C64:%.*]] = llvm.mlir.constant(64 : i32)
-  // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C64]]
+  // CHECK: nvvm.barrier id = %arg1 number_of_threads = [[C64]]
   nvvm.barrier0
   llvm.return
 }
@@ -126,6 +126,7 @@ llvm.func internal @inner_func_nw1() attributes {"ws_num_warps" = 1 : i32} {
 
 // CHECK: llvm.func @rewrite_barriers()
 llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
+  // CHECK-DAG: [[CST:%.*]] = llvm.mlir.constant({{.*}}) : f32
   // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-DAG: [[C2:%.*]] = llvm.mlir.constant(2 : i32)
   // CHECK-DAG: [[C3:%.*]] = llvm.mlir.constant(3 : i32)
@@ -141,8 +142,9 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
     ttg.warp_return
   }
   partition1() num_warps(2) {
-    // CHECK: call @inner_func_nw2_ws([[C3]]) : (i32) -> ()
-    llvm.call @inner_func_nw2() : () -> ()
+    // CHECK: call @inner_func_nw2_ws([[CST]], [[C3]]) : (f32, i32) -> ()
+    %cst = llvm.mlir.constant(4.2 : f32) : f32
+    llvm.call @inner_func_nw2(%cst) : (f32) -> ()
     ttg.warp_return
   }
   partition2() num_warps(1) {
