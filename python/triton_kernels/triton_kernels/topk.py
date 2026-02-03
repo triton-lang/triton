@@ -9,9 +9,9 @@ from triton_kernels.distributed import SymmetricMemoryPool
 from triton_kernels.tensor import wrap_torch_tensor, dtype_to_torch_dtype
 
 
-def make_empty(offset, shape, dtype, device, symm_mem_pool):
+def make_empty(offset, shape, dtype, device, all_gather, symm_mem_pool):
     dtype = dtype_to_torch_dtype(dtype)
-    if symm_mem_pool is not None:
+    if all_gather:
         rank_id = symm_mem_pool.mesh.local_rank
         ret_bufs = symm_mem_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
         ret = ret_bufs[rank_id]
@@ -38,13 +38,13 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     n_rows, n_cols = x.shape
     n_rows_max, _ = x.shape_max
     dev = x.device
-    world_size = symm_mem_pool.mesh.world_size if all_gather else 1
-    n_rows_out_max = n_rows_max * world_size if all_gather else n_rows_max
+    n_rows_out_max = n_rows_max * symm_mem_pool.mesh.world_size if all_gather else n_rows_max
     # scratchpad tensors
     # NOTE: these are not returned
-    y_vals_bufs, y_vals, offset = make_empty(0, (n_rows_out_max, k), x.dtype, dev, symm_mem_pool=symm_mem_pool)
+    y_vals_bufs, y_vals, offset = make_empty(0, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather,
+                                             symm_mem_pool=symm_mem_pool)
     if y_indx is None:
-        y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev,
+        y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather,
                                                  symm_mem_pool=symm_mem_pool)
     else:
         y_indx_bufs = (y_indx, )
@@ -52,7 +52,8 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
     bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
-                                                        torch.uint32, dev, symm_mem_pool=symm_mem_pool)
+                                                        torch.uint32, dev, all_gather=all_gather,
+                                                        symm_mem_pool=symm_mem_pool)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
@@ -60,13 +61,13 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         y_vals_bufs, y_indx_bufs, y_vals.stride(0), use_provided_indx,  # output [topk]
         bitmatrix_bufs, bitmatrix_data.stride(0), bitmatrix_data.stride(1),  # output [bitmatrix]
         n_rows, n_cols,  # shapes
-        symm_mem_pool.mesh.local_rank * n_rows if all_gather else 0, BLOCK_M=BLOCK_M,
+        symm_mem_pool.mesh.local_rank * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     if all_gather:
         symm_mem_pool.hdl.barrier(channel=0)
-    bitmatrix_shape = [n_rows * (symm_mem_pool.mesh.world_size - 1) + n_rows if all_gather else n_rows_max, n_cols]
+    bitmatrix_shape = [n_rows * symm_mem_pool.mesh.world_size if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = wrap_torch_tensor(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
@@ -168,9 +169,9 @@ def topk_torch(
     # fill bitmatrix
     if apply_softmax:
         y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
-    sort_indices = torch.argsort(y_vals[:n_rows, :], dim=1, descending=True, stable=True)
-    y_vals[:n_rows, :] = torch.gather(y_vals[:n_rows, :], 1, sort_indices)
-    y_indx[:n_rows, :] = torch.gather(y_indx[:n_rows, :], 1, sort_indices)
+    if not has_user_provided_indx:
+        y_vals, sort_indices = torch.sort(y_vals.float(), dim=1, descending=True, stable=True)
+        y_indx = torch.gather(y_indx, 1, sort_indices)
     y_indx[n_rows:, :] = -1
     rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
     cols = y_indx.reshape(-1)  # 64-bit safe for div/mod
