@@ -81,6 +81,37 @@ def create_shared_layouts(BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOC
     return (SHARED_LAYOUT_A, SHARED_LAYOUT_B)
 
 
+def build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, WARP_BASES, TRANSPOSE_B):
+    """
+    Build all layouts for the GEMM kernel.
+    """
+    # If TRANSPOSE_B we need to transpose each basis vector of the CGALayout for the
+    # shared allocation because the permute will transpose the basis vectors before we
+    # load them for wmmas.
+    if TRANSPOSE_B:
+        # Transpose each basis vector: [a, b] -> [b, a]
+        cga_layout_b_transposed = tuple([tuple([row[1], row[0]]) for row in cga_layout_b])
+    else:
+        cga_layout_b_transposed = cga_layout_b
+
+    SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_M, BLOCK_K],
+                                                                                [1, 0], cga_layout_a)
+    if not TRANSPOSE_B:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 16]], [BLOCK_K, BLOCK_N],
+                                                                                    [1, 0], cga_layout_b_transposed)
+    else:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_N, BLOCK_K],
+                                                                                    [1, 0], cga_layout_b_transposed)
+
+    WMMA_LAYOUT_A = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_a)
+    WMMA_LAYOUT_B = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_b)
+    ACCUMULATOR_LAYOUT = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_c)
+    OPERAND_LAYOUT_A = ttgl.DotOperandLayout(0, WMMA_LAYOUT_A, 8)
+    OPERAND_LAYOUT_B = ttgl.DotOperandLayout(1, WMMA_LAYOUT_B, 8)
+
+    return SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT, OPERAND_LAYOUT_A, OPERAND_LAYOUT_B
+
+
 @gluon.jit
 def create_tensor_descriptors(a_ptr, b_ptr, off_am, off_bn, stride_am, stride_ak, stride_bn, stride_bk,
                               shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, M: ttgl.constexpr,
@@ -154,8 +185,21 @@ def issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BL
 @gluon.jit
 def issue_wmma(consumer, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout: ttgl.constexpr, accumulator,
                wait_producers_cnt, NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
+    """
+    For multi-CTA configurations, we want warps within the CGA (cluster) to stay temporally aligned so we can
+    multicast data to multiple CTAs.
+    We do this by signaling the cluster barrier before `async_wait` (which inserts a CTA barrier), then waiting
+    for the cluster barrier to complete. This keeps warps of a CGA within one iteration of each other.
+    It can also improve latency hiding by overlapping the cluster and CTA barriers.
+    """
+    num_ctas: ttgl.constexpr = ttgl.num_ctas()
+    if num_ctas > 1:
+        ttgl.amd.gfx1250.cluster.arrive()
 
     ttgl.amd.gfx1250.tdm.async_wait(wait_producers_cnt)
+
+    if num_ctas > 1:
+        ttgl.amd.gfx1250.cluster.wait()
 
     a = a_buffer.index(consumer % NUM_BUFFERS).load(layout=a_layout)
     if not TRANSPOSE_B:
