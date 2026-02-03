@@ -1134,8 +1134,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         c = ttgl.convert_layout(c, layout=blocked)
         c = c.to(a_ptr.dtype.element_ty)
 
-        offs_cm = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked))
-        offs_cn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked))
+        offs_cm = ttgl.arange(0, BLOCK_SIZE_M)
+        offs_cn = ttgl.arange(0, BLOCK_SIZE_N)
         offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
@@ -1223,8 +1223,8 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
         c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
         c = c.to(out_ptr.dtype.element_ty)
 
-        out_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None]
-        out_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
+        out_offs_m = ttgl.arange(0, M)[:, None]
+        out_offs_n = ttgl.arange(0, N)[None, :]
         ttgl.amd.cdna4.buffer_store(c, out_ptr, out_offs_m * N + out_offs_n)
 
     def _create_mxfp_operand(operand: int, m: int, n: int, dtype: str):
