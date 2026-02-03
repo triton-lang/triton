@@ -185,7 +185,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   Type ptrType = triton::getPointerType(elType);
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
-  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
+  auto alloc =
+      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
