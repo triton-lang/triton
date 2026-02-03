@@ -23,6 +23,8 @@ namespace CommitKind {
 enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 }
 
+void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
+                          StringRef message);
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
@@ -36,7 +38,7 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   bool isSigned = false);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
-getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
+getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
 
 struct ValueType {
   Value value;

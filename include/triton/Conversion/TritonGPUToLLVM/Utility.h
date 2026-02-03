@@ -342,6 +342,9 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
+
+// Whether the convert layout should be forced to use warp shuffles.
+bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
 } // namespace gpu
 
 } // namespace triton
@@ -441,6 +444,9 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 
 size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
                  ArrayRef<unsigned> order);
+
+GlobalOp getOrInsertGlobalConstant(RewriterBase &rewriter, ModuleOp module,
+                                   Type type, Attribute content, StringRef key);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -629,6 +635,14 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
   return inlineRegionImpl(rewriter, region, args,
                           mlir::TypeID::get<TerminatorOp>(), loc);
 }
+
+// #prevBlock
+// if (condition) {
+//   #ifBlock
+// }
+// #thenBlock
+std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
+createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd);
 
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,

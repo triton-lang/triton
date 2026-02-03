@@ -21,19 +21,6 @@ class TTI_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
-def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "assert the condition within the current thread";
-  let description = [{
-    Assert that the condition is true given all the values are available in the current thread.
-    If the condition is false, the message is printed, and the program is aborted.
-    If check_any is true, any of the values in the condition must be true. Otherwise, all the
-    values in the condition must be true.
-  }];
-  let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message, BoolAttr:$check_any);
-  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
-}
-
-
 def TTI_ExperimentalBufferDescriptorsOp
     : TTI_Op<"experimental_buffer_descriptors", [Pure]> {
   let summary = "define an array of buffer descriptors";

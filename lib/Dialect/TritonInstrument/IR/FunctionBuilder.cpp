@@ -133,6 +133,7 @@ FuncOp getOrCreateFunction(
   func.setVisibility(SymbolTable::Visibility::Private);
   func->setAttr(ttg::AttrNumWarpsName,
                 moduleBuilder.getI32IntegerAttr(numWarps));
+  func->setAttr("always_use_warp_shuffle", moduleBuilder.getUnitAttr());
   for (auto [i, argType] : llvm::enumerate(argTypes)) {
     if (isa<PointerType>(argType)) {
       func.setArgAttr(i, "tt.divisibility",
@@ -171,7 +172,7 @@ void createCallToCachedFunction(
   if (assertInfo) {
     Value result = callOp->getResult(0);
     StringRef message = b.getStringAttr(assertInfo->message);
-    tti::ExperimentalAssertInThreadOp::create(b, result, message, false);
+    createAssertInThread(b, result, message);
   }
 }
 
@@ -220,28 +221,27 @@ std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
-Value convertAndBroadcast(ImplicitLocOpBuilder &b, Value tensor, int dim,
-                          RankedTensorType dstType) {
-  auto loc = b.getLoc();
-  ArrayRef<int64_t> shape = dstType.getShape();
-  auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto encoding = cast<ttg::BlockedEncodingAttr>(dstType.getEncoding());
-  RankedTensorType resultType =
-      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
-  auto slicedEncoding =
-      ttg::SliceEncodingAttr::get(b.getContext(), dim, encoding);
-  tensor = ttg::ConvertLayoutOp::create(
-      b, tensorType.cloneWithEncoding(slicedEncoding), tensor);
-  tensor = tti::expandOuterSlicedDim(b, loc, tensor);
-  tensor = triton::BroadcastOp::create(b, resultType, tensor);
-  return tensor;
-}
-
 Value createConvertLayout(ImplicitLocOpBuilder &b, Value tensor,
                           Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto dstType = tensorType.cloneWithEncoding(encoding);
   return ttg::ConvertLayoutOp::create(b, dstType, tensor);
+}
+
+Value convertAndBroadcast(ImplicitLocOpBuilder &b, Value tensor, int dim,
+                          RankedTensorType dstType) {
+  auto loc = b.getLoc();
+  ArrayRef<int64_t> shape = dstType.getShape();
+  auto tensorType = cast<RankedTensorType>(tensor.getType());
+  auto encoding = cast<ttg::DistributedEncodingTrait>(dstType.getEncoding());
+  RankedTensorType resultType =
+      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+  auto slicedEncoding =
+      ttg::SliceEncodingAttr::get(b.getContext(), dim, encoding);
+  tensor = createConvertLayout(b, tensor, slicedEncoding);
+  tensor = tti::expandOuterSlicedDim(b, loc, tensor);
+  tensor = triton::BroadcastOp::create(b, resultType, tensor);
+  return tensor;
 }
 
 Value expandAliases(ImplicitLocOpBuilder &b, Value bufferMask,
@@ -291,7 +291,7 @@ Value adjustIntegerWidth(ImplicitLocOpBuilder &b, Value value,
 Value createThreadColumnMask(ImplicitLocOpBuilder &b, Value threadMask,
                              RankedTensorType tensorType) {
   auto loc = b.getLoc();
-  auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
+  auto encoding = cast<ttg::DistributedEncodingTrait>(tensorType.getEncoding());
   auto sliceEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
   int columns = tensorType.getShape()[1];
 
@@ -321,7 +321,7 @@ Value createThreadColumnMask(ImplicitLocOpBuilder &b, Value threadMask,
 Value createColumnMask(ImplicitLocOpBuilder &b, Value column,
                        RankedTensorType tensorType) {
   auto loc = b.getLoc();
-  auto encoding = cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding());
+  auto encoding = cast<ttg::DistributedEncodingTrait>(tensorType.getEncoding());
   auto sliceEncoding = tti::getSingleDimSliceEncoding(encoding, /*dim=*/1);
   auto colType = RankedTensorType::get({tensorType.getShape()[1]},
                                        b.getI32Type(), sliceEncoding);
