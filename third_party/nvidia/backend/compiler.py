@@ -401,11 +401,8 @@ class CUDABackend(BaseBackend):
             pm.enable_debug()
             passes.llvmir.add_di_local_variable(pm)
             pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
-        return mod
 
-    def make_llvmir(self, src, metadata, options, capability):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
-        mod = src
         llvm.init_targets()
         context = llvm.context()
         if knobs.compilation.enable_asan:
@@ -555,7 +552,6 @@ please share the reproducer above with Triton project.
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
-        stages["llvmir"] = lambda src, metadata: self.make_llvmir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)
         if knobs.runtime.add_stages_inspection_hook is not None:
