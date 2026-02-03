@@ -12,6 +12,7 @@ import math
 from triton.experimental import gluon
 from triton.language.core import _aggregate as aggregate
 import triton.experimental.gluon.language as ttgl
+from triton._C.libtriton.gluon_ir import make_cga_layout
 
 # Handle imports for both pytest (module context) and direct execution
 try:
@@ -49,20 +50,17 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                          BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
                                          NUM_BUFFERS: ttgl.constexpr,  #
                                          TRANSPOSE_B: ttgl.constexpr,  #
-                                         WARP_BASES: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                                         SHARED_LAYOUT_A: ttgl.constexpr,  #
+                                         SHARED_LAYOUT_B: ttgl.constexpr,  #
+                                         ACCUMULATOR_LAYOUT: ttgl.constexpr,  #
+                                         OPERAND_LAYOUT_A: ttgl.constexpr,  #
+                                         OPERAND_LAYOUT_B: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
 
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
-
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
-    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
-    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
-    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
-    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
-    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
     a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
                                                SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
@@ -83,7 +81,7 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
         producer = 0
         consumer = 0
-        accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
+        accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=ACCUMULATOR_LAYOUT)
 
         issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K,
                                      NUM_BUFFERS, TRANSPOSE_B)
@@ -105,8 +103,8 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
             consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                                accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
-        offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
-        offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+        offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, ACCUMULATOR_LAYOUT))
+        offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, ACCUMULATOR_LAYOUT))
         offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
@@ -122,19 +120,17 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
                                                       BLOCK_K: ttgl.constexpr,  #
                                                       NUM_BUFFERS: ttgl.constexpr,  #
                                                       TRANSPOSE_B: ttgl.constexpr,  #
-                                                      WARP_BASES: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                                                      SHARED_LAYOUT_A: ttgl.constexpr,  #
+                                                      SHARED_LAYOUT_B: ttgl.constexpr,  #
+                                                      ACCUMULATOR_LAYOUT: ttgl.constexpr,  #
+                                                      OPERAND_LAYOUT_A: ttgl.constexpr,  #
+                                                      OPERAND_LAYOUT_B: ttgl.constexpr,
+                                                      L2_PREFETCH_DISTANCE: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
-
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
-    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
-    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
-    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
-    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
-    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
     a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
                                                SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
@@ -168,7 +164,7 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
                                    TRANSPOSE_B)
 
         consumer = 0
-        accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
+        accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=ACCUMULATOR_LAYOUT)
 
         for _ in range(0, ttgl.cdiv(K, BLOCK_K) - NUM_BUFFERS):
             producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
@@ -189,11 +185,39 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
             consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                                accumulator, (NUM_BUFFERS - 1 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
-        offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
-        offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+        offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, ACCUMULATOR_LAYOUT))
+        offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, ACCUMULATOR_LAYOUT))
         offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+
+
+def _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, WARP_BASES, TRANSPOSE_B):
+    # If TRANSPOSE_B we need to transpose each basis vector of the CGALayout for the
+    # shared allocation because the permute will transpose the basis vectors before we
+    # load them for wmmas.
+    if TRANSPOSE_B:
+        # Transpose each basis vector: [a, b] -> [b, a]
+        cga_layout_b_transposed = tuple([tuple([row[1], row[0]]) for row in cga_layout_b])
+    else:
+        cga_layout_b_transposed = cga_layout_b
+
+    SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_M, BLOCK_K],
+                                                                                [1, 0], cga_layout_a)
+    if not TRANSPOSE_B:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 16]], [BLOCK_K, BLOCK_N],
+                                                                                    [1, 0], cga_layout_b_transposed)
+    else:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_N, BLOCK_K],
+                                                                                    [1, 0], cga_layout_b_transposed)
+
+    WMMA_LAYOUT_A = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_a)
+    WMMA_LAYOUT_B = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_b)
+    ACCUMULATOR_LAYOUT = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_c)
+    OPERAND_LAYOUT_A = ttgl.DotOperandLayout(0, WMMA_LAYOUT_A, 8)
+    OPERAND_LAYOUT_B = ttgl.DotOperandLayout(1, WMMA_LAYOUT_B, 8)
+
+    return SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT, OPERAND_LAYOUT_A, OPERAND_LAYOUT_B
 
 
 @gluon.jit
@@ -205,19 +229,14 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
                               NUM_BUFFERS: ttgl.constexpr,  #
                               TRANSPOSE_B: ttgl.constexpr,  #
-                              WARP_BASES: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                              SHARED_LAYOUT_A: ttgl.constexpr, SHARED_LAYOUT_B: ttgl.constexpr,
+                              ACCUMULATOR_LAYOUT: ttgl.constexpr, OPERAND_LAYOUT_A: ttgl.constexpr,
+                              OPERAND_LAYOUT_B: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
-
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
-    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
-    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
-    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
-    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
-    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -232,7 +251,7 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
     producer = 0
     consumer = 0
-    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=ACCUMULATOR_LAYOUT)
 
     # Prefetching buffers we load in the prologue does not make sense
     issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, 0, 0, BLOCK_K, NUM_BUFFERS,
@@ -252,8 +271,8 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
         consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                            accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
-    offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
-    offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+    offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, ACCUMULATOR_LAYOUT))
+    offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, ACCUMULATOR_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
@@ -360,18 +379,14 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64)])
-@pytest.mark.parametrize("NUM_BUFFERS", [2, 3, 4])
-@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
-@pytest.mark.parametrize("PERSISTENT", [False, True])
-@pytest.mark.parametrize("PREFETCH", [False, True])
-@pytest.mark.parametrize("L2_PREFETCH_DISTANCE", [0, 2])
-@pytest.mark.parametrize("M,N,K", [(256, 256, 512), (250, 250, 510)])
-@pytest.mark.parametrize("num_warps", [4, 8])
-def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
-                                    L2_PREFETCH_DISTANCE, M, N, K, num_warps):
+def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
+                                    L2_PREFETCH_DISTANCE, M, N, K, num_warps, ctas_per_cga):
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
+
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    if num_ctas > 1 and PERSISTENT:
+        pytest.skip("Skip tests with multiple CTAs and persistent or prefetch")
 
     torch.manual_seed(42)
 
@@ -393,7 +408,16 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
         warp_bases.append((1 << i, 0))
     warp_bases = tuple(warp_bases)
 
+    cga_layout_a = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], 1], [0, 1])
+    cga_layout_b = make_cga_layout(ctas_per_cga, [1, ctas_per_cga[1]], [0, 1])
+    cga_layout_c = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], ctas_per_cga[1]], [0, 1])
+
+    # Build all layouts in wrapper function (outside kernel)
+    SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT, OPERAND_LAYOUT_A, OPERAND_LAYOUT_B = _build_gemm_layouts(
+        BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, warp_bases, TRANSPOSE_B)
+
     if not PERSISTENT:
+
         grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
         kernel = gemm_tdm_pipelined_kernel[grid](
             a_device, b_device, c_device,  #
@@ -403,8 +427,9 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
             stride_cm, stride_cn,  #
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
             NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
-            num_warps=num_warps, WARP_BASES=warp_bases, waves_per_eu=num_warps // 4,
-            L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
+            SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
+            OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B, num_warps=num_warps,
+            waves_per_eu=num_warps // 4, num_ctas=num_ctas, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
         static_profile(kernel)
     else:
         # num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
@@ -420,7 +445,9 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 stride_cm, stride_cn,  #
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
                 NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
-                num_warps=num_warps, WARP_BASES=warp_bases, waves_per_eu=num_warps // 4,
+                SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
+                OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B,  #
+                num_warps=num_warps, num_ctas=num_ctas, waves_per_eu=num_warps // 4,
                 L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
             static_profile(kernel)
         else:
@@ -431,13 +458,60 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 stride_bk, stride_bn,  #
                 stride_cm, stride_cn,  #
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, num_warps=num_warps, WARP_BASES=warp_bases,
-                waves_per_eu=num_warps // 4, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
+                NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
+                SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
+                OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B,  #
+                num_warps=num_warps, num_ctas=num_ctas, waves_per_eu=num_warps // 4,
+                L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
             static_profile(kernel)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ (b.to(torch.float32) if not TRANSPOSE_B else b.T.to(torch.float32))
     torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
+
+
+def _build_multi_cta_gemm_cases():
+    """
+    Build multi-CTA GEMM configs, it scales the problem size and blocks dims by
+    ctas_per_cga so each CTA works on BLOCK_M/BLOCK_N sized tile.
+    """
+
+    base_shapes = [(256, 256, 512), (250, 250, 510)]
+    base_blocks = [(32, 32, 64)]
+    ctas_per_cga_list = [[2, 1], [4, 2], [4, 4]]
+    configs = []
+    for M, N, K in base_shapes:
+        for BLOCK_M, BLOCK_N, BLOCK_K in base_blocks:
+            for ctas in ctas_per_cga_list:
+                configs.append((M * ctas[0], N * ctas[1], K, BLOCK_M * ctas[0], BLOCK_N * ctas[1], BLOCK_K, ctas))
+    return configs
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64)])
+@pytest.mark.parametrize("NUM_BUFFERS", [2, 3, 4])
+@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("PERSISTENT", [False, True])
+@pytest.mark.parametrize("PREFETCH", [False, True])
+@pytest.mark.parametrize("L2_PREFETCH_DISTANCE", [0, 2])
+@pytest.mark.parametrize("M,N,K", [(256, 256, 512), (250, 250, 510)])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_runtime_gemm_tdm_pipelined_single_cta(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT,
+                                               PREFETCH, L2_PREFETCH_DISTANCE, M, N, K, num_warps):
+    _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
+                                    L2_PREFETCH_DISTANCE, M, N, K, num_warps, [1, 1])
+
+
+@pytest.mark.parametrize("NUM_BUFFERS", [2, 3, 4])
+@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("PERSISTENT", [False])
+@pytest.mark.parametrize("PREFETCH", [False, True])
+@pytest.mark.parametrize("L2_PREFETCH_DISTANCE", [0, 2])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("M,N,K,BLOCK_M,BLOCK_N,BLOCK_K,ctas_per_cga", _build_multi_cta_gemm_cases())
+def test_runtime_gemm_tdm_pipelined_multi_cta(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, NUM_BUFFERS,
+                                              TRANSPOSE_B, PERSISTENT, PREFETCH, L2_PREFETCH_DISTANCE, num_warps):
+    _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
+                                    L2_PREFETCH_DISTANCE, M, N, K, num_warps, ctas_per_cga)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32)])
@@ -1469,12 +1543,18 @@ if __name__ == "__main__":
     BLOCK_M, BLOCK_N, BLOCK_K = args.block_m, args.block_n, args.block_k
     NUM_BUFFERS = args.num_buffers
     NUM_WARPS = args.num_warps
+    CTAS_PER_CGA = args.ctas_per_cga
+    NUM_CTAS = CTAS_PER_CGA[0] * CTAS_PER_CGA[1]
     TRANSPOSE_B = True
     PERSISTENT = args.persistent
     PREFETCH = args.prefetch_lds
     L2_PREFETCH_DISTANCE = args.prefetch_l2_distance
 
+    if NUM_CTAS not in [1, 2, 4, 8, 16]:
+        raise ValueError(f"NUM_CTAS (product of CTAS_PER_CGA) {NUM_CTAS} not supported")
+
     if args.warp_specialized:
+        assert NUM_CTAS == 1, "NUM_CTAS > 1 not supported for warp specialized gemm"
         assert L2_PREFETCH_DISTANCE == 0, "L2 prefetch no support in warp specialized kernel"
         # For warp specialized, allow larger blocks with subtiled variant
         if args.subtiled:
@@ -1500,6 +1580,7 @@ if __name__ == "__main__":
                                                    NUM_BUFFERS, TRANSPOSE_B, PERSISTENT,  #
                                                    M, N, K, NUM_WARPS)
     elif args.single_warp_schedule:
+        assert NUM_CTAS == 1, "NUM_CTAS > 1 not supported for single warp schedule"
         print(
             f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}, {L2_PREFETCH_DISTANCE=}"
         )
@@ -1508,8 +1589,8 @@ if __name__ == "__main__":
                                                                       M, N, K)
     else:
         print(
-            f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}, {L2_PREFETCH_DISTANCE=}"
+            f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}, {L2_PREFETCH_DISTANCE=}, {CTAS_PER_CGA=}"
         )
-        test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K,  #
+        _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K,  #
                                         NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH, L2_PREFETCH_DISTANCE,  #
-                                        M, N, K, NUM_WARPS)
+                                        M, N, K, NUM_WARPS, CTAS_PER_CGA)
