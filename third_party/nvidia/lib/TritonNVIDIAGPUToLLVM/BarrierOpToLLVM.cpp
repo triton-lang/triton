@@ -348,6 +348,147 @@ struct ArriveBarrierOpConversion
     return success();
   }
 };
+
+// CLC (Cluster Launch Control) Ops - Blackwell SM100+
+struct CLCTryCancelOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCTryCancelOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCTryCancelOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit,
+                           NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCTryCancelOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Only one thread per warp should issue the CLC instruction
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+
+    std::string ptxAsm = "clusterlaunchcontrol.try_cancel.async.shared::cta"
+                         ".mbarrier::complete_tx::bytes";
+    if (op.getMulticast())
+      ptxAsm += ".multicast::cluster::all";
+    ptxAsm += ".b128 [$0], [$1];";
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(adaptor.getResult(), "r"),
+        ptxBuilder.newOperand(adaptor.getMbarrier(), "r")};
+
+    auto clcOp = *ptxBuilder.create("@$2 " + ptxAsm);
+    operands.push_back(ptxBuilder.newOperand(pred, "b"));
+    clcOp(operands, /*onlyAttachMLIRArgs=*/true);
+
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct CLCIsCanceledOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCIsCanceledOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCIsCanceledOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCIsCanceledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+    auto ctx = getContext();
+
+    std::string ptxAsm = R"({
+      .reg .pred p1;
+      .reg .b128 clc_result;
+      ld.shared.b128 clc_result, [$1];
+      clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 p1, clc_result;
+      selp.b32 $0, 1, 0, p1;
+    })";
+
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand("=r");
+    auto *inputOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
+    clcOp({resultOp, inputOp}, /*onlyAttachMLIRArgs=*/true);
+
+    Value result =
+        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct CLCGetFirstCtaIdOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCGetFirstCtaIdOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCGetFirstCtaIdOpConversion(LLVMTypeConverter &typeConverter,
+                               PatternBenefit benefit,
+                               NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCGetFirstCtaIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+    auto ctx = getContext();
+
+    const char *dimName;
+    switch (op.getDim()) {
+    case 0:
+      dimName = "x";
+      break;
+    case 1:
+      dimName = "y";
+      break;
+    case 2:
+      dimName = "z";
+      break;
+    default:
+      return failure();
+    }
+
+    std::string ptxAsm = R"({
+      .reg .b128 result;
+      ld.shared.b128 result, [$1];
+      clusterlaunchcontrol.query_cancel.get_first_ctaid::)" +
+                         std::string(dimName) + R"(.b32.b128 $0, result;
+    })";
+
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand("=r");
+    auto *inputOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
+    clcOp({resultOp, inputOp}, /*onlyAttachMLIRArgs=*/true);
+
+    Value result =
+        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -361,4 +502,9 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  // CLC ops (SM100+)
+  patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCGetFirstCtaIdOpConversion>(typeConverter, benefit,
+                                             targetInfo);
 }
