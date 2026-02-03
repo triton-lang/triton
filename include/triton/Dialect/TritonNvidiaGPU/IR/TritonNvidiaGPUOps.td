@@ -88,6 +88,73 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 //
+// Cluster Launch Control (CLC) Ops - Blackwell SM100+
+//
+def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
+  let summary = "Issue CLC try_cancel to steal work from pending blocks";
+
+  let description = [{
+    Issues a clusterlaunchcontrol.try_cancel instruction to atomically cancel
+    a pending cluster launch. The result is written asynchronously to the
+    result buffer and the mbarrier is signaled on completion.
+
+    This is used for dynamic persistent kernels on Blackwell (SM100+).
+
+    The result buffer must be 16-byte aligned shared memory.
+    The mbarrier must be 8-byte aligned shared memory.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier,
+    I1Attr:$multicast
+  );
+
+  let assemblyFormat = [{
+    $result `,` $mbarrier attr-dict `:` qualified(type($result)) `,` qualified(type($mbarrier))
+  }];
+}
+
+def TTNG_CLCIsCanceledOp : TTNG_Op<"clc_is_canceled", []> {
+  let summary = "Check if CLC response indicates successful cancellation";
+
+  let description = [{
+    Decodes the CLC response buffer to check if a block was successfully
+    canceled. Returns 1 if canceled, 0 otherwise.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$result
+  );
+
+  let results = (outs I32:$is_canceled);
+
+  let assemblyFormat = [{
+    $result attr-dict `:` qualified(type($result)) `->` type($is_canceled)
+  }];
+}
+
+def TTNG_CLCGetFirstCtaIdOp : TTNG_Op<"clc_get_first_ctaid", []> {
+  let summary = "Get coordinate from CLC response";
+
+  let description = [{
+    Decodes the CLC response buffer to get the coordinate of the canceled
+    block. The dim attribute specifies which dimension (0=x, 1=y, 2=z).
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$result,
+    I32Attr:$dim
+  );
+
+  let results = (outs I32:$ctaid);
+
+  let assemblyFormat = [{
+    $result `,` $dim attr-dict `:` qualified(type($result)) `->` type($ctaid)
+  }];
+}
+
+//
 // WarpGroupDot Op
 //
 def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [

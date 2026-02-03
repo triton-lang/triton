@@ -832,6 +832,22 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_cluster_wait",
            [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
+      // CLC (Cluster Launch Control) ops - SM100+
+      .def("create_clc_try_cancel",
+           [](GluonOpBuilder &self, Value result, Value mbarrier,
+              bool multicast) {
+             self.create<ttng::CLCTryCancelOp>(result, mbarrier, multicast);
+           })
+      .def("create_clc_is_canceled",
+           [](GluonOpBuilder &self, Value result) -> Value {
+             auto i32Ty = self.getBuilder().getI32Type();
+             return self.create<ttng::CLCIsCanceledOp>(i32Ty, result);
+           })
+      .def("create_clc_get_first_ctaid",
+           [](GluonOpBuilder &self, Value result, int dim) -> Value {
+             auto i32Ty = self.getBuilder().getI32Type();
+             return self.create<ttng::CLCGetFirstCtaIdOp>(i32Ty, result, dim);
+           })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
