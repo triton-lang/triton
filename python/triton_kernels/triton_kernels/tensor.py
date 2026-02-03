@@ -9,7 +9,8 @@ from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.dtype import IntegerType, FloatType, DataType, FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64
+from .tensor_details.dtype import IntegerType, FloatType, DataType
+from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64, INT16, INT32, INT64
 
 
 # storage
@@ -246,6 +247,9 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
         FP32: torch.float32,
         FP16: torch.float16,
         FP64: torch.float64,
+        INT16: torch.int16,
+        INT32: torch.int32,
+        INT64: torch.int64,
     }[dtype]
 
 
@@ -262,6 +266,9 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         "bfloat16": BF16,
         "float32": FP32,
         "float64": FP64,
+        "int16": INT16,
+        "int32": INT32,
+        "int64": INT64,
     }
     if id in vals:
         return vals[id]
@@ -270,15 +277,13 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
     assert False, f"Unknown dtype: {id}"
 
 
-def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None):
+def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
+          allow_implicit_conversion: bool = False):
     storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
+    initial_layout = layout if isinstance(layout, StridedLayout) else StridedLayout()
     # pack sub-byte datatype along last dimension
-    if layout is None:
-        layout = StridedLayout()
-    # storage shape
-    assert isinstance(layout, StridedLayout)
-    order = layout.order(len(storage_shape))
+    order = initial_layout.order(len(storage_shape))
     dim = order[0]
     storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
     # storage strides
@@ -288,4 +293,8 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None)
         strides[d] = running
         running *= storage_shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
-    return wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=layout)
+    ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=initial_layout)
+    assert initial_layout == ret.storage.layout or allow_implicit_conversion
+    if allow_implicit_conversion:
+        ret = convert_layout(ret, layout)
+    return ret

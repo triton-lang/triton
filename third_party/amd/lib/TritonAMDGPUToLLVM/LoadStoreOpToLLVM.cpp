@@ -1295,8 +1295,21 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
+    auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    unsigned padInterval = 0;
+    unsigned padAmount = 0;
+    triton::LinearLayout sharedLayout;
+
+    if (paddedEnc) {
+      // Verifier ensures that there is exactly one interval-padding pair
+      padInterval = paddedEnc.getIntervals()[0];
+      padAmount = paddedEnc.getPaddings()[0];
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(smemTy);
+    }
+
     // Verifier ensures smem is not usind a PaddedSharedEncodingAttr
-    auto sharedLayout = triton::gpu::toLinearLayout(smemTy);
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
@@ -1306,7 +1319,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
-        /*padInterval=*/0, /*padAmount=*/0, offset, dstPtr, pred,
+        padInterval, padAmount, offset, dstPtr, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
         /*isLoad=*/false, cgaLayout, ctaId);
 
@@ -2284,17 +2297,18 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-struct AsyncTDMWaitConversion
-    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMWait> {
-  AsyncTDMWaitConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+struct AsyncTDMIntrinsicWaitConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMIntrinsicWait> {
+  AsyncTDMIntrinsicWaitConversion(LLVMTypeConverter &converter,
+                                  PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit) {}
 
   LogicalResult
-  matchAndRewrite(triton::amdgpu::AsyncTDMWait op, OpAdaptor adaptor,
+  matchAndRewrite(triton::amdgpu::AsyncTDMIntrinsicWait op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getNum());
+    ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getCount());
     rewriter.eraseOp(op);
     return success();
   }
@@ -2410,7 +2424,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
+  patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
 }

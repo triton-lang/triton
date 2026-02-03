@@ -44,7 +44,8 @@ void fillTDMDescriptor(
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, Value dstPtr, Value pred, Value multicastMask,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId);
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
+    bool isStore);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -77,6 +78,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value multicastMask, Type elementType, Value barrierPtr,
                       bool isLoad, const triton::LinearLayout &cgaLayout,
                       Value ctaId);
+
+// Calculate the number of TDM gather/scatter instructions needed.
+// - numIndices: number of row indices
+// - use32BitIndices: true for 32-bit indices (max 8 rows/instr), false for
+//   16-bit (max 16 rows/instr)
+// Returns: the number of TDM instructions that will be emitted
+size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
+                                          bool use32BitIndices);
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS
