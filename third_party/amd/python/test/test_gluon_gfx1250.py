@@ -3358,10 +3358,10 @@ def test_runtime_tdm_scatter_partial_column_block(N, num_warps, index_dtype):
 
 @gluon.jit
 def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, stride_n, BLOCK_M: ttgl.constexpr,
-                      BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr):
+                      BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr,
+                      SHARED_LAYOUT: ttgl.constexpr):
     """Kernel that uses TDM gather to read non-contiguous rows."""
     num_warps: ttgl.constexpr = ttgl.num_warps()
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # For gather indices, use a layout where all indices are available per thread.
     # NUM_INDICES must be a power of 2.
@@ -3394,12 +3394,19 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
 @pytest.mark.parametrize("dtype", ["fp16", "bf16", "fp8e5", "fp8e4nv"])
 @pytest.mark.parametrize("index_dtype", ["i16", "i32"])
-def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype):
+@pytest.mark.parametrize("shared_layout", ["padded", "swizzled"])
+def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype, shared_layout):
     """Test that TDM gather compiles correctly."""
     # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
     max_indices_per_instr = 16 if index_dtype == "i16" else 8
     if NUM_INDICES > max_indices_per_instr:
         pytest.skip(f"NUM_INDICES={NUM_INDICES} exceeds max {max_indices_per_instr} for {index_dtype} indices")
+
+    if shared_layout == "padded":
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N],
+                                                                                  [1, 0])
+    else:
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     dtype_str = dtype
     signature = {
@@ -3414,12 +3421,14 @@ def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype):
         "BLOCK_N": "constexpr",
         "NUM_INDICES": "constexpr",
         "SRC_COL_OFFSET": "constexpr",
+        "SHARED_LAYOUT": "constexpr",
     }
     constexprs = {
         "BLOCK_M": BLOCK_M,
         "BLOCK_N": BLOCK_N,
         "NUM_INDICES": NUM_INDICES,
         "SRC_COL_OFFSET": 0,
+        "SHARED_LAYOUT": SHARED_LAYOUT,
     }
 
     k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_kernel, signature, constexprs),
@@ -3442,9 +3451,16 @@ def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype):
     torch.float8_e4m3fn,
 ])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
-def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype):
+@pytest.mark.parametrize("shared_layout", ["padded", "swizzled"])
+def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype, shared_layout):
     """Test TDM gather correctness at runtime."""
     torch.manual_seed(42)
+
+    if shared_layout == "padded":
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N],
+                                                                                  [1, 0])
+    else:
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
     max_indices_per_instr = 16 if index_dtype == torch.int16 else 8
@@ -3465,7 +3481,7 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
 
     h = tdm_gather_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
                                  stride_n=inp_d.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=NUM_INDICES,
-                                 SRC_COL_OFFSET=src_col_offset)
+                                 SRC_COL_OFFSET=src_col_offset, SHARED_LAYOUT=SHARED_LAYOUT)
 
     amdgcn = h.asm["amdgcn"]
     actual_count = len(re.findall(r"tensor_load_to_lds", amdgcn))
@@ -3487,7 +3503,8 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("index_dtype", ["i16", "i32"])
-def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype):
+@pytest.mark.parametrize("shared_layout", ["padded", "swizzled"])
+def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype, shared_layout):
     """Test that TDM gather emits the correct number of instructions for large BLOCK_M."""
     # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
     max_per_instr = 16 if index_dtype == "i16" else 8
@@ -3495,6 +3512,12 @@ def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype)
         pytest.skip("This test is for cases requiring multiple TDM instructions")
     dtype = "fp32"
     dtype_str = str(dtype).split('.')[-1]
+
+    if shared_layout == "padded":
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N],
+                                                                                  [1, 0])
+    else:
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # For multiple instructions test, use BLOCK_M as NUM_INDICES
     signature = {
@@ -3509,12 +3532,14 @@ def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype)
         "BLOCK_N": "constexpr",
         "NUM_INDICES": "constexpr",
         "SRC_COL_OFFSET": "constexpr",
+        "SHARED_LAYOUT": "constexpr",
     }
     constexprs = {
         "BLOCK_M": BLOCK_M,
         "BLOCK_N": BLOCK_N,
         "NUM_INDICES": BLOCK_M,
         "SRC_COL_OFFSET": 0,
+        "SHARED_LAYOUT": SHARED_LAYOUT,
     }
 
     k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_kernel, signature, constexprs),
@@ -3540,9 +3565,16 @@ def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype)
     torch.float8_e4m3fn,
 ])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
-def test_runtime_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype):
+@pytest.mark.parametrize("shared_layout", ["padded", "swizzled"])
+def test_runtime_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype, shared_layout):
     """Test TDM gather with more rows than can fit in a single instruction."""
     torch.manual_seed(42)
+
+    if shared_layout == "padded":
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N],
+                                                                                  [1, 0])
+    else:
+        SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
     max_per_instr = 16 if index_dtype == torch.int16 else 8
@@ -3564,7 +3596,8 @@ def test_runtime_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, src_col_offs
     indices_d = src_row_indices.cuda()
 
     tdm_gather_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=N_inp, stride_n=1,
-                             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=BLOCK_M, SRC_COL_OFFSET=src_col_offset)
+                             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=BLOCK_M, SRC_COL_OFFSET=src_col_offset,
+                             SHARED_LAYOUT=SHARED_LAYOUT)
 
     out_result = out_d.cpu()
 
