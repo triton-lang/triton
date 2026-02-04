@@ -1154,6 +1154,69 @@ bool GatherLoweringHelper::isWarpLocal() {
          idxLayout.sublayout(kLane, otherDims);
 }
 
+ScatterLoweringHelper::ScatterLoweringHelper(triton::ScatterOp scatterOp)
+    : scatterOp(scatterOp) {}
+
+unsigned ScatterLoweringHelper::getScratchSizeInBytes() {
+  // Otherwise, scattering will write into a temporary output tensor in shared
+  // memory before materializing the final output registers.
+  RankedTensorType dstType = scatterOp.getDst().getType();
+  unsigned elemBytes = ceil<unsigned>(dstType.getElementTypeBitWidth(), 8);
+  unsigned dstBytes = product(dstType.getShape()) * elemBytes;
+  bool hasCombine =
+      !scatterOp.getCombineOp().empty() || scatterOp.getReduceKindAttr();
+  if (hasCombine) {
+    // Extra i32 per element for CAS-based locks/flags.
+    dstBytes += product(dstType.getShape()) * sizeof(int32_t);
+  }
+  return dstBytes;
+}
+
+bool ScatterLoweringHelper::isWarpLocal() {
+  // The scatter is warp-local if all source/index writes for any destination
+  // column can be serviced within a single warp.
+  RankedTensorType dstType = scatterOp.getDst().getType();
+  RankedTensorType srcType = scatterOp.getSrc().getType();
+  RankedTensorType idxType = scatterOp.getIndices().getType();
+  LinearLayout dstLayout = toLinearLayout(dstType);
+  LinearLayout srcLayout = toLinearLayout(srcType);
+  LinearLayout idxLayout = toLinearLayout(idxType);
+
+  Builder b(scatterOp.getContext());
+  StringAttr kBlock = b.getStringAttr("block");
+  StringAttr kWarp = b.getStringAttr("warp");
+  StringAttr kLane = b.getStringAttr("lane");
+  StringAttr kScatterDim =
+      b.getStringAttr("dim" + std::to_string(scatterOp.getAxis()));
+
+  // The scatter dimension must be invariant with respect to warp/block in all
+  // participating tensors.
+  if (!dstLayout.sublayoutIsZero({kBlock, kWarp}, kScatterDim) ||
+      !srcLayout.sublayoutIsZero({kBlock, kWarp}, kScatterDim) ||
+      !idxLayout.sublayoutIsZero({kBlock, kWarp}, kScatterDim))
+    return false;
+
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = dstType.getRank(); dim < rank; ++dim) {
+    if (dim != scatterOp.getAxis()) {
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+    }
+  }
+
+  // Source/index and destination columns must line up identically across warps.
+  if (dstLayout.sublayout({kBlock, kWarp}, otherDims) !=
+          srcLayout.sublayout({kBlock, kWarp}, otherDims) ||
+      dstLayout.sublayout({kBlock, kWarp}, otherDims) !=
+          idxLayout.sublayout({kBlock, kWarp}, otherDims))
+    return false;
+
+  // Require lane ownership of columns to match for simpler codegen.
+  return dstLayout.sublayout(kLane, otherDims) ==
+             srcLayout.sublayout(kLane, otherDims) &&
+         dstLayout.sublayout(kLane, otherDims) ==
+             idxLayout.sublayout(kLane, otherDims);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;

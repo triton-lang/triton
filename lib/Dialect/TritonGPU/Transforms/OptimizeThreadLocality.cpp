@@ -222,6 +222,95 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   return success();
 }
 
+// This function considers a scatter op in isolation and attempts to determine
+// whether an optimized layout can be applied to the destination/source/index
+// tensors.
+static LogicalResult setOptimizedScatterLayout(ScatterOp op, RewriterBase &b) {
+  RankedTensorType dstType = op.getDst().getType();
+  RankedTensorType srcType = op.getSrc().getType();
+  RankedTensorType idxType = op.getIndices().getType();
+
+  unsigned numThreadsPerWarp = lookupThreadsPerWarp(b);
+  unsigned numWarps = lookupNumWarps(op);
+
+  unsigned axis = op.getAxis();
+  unsigned rank = dstType.getRank();
+  if (rank == 1)
+    return failure();
+
+  SmallVector<unsigned> threadsPerWarp(rank);
+  SmallVector<unsigned> warpsPerCTA(rank);
+  SmallVector<unsigned> order;
+  order.push_back(axis);
+
+  unsigned maxThreadsInAxis = std::min<unsigned>(
+      std::min<unsigned>(dstType.getDimSize(axis), srcType.getDimSize(axis)),
+      numThreadsPerWarp);
+  threadsPerWarp[axis] = maxThreadsInAxis;
+
+  unsigned threadsToAlloc = numThreadsPerWarp / maxThreadsInAxis;
+  for (unsigned dim : getThreadOrder(dstType)) {
+    if (dim == axis)
+      continue;
+    order.push_back(dim);
+    unsigned nextThreadAlloc =
+        std::min<unsigned>(dstType.getDimSize(dim), threadsToAlloc);
+    threadsPerWarp[dim] = nextThreadAlloc;
+    threadsToAlloc /= nextThreadAlloc;
+  }
+  assert(llvm::none_of(threadsPerWarp, [](unsigned c) { return c == 0; }));
+
+  warpsPerCTA[axis] = 1;
+  unsigned warpsToAlloc = numWarps;
+  for (unsigned dim : getWarpOrder(dstType)) {
+    if (dim == axis)
+      continue;
+    unsigned warpsCanFit = dstType.getDimSize(dim) / threadsPerWarp[dim];
+    assert(warpsCanFit != 0);
+    unsigned nextWarpAlloc = std::min<unsigned>(warpsCanFit, warpsToAlloc);
+    warpsPerCTA[dim] = nextWarpAlloc;
+    warpsToAlloc /= nextWarpAlloc;
+  }
+  assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
+
+  SmallVector<unsigned> sizePerThread(rank, 1);
+  sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
+
+  threadsPerWarp[axis] *= threadsToAlloc;
+  warpsPerCTA[axis] *= warpsToAlloc;
+
+  assert(product(threadsPerWarp) == numThreadsPerWarp);
+  assert(product(warpsPerCTA) == numWarps);
+
+  MLIRContext *ctx = dstType.getContext();
+  auto baseLayout = cast<LayoutEncodingTrait>(dstType.getEncoding());
+  auto cgaLayout = getCGALayout(baseLayout);
+  auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
+                                            warpsPerCTA, order, cgaLayout);
+
+  auto cvtDst = ConvertLayoutOp::create(
+      b, op.getLoc(), dstType.cloneWithEncoding(newLayout), op.getDst());
+  auto cvtSrc = ConvertLayoutOp::create(
+      b, op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
+  auto cvtIdx = ConvertLayoutOp::create(
+      b, op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
+
+  b.setInsertionPointAfter(op);
+  auto cvtOut =
+      ConvertLayoutOp::create(b, op.getLoc(), op.getType(), op.getResult());
+  b.replaceAllUsesExcept(op.getResult(), cvtOut, cvtOut);
+
+  b.modifyOpInPlace(op, [&] {
+    op.getDstMutable().set(cvtDst);
+    op.getSrcMutable().set(cvtSrc);
+    op.getIndicesMutable().set(cvtIdx);
+    op.getResult().setType(op.getType().cloneWithEncoding(newLayout));
+    op.setEfficientLayout(true);
+  });
+
+  return success();
+}
+
 namespace {
 struct OptimizeGatherLayoutPattern : public mlir::OpRewritePattern<GatherOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -233,6 +322,17 @@ struct OptimizeGatherLayoutPattern : public mlir::OpRewritePattern<GatherOp> {
     return setOptimizedGatherLayout(op, rewriter);
   }
 };
+
+struct OptimizeScatterLayoutPattern : public mlir::OpRewritePattern<ScatterOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ScatterOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getEfficientLayout())
+      return failure();
+    return setOptimizedScatterLayout(op, rewriter);
+  }
+};
 } // namespace
 
 namespace {
@@ -242,10 +342,11 @@ class TritonGPUOptimizeThreadLocalityPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    // First try to optimize the layout of views and gathers.
+    // First try to optimize the layout of views, gathers, and scatters.
     mlir::RewritePatternSet layoutPatterns(&getContext());
     layoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
     layoutPatterns.add<OptimizeGatherLayoutPattern>(&getContext());
+    layoutPatterns.add<OptimizeScatterLayoutPattern>(&getContext());
     if (mlir::applyPatternsGreedily(mod, std::move(layoutPatterns)).failed()) {
       signalPassFailure();
     }

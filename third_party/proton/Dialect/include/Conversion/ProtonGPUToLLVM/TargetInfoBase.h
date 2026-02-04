@@ -17,6 +17,11 @@ public:
     return helper;
   }
 
+  Value matchAny(RewriterBase &rewriter, Location loc, Type maskType,
+                 Value value, Value activeMask) const {
+    return helper.matchAny(rewriter, loc, maskType, value, activeMask);
+  }
+
   // Return the local cycle counter value.
   virtual Value clock(ConversionPatternRewriter &rewriter, Location loc,
                       bool isClock64) const = 0;

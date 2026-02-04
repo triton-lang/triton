@@ -152,6 +152,7 @@ Scan/Sort Ops
     sort
     topk
     gather
+    scatter
 
 Atomic Ops
 ----------

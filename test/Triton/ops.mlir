@@ -265,6 +265,13 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x16xi32>) -> tens
   tt.return %0 : tensor<512x16xf32>
 }
 
+// CHECK-LABEL: @scatter_op
+tt.func @scatter_op(%arg0: tensor<128x16xf32>, %arg1: tensor<64x16xi32>, %arg2: tensor<64x16xf32>) -> tensor<128x16xf32> {
+  // CHECK-NEXT: %0 = tt.scatter %arg0[%arg1] = %arg2 {axis = 0 : i32} : (tensor<128x16xf32>, tensor<64x16xi32>, tensor<64x16xf32>) -> tensor<128x16xf32>
+  %0 = tt.scatter %arg0[%arg1] = %arg2 {axis = 0 : i32} : (tensor<128x16xf32>, tensor<64x16xi32>, tensor<64x16xf32>) -> tensor<128x16xf32>
+  tt.return %0 : tensor<128x16xf32>
+}
+
 // CHECK-LABEL: @tma_gather
 tt.func @tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
   // CHECK-NEXT: %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x128xbf16>

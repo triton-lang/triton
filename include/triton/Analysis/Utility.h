@@ -174,6 +174,21 @@ private:
   RankedTensorType dstTy;
 };
 
+// Helper class for lowering `tt.scatter` operations. This class shares lowering
+// logic between shared memory allocation and LLVM codegen.
+class ScatterLoweringHelper {
+public:
+  ScatterLoweringHelper(triton::ScatterOp scatterOp);
+
+  // Get the shared memory scratch size required by this op.
+  unsigned getScratchSizeInBytes();
+  // Determine if the scatter can be performed completely within a warp.
+  bool isWarpLocal();
+
+private:
+  triton::ScatterOp scatterOp;
+};
+
 // This struct represents the factorization of a warp-local layout conversion
 // into three components: a register-only permutation, a lane-only permutation,
 // and a set of swaps between lane and register basis vectors. Algebraically, it

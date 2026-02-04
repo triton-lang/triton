@@ -6458,6 +6458,308 @@ def test_gather(src_shape, indices_shape, axis, device):
 
 
 @triton.jit
+def scatter_test_kernel(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                        dst_dim1: tl.constexpr, dst_stride0: tl.constexpr, dst_stride1: tl.constexpr,
+                        idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr,
+                        idx_stride1: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                        src_stride0: tl.constexpr, src_stride1: tl.constexpr, out_dim0: tl.constexpr,
+                        out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr):
+    dst_offs = (tl.arange(0, dst_dim0)[:, None] * dst_stride0 + tl.arange(0, dst_dim1)[None, :] * dst_stride1)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
+@triton.jit
+def scatter_test_kernel_1d(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                           idx_dim0: tl.constexpr, src_dim0: tl.constexpr, out_dim0: tl.constexpr):
+    dst_offs = tl.arange(0, dst_dim0)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = tl.arange(0, idx_dim0)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = tl.arange(0, src_dim0)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis)
+
+    out_offs = tl.arange(0, out_dim0)
+    tl.store(out_ptr + out_offs, out)
+
+
+@triton.jit
+def scatter_reduce_add_combine(a, b):
+    return a + b
+
+
+@triton.jit
+def scatter_reduce_max_combine(a, b):
+    return tl.maximum(a, b)
+
+
+@triton.jit
+def scatter_reduce_add_kernel(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                              dst_dim1: tl.constexpr, dst_stride0: tl.constexpr, dst_stride1: tl.constexpr,
+                              idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr,
+                              idx_stride1: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                              src_stride0: tl.constexpr, src_stride1: tl.constexpr, out_dim0: tl.constexpr,
+                              out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr,
+                              INCLUDE_SELF: tl.constexpr):
+    dst_offs = (tl.arange(0, dst_dim0)[:, None] * dst_stride0 + tl.arange(0, dst_dim1)[None, :] * dst_stride1)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis, reduce=scatter_reduce_add_combine, include_self=INCLUDE_SELF)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
+@triton.jit
+def scatter_reduce_max_kernel(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                              dst_dim1: tl.constexpr, dst_stride0: tl.constexpr, dst_stride1: tl.constexpr,
+                              idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr,
+                              idx_stride1: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                              src_stride0: tl.constexpr, src_stride1: tl.constexpr, out_dim0: tl.constexpr,
+                              out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr,
+                              INCLUDE_SELF: tl.constexpr):
+    dst_offs = (tl.arange(0, dst_dim0)[:, None] * dst_stride0 + tl.arange(0, dst_dim1)[None, :] * dst_stride1)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis, reduce=scatter_reduce_max_combine, include_self=INCLUDE_SELF)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
+@triton.jit
+def scatter_reduce_add_named_kernel(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                                    dst_dim1: tl.constexpr, dst_stride0: tl.constexpr, dst_stride1: tl.constexpr,
+                                    idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr,
+                                    idx_stride1: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                                    src_stride0: tl.constexpr, src_stride1: tl.constexpr, out_dim0: tl.constexpr,
+                                    out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr,
+                                    INCLUDE_SELF: tl.constexpr):
+    dst_offs = (tl.arange(0, dst_dim0)[:, None] * dst_stride0 + tl.arange(0, dst_dim1)[None, :] * dst_stride1)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis, reduce="add", include_self=INCLUDE_SELF)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
+@triton.jit
+def scatter_reduce_max_named_kernel(dst_ptr, idx_ptr, src_ptr, out_ptr, axis: tl.constexpr, dst_dim0: tl.constexpr,
+                                    dst_dim1: tl.constexpr, dst_stride0: tl.constexpr, dst_stride1: tl.constexpr,
+                                    idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr,
+                                    idx_stride1: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                                    src_stride0: tl.constexpr, src_stride1: tl.constexpr, out_dim0: tl.constexpr,
+                                    out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr,
+                                    INCLUDE_SELF: tl.constexpr):
+    dst_offs = (tl.arange(0, dst_dim0)[:, None] * dst_stride0 + tl.arange(0, dst_dim1)[None, :] * dst_stride1)
+    dst = tl.load(dst_ptr + dst_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    out = tl.scatter(dst, idx, src, axis, reduce="max", include_self=INCLUDE_SELF)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
+def _make_unique_scatter_indices(dst_shape, src_shape, axis, device):
+    if len(dst_shape) == 1:
+        return torch.randperm(dst_shape[0], device=device)[:src_shape[0]]
+
+    if axis < 0:
+        axis += len(dst_shape)
+
+    if axis == 0:
+        rand = torch.rand((dst_shape[0], src_shape[1]), device=device)
+        return torch.argsort(rand, dim=0)[:src_shape[0], :]
+
+    assert axis == 1
+    rand = torch.rand((src_shape[0], dst_shape[1]), device=device)
+    return torch.argsort(rand, dim=1)[:, :src_shape[1]]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dst_shape, src_shape, axis", [
+    ([64], [64], 0),
+    ([32], [16], 0),
+    ([32], [16], -1),
+    ([128], [32], 0),
+    ([256], [128], 0),
+    ([16, 16], [8, 16], 0),
+    ([32, 16], [16, 16], 0),
+    ([128, 64], [64, 64], 0),
+    ([32, 16], [32, 8], 1),
+    ([64, 32], [32, 32], 0),
+    ([64, 32], [64, 16], 1),
+    ([128, 64], [128, 32], 1),
+    ([128, 64], [128, 64], -1),
+])
+def test_scatter(dst_shape, src_shape, axis, device):
+
+    def triton_scatter(dst: torch.Tensor, axis: int, indices: torch.Tensor, src: torch.Tensor):
+        output = torch.empty(dst.shape, dtype=dst.dtype, device=dst.device)
+
+        if len(dst_shape) == 1:
+            scatter_test_kernel_1d[(1, )](dst, indices, src, output, axis, dst.shape[0], indices.shape[0], src.shape[0],
+                                          output.shape[0])
+        else:
+            scatter_test_kernel[(1, )](dst, indices, src, output, axis, dst.shape[0], dst.shape[1], dst.stride(0),
+                                       dst.stride(1), indices.shape[0], indices.shape[1], indices.stride(0),
+                                       indices.stride(1), src.shape[0], src.shape[1], src.stride(0), src.stride(1),
+                                       output.shape[0], output.shape[1], output.stride(0), output.stride(1))
+
+        return output
+
+    dst = torch.randn(dst_shape, device=device)
+    src = torch.randn(src_shape, device=device)
+    indices = _make_unique_scatter_indices(dst_shape, src_shape, axis, device)
+    ref = torch.scatter(dst, axis, indices, src)
+    result = triton_scatter(dst, axis, indices, src)
+    torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dst_shape, src_shape, axis", [
+    ([16, 16], [8, 16], 0),
+    ([32, 16], [16, 16], 0),
+    ([32, 16], [32, 8], 1),
+    ([64, 32], [32, 32], 0),
+    ([64, 32], [64, 16], 1),
+])
+def test_scatter_broadcast_index(dst_shape, src_shape, axis, device):
+
+    def triton_scatter(dst: torch.Tensor, axis: int, indices: torch.Tensor, src: torch.Tensor):
+        output = torch.empty(dst.shape, dtype=dst.dtype, device=dst.device)
+
+        if len(dst_shape) == 1:
+            scatter_test_kernel_1d[(1, )](dst, indices, src, output, axis, dst.shape[0], indices.shape[0], src.shape[0],
+                                          output.shape[0])
+        else:
+            scatter_test_kernel[(1, )](dst, indices, src, output, axis, dst.shape[0], dst.shape[1], dst.stride(0),
+                                       dst.stride(1), indices.shape[0], indices.shape[1], indices.stride(0),
+                                       indices.stride(1), src.shape[0], src.shape[1], src.stride(0), src.stride(1),
+                                       output.shape[0], output.shape[1], output.stride(0), output.stride(1))
+
+        return output
+
+    dst = torch.randn(dst_shape, device=device)
+    src = torch.randn(src_shape, device=device)
+
+    if axis < 0:
+        axis += len(dst_shape)
+
+    # Make indices broadcastable by shrinking a non-axis dim to 1.
+    idx_shape = list(src_shape)
+    other_dim = 1 - axis
+    idx_shape[other_dim] = 1
+
+    if axis == 0:
+        rand = torch.rand((dst_shape[0], idx_shape[1]), device=device)
+        indices = torch.argsort(rand, dim=0)[:idx_shape[0], :]
+    else:
+        rand = torch.rand((idx_shape[0], dst_shape[1]), device=device)
+        indices = torch.argsort(rand, dim=1)[:, :idx_shape[1]]
+
+    indices_b = indices.expand(src_shape)
+    ref = torch.scatter(dst, axis, indices_b, src)
+    result = triton_scatter(dst, axis, indices, src)
+    torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dst_shape, src_shape, axis", [
+    ([64, 32], [32, 32], 0),
+    ([64, 32], [64, 16], 1),
+])
+@pytest.mark.parametrize("include_self", [True, False])
+@pytest.mark.parametrize("reduce_kind", ["add", "max"])
+@pytest.mark.parametrize("reduce_mode", ["callable", "named"])
+def test_scatter_reduce(dst_shape, src_shape, axis, include_self, reduce_kind, reduce_mode, device):
+
+    def triton_scatter_reduce(dst: torch.Tensor, axis: int, indices: torch.Tensor, src: torch.Tensor):
+        output = torch.empty(dst.shape, dtype=dst.dtype, device=dst.device)
+
+        if reduce_kind == "add":
+            kernel = scatter_reduce_add_kernel if reduce_mode == "callable" else scatter_reduce_add_named_kernel
+        else:
+            kernel = scatter_reduce_max_kernel if reduce_mode == "callable" else scatter_reduce_max_named_kernel
+
+        kernel[(1, )](
+            dst,
+            indices,
+            src,
+            output,
+            axis,
+            dst.shape[0],
+            dst.shape[1],
+            dst.stride(0),
+            dst.stride(1),
+            indices.shape[0],
+            indices.shape[1],
+            indices.stride(0),
+            indices.stride(1),
+            src.shape[0],
+            src.shape[1],
+            src.stride(0),
+            src.stride(1),
+            output.shape[0],
+            output.shape[1],
+            output.stride(0),
+            output.stride(1),
+            include_self,
+        )
+
+        return output
+
+    dst = torch.randn(dst_shape, device=device)
+    src = torch.randn(src_shape, device=device)
+    indices = _make_unique_scatter_indices(dst_shape, src_shape, axis, device)
+
+    reduce_name = "sum" if reduce_kind == "add" else "amax"
+    ref = torch.scatter_reduce(dst, axis, indices, src, reduce=reduce_name, include_self=include_self)
+
+    result = triton_scatter_reduce(dst, axis, indices, src)
+    torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+
+@triton.jit
 def mul_jit_function(x, y):
     return x * y
 

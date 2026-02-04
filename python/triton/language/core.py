@@ -1212,6 +1212,9 @@ class tensor(base_value):
     def gather(self, indices, axis) -> tensor:
         ...
 
+    def scatter(self, index, src, axis, reduce=None, include_self=True) -> tensor:
+        ...
+
     def histogram(self, num_bins) -> tensor:
         ...
 
@@ -2842,6 +2845,35 @@ def gather(src, index, axis, _semantic=None):
     index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
+
+
+@_tensor_member_fn
+@builtin
+def scatter(dst, index, src, axis, reduce=None, include_self=True, _semantic=None, _generator=None):
+    """Scatter values into a tensor along a given dimension.
+
+    :param dst: the destination tensor
+    :type dst: Tensor
+    :param index: the index tensor
+    :type index: Tensor
+    :param src: the source values tensor
+    :type src: Tensor
+    :param axis: the dimension to scatter along
+    :type axis: int
+    :param reduce: reduction combiner, either a JIT function or a known op name
+        (`"add"`, `"max"`, `"min"`, `"and"`, `"or"`, `"xor"`, `"umax"`, `"umin"`)
+    :type reduce: Callable | str | None
+    :param include_self: if true, include the original dst values in the reduction
+    :type include_self: bool
+
+    """
+    dst = _unwrap_if_constexpr(dst)
+    index = _unwrap_if_constexpr(index)
+    src = _unwrap_if_constexpr(src)
+    axis = _unwrap_if_constexpr(axis)
+    reduce = _unwrap_if_constexpr(reduce)
+    include_self = _unwrap_if_constexpr(include_self)
+    return _semantic.scatter(dst, index, src, axis, reduce, include_self, _generator=_generator)
 
 
 @builtin

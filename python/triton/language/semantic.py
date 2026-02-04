@@ -1766,6 +1766,104 @@ class TritonSemantic(Generic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
+    def _canonicalize_scatter_reduce_kind(self, reduce_kind: str, scalar_ty: tl.dtype) -> str:
+        kind = reduce_kind.lower()
+        if kind == "sum":
+            kind = "add"
+
+        assert kind in {"add", "fadd", "max", "fmax", "min", "fmin", "umax", "umin", "and", "or",
+                        "xor"}, f"unsupported scatter reduction kind '{reduce_kind}'"
+
+        if kind == "add":
+            assert scalar_ty.is_int() or scalar_ty.is_floating(
+            ), "scatter reduce='add' requires integer or floating type"
+            return "fadd" if scalar_ty.is_floating() else "add"
+
+        if kind == "max":
+            assert scalar_ty.is_int() or scalar_ty.is_floating(
+            ), "scatter reduce='max' requires integer or floating type"
+            if scalar_ty.is_floating():
+                return "fmax"
+            return "umax" if scalar_ty.is_int_unsigned() else "max"
+
+        if kind == "min":
+            assert scalar_ty.is_int() or scalar_ty.is_floating(
+            ), "scatter reduce='min' requires integer or floating type"
+            if scalar_ty.is_floating():
+                return "fmin"
+            return "umin" if scalar_ty.is_int_unsigned() else "min"
+
+        if kind in {"fadd", "fmax", "fmin"}:
+            assert scalar_ty.is_floating(), f"scatter reduce='{kind}' requires floating type"
+            return kind
+
+        if kind in {"umax", "umin"}:
+            assert scalar_ty.is_int_unsigned(), f"scatter reduce='{kind}' requires unsigned integer type"
+            return kind
+
+        assert scalar_ty.is_int(), f"scatter reduce='{kind}' requires integer type"
+        return kind
+
+    def scatter(self, dst: TensorTy, index: TensorTy, src: TensorTy, axis: int, reduce=None, include_self: bool = True,
+                _generator=None) -> TensorTy:
+        assert index.dtype.is_int(), "index must be an integer tensor"
+
+        rank = len(dst.type.shape)
+        assert len(index.type.shape) == rank, "destination and index tensors must have the same rank"
+        assert len(src.type.shape) == rank, "destination and source tensors must have the same rank"
+
+        assert -rank <= axis < rank, f"scatter axis {axis} must be < destination rank ({rank})"
+        if axis < 0:
+            axis += rank
+
+        if src.type.shape != index.type.shape:
+            # Allow index to be broadcastable to the source shape (PyTorch-style).
+            index = self.broadcast_impl_shape(index, src.type.shape)
+
+        assert src.type.shape == index.type.shape, "source and index tensors must have the same shape"
+        for d in range(rank):
+            if d == axis:
+                continue
+            assert index.type.shape[d] == dst.type.shape[
+                d], f"index dim {d} must match the corresponding destination dim"
+
+        reduce_kind = None
+        if isinstance(reduce, str):
+            reduce_kind = self._canonicalize_scatter_reduce_kind(reduce, dst.type.scalar)
+            reduce = None
+        elif reduce is not None:
+            assert callable(reduce), "reduce must be a callable or a supported string reduction kind"
+
+        scatter = self.builder.create_scatter(dst.handle, index.handle, src.handle, axis, include_self, reduce_kind)
+
+        if reduce is not None:
+            if not hasattr(self.builder, "create_scatter_ret"):
+                raise NotImplementedError("scatter reduction is not supported in interpreter mode")
+
+            def make_combine_region(scatter_op):
+                param_types = [dst.type.scalar, src.type.scalar]
+                region = scatter_op.get_region(0)
+                builder = self.builder
+                ip = builder.get_insertion_point()
+                try:
+                    to_ir = lambda T: T.to_ir(builder)
+                    block = builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+                    args = [self.tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
+                    results = _generator.call_JitFunction(reduce, args, kwargs={})
+                    if isinstance(results, self.tensor):
+                        handles = [results.handle]
+                    else:
+                        handles = [r.handle for r in results]
+                    assert len(handles) == 1, "scatter reduce must return a single tensor"
+                    builder.create_scatter_ret(*handles)
+                finally:
+                    builder.restore_insertion_point(ip)
+
+            make_combine_region(scatter)
+            assert scatter.verify()
+
+        return self.wrap_tensor(scatter.get_result(0), dst.type.scalar, dst.type.shape)
+
 # ===----------------------------------------------------------------------===
 #                               Map Elementwise
 # ===----------------------------------------------------------------------===
