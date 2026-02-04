@@ -11,6 +11,7 @@ import triton.language as tl
 from triton._internal_testing import is_interpreter
 from triton._filecheck import run_filecheck
 
+
 @triton.jit
 def kernel_single(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
@@ -325,7 +326,9 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK-SAME: %foo.stride.1: i64
         foo
 
-    h = triton.compile(triton.compiler.ASTSource(fn=kernel_tensordesc_param, signature={"foo": "tensordesc<fp16[32,64]>"}, constexprs={}))
+    h = triton.compile(
+        triton.compiler.ASTSource(fn=kernel_tensordesc_param, signature={"foo": "tensordesc<fp16[32,64]>"},
+                                  constexprs={}))
 
     check_template = inspect.getsource(kernel_tensordesc_param.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
@@ -340,6 +343,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
     class Point(NamedTuple):
         x: str
         y: str
+
     foo_tuple = Point("i32", "fp64")
     h = triton.compile(triton.compiler.ASTSource(fn=kernel_tuple_param, signature={"foo": foo_tuple}, constexprs={}))
 
