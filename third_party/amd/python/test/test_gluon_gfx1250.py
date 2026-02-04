@@ -1391,14 +1391,8 @@ def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
-@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
-@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
-@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
-def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
-                                                              order=[ndim - 1 - i for i in range(ndim)])
-
+def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT):
+    """Utility function to run TDM load/store tests with a given shared layout."""
     alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
 
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
@@ -1442,6 +1436,36 @@ def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE)
     actual[idx].zero_()
     expect = expect.new_zeros(BLOCK_SHAPE)
     assert torch.equal(expect, actual)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
+@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
+@pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
+    """Test TDM load/store with swizzled shared layout."""
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 64])
+@pytest.mark.parametrize("dtype_str", ["float16", "int32"])
+def test_tensor_descriptor_load_store_nd_with_padding(dtype_str, ndim, INNER_BLOCK):
+    """Test TDM load/store with padded shared memory layout.
+    TDM store only supports padding when:
+    1. There is a single padding interval
+    2. The padding interval equals the innermost block dimension
+    """
+    # Create padded shared layout where padding interval = innermost block dimension
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    PADDED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[INNER_BLOCK, 8]], BLOCK_SHAPE,
+                                                                              [ndim - 1 - i
+                                                                               for i in range(ndim)]  # standard order
+                                                                              )
+
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, "DEVICE_TDM", PADDED_LAYOUT)
 
 
 def test_tensor_descriptor_load_store_invalid_blocksize():
@@ -3151,8 +3175,13 @@ def test_runtime_tdm_scatter(NUM_INDICES, BLOCK_M, BLOCK_N, dst_col_offset, dtyp
     out_result = out_d.cpu()
 
     # Build expected output: zeros with scattered rows at the right positions
+    # Use uint8 view for indexing since float8 types don't support index operations in the latest stable pytorch yet
     ref_out = torch.zeros_like(out)
-    ref_out[dst_row_indices.long(), dst_col_offset:dst_col_offset + BLOCK_N] = inp[:NUM_INDICES]
+    elem_size = ref_out.element_size()
+    ref_out_bytes = ref_out.view(torch.uint8).reshape(M_out, -1)
+    inp_bytes = inp.view(torch.uint8).reshape(BLOCK_M, -1)
+    ref_out_bytes[dst_row_indices.long(),
+                  dst_col_offset * elem_size:(dst_col_offset + BLOCK_N) * elem_size] = inp_bytes[:NUM_INDICES]
     torch.testing.assert_close(out_result, ref_out)
 
 
@@ -3243,6 +3272,376 @@ def test_runtime_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, dst_col_off
     out_result = out_d.cpu()
 
     # Build expected output: zeros with scattered rows at the right positions
+    # Use uint8 view for indexing since float8 types don't support index operations in the latest stable pytorch yet
     ref_out = torch.zeros_like(out)
-    ref_out[dst_row_indices.long(), dst_col_offset:dst_col_offset + BLOCK_N] = inp
+    elem_size = ref_out.element_size()
+    ref_out_bytes = ref_out.view(torch.uint8).reshape(M_out, -1)
+    inp_bytes = inp.view(torch.uint8).reshape(BLOCK_M, -1)
+    ref_out_bytes[dst_row_indices.long(), dst_col_offset * elem_size:(dst_col_offset + BLOCK_N) * elem_size] = inp_bytes
+    torch.testing.assert_close(out_result, ref_out)
+
+
+@gluon.jit
+def tdm_scatter_multi_col_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M, N, stride_m, BLOCK_M: ttgl.constexpr,
+                                 BLOCK_N: ttgl.constexpr):
+    """TDM scatter kernel that processes multiple column blocks."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    idx_mask = (pid_m * BLOCK_M + idx_offs) < M
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
+
+    col_offset = pid_n * BLOCK_N
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, col_offset, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_partial_column_block(N, num_warps, index_dtype):
+    """Test TDM scatter with partial last column block (N not multiple of BLOCK_N)."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 128
+    BLOCK_N = 128
+    M = 256
+
+    inp = _create_scatter_test_data((M, N), torch.float16)
+    out = torch.zeros((M, N), dtype=torch.float16)
+    dst_row_indices = torch.randperm(M, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    grid_n = triton.cdiv(N, BLOCK_N)
+    grid = (triton.cdiv(M, BLOCK_M) * grid_n, )
+
+    tdm_scatter_multi_col_kernel[grid](inp_d, out_d, indices_d, M=M, N=N, stride_m=N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                       num_warps=num_warps)
+
+    out_result = out_d.cpu()
+
+    # Build reference - scatter each source row to its destination
+    ref_out = torch.zeros_like(out)
+    for src_row in range(M):
+        dst_row = dst_row_indices[src_row].item()
+        if dst_row < M:
+            ref_out[dst_row] = inp[src_row]
+
+    torch.testing.assert_close(out_result, ref_out)
+
+
+# =============================================================================
+# TDM Gather Mode Tests
+# =============================================================================
+
+
+@gluon.jit
+def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, stride_n, BLOCK_M: ttgl.constexpr,
+                      BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr):
+    """Kernel that uses TDM gather to read non-contiguous rows."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # For gather indices, use a layout where all indices are available per thread.
+    # NUM_INDICES must be a power of 2.
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    # Allocate shared memory for the gathered data
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    # Create tensor descriptor for input (source)
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
+
+    # Gather data from non-contiguous rows starting at SRC_COL_OFFSET
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    # Store gathered data to output using TDM
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("BLOCK_M", [16, 32])
+@pytest.mark.parametrize("BLOCK_N", [64, 128])
+@pytest.mark.parametrize("dtype", ["fp16", "bf16", "fp8e5", "fp8e4nv"])
+@pytest.mark.parametrize("index_dtype", ["i16", "i32"])
+def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype):
+    """Test that TDM gather compiles correctly."""
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_indices_per_instr = 16 if index_dtype == "i16" else 8
+    if NUM_INDICES > max_indices_per_instr:
+        pytest.skip(f"NUM_INDICES={NUM_INDICES} exceeds max {max_indices_per_instr} for {index_dtype} indices")
+
+    dtype_str = dtype
+    signature = {
+        "inp_ptr": f"*{dtype_str}",
+        "out_ptr": f"*{dtype_str}",
+        "src_row_indices_ptr": f"*{index_dtype}",
+        "M_inp": "i32",
+        "N_inp": "i32",
+        "stride_m": "i32",
+        "stride_n": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "NUM_INDICES": "constexpr",
+        "SRC_COL_OFFSET": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "NUM_INDICES": NUM_INDICES,
+        "SRC_COL_OFFSET": 0,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    amdgcn = k.asm["amdgcn"]
+    # Verify the gather uses tensor load to lds
+    assert re.search("tensor_load_to_lds", amdgcn), "Expected tensor_load_to_lds instruction for TDM gather"
+    assert re.search("s_wait_tensorcnt 0x0", amdgcn), "Expected s_wait_tensorcnt instruction"
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("src_col_offset", [0, 32])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e5m2,
+    torch.float8_e4m3fn,
+])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype):
+    """Test TDM gather correctness at runtime."""
+    torch.manual_seed(42)
+
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_indices_per_instr = 16 if index_dtype == torch.int16 else 8
+    if NUM_INDICES > max_indices_per_instr:
+        pytest.skip(f"NUM_INDICES={NUM_INDICES} exceeds max {max_indices_per_instr} for {index_dtype} indices")
+
+    M_inp = 2048
+    # Input width needs to accommodate src_col_offset + BLOCK_N
+    N_inp = src_col_offset + BLOCK_N
+    inp = _create_scatter_test_data((M_inp, N_inp), dtype)
+
+    out = torch.zeros((BLOCK_M, BLOCK_N), dtype=dtype)
+    src_row_indices = torch.arange(NUM_INDICES, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    h = tdm_gather_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
+                                 stride_n=inp_d.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=NUM_INDICES,
+                                 SRC_COL_OFFSET=src_col_offset)
+
+    amdgcn = h.asm["amdgcn"]
+    actual_count = len(re.findall(r"tensor_load_to_lds", amdgcn))
+    assert actual_count == 1, \
+        f"Expected 1 tensor_load_to_lds instruction, but found {actual_count}"
+
+    out_result = out_d.cpu()
+
+    # Only compare the gathered rows (first NUM_INDICES rows)
+    # Rows beyond NUM_INDICES contain uninitialized LDS data
+    gathered_out = out_result[:NUM_INDICES]
+    # Use uint8 view for indexing since float8 types don't support index operations in the latest stable pytorch yet
+    elem_size = inp.element_size()
+    inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
+    ref_bytes = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:(src_col_offset + BLOCK_N) * elem_size]
+    torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
+
+
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("index_dtype", ["i16", "i32"])
+def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype):
+    """Test that TDM gather emits the correct number of instructions for large BLOCK_M."""
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_per_instr = 16 if index_dtype == "i16" else 8
+    if BLOCK_M <= max_per_instr:
+        pytest.skip("This test is for cases requiring multiple TDM instructions")
+    dtype = "fp32"
+    dtype_str = str(dtype).split('.')[-1]
+
+    # For multiple instructions test, use BLOCK_M as NUM_INDICES
+    signature = {
+        "inp_ptr": f"*{dtype_str}",
+        "out_ptr": f"*{dtype_str}",
+        "src_row_indices_ptr": f"*{index_dtype}",
+        "M_inp": "i32",
+        "N_inp": "i32",
+        "stride_m": "i32",
+        "stride_n": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "NUM_INDICES": "constexpr",
+        "SRC_COL_OFFSET": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "NUM_INDICES": BLOCK_M,
+        "SRC_COL_OFFSET": 0,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    amdgcn = k.asm["amdgcn"]
+
+    expected_num_instructions = math.ceil(BLOCK_M / max_per_instr)
+    actual_count = len(re.findall(r"tensor_load_to_lds", amdgcn))
+
+    assert actual_count == expected_num_instructions, \
+        f"Expected {expected_num_instructions} tensor_load_to_lds instructions for BLOCK_M={BLOCK_M} " \
+        f"with {index_dtype} indices, but found {actual_count}"
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
+@pytest.mark.parametrize("src_col_offset", [0, 16])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e5m2,
+    torch.float8_e4m3fn,
+])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, src_col_offset, dtype, index_dtype):
+    """Test TDM gather with more rows than can fit in a single instruction."""
+    torch.manual_seed(42)
+
+    # i16 indices: up to 16 per instruction, i32 indices: up to 8 per instruction
+    max_per_instr = 16 if index_dtype == torch.int16 else 8
+    if BLOCK_M <= max_per_instr:
+        pytest.skip("This test is for cases requiring multiple TDM instructions")
+
+    M_inp = 2048  # Large enough to hold all source rows
+    N_inp = src_col_offset + BLOCK_N
+
+    inp = _create_scatter_test_data((M_inp, N_inp), dtype)
+
+    out = torch.zeros((BLOCK_M, BLOCK_N), dtype=dtype)
+
+    # Create randomized non-contiguous src_row_indices
+    src_row_indices = torch.randperm(M_inp, dtype=torch.int32)[:BLOCK_M]
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    tdm_gather_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=N_inp, stride_n=1,
+                             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=BLOCK_M, SRC_COL_OFFSET=src_col_offset)
+
+    out_result = out_d.cpu()
+
+    # Build expected output: gathered rows from input
+    # Use uint8 view for indexing since float8 types don't support index operations in the latest stable pytorch yet
+    elem_size = inp.element_size()
+    inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
+    ref_bytes = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:(src_col_offset + BLOCK_N) * elem_size]
+    torch.testing.assert_close(out_result.view(torch.uint8), ref_bytes)
+
+
+@gluon.jit
+def tdm_gather_multi_col_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M, N, stride_m, BLOCK_M: ttgl.constexpr,
+                                BLOCK_N: ttgl.constexpr):
+    """TDM gather kernel that processes multiple column blocks."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    idx_mask = (pid_m * BLOCK_M + idx_offs) < M
+    src_row_indices = ttgl.load(src_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
+
+    col_offset = pid_n * BLOCK_N
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, col_offset, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_gather_partial_column_block(N, num_warps, index_dtype):
+    """Test TDM gather with partial last column block (N not multiple of BLOCK_N)."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 128
+    BLOCK_N = 128
+    M = 256
+
+    inp = _create_scatter_test_data((M, N), torch.float16)
+    out = torch.zeros((M, N), dtype=torch.float16)
+    src_row_indices = torch.randperm(M, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    grid_n = triton.cdiv(N, BLOCK_N)
+    grid = (triton.cdiv(M, BLOCK_M) * grid_n, )
+
+    tdm_gather_multi_col_kernel[grid](inp_d, out_d, indices_d, M=M, N=N, stride_m=N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                      num_warps=num_warps)
+
+    out_result = out_d.cpu()
+
+    # Build reference - gather each source row to its destination
+    ref_out = torch.zeros_like(out)
+    for dst_row in range(M):
+        src_row = src_row_indices[dst_row].item()
+        if src_row < M:
+            ref_out[dst_row] = inp[src_row]
+
     torch.testing.assert_close(out_result, ref_out)

@@ -29,7 +29,9 @@ void CudaRuntime::allocateHostBuffer(uint8_t **buffer, size_t size,
                                      bool mapped) {
   if (mapped) {
     cuda::memHostAlloc<true>(reinterpret_cast<void **>(buffer), size,
-                             CU_MEMHOSTALLOC_DEVICEMAP);
+                             CU_MEMHOSTALLOC_DEVICEMAP |
+                                 CU_MEMHOSTALLOC_PORTABLE |
+                                 CU_MEMHOSTALLOC_DEVICEMAP);
   } else {
     cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
   }
