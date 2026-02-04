@@ -1333,8 +1333,13 @@ class tuple(base_value):
         return len(self.values)
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
-        for i, v in enumerate(self.values):
-            v._set_name(builder, f"{name}.{i}")
+        fields = self.type.fields
+        if fields is not None:
+            for field, v in zip(fields, self.values):
+                v._set_name(builder, f"{name}.{field}")
+        else:
+            for i, v in enumerate(self.values):
+                v._set_name(builder, f"{name}.{i}")
 
     def _flatten_ir(self, handles: List[ir.value]):
         for v in self.values:
@@ -1393,6 +1398,9 @@ class tensor_descriptor_base(base_value):
 
         self.handle = handle  # IR handle
         self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -1491,7 +1499,6 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        ## FOUND TENSOR DESCRIPTOR TYPE HERE
         super()._flatten_ir_types(builder, out)
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
@@ -1519,14 +1526,15 @@ class tensor_descriptor(tensor_descriptor_base):
         )
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
+        super()._set_name(builder, name)
         self.shape._set_name(builder, name + ".shape")
         self.strides._set_name(builder, name + ".stride")
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
-        handles.append(self.handle)
+        super()._flatten_ir(handles)
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
+
 
 # -----------------------
 # aggregate
