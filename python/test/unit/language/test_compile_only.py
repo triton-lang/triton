@@ -182,3 +182,23 @@ def test_signature_ordering():
     )
     target = triton.runtime.driver.active.get_current_target()
     triton.compile(src=src, target=target)
+
+
+def test_attr_string_keys() -> None:
+    """
+    Checks that ASTSource accepts string keys in attrs
+    and correctly maps them to argument indices.
+    """
+
+    @triton.jit
+    def kernel_add(a, b, c):
+        idx = tl.arange(0, 32)
+        tl.store(c + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    k = triton.compile(
+        triton.compiler.ASTSource(fn=kernel_add, signature={"a": "*fp32", "b": "*fp32", "c": "*fp32"}, constexprs={},
+                                  attrs={"a": [["tt.divisibility", 16], ["foo.attr", 123]], "c": [["foo.attr", 456]]}),
+        target=GPUTarget("cuda", 100, 32))
+    ttir = k.asm["ttir"]
+    assert "%arg0: !tt.ptr<f32> {foo.attr = 123 : i32, tt.divisibility = 16 : i32}" in str(ttir)
+    assert "%arg2: !tt.ptr<f32> {foo.attr = 456 : i32}" in str(ttir)
