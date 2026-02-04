@@ -169,7 +169,7 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     assert(wmmaVer == 3 && "unexpected wmma version");
     // arguments for v3:
-    // int:          %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
+    // int:          %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse, clamp
     // f32/f16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
     // f8/bf8:       %A, %B, %C_mod, %C, %A_reuse, %B_reuse
     if (aElType.isInteger())
@@ -190,6 +190,10 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 
     operands.push_back(b.i1_val(0));
     operands.push_back(b.i1_val(0));
+    // Add clamp for int types
+    if (aElType.isInteger()) {
+      operands.push_back(b.i1_val(0));
+    }
   }
 
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
@@ -342,8 +346,11 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto quot = divideLeft(wmmaLL, tile).value();
-  auto repLayout = zerosLike(tile) * quot;
+  auto maybeQuot = divideLeft(wmmaLL, tile);
+  if (!maybeQuot.has_value()) {
+    return op.emitError("failed to divide wmma layout by tile layout");
+  }
+  auto repLayout = zerosLike(tile) * maybeQuot.value();
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kDim), 1u);
 
   Value loadedA = adaptor.getA();
@@ -530,8 +537,11 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto quot = divideLeft(wmmaLL, tile).value();
-  auto repLayout = zerosLike(tile) * quot;
+  auto maybeQuot = divideLeft(wmmaLL, tile);
+  if (!maybeQuot.has_value()) {
+    return op.emitError("failed to divide wmma layout by tile layout");
+  }
+  auto repLayout = zerosLike(tile) * maybeQuot.value();
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();

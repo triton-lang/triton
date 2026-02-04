@@ -33,6 +33,8 @@ struct GraphState {
     bool isMissingName{};
     // Whether the node is a metric kernel node
     bool isMetricNode{};
+    // Number of uint64 value words written to MetricBuffer by this node.
+    size_t metricNumWords{};
   };
 
   // Capture tag to identify captured call paths
@@ -54,11 +56,14 @@ struct GraphState {
   uint32_t graphId{};
   // Total number of GPU kernels launched by this graph
   size_t numNodes{1};
+  // Total number of uint64 words written by all metric nodes in this graph.
+  size_t metricNumWords{};
 };
 
 struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
+    size_t numWords;
     std::map<Data *, std::vector<size_t>> dataToEntryIds;
   };
 
@@ -67,6 +72,8 @@ struct PendingGraphQueue {
   size_t startBufferOffset{};
   // Total number of metric nodes in the pending graphs
   size_t numNodes{};
+  // Total number of uint64 words written by all nodes in this queue
+  size_t numWords{};
   // Device where the pending graphs are recorded
   void *device{};
   // Phase
@@ -76,10 +83,12 @@ struct PendingGraphQueue {
                              void *device)
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
-  void push(size_t numNodes,
+  void push(size_t numNodes, size_t numWords,
             const std::map<Data *, std::vector<size_t>> &dataToEntryIds) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, dataToEntryIds});
+    pendingGraphs.emplace_back(
+        PendingGraph{numNodes, numWords, dataToEntryIds});
     this->numNodes += numNodes;
+    this->numWords += numWords;
   }
 };
 
@@ -90,7 +99,7 @@ public:
 
   void push(size_t phase,
             const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
-            size_t numNodes);
+            size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
@@ -99,7 +108,7 @@ public:
   bool flushAll();
 
   // Check if we need to flush all before pushing new pending graph
-  bool flushIfNeeded(size_t numNodes);
+  bool flushIfNeeded(size_t numWords);
 
 private:
   struct Slot {

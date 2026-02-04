@@ -61,6 +61,7 @@ bool isCDNA(ISAFamily isaFamily) {
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
     return true;
   default:
     break;

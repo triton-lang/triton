@@ -37,11 +37,13 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
 
 def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert Builtin Func to LLVM";
-    let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true)";
+    let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass(\"\", /*ftz=*/true)";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
     let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"",
+               "gfx target device architecture, e.g., gfx942">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
     ];
@@ -78,12 +80,17 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
 
 def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
     let summary = "Emit conditional barrier and inlines scf.execute_region for warp-pipeline";
-    let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass()";
+    let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass(\"\")";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect",
                              "mlir::gpu::GPUDialect",
                              "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+    let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"",
+               "gfx target device architecture, e.g., gfx942">,
+    ];
 }
 
 def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {

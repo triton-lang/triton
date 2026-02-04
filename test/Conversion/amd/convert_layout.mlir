@@ -28,3 +28,77 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// 4 way test covers case where every output register is combined from parts of 4 different input registers.
+#blocked4x4 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear4x4 = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#blocked8x8 = #ttg.blocked<{sizePerThread = [8, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear8x8 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]], lane = [[0, 8], [0, 16], [0, 32], [8, 0], [16, 0], [32, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_4_way_v_perm_4x4
+  tt.func @convert_layout_4_way_v_perm_4x4(%arg0: tensor<32x32xi8, #blocked4x4>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear4x4>) {
+    // CHECK-COUNT-8: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #blocked4x4> -> tensor<32x32xi8, #linear4x4>
+    tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear4x4>
+    tt.return
+  }
+  // CHECK-LABEL: convert_layout_4_way_v_perm_8x8
+  tt.func @convert_layout_4_way_v_perm_8x8(%arg0: tensor<64x64xi8, #blocked8x8>, %arg1: tensor<64x64x!tt.ptr<i8>, #linear8x8>) {
+    // CHECK-COUNT-32: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<64x64xi8, #blocked8x8> -> tensor<64x64xi8, #linear8x8>
+    tt.store %arg1, %0 : tensor<64x64x!tt.ptr<i8>, #linear8x8>
+    tt.return
+  }
+}
+
+// -----
+
+// 2 way test covers case where each output register is combined from only 2 input registers,
+// so it requires 1 v_perm instruction per one output register
+#blocked = #ttg.blocked<{sizePerThread = [8, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]], lane = [[0, 8], [0, 16], [0, 32], [8, 0], [16, 0], [32, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_2_way_v_perm_8x8
+  tt.func @convert_layout_2_way_v_perm_8x8(%arg0: tensor<64x64xi8, #blocked>, %arg1: tensor<64x64x!tt.ptr<i8>, #linear>) {
+    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<64x64xi8, #blocked> -> tensor<64x64xi8, #linear>
+    tt.store %arg1, %0 : tensor<64x64x!tt.ptr<i8>, #linear>
+    tt.return
+  }
+}
+
+// -----
+
+// 1 way test covers case where each output register depends from one input register, just reordering bytes.
+#blocked = #ttg.blocked<{sizePerThread = [8, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 2], [0, 1], [0, 4], [1, 0], [2, 0], [4, 0]], lane = [[0, 8], [0, 16], [0, 32], [8, 0], [16, 0], [32, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_1_way_v_perm_8x8
+  tt.func @convert_layout_1_way_v_perm_8x8(%arg0: tensor<64x64xi8, #blocked>, %arg1: tensor<64x64x!tt.ptr<i8>, #linear>) {
+    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<64x64xi8, #blocked> -> tensor<64x64xi8, #linear>
+    tt.store %arg1, %0 : tensor<64x64x!tt.ptr<i8>, #linear>
+    tt.return
+  }
+}
+
+// -----
+
+// Case of in-thread convert with a small tensor with only 2 values per thread
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: no_op_small_convert_layout
+  tt.func @no_op_small_convert_layout(%arg0: tensor<16x8xi8, #blocked>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear>) {
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #blocked> -> tensor<16x8xi8, #linear>
+    tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear>
+    tt.return
+  }
+}

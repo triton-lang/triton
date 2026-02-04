@@ -485,9 +485,9 @@ void init_gluon_ir(py::module &&m) {
              auto rank = shape.size();
              auto kOffset = mlir::StringAttr::get(ctx, "offset");
              auto kBlock = mlir::StringAttr::get(ctx, "block");
-             auto ll = tt::LinearLayout(
-                 {{kOffset, offsetBases}, {kBlock, blockBases}},
-                 tt::standardOutDimNames(ctx, rank));
+             auto outDims = tt::standardOutDimNames(ctx, rank);
+             auto ll = tt::LinearLayout({{kOffset, offsetBases}}, outDims) *
+                       tt::LinearLayout({{kBlock, blockBases}}, outDims);
              return ttg::PaddedSharedEncodingAttr::get(ctx, intervals, paddings,
                                                        std::move(ll));
            })
@@ -981,6 +981,12 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices,
                                                   dstColOffset, src, barrier);
            })
+      .def("create_async_tdm_gather",
+           [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
+              Value srcColOffset, Value dst, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices,
+                                                 srcColOffset, dst, barrier);
+           })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value pred, bool speculative, bool returnOffsets) -> Value {
@@ -1019,11 +1025,16 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::ClusterBarrierWaitOp>();
            })
       .def("create_warp_pipeline_border",
-           [](GluonOpBuilder &self, const std::string &marker) {
+           [](GluonOpBuilder &self, const std::string &marker, int priority) {
              auto border = self.create<ROCDL::SchedBarrier>(0);
              auto ctx = self.getContext();
              border->setAttr("triton.warp_pipeline.border",
                              StringAttr::get(ctx, marker));
+             if (priority > -1) {
+               auto i32Ty = IntegerType::get(ctx, 32);
+               border->setAttr("triton.warp_pipeline.priority",
+                               IntegerAttr::get(i32Ty, priority));
+             }
            });
 
   m.def(

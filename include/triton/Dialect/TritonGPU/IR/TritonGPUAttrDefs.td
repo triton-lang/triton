@@ -1258,6 +1258,9 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
         CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned kWidth,
         unsigned elemBitWidth, bool needTrans) const;
+
+    // Returns true if the two WMMA layouts are equal, ignoring the CGA layout.
+    bool isEqualIgnoringCGALayout(AMDWmmaEncodingAttr other) const;
   }];
 }
 

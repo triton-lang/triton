@@ -146,6 +146,7 @@ def expand_signature(signature, tensordesc_meta):
                 for _ in range(2 * ndim):
                     output.append("i64")
                 output.append("i1")
+                output.append("i1")
             else:
                 output.append("nvTmaDesc")
 
@@ -203,6 +204,7 @@ TMA_DTYPE_DEVICE_TO_HOST = dict((i, i) for i in range(16))
 TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
+TMA_TF32 = 11
 
 
 def make_tensordesc_arg(arg, metadata):
@@ -213,7 +215,15 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
+        return [
+            arg.base,
+            *arg.shape,
+            *arg.strides,
+            arg.padding == "nan",
+            arg.round_f32_to_tf32,
+            *arg.shape,
+            *arg.strides,
+        ]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -231,6 +241,9 @@ def make_tensordesc_arg(arg, metadata):
         expanded_shape[-1] *= 2
     else:
         expanded_shape = shape
+
+    if arg.round_f32_to_tf32:
+        elem_type = TMA_TF32
 
     cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
         arg.base.data_ptr(),

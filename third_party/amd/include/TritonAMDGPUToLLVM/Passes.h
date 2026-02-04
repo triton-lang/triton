@@ -25,7 +25,8 @@ namespace mlir::triton {
 
 namespace mlir::triton::AMD {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertWarpPipelinePass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertWarpPipelinePass(StringRef targetArch);
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPUConvertWarpSpecializeToLLVMPass(StringRef arch);
 void runScalarizePackedFOpsPass(llvm::Function &F);
@@ -37,7 +38,7 @@ namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz);
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertBuiltinFuncToLLVMPass(bool ftz);
+createConvertBuiltinFuncToLLVMPass(StringRef targetArch, bool ftz);
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPUInsertInstructionSchedHintsPass(StringRef variant);
 std::unique_ptr<OperationPass<ModuleOp>>

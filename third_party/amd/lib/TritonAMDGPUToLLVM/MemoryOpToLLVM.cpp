@@ -140,21 +140,17 @@ private:
     // memory. We require N number of lanes to be contiguous since they read
     // consecutive 64 bits loaded from the same lanes.
     tile = LinearLayout::identity1D(ldsParams.tileSize, kLane, kOffset);
-
     const auto isaFamily = targetInfo.getISAFamily();
-    // B8 types on gfx1250 require a different tile with double the contiguity
-    bool doubleB8Contiguity =
-        isaFamily == AMD::ISAFamily::GFX1250 && bitWidth == 8;
     const unsigned missingLanes =
         targetInfo.getWarpSize() / tile.getInDimSize(kLane);
     unsigned otherLanes = 1;
     if (isaFamily == AMD::ISAFamily::CDNA4) {
       otherLanes = (bitWidth == 8) ? 2 : 4;
-    } else if (doubleB8Contiguity) {
+    } else if (ldsParams.needsDoubleB8Contiguity) {
       otherLanes = 2;
     }
 
-    if (doubleB8Contiguity) {
+    if (ldsParams.needsDoubleB8Contiguity) {
       fullTile =
           tile * LinearLayout::identity1D(ldsParams.tileSize / 2, kReg, kAddr) *
           LinearLayout::identity1D(otherLanes, kLane, kAddr) *
@@ -457,7 +453,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isCDNA(targetInfo.getISAFamily()))
+    if (!isCDNA(targetInfo.getISAFamily()) ||
+        targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.

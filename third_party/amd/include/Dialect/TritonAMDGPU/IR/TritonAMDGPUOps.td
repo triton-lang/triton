@@ -645,7 +645,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
-    RankedTensorOf<[BF16, I8]>:$scale);
+    RankedTensorOf<[AnyTypeOf<[BF16, I8]>]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
   let assemblyFormat = [{
@@ -861,10 +861,51 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Optional<TTG_MemDescType>:$barrier
   );
+  let results = (outs TTG_AsyncToken:$retToken);
 
   let assemblyFormat = [{
     $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMGatherOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather"> {
+  let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
+
+  let description = [{
+    This operation gathers data from non-contiguous rows in global memory to local
+    memory using TDM gather mode.
+    Unlike the regular async_tdm_copy_global_to_local which reads from contiguous memory,
+    this operation uses src_row_indices to specify which rows in global memory to read from.
+
+    The descriptor must be 2D. The src_row_indices specify which rows in global memory
+    to read from. The element type of src_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The src_col_offset specifies the starting column in the source tensor for
+    all gathered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$src_row_indices,
+    I32:$src_col_offset,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Optional<TTG_MemDescType>:$barrier
+  );
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
   let hasVerifier = 1;
@@ -879,11 +920,33 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
   let description = [{
     This operation waits until there are less than or equal to the given number
-    of outstanding TDM operations, including both loads and stores. This is
-    necessary to ensure that data is available in the LDS before it is used.
+    of outstanding async TDM operations.
+    This is necessary to ensure that data is available in the LDS (load, gather)
+    or HBM (store, scatter) before it is used.
+
+    This operation counts the number of TDM IR operations (AsyncTDMCopyGlobalToLocalOp,
+    AsyncTDMCopyLocalToGlobalOp, AsyncTDMScatterOp, AsyncTDMGatherOp).
   }];
   let results = (outs TTG_AsyncToken:$retToken);
   let assemblyFormat = "$asyncToken attr-dict";
+}
+
+def AsyncTDMIntrinsicWait : TT_AMDGPU_Op<"async_tdm_intrinsic_wait", [MemWaitOpTrait]> {
+  let summary = "Wait until there are less than or equal to the given number of outstanding TDM intrinsics";
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$count);
+  let description = [{
+    This operation waits until there are less than or equal to the given number
+    of outstanding TDM intrinsics (assembly instructions). This is necessary to
+    ensure that data is available in LDS (load, gather) or HBM (store, scatter)
+    before it is used.
+
+    Unlike AsyncTDMWait which counts IR operations, this operation counts the
+    actual number of TDM assembly instructions (e.g., tensor_load_to_lds,
+    tensor_store_from_lds) that are emitted. Which is required for the lowering
+    to LLVM.
+  }];
+  let results = (outs TTG_AsyncToken:$retToken);
+  let assemblyFormat = "($asyncToken^)? attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
