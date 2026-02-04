@@ -4027,3 +4027,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %9 : tensor<4x1xi64, #blocked>
   }
 }
+
+// -----
+
+// Test that we do not hoist a convert if the resulting convert would  be more
+// expensive than the original.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 8, 4], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hoist_convert_unprofitable(%arg0: tensor<1x32x32xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked1}>}>> {
+    // CHECK: tt.broadcast
+    // CHECK: tt.reduce
+    // CHECK: tt.reduce
+    // CHECK: ttg.convert_layout
+    %0 = tt.broadcast %arg0 : tensor<1x32x32xf32, #blocked> -> tensor<32x32x32xf32, #blocked>
+    %1 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %4 = arith.addf %arg1, %arg2 : f32
+      tt.reduce.return %4 : f32
+    }) : (tensor<32x32x32xf32, #blocked>) -> tensor<32x32xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %2 = "tt.reduce"(%1) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %4 = arith.addf %arg1, %arg2 : f32
+      tt.reduce.return %4 : f32
+    }) : (tensor<32x32xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked}>}>>
+    %3 = ttg.convert_layout %2 : tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked}>}>> -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked1}>}>>
+    tt.return %3 : tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked1}>}>>
+  }
+}
