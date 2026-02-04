@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace {
 
@@ -125,6 +126,69 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
   return results;
 }
 
+// Helper to construct linear layout for PartitionedSharedEncodingAttr with
+// PaddedSharedEncodingAttr sublayout. This mirrors the logic in
+// partitionedSharedToLinearLayout but uses the linear component from the padded
+// layout.
+static LinearLayout constructPartitionedLinearLayoutWithPadded(
+    ArrayRef<int64_t> shape,
+    triton::gpu::PartitionedSharedEncodingAttr partitioned,
+    triton::gpu::PaddedSharedEncodingAttr paddedLayout) {
+  MLIRContext *ctx = partitioned.getContext();
+  unsigned numPartitions = partitioned.getNumPartitions();
+  unsigned numGroups = partitioned.getNumGroups();
+  unsigned partitionDim = partitioned.getPartitionDim();
+  auto outDimNames = standardOutDimNames(ctx, shape.size());
+
+  // Step 1: Get the linear component from the padded layout
+  LinearLayout baseLayout = paddedLayout.getLinearComponent();
+
+  // Step 2: partLayout maps "partition" -> piece selection along partitionDim.
+  LinearLayout partLayout = LinearLayout::identity1D(
+      numPartitions, str_attr("partition"), outDimNames[partitionDim]);
+  auto groupLayout = baseLayout * partLayout;
+
+  // Step 3: extend "offset" to address across groups.
+  LinearLayout extension = LinearLayout::identity1D(
+      numGroups, str_attr("offset"), outDimNames[partitionDim]);
+
+  return groupLayout * extension;
+}
+
+// Compute the distributed-to-shared memory layout conversion based on the
+// encoding type (padded, partitioned with padded sublayout, or standard linear
+// layouts).
+static LinearLayout computeDistributedToSharedLayout(MemDescType memDescTy,
+                                                     LinearLayout regLayout) {
+  // Check for padded encoding (standalone or inside partitioned)
+  auto encoding = memDescTy.getEncoding();
+  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(encoding);
+  auto partitionedEnc =
+      dyn_cast<triton::gpu::PartitionedSharedEncodingAttr>(encoding);
+  triton::gpu::PaddedSharedEncodingAttr paddedPartitionLayout = nullptr;
+  if (partitionedEnc) {
+    paddedPartitionLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+        partitionedEnc.getPartitionLayout());
+  }
+
+  LinearLayout cvt = LinearLayout::empty();
+  if (paddedEnc) {
+    // Standalone padded layout
+    const auto &sharedLL = paddedEnc.getLinearComponent();
+    cvt = regLayout.invertAndCompose(sharedLL);
+  } else if (paddedPartitionLayout) {
+    // Partitioned layout with padded sublayout
+    auto shape = memDescTy.getAllocShape().take_back(memDescTy.getRank());
+    auto sharedLL = constructPartitionedLinearLayoutWithPadded(
+        shape, partitionedEnc, paddedPartitionLayout);
+    cvt = regLayout.invertAndCompose(sharedLL);
+  } else {
+    auto sharedLayout = toLinearLayout(memDescTy);
+    cvt = regLayout.invertAndCompose(sharedLayout);
+  }
+  return cvt;
+}
+
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -139,16 +203,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   auto regLayout = toLinearLayout(regTy);
-  auto paddedEnc =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
-  LinearLayout cvt = LinearLayout::empty();
-  if (paddedEnc) {
-    const auto &sharedLL = paddedEnc.getLinearComponent();
-    cvt = regLayout.invertAndCompose(sharedLL);
-  } else {
-    auto sharedLayout = toLinearLayout(memDescTy);
-    cvt = regLayout.invertAndCompose(sharedLayout);
-  }
+
+  LinearLayout cvt = computeDistributedToSharedLayout(memDescTy, regLayout);
   auto kBlock = str_attr("block");
   // We could support it by removing this check if we ever want to
   if (!cvt.isTrivialOver({kBlock})) {
@@ -264,13 +320,6 @@ public:
     auto memDescVal = op.getSrc();
     auto regVal = op.getResult();
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
-    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
-    // PRs.
-    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
-            memDescTy.getEncoding())) {
-      return rewriter.notifyMatchFailure(
-          op, "PartitionedSharedEncoding not yet supported in lowering");
-    }
     auto regTy = cast<RankedTensorType>(regVal.getType());
     auto typeConverter = getTypeConverter();
 
@@ -278,23 +327,14 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto sharedEnc =
-        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
     auto kPartition = str_attr("partition");
     auto regLayout = toLinearLayout(regTy);
-    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
-    LinearLayout cvt = LinearLayout::empty();
-    if (paddedEnc) {
-      const auto &sharedLL = paddedEnc.getLinearComponent();
-      cvt = regLayout.invertAndCompose(sharedLL);
-    } else {
-      auto sharedLayout = toLinearLayout(memDescTy);
-      cvt = regLayout.invertAndCompose(sharedLayout);
-    }
+
+    LinearLayout cvt = computeDistributedToSharedLayout(memDescTy, regLayout);
     auto kBlock = str_attr("block");
     // We could support it by removing this check if we ever want to
     if (!cvt.isTrivialOver({kBlock})) {
@@ -335,13 +375,6 @@ public:
     Value memDescVal = op.getDst();
     auto typeConverter = getTypeConverter();
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
-    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
-    // PRs.
-    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
-            memDescTy.getEncoding())) {
-      return rewriter.notifyMatchFailure(
-          op, "PartitionedSharedEncoding not yet supported in lowering");
-    }
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);

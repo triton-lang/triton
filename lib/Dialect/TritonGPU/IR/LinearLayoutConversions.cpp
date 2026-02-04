@@ -1171,8 +1171,8 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
 //
 // Example (numPartitions=2, numGroups=4, shape=[128,32], partitionDim=0):
 //   Logical pieces: [P0|P1|P2|P3|P4|P5|P6|P7]  (8 pieces of [16,32] each)
-//   Buffer 0: [P0|P2|P4|P6]  (partition=0 pieces, contiguous in buffer)
-//   Buffer 1: [P1|P3|P5|P7]  (partition=1 pieces, contiguous in buffer)
+//   Partition 0: [P0|P2|P4|P6]  (contiguous in buffer)
+//   Partition 1: [P1|P3|P5|P7]  (contiguous in buffer)
 //
 // LinearLayout inputs: "offset", "partition"
 // LinearLayout outputs: dim0, dim1, ... (tensor coordinates)
@@ -1196,12 +1196,12 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
 
   // Step 1: baseLayout maps (offset, block) -> coordinates within ONE piece.
   // Output size along partitionDim = pieceSize.
-  LinearLayout baseLayout;
-  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(partitionLayout)) {
-    baseLayout = padded.getLinearComponent();
-  } else {
-    baseLayout = toLinearLayout(partitionShape, partitionLayout);
-  }
+  // Note: PaddedSharedEncodingAttr in partitionLayout must be handled in
+  // lowering, not here. This function only creates fully linear layouts.
+  assert(!isa<PaddedSharedEncodingAttr>(partitionLayout) &&
+         "PaddedSharedEncodingAttr in partitioned layout must be handled in "
+         "lowering");
+  LinearLayout baseLayout = toLinearLayout(partitionShape, partitionLayout);
 
   // Step 2: partLayout maps "partition" -> piece selection along partitionDim.
   LinearLayout partLayout = LinearLayout::identity1D(

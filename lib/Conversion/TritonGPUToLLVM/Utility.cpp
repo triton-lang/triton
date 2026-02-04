@@ -566,6 +566,20 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
+// Build a vector containing multiple base pointers for dynamic indexing.
+static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                                ArrayRef<Value> smemBases) {
+  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ptrTy = smemBases[0].getType();
+  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
+  Value basesVec = b.undef(vecTy);
+  for (size_t i = 0; i < smemBases.size(); ++i) {
+    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
+  }
+  return basesVec;
+}
+
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
@@ -591,23 +605,34 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto kPartition = str_attr("partition");
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
-  // Check if cvt has partition output dimension (for partitioned tensors)
-  bool isPartitioned = smemBases.size() > 1 && cvt.hasOutDim(kPartition);
+  // Either we have multiple bases with a matching partition dimension,
+  // or we have a single base.
+  assert((smemBases.size() == 1 ||
+          (cvt.hasOutDim(kPartition) &&
+           cvt.getOutDimSize(kPartition) == smemBases.size())) &&
+         "smemBases size must match partition dimension size");
+  bool isPartitioned = smemBases.size() > 1;
 
-  // Extract just the offset part for vectorization analysis
-  LinearLayout offsetCvt = cvt.sublayout({kReg, kLane, kWarp, kBlock}, {kOffset});
+  // Extract the layout for vectorization analysis.
+  auto inDimNames = to_vector(cvt.getInDimNames());
+  SmallVector<StringAttr> offsetOutDims;
+  for (auto outDim : cvt.getOutDimNames()) {
+    if (outDim != kPartition)
+      offsetOutDims.push_back(outDim);
+  }
+  LinearLayout vectCvt = cvt.sublayout(inDimNames, offsetOutDims);
 
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, offsetCvt, bitwidth, maybeMaxVecElems);
+      largestVectorisation(ctx, vectCvt, bitwidth, maybeMaxVecElems);
 
-  offsetCvt = permutation.apply(offsetCvt);
+  vectCvt = permutation.apply(vectCvt);
   cvt = permutation.apply(cvt);
   if (isStore) {
     vals = permutation.apply(vals);
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
-  auto quot = divideLeft(offsetCvt, tile);
+  auto quot = divideLeft(vectCvt, tile);
   assert(quot.has_value() && "cvt must be divisible by tile");
   LinearLayout reps = zerosLike(tile) * *quot;
   assert(reps.hasInDim(kBlock));
@@ -626,19 +651,12 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   }
 
   // For partitioned tensors, we need to compute the partition index
-  // dynamically.
-  // Create a vector of base pointers for dynamic indexing.
+  // dynamically and select from multiple base pointers.
   LinearLayout partitionLayout;
   Value basesVec;
   if (isPartitioned) {
-    partitionLayout = cvt.sublayout({kReg, kLane, kWarp, kBlock}, {kPartition});
-    auto ptrTy = smemBases[0].getType();
-    auto vecTy =
-        VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
-    basesVec = b.undef(vecTy);
-    for (size_t i = 0; i < smemBases.size(); ++i) {
-      basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
-    }
+    partitionLayout = cvt.sublayout(inDimNames, {kPartition});
+    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // PTX expects the address increments to be done in bytes
@@ -753,10 +771,21 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
 
+  // Extract padding info from padded encoding (standalone or inside
+  // partitioned)
   std::optional<int> maybeMaxVecElems;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
-  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+  triton::gpu::PaddedSharedEncodingAttr paddedEnc;
+  if (auto enc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
           srcTy.getEncoding())) {
+    paddedEnc = enc;
+  } else if (auto partitioned =
+                 dyn_cast<triton::gpu::PartitionedSharedEncodingAttr>(
+                     srcTy.getEncoding())) {
+    paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+        partitioned.getPartitionLayout());
+  }
+  if (paddedEnc) {
     maybeMaxVecElems = paddedEnc.getMinInterval();
     auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
     paddingShifts = getPaddedSharedShifts(paddedEnc, bitwidth,
