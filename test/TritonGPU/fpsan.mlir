@@ -219,8 +219,11 @@ tt.func public @fma_op(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) 
 
 // -----
 
-// CHECK-LABEL: @unary_id
-tt.func public @unary_id(%a: tensor<4xf32>) -> tensor<4xf32> {
+// CHECK-LABEL: @unary_ops
+tt.func public @unary_ops(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.xori
+  // CHECK: arith.xori
   // CHECK-NOT: math.exp
   // CHECK-NOT: math.log
   // CHECK-NOT: math.sqrt

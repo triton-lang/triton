@@ -20,13 +20,32 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-constexpr int64_t kTileM = 8;
-constexpr int64_t kTileN = 8;
-
 #define GEN_PASS_DEF_TRITONINSTRUMENTFPSANITIZER
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
 
 namespace {
+
+constexpr int64_t kTileM = 8;
+constexpr int64_t kTileN = 8;
+
+enum class UnaryOpId : uint64_t {
+  Exp = 0,
+  Log,
+  Exp2,
+  Log2,
+  Cos,
+  Sin,
+  Sqrt,
+  Rsqrt,
+  Erf,
+  Floor,
+  Ceil,
+  PreciseSqrt,
+};
+
+constexpr uint64_t getUnaryOpId(UnaryOpId opId) {
+  return static_cast<uint64_t>(opId);
+}
 
 Type getElementType(Type ty) {
   if (auto shaped = dyn_cast<ShapedType>(ty))
@@ -59,43 +78,6 @@ unsigned getIntBitwidth(Type ty) {
 
 Type getTypeWithElement(Type ty, Type elemTy) {
   return cast<RankedTensorType>(ty).clone(elemTy);
-}
-
-Value resolveMemdescRoot(Value memdesc) {
-  Value cur = memdesc;
-  while (cur) {
-    if (auto arg = dyn_cast<BlockArgument>(cur)) {
-      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-              arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getExplicitCaptures()[arg.getArgNumber()];
-        cur = capture;
-        continue;
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        unsigned argNum = arg.getArgNumber();
-        if (argNum == 0)
-          return Value();
-        cur = forOp.getInitArgs()[argNum - 1];
-        continue;
-      }
-      return cur;
-    }
-
-    if (auto subslice = cur.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      cur = subslice.getSrc();
-      continue;
-    }
-    if (auto view = cur.getDefiningOp<ttg::MemDescIndexOp>()) {
-      cur = view.getSrc();
-      continue;
-    }
-    if (auto view = cur.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      cur = view.getSrc();
-      continue;
-    }
-    return cur;
-  }
-  return Value();
 }
 
 Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Type targetTy,
@@ -242,15 +224,15 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
 
   OpBuilder::InsertionGuard guard(rewriter);
   Value zero =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(0));
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
   Value mUpper =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(m));
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(m));
   Value nUpper =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(n));
-  Value mStep =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(tileM));
-  Value nStep =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(tileN));
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(n));
+  Value mStep = arith::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI32IntegerAttr(tileM));
+  Value nStep = arith::ConstantOp::create(rewriter, loc,
+                                          rewriter.getI32IntegerAttr(tileN));
 
   auto mLoop = scf::ForOp::create(rewriter, loc, zero, mUpper, mStep);
   rewriter.setInsertionPointToStart(mLoop.getBody());
@@ -290,9 +272,9 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
 
   Value zeroSum = getIntConstantLike(rewriter, loc, accTileI.getType(), 0);
   Value kUpper =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(k));
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(k));
   Value kStep =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(1));
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
   auto kLoop = scf::ForOp::create(rewriter, loc, zero, kUpper, kStep, zeroSum);
   rewriter.setInsertionPointToStart(kLoop.getBody());
   Value kIdx = kLoop.getInductionVar();
@@ -509,8 +491,6 @@ public:
       auto loc = view.getLoc();
       Value idx = view.getIndex();
       idx = castToI32(rewriter, loc, idx);
-      if (!idx)
-        return std::nullopt;
       int64_t stride = product(baseTy.getShape().drop_front(1));
       auto strideVal = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(stride));
@@ -1071,16 +1051,27 @@ private:
   TmemScratchManager *scratch;
 };
 
-template <typename OpTy>
-struct IdentityPattern : public OpRewritePattern<OpTy> {
-  using OpRewritePattern<OpTy>::OpRewritePattern;
+template <typename OpTy> struct UnaryPattern : public OpRewritePattern<OpTy> {
+  UnaryPattern(MLIRContext *context, UnaryOpId unaryOpId)
+      : OpRewritePattern<OpTy>(context), unaryOpId(unaryOpId) {}
+
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
-    rewriter.replaceOp(op, op.getOperand());
+
+    auto loc = op.getLoc();
+    auto inI = bitcastToInt(rewriter, loc, op.getOperand());
+    auto opId = getIntConstantLike(rewriter, loc, inI.getType(),
+                                   getUnaryOpId(unaryOpId));
+    auto outI = arith::XOrIOp::create(rewriter, loc, inI, opId);
+    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    rewriter.replaceOp(op, outF);
     return success();
   }
+
+private:
+  UnaryOpId unaryOpId;
 };
 
 class FpSanitizerPass
@@ -1103,19 +1094,24 @@ public:
 
     TmemScratchManager scratch;
     RewritePatternSet patterns(&getContext());
-    patterns
-        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-             DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-             ExtFOpPattern, TruncFOpPattern, DotPattern,
-             IdentityPattern<math::ExpOp>, IdentityPattern<math::LogOp>,
-             IdentityPattern<math::Exp2Op>, IdentityPattern<math::Log2Op>,
-             IdentityPattern<math::CosOp>, IdentityPattern<math::SinOp>,
-             IdentityPattern<math::SqrtOp>, IdentityPattern<math::RsqrtOp>,
-             IdentityPattern<math::ErfOp>, IdentityPattern<math::FloorOp>,
-             IdentityPattern<math::CeilOp>, IdentityPattern<tt::PreciseSqrtOp>>(
-            &getContext());
+    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+                 DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
+                 ExtFOpPattern, TruncFOpPattern, DotPattern>(&getContext());
+    patterns.add<UnaryPattern<math::ExpOp>>(&getContext(), UnaryOpId::Exp);
+    patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
+    patterns.add<UnaryPattern<math::Exp2Op>>(&getContext(), UnaryOpId::Exp2);
+    patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
+    patterns.add<UnaryPattern<math::CosOp>>(&getContext(), UnaryOpId::Cos);
+    patterns.add<UnaryPattern<math::SinOp>>(&getContext(), UnaryOpId::Sin);
+    patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
+    patterns.add<UnaryPattern<math::RsqrtOp>>(&getContext(), UnaryOpId::Rsqrt);
+    patterns.add<UnaryPattern<math::ErfOp>>(&getContext(), UnaryOpId::Erf);
+    patterns.add<UnaryPattern<math::FloorOp>>(&getContext(), UnaryOpId::Floor);
+    patterns.add<UnaryPattern<math::CeilOp>>(&getContext(), UnaryOpId::Ceil);
+    patterns.add<UnaryPattern<tt::PreciseSqrtOp>>(&getContext(),
+                                                  UnaryOpId::PreciseSqrt);
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern>(&getContext(), &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext());
