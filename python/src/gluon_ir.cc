@@ -838,15 +838,21 @@ void init_gluon_ir(py::module &&m) {
               bool multicast) {
              self.create<ttng::CLCTryCancelOp>(result, mbarrier, multicast);
            })
+      .def("create_clc_load_result",
+           [](GluonOpBuilder &self, Value result) -> std::pair<Value, Value> {
+             auto i64Ty = self.getBuilder().getI64Type();
+             auto op = self.create<ttng::CLCLoadResultOp>(i64Ty, i64Ty, result);
+             return {op.getLo(), op.getHi()};
+           })
       .def("create_clc_is_canceled",
-           [](GluonOpBuilder &self, Value result) -> Value {
-             auto i32Ty = self.getBuilder().getI32Type();
-             return self.create<ttng::CLCIsCanceledOp>(i32Ty, result);
+           [](GluonOpBuilder &self, Value lo, Value hi) -> Value {
+             auto i1Ty = self.getBuilder().getI1Type();
+             return self.create<ttng::CLCIsCanceledOp>(i1Ty, lo, hi);
            })
       .def("create_clc_get_first_ctaid",
-           [](GluonOpBuilder &self, Value result, int dim) -> Value {
+           [](GluonOpBuilder &self, Value lo, Value hi, int dim) -> Value {
              auto i32Ty = self.getBuilder().getI32Type();
-             return self.create<ttng::CLCGetFirstCtaIdOp>(i32Ty, result, dim);
+             return self.create<ttng::CLCGetFirstCtaIdOp>(i32Ty, lo, hi, dim);
            })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,

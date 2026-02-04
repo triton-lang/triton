@@ -91,7 +91,7 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //
 def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
-  let summary = "Issue CLC try_cancel to steal work from pending blocks";
+  let summary = "Issue CLC try_cancel to cancel a pending cluster";
 
   let description = [{
     Issues a clusterlaunchcontrol.try_cancel instruction to atomically cancel
@@ -115,42 +115,61 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
   }];
 }
 
-def TTNG_CLCIsCanceledOp : TTNG_Op<"clc_is_canceled", []> {
-  let summary = "Check if CLC response indicates successful cancellation";
+def TTNG_CLCLoadResultOp : TTNG_Op<"clc_load_result", []> {
+  let summary = "Load CLC response from shared memory into registers";
 
   let description = [{
-    Decodes the CLC response buffer to check if a block was successfully
-    canceled. Returns 1 if canceled, 0 otherwise.
+    Loads the 128-bit CLC response from shared memory into two i64 registers.
+    This allows subsequent is_canceled and get_first_ctaid operations to
+    operate on registers without re-reading shared memory.
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$result
   );
 
-  let results = (outs I32:$is_canceled);
+  let results = (outs I64:$lo, I64:$hi);
 
   let assemblyFormat = [{
-    $result attr-dict `:` qualified(type($result)) `->` type($is_canceled)
+    $result attr-dict `:` qualified(type($result)) `->` type($lo) `,` type($hi)
   }];
 }
 
-def TTNG_CLCGetFirstCtaIdOp : TTNG_Op<"clc_get_first_ctaid", []> {
-  let summary = "Get coordinate from CLC response";
+def TTNG_CLCIsCanceledOp : TTNG_Op<"clc_is_canceled", [Pure]> {
+  let summary = "Check if CLC response indicates successful cancellation";
 
   let description = [{
-    Decodes the CLC response buffer to get the coordinate of the canceled
-    block. The dim attribute specifies which dimension (0=x, 1=y, 2=z).
+    Decodes the CLC response to check if a cluster was successfully
+    canceled. Returns true if canceled, false otherwise.
+  }];
+
+  let arguments = (ins I64:$lo, I64:$hi);
+
+  let results = (outs I1:$is_canceled);
+
+  let assemblyFormat = [{
+    $lo `,` $hi attr-dict `:` type($lo) `,` type($hi) `->` type($is_canceled)
+  }];
+}
+
+def TTNG_CLCGetFirstCtaIdOp : TTNG_Op<"clc_get_first_ctaid", [Pure]> {
+  let summary = "Get CTA ID coordinate from CLC response";
+
+  let description = [{
+    Decodes the CLC response to get the first CTA ID coordinate of the
+    canceled cluster. The dim attribute specifies which dimension (0=x, 1=y, 2=z).
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$result,
+    I64:$lo,
+    I64:$hi,
     I32Attr:$dim
   );
 
   let results = (outs I32:$ctaid);
 
   let assemblyFormat = [{
-    $result `,` $dim attr-dict `:` qualified(type($result)) `->` type($ctaid)
+    $lo `,` $hi `,` $dim attr-dict `:` type($lo) `,` type($hi) `->` type($ctaid)
   }];
 }
 

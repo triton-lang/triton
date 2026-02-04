@@ -6,15 +6,14 @@ cancel not-yet-launched clusters and take over their work via the
 clusterlaunchcontrol.try_cancel instruction.
 """
 
-from triton.experimental.gluon._runtime import jit
 from triton.experimental.gluon.language._core import builtin, tensor
-from triton.experimental.gluon.language.nvidia.hopper import mbarrier
+from triton.language.core import _aggregate as aggregate
 import triton.language as tl
 
 __all__ = [
     "try_cancel",
-    "is_canceled",
-    "get_first_ctaid",
+    "load_result",
+    "CLCResult",
 ]
 
 
@@ -22,69 +21,64 @@ __all__ = [
 def try_cancel(result, mbar, multicast=False, _semantic=None):
     """
     Issue a CLC try_cancel request to atomically cancel a pending cluster launch.
-    
+
     Args:
         result (shared_memory_descriptor): 16-byte aligned shared memory for the response
         mbar (shared_memory_descriptor): 8-byte aligned mbarrier for completion signaling
         multicast (bool): If True, broadcast result to all CTAs in cluster
-    
+
     Only supported on SM100+ (Blackwell).
     """
     _semantic.builder.create_clc_try_cancel(result.handle, mbar.handle, multicast)
 
 
 @builtin
-def is_canceled(result, _semantic=None):
+def load_result(result, _semantic=None):
     """
-    Check if the CLC response indicates a successful cancellation.
-    
+    Load the CLC response from shared memory into registers.
+
     Args:
         result (shared_memory_descriptor): The CLC response buffer
-        
+
     Returns:
-        tensor: Non-zero if a cluster was successfully canceled, 0 otherwise
+        CLCResult: Object with is_canceled() and get_first_ctaid(dim) methods
     """
-    handle = _semantic.builder.create_clc_is_canceled(result.handle)
-    return tensor(handle, tl.int32)
+    lo, hi = _semantic.builder.create_clc_load_result(result.handle)
+    return CLCResult(tensor(lo, tl.int64), tensor(hi, tl.int64))
 
 
-@builtin
-def get_first_ctaid(result, dim, _semantic=None):
-    """
-    Get the first CTA ID coordinate of the canceled cluster from CLC response.
-    
-    Args:
-        result (shared_memory_descriptor): The CLC response buffer
-        dim (int): Dimension to get (0=x, 1=y, 2=z)
-        
-    Returns:
-        tensor: The CTA ID coordinate value for the specified dimension
-    """
-    handle = _semantic.builder.create_clc_get_first_ctaid(result.handle, dim)
-    return tensor(handle, tl.int32)
+@aggregate
+class CLCResult:
+    """CLC response loaded into registers. Query without re-reading memory."""
 
+    lo: tl.tensor
+    hi: tl.tensor
 
-@jit
-def fetch_next_tile(clc_result, clc_mbar):
-    """
-    High-level helper to fetch next tile via CLC.
-    
-    Args:
-        clc_result: shared_memory_descriptor for 16-byte CLC response
-        clc_mbar: shared_memory_descriptor for mbarrier
-        
-    Returns:
-        (has_work, tile_m, tile_n): Tuple of whether work was found and tile coordinates
-    """
-    # Issue CLC try_cancel
-    try_cancel(clc_result, clc_mbar)
+    def __init__(self, lo, hi):
+        self.lo = lo
+        self.hi = hi
 
-    # Wait for CLC response
-    mbarrier.wait(clc_mbar, 0)
+    @builtin
+    def is_canceled(self, _semantic=None):
+        """
+        Check if the CLC response indicates a successful cancellation.
 
-    # Decode response
-    has_work = is_canceled(clc_result)
-    tile_m = get_first_ctaid(clc_result, 0)
-    tile_n = get_first_ctaid(clc_result, 1)
+        Returns:
+            tensor: True if a cluster was successfully canceled, False otherwise
+        """
+        handle = _semantic.builder.create_clc_is_canceled(self.lo.handle, self.hi.handle)
+        return tensor(handle, tl.int1)
 
-    return has_work, tile_m, tile_n
+    @builtin
+    def get_first_ctaid(self, dim, _semantic=None):
+        """
+        Get the first CTA ID coordinate of the canceled cluster.
+
+        Args:
+            dim (int): Dimension to get (0=x, 1=y, 2=z)
+
+        Returns:
+            tensor: The CTA ID coordinate value for the specified dimension
+        """
+        handle = _semantic.builder.create_clc_get_first_ctaid(self.lo.handle, self.hi.handle, dim)
+        return tensor(handle, tl.int32)

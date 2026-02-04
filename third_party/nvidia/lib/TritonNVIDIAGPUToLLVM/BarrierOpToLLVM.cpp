@@ -367,31 +367,71 @@ struct CLCTryCancelOpConversion
     }
 
     auto loc = op.getLoc();
-    TritonLLVMOpBuilder b(loc, rewriter);
 
-    // Only one thread per warp should issue the CLC instruction
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    // Use elect predicate - only one thread should issue CLC
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
-    std::string ptxAsm = "clusterlaunchcontrol.try_cancel.async.shared::cta"
+    std::string ptxAsm = "@$2 clusterlaunchcontrol.try_cancel.async.shared::cta"
                          ".mbarrier::complete_tx::bytes";
     if (op.getMulticast())
       ptxAsm += ".multicast::cluster::all";
     ptxAsm += ".b128 [$0], [$1];";
 
     PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
-        ptxBuilder.newOperand(adaptor.getResult(), "r"),
-        ptxBuilder.newOperand(adaptor.getMbarrier(), "r")};
-
-    auto clcOp = *ptxBuilder.create("@$2 " + ptxAsm);
-    operands.push_back(ptxBuilder.newOperand(pred, "b"));
-    clcOp(operands, /*onlyAttachMLIRArgs=*/true);
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
+    auto *mbarOp = ptxBuilder.newOperand(adaptor.getMbarrier(), "r");
+    auto *predOp = ptxBuilder.newOperand(pred, "b");
+    clcOp({resultOp, mbarOp, predOp}, /*onlyAttachMLIRArgs=*/true);
 
     auto voidTy = void_ty(getContext());
     ptxBuilder.launch(rewriter, loc, voidTy);
 
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct CLCLoadResultOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCLoadResultOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCLoadResultOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCLoadResultOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+
+    std::string ptxAsm = R"({
+      .reg .b128 clc_result;
+      ld.shared.b128 clc_result, [$2];
+      mov.b128 {$0, $1}, clc_result;
+    })";
+
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *loOp = ptxBuilder.newOperand("=l");
+    auto *hiOp = ptxBuilder.newOperand("=l");
+    auto *inputOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
+    clcOp({loOp, hiOp, inputOp}, /*onlyAttachMLIRArgs=*/true);
+
+    auto i64Ty = IntegerType::get(getContext(), 64);
+    auto resultTy =
+        LLVM::LLVMStructType::getLiteral(getContext(), {i64Ty, i64Ty});
+    Value result =
+        ptxBuilder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+
+    Value lo = LLVM::ExtractValueOp::create(rewriter, loc, result, 0);
+    Value hi = LLVM::ExtractValueOp::create(rewriter, loc, result, 1);
+    rewriter.replaceOp(op, {lo, hi});
     return success();
   }
 };
@@ -413,12 +453,11 @@ struct CLCIsCanceledOpConversion
     }
 
     auto loc = op.getLoc();
-    auto ctx = getContext();
 
     std::string ptxAsm = R"({
       .reg .pred p1;
       .reg .b128 clc_result;
-      ld.shared.b128 clc_result, [$1];
+      mov.b128 clc_result, {$1, $2};
       clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 p1, clc_result;
       selp.b32 $0, 1, 0, p1;
     })";
@@ -426,12 +465,16 @@ struct CLCIsCanceledOpConversion
     PTXBuilder ptxBuilder;
     auto &clcOp = *ptxBuilder.create(ptxAsm);
     auto *resultOp = ptxBuilder.newOperand("=r");
-    auto *inputOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
-    clcOp({resultOp, inputOp}, /*onlyAttachMLIRArgs=*/true);
+    auto *loOp = ptxBuilder.newOperand(adaptor.getLo(), "l");
+    auto *hiOp = ptxBuilder.newOperand(adaptor.getHi(), "l");
+    clcOp({resultOp, loOp, hiOp}, /*onlyAttachMLIRArgs=*/true);
 
     Value result =
         ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
-    rewriter.replaceOp(op, result);
+    // Convert i32 to i1
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value boolResult = b.icmp_ne(result, b.i32_val(0));
+    rewriter.replaceOp(op, boolResult);
     return success();
   }
 };
@@ -453,7 +496,6 @@ struct CLCGetFirstCtaIdOpConversion
     }
 
     auto loc = op.getLoc();
-    auto ctx = getContext();
 
     const char *dimName;
     switch (op.getDim()) {
@@ -472,7 +514,7 @@ struct CLCGetFirstCtaIdOpConversion
 
     std::string ptxAsm = R"({
       .reg .b128 result;
-      ld.shared.b128 result, [$1];
+      mov.b128 result, {$1, $2};
       clusterlaunchcontrol.query_cancel.get_first_ctaid::)" +
                          std::string(dimName) + R"(.b32.b128 $0, result;
     })";
@@ -480,8 +522,9 @@ struct CLCGetFirstCtaIdOpConversion
     PTXBuilder ptxBuilder;
     auto &clcOp = *ptxBuilder.create(ptxAsm);
     auto *resultOp = ptxBuilder.newOperand("=r");
-    auto *inputOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
-    clcOp({resultOp, inputOp}, /*onlyAttachMLIRArgs=*/true);
+    auto *loOp = ptxBuilder.newOperand(adaptor.getLo(), "l");
+    auto *hiOp = ptxBuilder.newOperand(adaptor.getHi(), "l");
+    clcOp({resultOp, loOp, hiOp}, /*onlyAttachMLIRArgs=*/true);
 
     Value result =
         ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
@@ -504,6 +547,7 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
   // CLC ops (SM100+)
   patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCGetFirstCtaIdOpConversion>(typeConverter, benefit,
                                              targetInfo);
