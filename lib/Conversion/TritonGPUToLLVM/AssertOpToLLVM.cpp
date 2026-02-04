@@ -71,14 +71,6 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       col = fileLineColLoc.getColumn();
     }
 
-    if (op.getUniform()) {
-      // Print the message only for the first thread
-      Value threadId = getThreadId(*b.builder, loc);
-      Value zero = b.int_val(threadId.getType().getIntOrFloatBitWidth(), 0);
-      Value threadIdIsZero = b.icmp_eq(threadId, zero);
-      condition = b.and_(condition, threadIdIsZero);
-    }
-
     auto [prevBlock, ifBlock, thenBlock] =
         createIfBlock(rewriter, loc, condition);
 

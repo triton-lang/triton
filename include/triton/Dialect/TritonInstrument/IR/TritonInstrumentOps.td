@@ -21,6 +21,17 @@ class TTI_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
+def TTI_ExperimentalAssertUniformOp : TTI_Op<"experimental_assert_uniform", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "assert the uniform condition";
+  let description = [{
+    Assert that the condition is true given all threads in the warp group have
+    the same value, so only one thread needs to evaluate the assert and print
+    the message.
+  }];
+  let arguments = (ins I1:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict-with-keyword";
+}
+
 def TTI_ExperimentalBufferDescriptorsOp
     : TTI_Op<"experimental_buffer_descriptors", [Pure]> {
   let summary = "define an array of buffer descriptors";

@@ -47,6 +47,27 @@ Value createMemDescToI32(RewriterBase &rewriter, Location loc,
 // Patterns
 ////////////////////////////////////////////
 
+struct AssertUniformOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalAssertUniformOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalAssertUniformOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonLLVMIRRewriter b(op.getLoc(), rewriter);
+    Value tid = getThreadId(b, op.getLoc());
+    Value threadIdIsZero = b.icmp_eq(tid, b.i32_val(0));
+
+    auto [prevBlock, ifBlock, thenBlock] =
+        createIfBlock(rewriter, op.getLoc(), threadIdIsZero);
+    rewriter.setInsertionPointToStart(ifBlock);
+    AssertOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
+                     adaptor.getMessage());
+    rewriter.eraseOp(op);
+    rewriter.setInsertionPointToStart(thenBlock);
+    return success();
+  }
+};
+
 struct BufferDescriptorsOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalBufferDescriptorsOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -243,8 +264,8 @@ public:
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns.add<AssertUniformOpConversion>(typeConverter);
   patterns.add<BufferDescriptorsOpConversion>(typeConverter);
   patterns.add<LockAcquireOpConversion>(typeConverter);
   patterns.add<LockReleaseOpConversion>(typeConverter);

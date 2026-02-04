@@ -279,7 +279,7 @@ void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
     b.setInsertionPointAfter(reduceOp);
     condition = reduceOp.getResult().front();
   }
-  triton::AssertOp::create(b, b.getLoc(), condition, message, /*uniform=*/true);
+  ExperimentalAssertUniformOp::create(b, condition, message);
 }
 
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,

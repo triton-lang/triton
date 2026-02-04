@@ -234,7 +234,6 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
 }
 
 bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  auto cvtLayout = minimalCvtLayout(cvt.getSrc().getType(), cvt.getType());
   return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 
