@@ -711,23 +711,34 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
 
     unsigned firstIndex = 0;
     if (inputs.size() != lattices.size()) {
+      auto appendNonSuccessorInputs = [&](ValueRange allInputs) {
+        SmallVector<Value> nonSuccessorInputs;
+        SmallVector<dataflow::IntegerValueRangeLattice *> nonSuccessorLattices;
+        auto appendRange = [&](unsigned start, unsigned end) {
+          for (unsigned i = start; i < end; ++i) {
+            nonSuccessorInputs.push_back(allInputs[i]);
+            nonSuccessorLattices.push_back(lattices[i]);
+          }
+        };
+
+        appendRange(0, firstIndex);
+        appendRange(firstIndex + inputs.size(), allInputs.size());
+
+        if (!nonSuccessorInputs.empty())
+          visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
+                                       nonSuccessorLattices);
+      };
+
       if (successor.isParent()) {
         if (!inputs.empty()) {
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         }
-        visitNonControlFlowArguments(
-            branch, successor,
-            branch->getResults().slice(firstIndex, inputs.size()), lattices,
-            firstIndex);
+        appendNonSuccessorInputs(branch->getResults());
       } else {
         if (!inputs.empty()) {
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
         }
-        visitNonControlFlowArguments(
-            branch, successor,
-            successor.getSuccessor()->getArguments().slice(firstIndex,
-                                                           inputs.size()),
-            lattices, firstIndex);
+        appendNonSuccessorInputs(successor.getSuccessor()->getArguments());
       }
     }
 
