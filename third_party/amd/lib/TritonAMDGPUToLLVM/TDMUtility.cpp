@@ -665,16 +665,13 @@ void fillTDMDescriptorForGatherScatter(
       decodeTDMDescriptorFull(rewriter, loc, group0, group1, group2, group3,
                               /*numDims=*/2);
 
-  // Apply CTA offsets to the base pointer
+  // Apply CTA column offset to the base pointer.
+  // Row positions are specified by rowIndices, so only column offset applies.
   auto kBlock = str_attr("block");
   auto cgaOffsets =
       applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
-  Value cgaBaseOffset = b.i32_val(0);
-  for (size_t i = 0; i < 2; ++i) {
-    Value dimOffset = b.mul(cgaOffsets[i].second, tensorStride[i]);
-    cgaBaseOffset = b.add(cgaBaseOffset, dimOffset);
-  }
-  globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaBaseOffset);
+  Value cgaColOffset = b.mul(cgaOffsets[1].second, tensorStride[1]);
+  globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
   // For scatter, only apply column offset to global address
   // Row positions are specified by rowIndices
@@ -684,6 +681,10 @@ void fillTDMDescriptorForGatherScatter(
   // Calculate LDS offset based on row offset only (column always starts at 0)
   Value ldsOffset = b.mul(ldsRowOffset, b.i32_val(blockShape[1]));
   ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
+
+  // Adjust column tensor shape for OOB handling - subtract column offset to
+  // get remaining elements.
+  tensorShape[1] = b.smax(b.i32_val(0), b.sub(tensorShape[1], globalColOffset));
 
   // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
@@ -705,7 +706,7 @@ void fillTDMDescriptorForGatherScatter(
   Value typeBits = b.and_(group0[3], b.i32_val(0xC0000000));
   group0[3] = b.or_(typeBits, globalAddrHigh);
 
-  // Update group1 with tensor shapes (keep original for stride calculation)
+  // Update group1 with adjusted tensor shapes for proper OOB handling
   group1[1] = b.shl(tensorShape[1], b.i32_val(16));
   group1[2] = b.lshr(tensorShape[1], b.i32_val(16));
   group1[2] = b.or_(group1[2], b.shl(tensorShape[0], b.i32_val(16)));
