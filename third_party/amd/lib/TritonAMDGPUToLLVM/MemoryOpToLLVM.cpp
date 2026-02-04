@@ -453,7 +453,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isCDNA(targetInfo.getISAFamily()))
+    if (!isCDNA(targetInfo.getISAFamily()) ||
+        targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
