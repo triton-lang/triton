@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.language.cumsum &mdash; Triton  documentation</title>
+  <title>triton.language.topk &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
@@ -22,8 +22,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.histogram" href="triton.language.histogram.html" />
-    <link rel="prev" title="triton.language.cumprod" href="triton.language.cumprod.html" /> 
+    <link rel="next" title="triton.language.gather" href="triton.language.gather.html" />
+    <link rel="prev" title="triton.language.sort" href="triton.language.sort.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -66,13 +66,13 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#scan-sort-ops">Scan/Sort Ops</a><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="triton.language.associative_scan.html">triton.language.associative_scan</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.cumprod.html">triton.language.cumprod</a></li>
-<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.cumsum</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#triton.language.cumsum"><code class="docutils literal notranslate"><span class="pre">cumsum()</span></code></a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="triton.language.cumsum.html">triton.language.cumsum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.histogram.html">triton.language.histogram</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sort.html">triton.language.sort</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.topk.html">triton.language.topk</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.topk</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#triton.language.topk"><code class="docutils literal notranslate"><span class="pre">topk()</span></code></a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.gather.html">triton.language.gather</a></li>
 </ul>
 </li>
@@ -113,9 +113,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../triton.language.html">triton.language</a></li>
-      <li class="breadcrumb-item active">triton.language.cumsum</li>
+      <li class="breadcrumb-item active">triton.language.topk</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/python-api/generated/triton.language.cumsum.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/python-api/generated/triton.language.topk.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -123,25 +123,35 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-language-cumsum">
-<h1>triton.language.cumsum<a class="headerlink" href="#triton-language-cumsum" title="Link to this heading">¶</a></h1>
+  <section id="triton-language-topk">
+<h1>triton.language.topk<a class="headerlink" href="#triton-language-topk" title="Link to this heading">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="triton.language.cumsum">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">cumsum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reverse</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.cumsum" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the cumsum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p>
+<dt class="sig sig-object py" id="triton.language.topk">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">topk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">constexpr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.topk" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the k largest elements of the input tensor along the specified dimension.</p>
+<p>The elements are returned in sorted order (largest first).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>input</strong> (<em>Tensor</em>) – the input values</p></li>
-<li><p><strong>axis</strong> (<em>int</em>) – the dimension along which the scan should be done</p></li>
-<li><p><strong>reverse</strong> (<em>bool</em>) – if true, the scan is performed in the reverse direction</p></li>
-<li><p><strong>dtype</strong> (<em>tl.dtype</em>) – the desired data type of the returned tensor. If specified, the input tensor is casted to <code class="code docutils literal notranslate"><span class="pre">dtype</span></code> before the operation is performed. If not specified, small integer types (&lt; 32 bits) are upcasted to prevent overflow. Note that <code class="code docutils literal notranslate"><span class="pre">tl.bfloat16</span></code> inputs are automatically promoted to <code class="code docutils literal notranslate"><span class="pre">tl.float32</span></code>.</p></li>
+<li><p><strong>x</strong> (<em>Tensor</em>) – The input tensor.</p></li>
+<li><p><strong>k</strong> (<em>int</em>) – The number of top elements to return. Must be a power of two.</p></li>
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to find the top k elements.
+If None, uses the last dimension. Currently only the last dimension is supported.</p></li>
 </ul>
 </dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A tensor containing the k largest elements along the specified dimension.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Tensor</p>
+</dd>
 </dl>
-<p>This function can also be called as a member function on <a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">tensor</span></code></a>,
-as <code class="code docutils literal notranslate"><span class="pre">x.cumsum(...)</span></code> instead of
-<code class="code docutils literal notranslate"><span class="pre">cumsum(x,</span> <span class="pre">...)</span></code>.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Get top 4 elements from a 1D tensor</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+<span class="n">top4</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">topk</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>  <span class="c1"># Returns [15, 14, 13, 12]</span>
+</pre></div>
+</div>
 </dd></dl>
 
 </section>
@@ -150,8 +160,8 @@ as <code class="code docutils literal notranslate"><span class="pre">x.cumsum(..
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.language.cumprod.html" class="btn btn-neutral float-left" title="triton.language.cumprod" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.histogram.html" class="btn btn-neutral float-right" title="triton.language.histogram" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.sort.html" class="btn btn-neutral float-left" title="triton.language.sort" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.gather.html" class="btn btn-neutral float-right" title="triton.language.gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
