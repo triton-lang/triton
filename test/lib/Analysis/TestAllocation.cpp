@@ -29,10 +29,9 @@ struct TestAllocationPass
   ModuleAllocation getModuleAllocation() {
     switch (getScratchSizeFunction) {
     case GetScratchSizeFunction::None:
-      return {getOperation(), triton::defaultAllocationAnalysisScratchSizeFn,
-              partitionSize};
+      return {getOperation()};
     case GetScratchSizeFunction::ValidConstant:
-      return {getOperation(), getScratchSize128, partitionSize};
+      return {getOperation(), getScratchSize128};
     }
     llvm_unreachable("Unhandled case");
   }
@@ -58,8 +57,8 @@ struct TestAllocationPass
         if (op->getNumResults() < 1)
           return;
         for (Value result : op->getResults()) {
-          auto bufferIds = allocation->getBufferIds(result);
-          for (auto bufferId : bufferIds) {
+          auto bufferId = allocation->getBufferId(result);
+          if (bufferId != Allocation::InvalidBufferId) {
             size_t offset = allocation->getOffset(bufferId);
             size_t size = allocation->getAllocatedSize(bufferId);
             mlir::emitRemark(op->getLoc())
@@ -80,12 +79,6 @@ struct TestAllocationPass
           clEnumValN(GetScratchSizeFunction::None, "None", "None (default)"),
           clEnumValN(GetScratchSizeFunction::ValidConstant, "ValidConstant",
                      "ValidConstant"))};
-
-  Option<size_t> partitionSize{
-      *this, "partition-size",
-      llvm::cl::desc(
-          "Shared memory partition size in bytes (0 = no partitioning)"),
-      llvm::cl::init(0)};
 };
 
 } // namespace

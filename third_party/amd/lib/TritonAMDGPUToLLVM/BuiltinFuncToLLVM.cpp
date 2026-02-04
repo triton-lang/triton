@@ -18,8 +18,9 @@ namespace {
 
 class CallOpConversion : public OpRewritePattern<LLVM::CallOp> {
 public:
-  CallOpConversion(mlir::MLIRContext *context, bool ftz)
-      : OpRewritePattern(context, 1), ftz(ftz) {}
+  CallOpConversion(mlir::MLIRContext *context,
+                   const AMD::TargetInfo &targetInfo, bool ftz)
+      : OpRewritePattern(context, 1), targetInfo(targetInfo), ftz(ftz) {}
 
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,
@@ -171,13 +172,17 @@ private:
   }
 
 private:
+  const AMD::TargetInfo &targetInfo;
   bool ftz;
 };
 
 struct ConvertBuiltinFuncToLLVM
     : public triton::impl::ConvertBuiltinFuncToLLVMBase<
           ConvertBuiltinFuncToLLVM> {
-  explicit ConvertBuiltinFuncToLLVM(bool ftz) { this->ftz = ftz; }
+  ConvertBuiltinFuncToLLVM(StringRef targetArch, bool ftz) {
+    this->arch = targetArch.str();
+    this->ftz = ftz;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -186,10 +191,11 @@ struct ConvertBuiltinFuncToLLVM
     GreedyRewriteConfig config;
     config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
+    AMD::TargetInfo targetInfo(this->arch.getValue());
     RewritePatternSet patterns(context);
-    patterns.add<CallOpConversion>(context, this->ftz);
-    if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
-            .failed()) {
+    patterns.add<CallOpConversion>(context, targetInfo, this->ftz);
+
+    if (failed(applyPatternsGreedily(mod, std::move(patterns), config))) {
       signalPassFailure();
     }
   }
@@ -200,8 +206,8 @@ struct ConvertBuiltinFuncToLLVM
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertBuiltinFuncToLLVMPass(bool ftz) {
-  return std::make_unique<ConvertBuiltinFuncToLLVM>(ftz);
+createConvertBuiltinFuncToLLVMPass(StringRef targetArch, bool ftz) {
+  return std::make_unique<ConvertBuiltinFuncToLLVM>(targetArch, ftz);
 }
 
 } // namespace mlir::triton

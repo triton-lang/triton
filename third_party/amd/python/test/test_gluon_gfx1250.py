@@ -3281,6 +3281,76 @@ def test_runtime_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, dst_col_off
     torch.testing.assert_close(out_result, ref_out)
 
 
+@gluon.jit
+def tdm_scatter_multi_col_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M, N, stride_m, BLOCK_M: ttgl.constexpr,
+                                 BLOCK_N: ttgl.constexpr):
+    """TDM scatter kernel that processes multiple column blocks."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    idx_mask = (pid_m * BLOCK_M + idx_offs) < M
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
+
+    col_offset = pid_n * BLOCK_N
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, col_offset, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_partial_column_block(N, num_warps, index_dtype):
+    """Test TDM scatter with partial last column block (N not multiple of BLOCK_N)."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 128
+    BLOCK_N = 128
+    M = 256
+
+    inp = _create_scatter_test_data((M, N), torch.float16)
+    out = torch.zeros((M, N), dtype=torch.float16)
+    dst_row_indices = torch.randperm(M, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    grid_n = triton.cdiv(N, BLOCK_N)
+    grid = (triton.cdiv(M, BLOCK_M) * grid_n, )
+
+    tdm_scatter_multi_col_kernel[grid](inp_d, out_d, indices_d, M=M, N=N, stride_m=N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                       num_warps=num_warps)
+
+    out_result = out_d.cpu()
+
+    # Build reference - scatter each source row to its destination
+    ref_out = torch.zeros_like(out)
+    for src_row in range(M):
+        dst_row = dst_row_indices[src_row].item()
+        if dst_row < M:
+            ref_out[dst_row] = inp[src_row]
+
+    torch.testing.assert_close(out_result, ref_out)
+
+
 # =============================================================================
 # TDM Gather Mode Tests
 # =============================================================================
@@ -3504,3 +3574,74 @@ def test_runtime_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, src_col_offs
     inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
     ref_bytes = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:(src_col_offset + BLOCK_N) * elem_size]
     torch.testing.assert_close(out_result.view(torch.uint8), ref_bytes)
+
+
+@gluon.jit
+def tdm_gather_multi_col_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M, N, stride_m, BLOCK_M: ttgl.constexpr,
+                                BLOCK_N: ttgl.constexpr):
+    """TDM gather kernel that processes multiple column blocks."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    IDX_BASE_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_BASE_LAYOUT)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    idx_mask = (pid_m * BLOCK_M + idx_offs) < M
+    src_row_indices = ttgl.load(src_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
+
+    col_offset = pid_n * BLOCK_N
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, col_offset, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_gather_partial_column_block(N, num_warps, index_dtype):
+    """Test TDM gather with partial last column block (N not multiple of BLOCK_N)."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 128
+    BLOCK_N = 128
+    M = 256
+
+    inp = _create_scatter_test_data((M, N), torch.float16)
+    out = torch.zeros((M, N), dtype=torch.float16)
+    src_row_indices = torch.randperm(M, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    grid_n = triton.cdiv(N, BLOCK_N)
+    grid = (triton.cdiv(M, BLOCK_M) * grid_n, )
+
+    tdm_gather_multi_col_kernel[grid](inp_d, out_d, indices_d, M=M, N=N, stride_m=N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                      num_warps=num_warps)
+
+    out_result = out_d.cpu()
+
+    # Build reference - gather each source row to its destination
+    ref_out = torch.zeros_like(out)
+    for dst_row in range(M):
+        src_row = src_row_indices[dst_row].item()
+        if src_row < M:
+            ref_out[dst_row] = inp[src_row]
+
+    torch.testing.assert_close(out_result, ref_out)

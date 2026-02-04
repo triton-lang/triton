@@ -182,3 +182,41 @@ def test_signature_ordering():
     )
     target = triton.runtime.driver.active.get_current_target()
     triton.compile(src=src, target=target)
+
+
+def test_fp8_compiles_for_multiple_architectures_hip():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    gfx950 has native FP8 instructions; gfx942 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("hip", "gfx950", 64))
+    triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
+
+
+def test_fp8_compiles_for_multiple_architectures_cuda():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    SM90 has native FP8 instructions; SM80 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    triton.compile(src, target=GPUTarget("cuda", 80, 32))

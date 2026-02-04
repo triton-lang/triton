@@ -1778,59 +1778,56 @@ struct FpToFpOpConversion
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
-    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, ConverterT>
-        srcMap = {
-            // F8 -> F16
-            {{F8E4M3FNUZTyID, F16TyID, undefRounding},
-             Fp8E4M3FNUZ_to_Fp16(isaFamily)},
-            {{F8E4M3FNTyID, F16TyID, undefRounding},
-             Fp8E4M3FN_to_Fp16(isaFamily)},
-            {{F8E5M2FNUZTyID, F16TyID, undefRounding},
-             Fp8E5M2FNUZ_to_Fp16(isaFamily)},
-            {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16(isaFamily)},
-            // F16 -> F8
-            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E4M3FN_RTNE(isaFamily)},
-            {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E5M2FNUZ(isaFamily)},
-            {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E4M3FNUZ(isaFamily)},
-            {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E5M2_RTNE(isaFamily)},
-            {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
-            // F8 -> BF16
-            {{F8E5M2TyID, BF16TyID, undefRounding}, Fp8E5M2_to_Bf16(isaFamily)},
-            {{F8E5M2FNUZTyID, BF16TyID, undefRounding}, Fp8E5M2FNUZ_to_Bf16},
-            {{F8E4M3FNTyID, BF16TyID, undefRounding},
-             Fp8E4M3FN_to_Bf16(isaFamily)},
-            {{F8E4M3FNUZTyID, BF16TyID, undefRounding},
-             Fp8E4M3FNUZ_to_Bf16(isaFamily)},
-            // BF16 -> F8
-            {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E5M2(isaFamily)},
-            {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E4M3FN(isaFamily)},
-            {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E5M2FNUZ(isaFamily)},
-            {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E4M3FNUZ(isaFamily)},
-            // F32 <-> F8
-            {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-             Fp32_to_Fp8E4M3FNUZ(isaFamily)},
-            {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Fp32_to_Fp8E5M2FNUZ(isaFamily)},
-            {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-             Fp32_to_Fp8E4M3FN_RTNE(isaFamily)},
-            {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Fp32_to_Fp8E5M2_RTNE(isaFamily)},
-            {{F32TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp32_to_Fp8E5M2_RTZ},
-            {{F8E4M3FNUZTyID, F32TyID, undefRounding}, Fp8E4M3FNUZ_to_Fp32},
-            {{F8E5M2FNUZTyID, F32TyID, undefRounding}, Fp8E5M2FNUZ_to_Fp32},
-            {{F8E4M3FNTyID, F32TyID, undefRounding}, Fp8E4M3FN_to_Fp32},
-            {{F8E5M2TyID, F32TyID, undefRounding}, Fp8E5M2_to_Fp32},
-            // F32 -> F16 with RTZ
-            {{F32TyID, F16TyID, RoundingMode::RTZ}, convertFp32ToFp16RTZ},
-        };
+    DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, ConverterT> srcMap = {
+        // F8 -> F16
+        {{F8E4M3FNUZTyID, F16TyID, undefRounding},
+         Fp8E4M3FNUZ_to_Fp16(isaFamily)},
+        {{F8E4M3FNTyID, F16TyID, undefRounding}, Fp8E4M3FN_to_Fp16(isaFamily)},
+        {{F8E5M2FNUZTyID, F16TyID, undefRounding},
+         Fp8E5M2FNUZ_to_Fp16(isaFamily)},
+        {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16(isaFamily)},
+        // F16 -> F8
+        {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+         Fp16_to_Fp8E4M3FN_RTNE(isaFamily)},
+        {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
+         Fp16_to_Fp8E5M2FNUZ(isaFamily)},
+        {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
+         Fp16_to_Fp8E4M3FNUZ(isaFamily)},
+        {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
+         Fp16_to_Fp8E5M2_RTNE(isaFamily)},
+        {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
+        // F8 -> BF16
+        {{F8E5M2TyID, BF16TyID, undefRounding}, Fp8E5M2_to_Bf16(isaFamily)},
+        {{F8E5M2FNUZTyID, BF16TyID, undefRounding}, Fp8E5M2FNUZ_to_Bf16},
+        {{F8E4M3FNTyID, BF16TyID, undefRounding}, Fp8E4M3FN_to_Bf16(isaFamily)},
+        {{F8E4M3FNUZTyID, BF16TyID, undefRounding},
+         Fp8E4M3FNUZ_to_Bf16(isaFamily)},
+        // BF16 -> F8
+        {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
+         Bf16_to_Fp8E5M2(isaFamily)},
+        {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+         Bf16_to_Fp8E4M3FN(isaFamily)},
+        {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
+         Bf16_to_Fp8E5M2FNUZ(isaFamily)},
+        {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
+         Bf16_to_Fp8E4M3FNUZ(isaFamily)},
+        // F32 <-> F8
+        {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
+         Fp32_to_Fp8E4M3FNUZ(isaFamily)},
+        {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
+         Fp32_to_Fp8E5M2FNUZ(isaFamily)},
+        {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+         Fp32_to_Fp8E4M3FN_RTNE(isaFamily)},
+        {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
+         Fp32_to_Fp8E5M2_RTNE(isaFamily)},
+        {{F32TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp32_to_Fp8E5M2_RTZ},
+        {{F8E4M3FNUZTyID, F32TyID, undefRounding}, Fp8E4M3FNUZ_to_Fp32},
+        {{F8E5M2FNUZTyID, F32TyID, undefRounding}, Fp8E5M2FNUZ_to_Fp32},
+        {{F8E4M3FNTyID, F32TyID, undefRounding}, Fp8E4M3FN_to_Fp32},
+        {{F8E5M2TyID, F32TyID, undefRounding}, Fp8E5M2_to_Fp32},
+        // F32 -> F16 with RTZ
+        {{F32TyID, F16TyID, RoundingMode::RTZ}, convertFp32ToFp16RTZ},
+    };
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
