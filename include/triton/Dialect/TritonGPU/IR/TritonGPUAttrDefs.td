@@ -359,6 +359,72 @@ For identity mappings a short form based on order and shape is used to increase 
   let genVerifyDecl = 1;
 }
 
+
+def PartitionedSharedEncodingAttr
+    : TritonGPU_Attr<"PartitionedSharedEncoding", "partitioned_shared_encoding",
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods,  LayoutEncodingTrait]> {
+  let mnemonic = "partitioned_shared";
+
+  let description = [{
+    An encoding for tensors whose elements are partitioned across multiple
+    separate shared memory allocations. This reduces shared memory partition
+    conflicts by splitting a tensor along a specific dimension into separate
+    allocations.
+
+    Parameters:
+    - numPartitions: Number of distinct memory partitions (and separate buffers).
+      Buffers in different partitions MUST be placed in different physical
+      shared memory slots.
+    - numGroups: Number of groups. Each group contains numPartitions
+      consecutive pieces of the tensor.
+    - partitionDim: The dimension along which the tensor is partitioned.
+    - partitionLayout: The shared memory layout used within each piece.
+
+    The total number of logical pieces is numPartitions * numGroups.
+    Pieces are organized as:
+      [Group 0: pieces 0..numPartitions-1]
+      [Group 1: pieces numPartitions..2*numPartitions-1]
+      ...
+
+    ## Memory Allocation
+
+    The allocator creates numPartitions buffers (NOT numLogicalPieces buffers).
+    Each buffer contains all pieces from all groups that belong to that partition,
+    concatenated together. Buffer size = pieceSize * numGroups.
+
+    For example, with numPartitions=2, numGroups=4 and
+    partitionDim=0 on a [128, 32] tensor:
+    - Total 8 logical pieces, each of size [16, 32] (pieceSize = 16*32 elements)
+    - Piece layout: [0, 1, 2, 3, 4, 5, 6, 7]
+    - Partitions:    0  1  0  1  0  1  0  1
+    - Groups:       |Grp0||Grp1||Grp2||Grp3|
+
+    Physical allocation (2 buffers, each containing 4 pieces):
+    - Buffer 0 (Partition 0): [Piece0 | Piece2 | Piece4 | Piece6]
+    - Buffer 1 (Partition 1): [Piece1 | Piece3 | Piece5 | Piece7]
+
+    Physical allocation guarantee: Buffers in different partitions MUST reside
+    in distinct physical shared memory partitions.
+  }];
+
+  let parameters = (ins
+      "unsigned":$numPartitions,
+      "unsigned":$numGroups,
+      "unsigned":$partitionDim,
+      "SharedEncodingTrait":$partitionLayout
+  );
+
+  let extraClassDeclaration = [{
+    /// Returns the total number of logical pieces.
+    unsigned getNumLogicalPieces() const {
+      return getNumPartitions() * getNumGroups();
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait,
