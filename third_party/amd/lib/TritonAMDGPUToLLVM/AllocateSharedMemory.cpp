@@ -1,10 +1,8 @@
 #include "Analysis/AMDGPUAllocation.h"
-#include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/AllocateSharedMemoryUtility.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -22,16 +20,7 @@ struct AllocateAMDGPUSharedMemory
           AllocateAMDGPUSharedMemory> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-
-    // Get partition size from target info
-    size_t partitionSize = 0;
-    if (auto arch = getAMDArch(mod)) {
-      AMD::TargetInfo targetInfo(arch->str());
-      partitionSize = targetInfo.getSharedMemoryPartitionSize();
-    }
-
-    ModuleAllocation allocation(mod, AMDAllocationAnalysisScratchSizeFn,
-                                partitionSize);
+    ModuleAllocation allocation(mod, AMDAllocationAnalysisScratchSizeFn);
 
     mlir::triton::gpu::attachAllocationSizeAndOffsetAttr(mod, allocation);
   }

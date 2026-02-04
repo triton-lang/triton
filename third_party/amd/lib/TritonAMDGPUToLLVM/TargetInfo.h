@@ -22,8 +22,6 @@ public:
 
   int getSharedMemorySize() const;
 
-  size_t getSharedMemoryPartitionSize() const override;
-
   bool supportMaximumMinimum() const override;
 
   bool supportDppBroadcast() const;

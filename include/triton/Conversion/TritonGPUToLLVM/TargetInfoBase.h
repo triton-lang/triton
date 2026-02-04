@@ -104,10 +104,6 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool isCuda() const { return false; }
 
-  // Returns the shared memory partition size in bytes. A value of 0 means
-  // shared memory is not partitioned.
-  virtual size_t getSharedMemoryPartitionSize() const { return 0; }
-
   // Annotate target specific information to local load operations during
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
