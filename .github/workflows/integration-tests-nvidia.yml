@@ -9,10 +9,10 @@ on:
 
 jobs:
   integration-tests-nvidia:
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ (matrix.runner[0] == 'nvidia-gb200') && fromJson('{"group":"gb200-runner-set","labels":["self-hosted"]}') || matrix.runner }}
     timeout-minutes: 60
     # Let A100 and H100 continue even if GB200 fails, as it's a bit flaky
-    continue-on-error: ${{ matrix.runner[0] == 'nvidia-gb200'}}
+    continue-on-error: ${{ matrix.runner[0] == 'nvidia-gb200' }}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -69,6 +69,8 @@ jobs:
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Setup Python environment for GB200
+        # For GB200 we run inside a containerized runner with /venv
+        # (works for both nvidia-gb200 and nvidia-gb200-2 since we route via the gb200 runner group)
         if: ${{ matrix.runner[0] == 'nvidia-gb200' }}
         run: |
           echo "/venv/bin" >> $GITHUB_PATH
