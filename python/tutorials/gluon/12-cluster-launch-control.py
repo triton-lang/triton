@@ -19,8 +19,9 @@ the result after tile completion. This hides CLC latency behind computation.
 CLC API
 -------
 - ``clc.try_cancel(result, mbar)``: Issue async CLC request to cancel a pending cluster
-- ``clc.is_canceled(result)``: Returns non-zero if a cluster was successfully canceled
-- ``clc.get_first_ctaid(result, dim)``: Get the canceled cluster's first CTA ID (dim: 0=x, 1=y, 2=z)
+- ``clc_result = clc.load_result(result)``: Load CLC response into registers
+- ``clc_result.is_canceled()``: Returns True if a cluster was successfully canceled
+- ``clc_result.get_first_ctaid(dim)``: Get the canceled cluster's first CTA ID (dim: 0=x, 1=y, 2=z)
 """
 
 import torch
@@ -186,11 +187,12 @@ def clc_matmul_kernel(a_desc, b_desc, c_desc, num_pid_n, num_buffers: gl.constex
     # === CHECK CLC RESULT ===
     # CLC was issued during prologue, should be ready now
     mbarrier.wait(clc_mbar, 0)
-    has_work = clc.is_canceled(clc_result)
+    clc_response = clc.load_result(clc_result)
+    has_work = clc_response.is_canceled()
 
-    if has_work != 0:
+    if has_work:
         # Successfully canceled a cluster - process its tile
-        canceled_pid = clc.get_first_ctaid(clc_result, 0)
+        canceled_pid = clc_response.get_first_ctaid(0)
         pid_m = canceled_pid // num_pid_n
         pid_n = canceled_pid % num_pid_n
         off_m = pid_m * BLOCK_M
