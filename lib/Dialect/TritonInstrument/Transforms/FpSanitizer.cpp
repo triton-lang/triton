@@ -49,8 +49,7 @@ Type getIntTypeLike(Type ty) {
   }
   if (isa<FloatType>(ty))
     return intElem;
-  assert(false && "expected FloatType or RankedTensorType");
-  return Type();
+  llvm::report_fatal_error("expected FloatType or RankedTensorType");
 }
 
 unsigned getIntBitwidth(Type ty) {
@@ -59,9 +58,7 @@ unsigned getIntBitwidth(Type ty) {
 }
 
 Type getTypeWithElement(Type ty, Type elemTy) {
-  auto ranked = dyn_cast<RankedTensorType>(ty);
-  assert(ranked && "expected RankedTensorType");
-  return RankedTensorType::get(ranked.getShape(), elemTy, ranked.getEncoding());
+  return cast<RankedTensorType>(ty).clone(elemTy);
 }
 
 Value resolveMemdescRoot(Value memdesc) {
@@ -101,34 +98,35 @@ Value resolveMemdescRoot(Value memdesc) {
   return Value();
 }
 
+Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Type targetTy,
+                         int64_t value) {
+  if (auto shaped = dyn_cast<ShapedType>(targetTy)) {
+    auto elem = cast<IntegerType>(shaped.getElementType());
+    auto attr =
+        DenseElementsAttr::get(shaped, rewriter.getIntegerAttr(elem, value));
+    return arith::ConstantOp::create(rewriter, loc, attr);
+  }
+  auto intTy = cast<IntegerType>(targetTy);
+  return arith::ConstantOp::create(rewriter, loc,
+                                   rewriter.getIntegerAttr(intTy, value));
+}
+
 Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
                          Type targetTy) {
   if (v.getType() == targetTy)
     return v;
 
-  auto getShiftLike = [&](Type ty, int64_t shiftAmount) -> Value {
-    if (auto ranked = dyn_cast<RankedTensorType>(ty)) {
-      auto elemTy = cast<IntegerType>(ranked.getElementType());
-      auto attr = DenseElementsAttr::get(
-          ranked, rewriter.getIntegerAttr(elemTy, shiftAmount));
-      return arith::ConstantOp::create(rewriter, loc, attr);
-    }
-    auto intTy = cast<IntegerType>(ty);
-    return arith::ConstantIntOp::create(rewriter, loc, shiftAmount,
-                                        intTy.getWidth());
-  };
-
   unsigned srcWidth = getIntBitwidth(v.getType());
   unsigned dstWidth = getIntBitwidth(targetTy);
   if (dstWidth > srcWidth) {
     auto ext = arith::ExtUIOp::create(rewriter, loc, targetTy, v);
-    auto shift =
-        getShiftLike(targetTy, static_cast<int64_t>(dstWidth - srcWidth));
+    auto shift = getIntConstantLike(rewriter, loc, targetTy,
+                                    static_cast<int64_t>(dstWidth - srcWidth));
     return arith::ShLIOp::create(rewriter, loc, ext, shift);
   }
   if (srcWidth > dstWidth) {
-    auto shift =
-        getShiftLike(v.getType(), static_cast<int64_t>(srcWidth - dstWidth));
+    auto shift = getIntConstantLike(rewriter, loc, v.getType(),
+                                    static_cast<int64_t>(srcWidth - dstWidth));
     auto shifted = arith::ShRUIOp::create(rewriter, loc, v, shift);
     return arith::TruncIOp::create(rewriter, loc, targetTy, shifted);
   }
@@ -150,20 +148,6 @@ Value bitcastToInt(PatternRewriter &rewriter, Location loc, Value v) {
 Value bitcastToFloat(PatternRewriter &rewriter, Location loc, Value v,
                      Type floatTy) {
   return tt::BitcastOp::create(rewriter, loc, floatTy, v);
-}
-
-Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Value like,
-                         int64_t value) {
-  auto ty = like.getType();
-  if (auto shaped = dyn_cast<ShapedType>(ty)) {
-    auto elem = cast<IntegerType>(shaped.getElementType());
-    auto attr =
-        DenseElementsAttr::get(shaped, rewriter.getIntegerAttr(elem, value));
-    return arith::ConstantOp::create(rewriter, loc, attr);
-  }
-  auto intTy = cast<IntegerType>(ty);
-  return arith::ConstantOp::create(rewriter, loc,
-                                   rewriter.getIntegerAttr(intTy, value));
 }
 
 Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
@@ -198,20 +182,16 @@ Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
   return allocOp.getResult();
 }
 
+// Calculate multiplicative inverse of the integer `input` modulo 2^bitwidth
 Value fpsanPow2ModInv(PatternRewriter &rewriter, Location loc, Value input) {
-  auto one = getIntConstantLike(rewriter, loc, input, 1);
-  auto two = getIntConstantLike(rewriter, loc, input, 2);
+  auto one = getIntConstantLike(rewriter, loc, input.getType(), 1);
+  auto two = getIntConstantLike(rewriter, loc, input.getType(), 2);
 
   auto a = arith::OrIOp::create(rewriter, loc, input, one);
   Value x = a;
 
   unsigned bitwidth = getIntBitwidth(input.getType());
-  unsigned iters = 0;
-  unsigned bits = 1;
-  while (bits < bitwidth) {
-    bits *= 2;
-    iters += 1;
-  }
+  unsigned iters = llvm::Log2_32(bitwidth);
 
   for (unsigned i = 0; i < iters; ++i) {
     auto ax = arith::MulIOp::create(rewriter, loc, a, x);
@@ -232,7 +212,7 @@ Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
 Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   auto numI = bitcastToInt(rewriter, loc, num);
   auto denI = bitcastToInt(rewriter, loc, den);
-  auto one = getIntConstantLike(rewriter, loc, denI, 1);
+  auto one = getIntConstantLike(rewriter, loc, denI.getType(), 1);
   auto denSafe = arith::OrIOp::create(rewriter, loc, denI, one);
   auto resI = arith::RemSIOp::create(rewriter, loc, numI, denSafe);
   return bitcastToFloat(rewriter, loc, resI, num.getType());
@@ -308,7 +288,7 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
   Value aStrideVal = arith::ConstantOp::create(
       rewriter, loc, rewriter.getI32IntegerAttr(aStride));
 
-  Value zeroSum = getIntConstantLike(rewriter, loc, accTileI, 0);
+  Value zeroSum = getIntConstantLike(rewriter, loc, accTileI.getType(), 0);
   Value kUpper =
       arith::ConstantOp::create(rewriter, loc, rewriter.getIndexAttr(k));
   Value kStep =
@@ -341,7 +321,7 @@ emitMmaEmulationLoops(PatternRewriter &rewriter, Location loc, Value aPtr,
 
   Value predMask =
       tt::SplatOp::create(rewriter, loc, accTileI.getType(), predInt);
-  Value oneI = getIntConstantLike(rewriter, loc, accTileI, 1);
+  Value oneI = getIntConstantLike(rewriter, loc, accTileI.getType(), 1);
   Value predInv = arith::SubIOp::create(rewriter, loc, oneI, predMask);
   Value outMasked = arith::MulIOp::create(rewriter, loc, outI, predMask);
   Value accMasked = arith::MulIOp::create(rewriter, loc, accTileI, predInv);
@@ -369,18 +349,8 @@ Region *getScratchScopeRegion(Operation *anchor) {
       return region;
     region = region->getParentRegion();
   }
-  return nullptr;
-}
-
-bool isValueDefinedInRegion(Value value, Region *region) {
-  if (!region)
-    return false;
-  if (auto arg = dyn_cast<BlockArgument>(value))
-    return arg.getOwner()->getParent() == region;
-  Operation *def = value.getDefiningOp();
-  if (!def)
-    return false;
-  return def->getParentRegion() == region;
+  llvm::report_fatal_error("getScratchScopeRegion called on an op that is not "
+                           "contained in a function");
 }
 
 class TmemScratchManager {
@@ -433,9 +403,6 @@ public:
 
   std::optional<ScratchInfo>
   getOrCreate(Value memdesc, PatternRewriter &rewriter, Region *scope) {
-    if (!scope)
-      return std::nullopt;
-
     if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
       if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
               arg.getOwner()->getParentOp())) {
@@ -469,7 +436,7 @@ public:
       }
 
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(&scope->front());
+      rewriter.setInsertionPointAfter(alloc);
       auto loc = alloc.getLoc();
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
@@ -485,17 +452,10 @@ public:
                                   rewriter.getI64IntegerAttr(alignment));
       Value ptr = allocOp.getResult();
 
-      if (Value src = alloc.getSrc()) {
-        if (!isValueDefinedInRegion(src, scope))
-          src = Value();
-        if (src && src.getDefiningOp())
-          rewriter.setInsertionPointAfter(src.getDefiningOp());
-        Value init = src;
-        if (init) {
-          auto initTy = cast<RankedTensorType>(init.getType());
-          if (!createStoreScratchMemory(rewriter, loc, ptr, init, initTy))
-            return std::nullopt;
-        }
+      if (Value init = alloc.getSrc()) {
+        auto initTy = cast<RankedTensorType>(init.getType());
+        if (!createStoreScratchMemory(rewriter, loc, ptr, init, initTy))
+          return std::nullopt;
       }
 
       ScratchInfo info{ptr, tensorTy};
@@ -513,12 +473,7 @@ public:
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
-      if (Operation *def = baseInfo->ptr.getDefiningOp();
-          def && def->getParentRegion() == scope) {
-        rewriter.setInsertionPointAfter(def);
-      } else {
-        rewriter.setInsertionPointToStart(&scope->front());
-      }
+      rewriter.setInsertionPoint(subslice);
       auto loc = subslice.getLoc();
       int64_t stride = baseTy.getShape().front();
       if (baseTy.getRank() > 2)
@@ -550,21 +505,9 @@ public:
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
-      if (Operation *def = baseInfo->ptr.getDefiningOp();
-          def && def->getParentRegion() == scope) {
-        rewriter.setInsertionPointAfter(def);
-      } else {
-        rewriter.setInsertionPointToStart(&scope->front());
-      }
+      rewriter.setInsertionPoint(view);
       auto loc = view.getLoc();
       Value idx = view.getIndex();
-      if (!isValueDefinedInRegion(idx, scope)) {
-        APInt value;
-        if (!matchPattern(idx, m_ConstantInt(&value)))
-          return std::nullopt;
-        idx = arith::ConstantOp::create(
-            rewriter, loc, rewriter.getI32IntegerAttr(value.getSExtValue()));
-      }
       idx = castToI32(rewriter, loc, idx);
       if (!idx)
         return std::nullopt;
@@ -589,12 +532,7 @@ public:
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
-      if (Operation *def = baseInfo->ptr.getDefiningOp();
-          def && def->getParentRegion() == scope) {
-        rewriter.setInsertionPointAfter(def);
-      } else {
-        rewriter.setInsertionPointToStart(&scope->front());
-      }
+      rewriter.setInsertionPoint(view);
       auto loc = view.getLoc();
       Value ptr = baseInfo->ptr;
       auto ptrTy = triton::getPointerType(memTy.getElementType());
