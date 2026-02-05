@@ -70,35 +70,51 @@ def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return r
 
 
+def murmur64Mixer(h: np.uint64) -> np.uint64:
+    with np.errstate(over="ignore"):
+        h = np.uint64(h)
+        h ^= h >> np.uint64(33)
+        h = np.uint64(h * np.uint64(0xff51afd7ed558ccd))
+        h ^= h >> np.uint64(33)
+        h = np.uint64(h * np.uint64(0xc4ceb9fe1a85ec53))
+        h ^= h >> np.uint64(33)
+        return np.uint64(h)
+
+
+OP_TO_ID_U64 = {
+    "exp": np.uint64(0),
+    "log": np.uint64(1),
+    "exp2": np.uint64(2),
+    "log2": np.uint64(3),
+    "cos": np.uint64(4),
+    "sin": np.uint64(5),
+    "sqrt": np.uint64(6),
+    "rsqrt": np.uint64(7),
+    "erf": np.uint64(8),
+    "floor": np.uint64(9),
+    "ceil": np.uint64(10),
+    "sqrt_rn": np.uint64(11),
+    "div_inv": np.uint64(12),
+}
+
+OP_TO_TAG_U32 = {name: np.uint32(murmur64Mixer(op_id) & np.uint64(0xFFFFFFFF)) for name, op_id in OP_TO_ID_U64.items()}
+
+
 def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     # fpsan division is defined as: num_bits * (den_bits xor DivInvOpId) mod 2^32.
     # Keep this in sync with UnaryOpId::DivInv in FpSanitizer.cpp.
-    DIV_INV_OP_ID = np.uint64(12)
+    div_inv_tag = OP_TO_TAG_U32["div_inv"].astype(np.uint64)
     mask = np.uint64(0xFFFFFFFF)
     num = _as_u32(x_i32).astype(np.uint64)
     den = _as_u32(y_i32).astype(np.uint64)
-    tagged = (den ^ DIV_INV_OP_ID).astype(np.uint64)
+    tagged = (den ^ div_inv_tag).astype(np.uint64)
     out_u32 = ((num * tagged) & mask).astype(np.uint32)
     return _u32_to_i32(out_u32)
 
 
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
-    op_to_id = {
-        "exp": 0,
-        "log": 1,
-        "exp2": 2,
-        "log2": 3,
-        "cos": 4,
-        "sin": 5,
-        "sqrt": 6,
-        "rsqrt": 7,
-        "erf": 8,
-        "floor": 9,
-        "ceil": 10,
-        "sqrt_rn": 11,
-    }
-    tag = np.uint32(op_to_id[op])
+    tag = OP_TO_TAG_U32[op]
     out_u32 = _as_u32(x_i32) ^ tag
     return _u32_to_i32(out_u32)
 
