@@ -379,15 +379,16 @@ struct DotOpMFMAConversionHelper {
             acc = tb.insert_element(vecTy, acc, c, tb.i32_val(v));
           }
 
-          /// in the case of kDimInstrSize larger than kDimOperandSize, we
+          /// in the case of kDimInstrSize is larger than kDimOperandSize, we
           /// duplicate operand contents and dot output need to be divided by
           /// the duplication ratio. To make results correct, initial acc need
-          /// to preajusted with multiplying the duplication ratio. For example
-          /// Let say A=[1,2]; B=[3,4], initial acc = 2, C = A*B + acc = 1*3+2*4
-          /// + 2= 13, Consider instruction K size is 4, in this case operands
+          /// to be pre-ajusted with multiplying the duplication ratio. For
+          /// example Let us say A=[1,2]; B=[3,4], initial acc = 2, C = A*B +
+          /// acc = 1*3+2*4
+          /// + 2= 13, Consider instruction K size is 4, in this case, operands
           /// will be duplicated: A' = [1,2,1,2] B' = [3,4,3,4] C' = (1*3+2*4) +
-          /// (1*3+2*4) = 22 to make output correct, we need to preadjust acc
-          /// with multiplying by 2 so we got 22 + 2 * 2 = 26, then ajdust by 2,
+          /// (1*3+2*4) = 22. To make output correct, we need to pre-adjust acc
+          /// with multiplying by 2 so we got 22 + 2 * 2 = 26, then adjust by 2,
           /// we get 13.
           acc = preAdjustAcc(acc, dstElemTy, kDimInstrSize, kDimOperandSize,
                              elemsPerVec);
