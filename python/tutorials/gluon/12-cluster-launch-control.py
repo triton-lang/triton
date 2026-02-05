@@ -219,6 +219,7 @@ def run_matmul_kernel(A, B, C, BLOCK_M=128, BLOCK_N=256, BLOCK_K=64, num_buffers
     persistent_matmul_kernel[(grid, )](a_desc, b_desc, c_desc, MMAImpl, SchedulerImpl, num_buffers, num_warps=num_warps)
 
 
+@pytest.mark.skipif(not is_blackwell())
 @pytest.mark.parametrize("M, N, K", [(8192, 8192, 8192), (1000, 1000, 1000)])
 @pytest.mark.parametrize("use_clc", [True, False])
 def test_op(M, N, K, use_clc):
