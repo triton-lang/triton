@@ -71,15 +71,35 @@ def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
 
 
 def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    # fpsan division is defined as: num_bits * inv(den_bits | 1) mod 2^32
-    # where inv is the multiplicative inverse in Z/(2^32).
-    MOD = 1 << 32
+    # fpsan division is defined as: num_bits * (den_bits xor DivInvOpId) mod 2^32.
+    # Keep this in sync with UnaryOpId::DivInv in FpSanitizer.cpp.
+    DIV_INV_OP_ID = np.uint64(12)
     mask = np.uint64(0xFFFFFFFF)
     num = _as_u32(x_i32).astype(np.uint64)
     den = _as_u32(y_i32).astype(np.uint64)
-    den_odd = (den | np.uint64(1)).astype(np.uint64)
-    inv = np.array([pow(int(d), -1, MOD) for d in den_odd], dtype=np.uint64)
-    out_u32 = ((num * inv) & mask).astype(np.uint32)
+    tagged = (den ^ DIV_INV_OP_ID).astype(np.uint64)
+    out_u32 = ((num * tagged) & mask).astype(np.uint32)
+    return _u32_to_i32(out_u32)
+
+
+def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
+    # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
+    op_to_id = {
+        "exp": 0,
+        "log": 1,
+        "exp2": 2,
+        "log2": 3,
+        "cos": 4,
+        "sin": 5,
+        "sqrt": 6,
+        "rsqrt": 7,
+        "erf": 8,
+        "floor": 9,
+        "ceil": 10,
+        "sqrt_rn": 11,
+    }
+    tag = np.uint32(op_to_id[op])
+    out_u32 = _as_u32(x_i32) ^ tag
     return _u32_to_i32(out_u32)
 
 
@@ -242,7 +262,7 @@ def test_unary_math_identity(device, op, fresh_knobs):
     n_elements = 1024
     BLOCK = 256
     rs = np.random.RandomState(0)
-    # Includes negative values for log/sqrt on purpose; fpsan treats them as identity.
+    # Includes negative values for log/sqrt on purpose; fpsan works on payload bits.
     xf = rs.randn(n_elements).astype(np.float32)
     x_bits = xf.view(np.int32)
 
@@ -258,7 +278,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
         BLOCK=BLOCK,
     )
 
-    _assert_payload_equal(out, x_bits)
+    exp_bits = _expected_unary_tag_i32(x_bits, op)
+    _assert_payload_equal(out, exp_bits)
 
 
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:

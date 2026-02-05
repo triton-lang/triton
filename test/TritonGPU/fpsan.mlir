@@ -196,7 +196,7 @@ tt.func public @binary_ops(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32
 // CHECK-LABEL: @div_rem_ops
 tt.func public @div_rem_ops(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tt.bitcast
-  // CHECK: arith.ori
+  // CHECK: arith.xori
   // CHECK: arith.muli
   // CHECK-NOT: arith.divf
   // CHECK-NOT: arith.remf
