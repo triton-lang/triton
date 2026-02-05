@@ -1008,6 +1008,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI64Type();
            })
+      .def("get_int128_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getIntegerType(128);
+           })
       .def("get_fp8e4nv_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E4M3FNType>();

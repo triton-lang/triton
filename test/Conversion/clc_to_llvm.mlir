@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=100 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=100 | FileCheck %s --dump-input-context=50
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -17,10 +17,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: clc_load_result
-  tt.func @clc_load_result(%result: !ttg.memdesc<2xi64, #shared0, #smem>) -> (i64, i64) {
-    // CHECK: ld.shared.b128
-    %lo, %hi = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared0, #smem> -> i64, i64
-    tt.return %lo, %hi : i64, i64
+  tt.func @clc_load_result(%result: !ttg.memdesc<2xi64, #shared0, #smem>) {
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i128
+    %res = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared0, #smem> -> i128
+    tt.return
   }
 }
 
@@ -28,42 +28,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: clc_is_canceled
-  tt.func @clc_is_canceled(%lo: i64, %hi: i64) -> i1 {
+  tt.func @clc_is_canceled(%clcRes: i128) {
     // CHECK: clusterlaunchcontrol.query_cancel.is_canceled.pred.b128
-    %is_canceled = ttng.clc_is_canceled %lo, %hi : i64, i64 -> i1
-    tt.return %is_canceled : i1
+    %is_canceled = ttng.clc_is_canceled %clcRes : i128 -> i1
+    tt.return
   }
 }
 
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: clc_get_first_ctaid_x
-  tt.func @clc_get_first_ctaid_x(%lo: i64, %hi: i64) -> i32 {
+  // CHECK-LABEL: clc_get_program_id_x
+  tt.func @clc_get_program_id_x(%clcResult: i128) {
     // CHECK: clusterlaunchcontrol.query_cancel.get_first_ctaid::x.b32.b128
-    %ctaid = ttng.clc_get_first_ctaid %lo, %hi, 0 : i64, i64 -> i32
-    tt.return %ctaid : i32
+    // CHECK-NOT: sdiv
+    %ctaid = ttng.clc_get_program_id %clcResult, x : i128 -> i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: clc_get_program_id_x_multicta
+  tt.func @clc_get_program_id_x_multicta(%clcResult: i128) {
+    // CHECK: %[[ctaid:[^ ]*]] = {{.*}}clusterlaunchcontrol.query_cancel.get_first_ctaid::x.b32.b128
+    // CHECK-NEXT: %[[four:.*]] = llvm.mlir.constant(4 : i32)
+    // CHECK-NEXT: llvm.sdiv %[[ctaid]], %[[four]] : i32
+    %ctaid = ttng.clc_get_program_id %clcResult, x : i128 -> i32
+    tt.return
   }
 }
 
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: clc_get_first_ctaid_y
-  tt.func @clc_get_first_ctaid_y(%lo: i64, %hi: i64) -> i32 {
+  // CHECK-LABEL: clc_get_program_id_y
+  tt.func @clc_get_program_id_y(%clcResult: i128) {
     // CHECK: clusterlaunchcontrol.query_cancel.get_first_ctaid::y.b32.b128
-    %ctaid = ttng.clc_get_first_ctaid %lo, %hi, 1 : i64, i64 -> i32
-    tt.return %ctaid : i32
+    %ctaid = ttng.clc_get_program_id %clcResult, y : i128 -> i32
+    tt.return
   }
 }
 
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: clc_get_first_ctaid_z
-  tt.func @clc_get_first_ctaid_z(%lo: i64, %hi: i64) -> i32 {
+  // CHECK-LABEL: clc_get_program_id_z
+  tt.func @clc_get_program_id_z(%clcResult: i128) {
     // CHECK: clusterlaunchcontrol.query_cancel.get_first_ctaid::z.b32.b128
-    %ctaid = ttng.clc_get_first_ctaid %lo, %hi, 2 : i64, i64 -> i32
-    tt.return %ctaid : i32
+    %ctaid = ttng.clc_get_program_id %clcResult, z : i128 -> i32
+    tt.return
   }
 }
