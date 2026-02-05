@@ -274,14 +274,15 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
         const dataflow::IntegerValueRangeLattice *lattice =
             getLatticeElementFor(getProgramPointBefore(block), value);
         if (lattice != nullptr && !lattice->getValue().isUninitialized())
-          return getUpper ? lattice->getValue().getValue().smax()
-                          : lattice->getValue().getValue().smin();
+          return getUpper.value_or(false)
+                     ? lattice->getValue().getValue().smax()
+                     : lattice->getValue().getValue().smin();
       }
     }
     if (defaultVal)
       return *defaultVal;
-    return getUpper ? APInt::getSignedMaxValue(width)
-                    : APInt::getSignedMinValue(width);
+    return getUpper.value_or(false) ? APInt::getSignedMaxValue(width)
+                                    : APInt::getSignedMinValue(width);
   };
 
   Block *block = iv->getParentBlock();
