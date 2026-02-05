@@ -9,15 +9,16 @@ on:
 
 jobs:
   integration-tests-nvidia:
-    runs-on: ${{ matrix.runner[0] == 'nvidia-gb200' && fromJSON('{"group":"gb200-runner-set"}') || matrix.runner }}
+    name: integration-tests-nvidia (${{ matrix.config.name }})
+    runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 60
     # Let A100 and H100 continue even if GB200 fails, as it's a bit flaky
-    continue-on-error: ${{ startsWith(matrix.runner[0], 'nvidia-gb200') }}
+    continue-on-error: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
     strategy:
       matrix:
-        runner: ${{ fromJson(inputs.matrix) }}
+        config: ${{ fromJson(inputs.matrix) }}
     env:
-      RUNNER_TYPE: ${{ matrix.runner[0] }}
+      RUNNER_TYPE: ${{ matrix.config.runner_type }}
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -69,7 +70,7 @@ jobs:
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Setup Python environment for GB200
-        if: ${{ startsWith(matrix.runner[0], 'nvidia-gb200') }}
+        if: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
         run: |
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
@@ -90,7 +91,7 @@ jobs:
       - name: Run python tests on CUDA
         run: make NUM_PROCS=24 test-unit
       - name: Run interpreter tests
-        if: ${{ matrix.runner[0] == 'nvidia-h100' }}
+        if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret
       - name: Run regression tests
         run: make test-regression
