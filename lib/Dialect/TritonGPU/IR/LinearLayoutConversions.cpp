@@ -1339,7 +1339,8 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
-                                         LinearLayout ctaLayout) {
+                                         LinearLayout ctaLayout,
+                                         CGAEncodingAttr cgaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   SmallVector<int32_t> order;
@@ -1390,9 +1391,8 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
   ctaLayout = tileLayout.transposeOuts(outDimNames) * ctaLayout;
-  auto nonOpSelLayout = combineCtaCgaWithShape(
-      ctaLayout, CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2),
-      dotOperandShape);
+  auto nonOpSelLayout =
+      combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
 
   // This is the tricky part. For a single tile, only 16 threads
   // hold scale values, 4 for each thread. Other 16 thread in a warp

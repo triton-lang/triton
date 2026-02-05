@@ -2923,6 +2923,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_wmma_scale_layout_for_multicta(target):
+
+    @gluon.jit
+    def kernel():
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=0,  #
+            parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 0], [1, 0]]),  #
+            k_width=16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(a_layout, [64, 4])
+        ttgl.full([64, 4], 0x02, ttgl.uint8, a_scale_layout)
+
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=1,  #
+            parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                          instr_shape=[16, 16, 64], cga_layout=[[1, 0], [0, 0]]),  #
+            k_width=16,
+        )
+        b_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(b_layout, [64, 4])
+        ttgl.full([64, 4], 0x01, ttgl.uint8, b_scale_layout)
+
+    module = run_parser(kernel, *make_args(num_warps=4, num_ctas=4), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [16, 0]], block = [[0, 0], [32, 0]]}>
+#linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = [[32, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c2_i8 = arith.constant 2 : i8
+    %cst = arith.constant dense<2> : tensor<64x4xi8, #linear>
+    %c1_i8 = arith.constant 1 : i8
+    %cst_0 = arith.constant dense<1> : tensor<64x4xi8, #linear1>
+    tt.return
+  }
+}
+""")
+
+
 @gluon.jit
 def padded_shared_layout_kernel():
     shape: ttgl.constexpr = [64, 64]
