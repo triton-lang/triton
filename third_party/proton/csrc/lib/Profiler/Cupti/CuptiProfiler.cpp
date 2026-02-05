@@ -600,10 +600,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      int64_t totalScopeLens = 0;
-      int64_t totalFrames = 0;
-      int64_t totalDepth = 0;
-      int64_t totalCallPaths = 0;
+      double totalScopeLens = 0;
+      double totalFrames = 0;
+      double totalDepth = 0;
+      double totalCallPaths = 0;
       
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
