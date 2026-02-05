@@ -4,10 +4,11 @@
 // CHECK: #shared = {{.*}}vec = 1, {{.*}} order = [1, 0]
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 4], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: clamp_vec_to_1_for_async_copy
-  tt.func @clamp_vec_to_1_for_async_copy(%arg0: tensor<16x32x!tt.ptr<f32>, #blocked1> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+  // CHECK-LABEL: async_copy_shared_vec2_clamp_to_vec1
+  tt.func @async_copy_shared_vec2_clamp_to_vec1(%arg0: tensor<16x32x!tt.ptr<f32>, #blocked1> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
                 %arg1: tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<16x32xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <16x32xf32, #shared, #smem, mutable>
     %cst = arith.constant dense<32> : tensor<16x32xi32, #blocked1>
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x32xf32, #mma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x32xf32, #mma>) : i32 {
@@ -27,10 +28,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: #shared = {{.*}} order = [1, 0]
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 4], isTransposed = false}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: clamp_vec_to_1_for_async_copy_blocked
-  tt.func @clamp_vec_to_1_for_async_copy_blocked(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+  // CHECK-LABEL: async_copy_shared_layout_vec1_order
+  tt.func @async_copy_shared_layout_vec1_order(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
                 %arg1: tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<16x32xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <32x32xf32, #shared, #smem, mutable>
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x32xf32, #mma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x32xf32, #mma>) : i32 {
       %b = tt.load %arg0 : tensor<32x32x!tt.ptr<f32>, #blocked>
