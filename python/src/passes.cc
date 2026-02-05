@@ -97,6 +97,9 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
                      createTritonGPUOptimizePartitionWarps);
+  m.def("add_canonicalize_llvm_ir", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::LLVM::LLVMFuncOp>(createCanonicalizeLLVMIR());
+  });
 }
 
 void init_plugin_passes(py::module &&m) {

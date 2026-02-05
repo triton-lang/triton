@@ -50,9 +50,12 @@ struct ConvertLayoutOpConversion
     StringAttr kLane = str_attr("lane");
     StringAttr kRegister = str_attr("register");
 
+    auto dims = conversion.getInDimNames();
+    bool alwaysUseWarpShuffle = cvtAlwaysUseWarpShuffle(op);
+    assert(!alwaysUseWarpShuffle || (!llvm::is_contained(dims, kBlock) &&
+                                     !llvm::is_contained(dims, kWarp)));
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    auto dims = conversion.getInDimNames();
     if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
@@ -67,7 +70,7 @@ struct ConvertLayoutOpConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
-      if (cvtNeedsWarpShuffle(srcTy, dstTy))
+      if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
         return transferWithinWarp(op, adaptor, rewriter);
 
       transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);

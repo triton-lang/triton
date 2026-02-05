@@ -2573,62 +2573,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "cuda:90"} {
+// CHECK: llvm.mlir.global internal constant @tensor_constant_0([0 : i32, 1 : i32, {{.*}}, 15 : i32]) {addr_space = 0 : i32} : !llvm.array<16 x i32>
+
 // CHECK-LABEL: @arith_constant_array
 tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
-  tt.return
-}
-}
-
-// -----
-
-
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @arith_constant_array
-tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
-  tt.return
-}
-}
-
-// -----
-
-
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @arith_constant_array
-tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
+  %0 = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : tensor<16xi32, #blocked>
+  // CHECK: nvvm.read.ptx.sreg.tid.x
+  // CHECK: [[ADDR:%.*]] = llvm.mlir.addressof @tensor_constant_0
+  // CHECK: [[OFFSET:%.*]] = llvm.getelementptr [[ADDR]]
+  // CHECK: [[VALUE:%.*]] = llvm.load [[OFFSET]]
+  // CHECK: llvm.insertvalue [[VALUE]], %{{.*}}[0]
   tt.return
 }
 }
