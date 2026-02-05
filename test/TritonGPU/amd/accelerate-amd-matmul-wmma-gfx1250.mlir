@@ -351,3 +351,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0] }>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_f16_f32_smallk(
+      %arg0: tensor<32x8x!tt.ptr<f16>, #op0>,
+      %arg1: tensor<8x32x!tt.ptr<f16>, #op1>,
+      %arg2: tensor<32x32x!tt.ptr<f32>, #blocked>
+      ) {
+    %a = tt.load %arg0 : tensor<32x8x!tt.ptr<f16>, #op0>
+    %b = tt.load %arg1 : tensor<8x32x!tt.ptr<f16>, #op1>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    // CHECK: %[[OPND0:.*]] = ttg.convert_layout {{.*}} : tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+    // CHECK: %[[OPND1:.*]] = ttg.convert_layout {{.*}} : tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.dot %[[OPND0]], %[[OPND1]], %{{.*}} : tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<32x32xf32, #mma>
+    %res = tt.dot %a, %b, %c : tensor<32x8xf16, #op0> * tensor<8x32xf16, #op1> -> tensor<32x32xf32, #blocked>
+    tt.store %arg2, %res : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

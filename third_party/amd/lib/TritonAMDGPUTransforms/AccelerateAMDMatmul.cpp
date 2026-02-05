@@ -1549,6 +1549,11 @@ public:
     if (operandTypes.empty())
       return failure();
 
+    auto kDimTensor = aShape.back();
+    if (kDimTensor == 1) {
+      return rewriter.notifyMatchFailure(dotOp,
+                                         "Skipping WMMA for dot op with K=1");
+    }
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
         chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion);
@@ -1590,8 +1595,14 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
-    auto kWidth = wmmaVersion == 3 ? 8 : kBase;
+    auto kWidth = 0;
+    // Adjust kWidth=kDimTensor/2 when kDimTensor < kDim
+    if (kDimTensor < kDim) {
+      kWidth = kDimTensor / 2;
+    } else {
+      // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
+      kWidth = wmmaVersion == 3 ? 8 : kBase;
+    }
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
