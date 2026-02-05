@@ -89,9 +89,9 @@ def _p_matmul(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
-             # NYI: Must be None
+             # One of ["HOPPER_VALUE", None]
              SWIZZLE_MX_VALUE: tl.constexpr,
-             # One of ["BLACKWELL", None]
+             # One of ["BLACKWELL", "HOPPER_SCALE", None]
              SWIZZLE_MX_SCALE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
@@ -110,8 +110,7 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              ):
-    # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
-
+    tl.static_assert(SWIZZLE_MX_VALUE is None or SWIZZLE_MX_VALUE == "HOPPER_VALUE")
     # why is this faster than using host-side tensor descriptor?!
     if Y_TMA_MODE is not None:
         Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)

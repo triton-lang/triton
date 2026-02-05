@@ -1362,9 +1362,6 @@ class tensor_descriptor_base_type(base_type):
             return False
         return self.block_type == other.block_type
 
-    def __neq__(self, other) -> bool:
-        return not (self == other)
-
     def mangle(self) -> str:
         return f"TD{self.block_type.mangle()}"
 

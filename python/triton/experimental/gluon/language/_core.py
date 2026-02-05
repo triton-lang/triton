@@ -211,9 +211,6 @@ class shared_memory_descriptor_type(base_type):
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
 
-    def __neq__(self, other) -> bool:
-        return not (self == other)
-
     def mangle(self) -> str:
         shape_str = "_".join([str(s) for s in self.shape])
         alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])

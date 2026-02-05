@@ -196,9 +196,6 @@ class tensor_memory_descriptor_type(base_type):
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
 
-    def __neq__(self, other) -> bool:
-        return not (self == other)
-
     def mangle(self) -> str:
         shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"

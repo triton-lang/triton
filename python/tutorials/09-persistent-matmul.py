@@ -465,7 +465,6 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
     c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
     def grid(META):
-        nonlocal a_desc, b_desc, c_desc
         BLOCK_M = META["BLOCK_SIZE_M"]
         BLOCK_N = META["BLOCK_SIZE_N"]
         return (min(
