@@ -219,6 +219,42 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
+  Value preAdjustAcc(Value &acc, Type dstElemTy,
+                             int64_t kDimInstrSize,
+                             int64_t kDimOperandSiz,
+                             unsigned elemsPerVec) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    if (kDimInstrSize <= kDimOperandSize) {
+      return acc;
+    }
+
+    auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+    Value preAdjustedAcc = tb.undef(vecTy);
+    for (unsigned v = 0; v < elemsPerVec; ++v) {
+      Value accElem = tb.extract_element(dstElemTy, acc, tb.i32_val(v));
+      assert(kDimInstrSize % kDimOperandSize == 0);
+      int duplicationRate = kDimInstrSize / kDimOperandSize;
+      assert(llvm::isPowerOf2_32(duplicationRate));
+      if (dstElemTy.isInteger()) {
+        auto shiftSize = llvm::Log2_32(duplicationRate);
+        assert(!accElem.getType().isUnsignedInteger() &&
+                "MFMA uses signed accumulator");
+        auto adjustedElem = tb.lshr(accElem, tb.i32_val(shiftSize));
+        preAdjustedAcc = tb.insert_element(vecTy, preAdjustedAcc, adjustedElem, tb.i32_val(v));
+      } else {
+        float factor = 1.0 * duplicationRate;
+        auto multiplierAttr =
+            rewriter.getFloatAttr(dstElemTy, factor);
+        auto multiplierVal = LLVM::ConstantOp::create(
+            rewriter, loc, dstElemTy, multiplierAttr);
+        auto adjustedElem tb.fmul(accElem, multiplierVal);
+        preAdjustedAcc = tb.insert_element(vecTy, preAdjustedAcc, adjustedElem, tb.i32_val(v));
+      }
+    }
+
+    return preAdjustedAcc;
+  }
+
   template <typename T>
   void packAndReplaceResult(T &op, SmallVector<Value> &fc,
                             const FailureOr<MfmaIntrinsic> &maybeMfmaIntrinsic,
@@ -343,6 +379,21 @@ struct DotOpMFMAConversionHelper {
             Value c = fc[linearIdx];
             acc = tb.insert_element(vecTy, acc, c, tb.i32_val(v));
           }
+
+          /// in the case of kDimInstrSize larger than kDimOperandSize, we duplicate operand contents
+          /// and dot output need to be divided by the duplication ratio. To make results correct, 
+          /// initial acc need to preajusted with multiplying the duplication ratio. For example
+          /// Let say A=[1,2]; B=[3,4], initial acc = 2, C = A*B + acc = 1*3+2*4 + 2= 13, 
+          /// Consider instruction K size is 4,
+          /// in this case operands will be duplicated:
+          /// A' = [1,2,1,2] B' = [3,4,3,4]
+          /// C' = (1*3+2*4) + (1*3+2*4) = 22
+          /// to make output correct, we need to preadjust acc with multiplying by 2
+          /// so we got 22 + 2 * 2 = 26, then ajdust by 2, we get 13.
+          acc = preAdjustAcc(acc, dstElemTy,
+                             kDimInstrSize,
+                             kDimOperandSiz,
+                             elemsPerVec);
 
           for (int k = 0; k < numVecInKBase; ++k) {
             Value op1 = operandA[{b, m, k}];
@@ -757,6 +808,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                      m * numRepN * elemsPerVec + n * elemsPerVec + v],
                   tb.i32_val(v));
             }
+
+            acc = preAdjustAcc(acc, dstElemTy,
+                              kDimInstrSize,
+                              kDimOperandSiz,
+                              elemsPerVec);
+
             acc = zeroAuxiliarBlocks(subBlocks, acc);
             for (innerK = 0; innerK < innerKBound; innerK++) {
               int k = is2Step ? outerK : innerK;
