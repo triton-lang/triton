@@ -113,6 +113,7 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
   let assemblyFormat = [{
     $result `,` $mbarrier attr-dict `:` qualified(type($result)) `,` qualified(type($mbarrier))
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_CLCLoadResultOp : TTNG_Op<"clc_load_result", []> {
@@ -125,14 +126,15 @@ def TTNG_CLCLoadResultOp : TTNG_Op<"clc_load_result", []> {
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$result
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
-  let results = (outs I64:$lo, I64:$hi);
+  let results = (outs I128:$clcResult);
 
   let assemblyFormat = [{
-    $result attr-dict `:` qualified(type($result)) `->` type($lo) `,` type($hi)
+    $src attr-dict `:` qualified(type($src)) `->` type($clcResult)
   }];
+  let hasVerifier = 1;
 }
 
 def TTNG_CLCIsCanceledOp : TTNG_Op<"clc_is_canceled", [Pure]> {
@@ -143,16 +145,16 @@ def TTNG_CLCIsCanceledOp : TTNG_Op<"clc_is_canceled", [Pure]> {
     canceled. Returns true if canceled, false otherwise.
   }];
 
-  let arguments = (ins I64:$lo, I64:$hi);
+  let arguments = (ins I128:$clcResult);
 
   let results = (outs I1:$is_canceled);
 
   let assemblyFormat = [{
-    $lo `,` $hi attr-dict `:` type($lo) `,` type($hi) `->` type($is_canceled)
+    $clcResult attr-dict `:` type($clcResult) `->` type($is_canceled)
   }];
 }
 
-def TTNG_CLCGetFirstCtaIdOp : TTNG_Op<"clc_get_first_ctaid", [Pure]> {
+def TTNG_CLCGetProgramIdOp : TTNG_Op<"clc_get_program_id", [Pure]> {
   let summary = "Get CTA ID coordinate from CLC response";
 
   let description = [{
@@ -161,16 +163,21 @@ def TTNG_CLCGetFirstCtaIdOp : TTNG_Op<"clc_get_first_ctaid", [Pure]> {
   }];
 
   let arguments = (ins
-    I64:$lo,
-    I64:$hi,
-    I32Attr:$dim
+    I128:$clcResult,
+    TT_ProgramDim:$dim
   );
 
-  let results = (outs I32:$ctaid);
+  let results = (outs I32:$result);
 
   let assemblyFormat = [{
-    $lo `,` $hi `,` $dim attr-dict `:` type($lo) `,` type($hi) `->` type($ctaid)
+    $clcResult `,` $dim attr-dict `:` type($clcResult) `->` type($result)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$clcResult, "int":$axis), [{
+      build($_builder, $_state, clcResult, ProgramIDDim(axis));
+    }]>
+  ];
 }
 
 //

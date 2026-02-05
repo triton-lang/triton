@@ -8,36 +8,50 @@ from triton.experimental.gluon.language.nvidia.hopper import mbarrier
 from triton.experimental.gluon.language.nvidia.blackwell import clc
 
 
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_clc_basic():
-    """Test CLC try_cancel, load_result, is_canceled, get_first_ctaid ops."""
+def test_clc_basic(num_ctas):
 
     @gluon.jit
-    def clc_kernel(Out):
-        pid = gl.program_id(0)
+    def clc_kernel(WasLaunched, IsCancelled, ProgramId, smem_size: gl.constexpr):
+        # Large shared memory allocation to force 1 block per SM
+        cga_layout: gl.constexpr = [[0]] if gl.num_ctas() == 2 else []
+        unswizzled_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        dummy_alloc = gl.allocate_shared_memory(gl.int64, [smem_size // 8 - 32], unswizzled_layout)
 
-        # Allocate shared memory for CLC result (128-bit) and mbarrier
-        clc_result = gl.allocate_shared_memory(gl.int64, [2], mbarrier.MBarrierLayout())
-        clc_mbar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        # Try to cancel another launch
+        clc_result = gl.allocate_shared_memory(gl.int64, [2], unswizzled_layout)
+        clc_mbar = mbarrier.allocate_mbarrier()
         mbarrier.init(clc_mbar, count=1)
 
-        # Issue CLC try_cancel (will fail since no pending clusters, but tests the op)
-        clc.try_cancel(clc_result, clc_mbar)
+        clc.try_cancel(clc_result, clc_mbar, multicast=True)
         mbarrier.expect(clc_mbar, 16)
         mbarrier.wait(clc_mbar, 0)
 
-        # Load result into registers and query
         clc_response = clc.load_result(clc_result)
-        is_canceled = clc_response.is_canceled()
-        ctaid_x = clc_response.get_first_ctaid(0)
+        pid = gl.program_id(0)
+        gl.store(WasLaunched + pid, True)
+        gl.store(IsCancelled + pid, clc_response.is_canceled())
+        gl.store(ProgramId + pid, clc_response.program_id(0))
+        dummy_alloc._keep_alive()
 
-        # Write results
-        out_ptr = Out + pid * 2
-        gl.store(out_ptr, is_canceled)  # Store bool directly
-        gl.store(out_ptr + 1, ctaid_x)
+    device = "cuda"
+    dev_props = torch.cuda.get_device_properties(device)
+    num_sms = dev_props.multi_processor_count
+    smem_size = dev_props.shared_memory_per_block_optin // num_ctas
 
-    out = torch.zeros(2, dtype=torch.int32, device="cuda")
-    clc_kernel[(1,)](out)
+    grid = 2 * (num_sms // num_ctas)
+    was_launched = torch.zeros([grid], dtype=torch.bool, device=device)
+    is_cancelled = torch.zeros([grid], dtype=torch.bool, device=device)
+    program_ids = torch.zeros([grid], dtype=torch.int32, device=device)
+    clc_kernel[(grid, )](was_launched, is_cancelled, program_ids, smem_size, num_ctas=num_ctas)
 
-    # is_canceled should be 0 (False) since there are no pending clusters
-    assert out[0].item() == 0, f"Expected is_canceled=0, got {out[0].item()}"
+    num_launched = torch.sum(was_launched).item()
+    assert num_launched < grid
+
+    num_cancelled = torch.sum(is_cancelled).item()
+    assert num_launched + num_cancelled == grid
+
+    for pid in range(grid):
+        if is_cancelled[pid]:
+            assert not was_launched[program_ids[pid]]
