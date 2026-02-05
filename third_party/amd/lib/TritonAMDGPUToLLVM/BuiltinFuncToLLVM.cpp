@@ -25,7 +25,7 @@ public:
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,
                   mlir::PatternRewriter &rewriter) const override {
-    if (isWrappedLLVMIntrinsic(callOp)) {
+    if (isWrappedLLVMIntrinsic(callOp) || isOcmlCall(callOp)) {
       return convertToLLVMIntrinsic(callOp, rewriter);
     } else {
       return failure();
@@ -36,6 +36,15 @@ private:
   bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
     if (std::optional<StringRef> callee = callOp.getCallee()) {
       if (callee.value().starts_with("__triton_hip_")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool isOcmlCall(LLVM::CallOp callOp) const {
+    if (std::optional<StringRef> callee = callOp.getCallee()) {
+      if (callee.value().starts_with("__ocml_")) {
         return true;
       }
     }
@@ -161,6 +170,12 @@ private:
       replacementOp = LLVM::FMulOp::create(rewriter, loc, returnType,
                                            posResult->getResult(0),
                                            sign->getResult(0), defaultFlags);
+    } else if (calleeName == "__ocml_tanh_f32") {
+      if (targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250) {
+        const char *intrinsic = "llvm.amdgcn.tanh.f32";
+        replacementOp = LLVM::createLLVMIntrinsicCallOp(
+            rewriter, loc, intrinsic, returnType, operands[0]);
+      }
     }
 
     if (replacementOp) {
