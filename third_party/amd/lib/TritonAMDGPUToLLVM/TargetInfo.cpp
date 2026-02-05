@@ -506,7 +506,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
           valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows,
           allBanks);
     } else {
-      // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
 
       // Lanes 0-15 read from lane 31 and lanes 16-31 read from lane 15.

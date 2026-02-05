@@ -292,7 +292,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     group1[0] = b.or_(group1[0], b.i32_val((log2PadInterval - 1) << 22));
     group1[0] = b.or_(group1[0], b.i32_val((padAmountInDwords - 1) << 25));
   }
-  // Encode tensor shapes using 48-bit encoding
+  // Encode 32-bit tensor shapes
   group1[1] = b.shl(tensorShape[numDims - 1], v16);
   group1[2] = b.lshr(tensorShape[numDims - 1], v16);
 
@@ -304,7 +304,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   // Block shapes
   group1[3] = b.or_(group1[3], b.i32_val(blockShape[numDims - 1] << 16));
   if (numDims >= 2) {
-    group1[4] = b.i32_val(blockShape[numDims - 2]);
+    group1[4] = b.i32_val(blockShape[numDims - 2] & 0xFFFF);
   }
   // tile_dim2 (upper 16 bits of group1[4])
   if (numDims >= 3) {
