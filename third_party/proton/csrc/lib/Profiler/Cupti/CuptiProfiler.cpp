@@ -600,6 +600,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
+      int64_t totalScopeLens = 0;
+      int64_t totalFrames = 0;
+      int64_t totalDepth = 0;
+      int64_t totalCallPaths = 0;
+      
       for (auto &[data, callpathToNodeStates] :
            graphState.dataToCallpathToNodeStates) {
         auto *dataPtr = data;
@@ -612,6 +617,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         for (const auto &[callpath, nodeStates] : callpathToNodeStates) {
           const auto nodeEntry =
               dataPtr->addOp(baseEntry.phase, baseEntry.id, callpath);
+          for (const auto &frame: callpath) {
+            totalScopeLens += frame.name.size();
+            totalFrames++;
+          }
+          totalDepth += callpath.size();
+          totalCallPaths++;
           for (const auto &nodeStateRef : nodeStates) {
             const auto &nodeState = nodeStateRef.get();
             auto &graphNodeState = graphNodeIdToState.emplace(nodeState.nodeId);
@@ -621,6 +632,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           }
         }
       }
+
+      std::cout << "[PROTON] Graph launch call path has " << totalFrames
+                << " frames with average scope length "
+                << (totalScopeLens / totalFrames) << " and average depth "
+                << (totalDepth / totalCallPaths)
+                << " for graphExecId: " << graphExecId << std::endl;
+
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
