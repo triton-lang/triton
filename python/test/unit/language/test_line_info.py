@@ -159,24 +159,24 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 16))
         assert (check_file_lines(file_lines, "test_line_info.py", 17))
+        assert (check_file_lines(file_lines, "test_line_info.py", 18))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 27))
+        assert (check_file_lines(file_lines, "test_line_info.py", 28))
         assert (check_file_lines(file_lines, "test_line_info.py", 29))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 41))
-        assert (check_file_lines(file_lines, "test_line_info.py", 34))
-        assert (check_file_lines(file_lines, "test_line_info.py", 34))
+        assert (check_file_lines(file_lines, "test_line_info.py", 42))
+        assert (check_file_lines(file_lines, "test_line_info.py", 35))
+        assert (check_file_lines(file_lines, "test_line_info.py", 35))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 52))
         assert (check_file_lines(file_lines, "test_line_info.py", 53))
         assert (check_file_lines(file_lines, "test_line_info.py", 54))
+        assert (check_file_lines(file_lines, "test_line_info.py", 55))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 64))
-        assert (check_file_lines(file_lines, "test_line_info.py", 65, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 65))
+        assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 74))
+        assert (check_file_lines(file_lines, "test_line_info.py", 75))
 
 
 @pytest.mark.interpreter
@@ -260,7 +260,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":261:0)
+        # CHECK: #loc = loc("{{.*}}":262:0)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc14)
