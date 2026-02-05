@@ -221,7 +221,7 @@ struct DotOpMFMAConversionHelper {
 
   Value preAdjustAcc(Value &acc, Type dstElemTy,
                              int64_t kDimInstrSize,
-                             int64_t kDimOperandSiz,
+                             int64_t kDimOperandSize,
                              unsigned elemsPerVec) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     if (kDimInstrSize <= kDimOperandSize) {
@@ -247,7 +247,7 @@ struct DotOpMFMAConversionHelper {
             rewriter.getFloatAttr(dstElemTy, factor);
         auto multiplierVal = LLVM::ConstantOp::create(
             rewriter, loc, dstElemTy, multiplierAttr);
-        auto adjustedElem tb.fmul(accElem, multiplierVal);
+        auto adjustedElem = tb.fmul(accElem, multiplierVal);
         preAdjustedAcc = tb.insert_element(vecTy, preAdjustedAcc, adjustedElem, tb.i32_val(v));
       }
     }
@@ -392,7 +392,7 @@ struct DotOpMFMAConversionHelper {
           /// so we got 22 + 2 * 2 = 26, then ajdust by 2, we get 13.
           acc = preAdjustAcc(acc, dstElemTy,
                              kDimInstrSize,
-                             kDimOperandSiz,
+                             kDimOperandSize,
                              elemsPerVec);
 
           for (int k = 0; k < numVecInKBase; ++k) {
@@ -811,7 +811,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
             acc = preAdjustAcc(acc, dstElemTy,
                               kDimInstrSize,
-                              kDimOperandSiz,
+                              kDimOperandSize,
                               elemsPerVec);
 
             acc = zeroAuxiliarBlocks(subBlocks, acc);

@@ -3205,7 +3205,9 @@ def get_test_dot_small_k_mfma_cases():
     return [(32, 32, k_size, 4, False, False, 'None', 'ieee', in_dtype, out_dtype, 1, mma_nonk_size)
             for k_size in [1, 2, 4, 8]
             for in_dtype, out_dtype in [('float16', 'float32'), ('int8', 'int32')]
-            for mma_nonk_size in mma_nonk_sizes]
+            for mma_nonk_size in mma_nonk_sizes] + [
+           (32, 32, 16, 4, False, False, 'add-matrix', 'ieee', in_dtype, out_dtype, 2, 16)
+            for in_dtype, out_dtype in [('float16', 'float32')]]
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
