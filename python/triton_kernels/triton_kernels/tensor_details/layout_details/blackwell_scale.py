@@ -12,13 +12,6 @@ from triton_kernels import target_info
 # ------------------- Blackwell MX Scale Layout -------------------
 
 
-def _swizzle_block_shape(block_shape):
-    K, N = block_shape
-    assert K % 4 == 0, f"{block_shape[0]=} must be divisible by 4"
-    assert N % 128 == 0, f"{block_shape[1]=} must be divisible by 128"
-    return [1, N // 128, K // 4, 2, 256]
-
-
 @dataclass(frozen=True)
 class BlackwellMXScaleLayout(Layout):
 
