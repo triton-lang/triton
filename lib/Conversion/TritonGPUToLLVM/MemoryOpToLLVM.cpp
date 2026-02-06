@@ -6,7 +6,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/LayoutUtils.h"
 
 namespace {
 
@@ -28,12 +27,9 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
   bool isScatter = !storeVals.empty();
 
   // Get the shared memory layout (linear component for padded layouts)
-  auto sharedEnc =
-      cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
-  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
   LinearLayout sharedLayout;
-  if (paddedEnc) {
-    sharedLayout = paddedEnc.getLinearComponent();
+  if (isPaddedEncoding(memDescTy.getEncoding())) {
+    sharedLayout = paddedLinearLayout(memDescTy);
   } else {
     sharedLayout = toLinearLayout(memDescTy);
   }
@@ -102,10 +98,10 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
 
     // Add padding offset for padded layouts (non-linear component)
     Value ptr;
-    if (paddedEnc) {
+    if (isPaddedEncoding(memDescTy.getEncoding())) {
       // Convert offset to bytes for padding calculation
       Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-      auto shifts = getPaddedSharedShifts(paddedEnc, bitwidth,
+      auto shifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
       // GEP in bytes: base + offset*elemSize + padOffset
       Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
@@ -126,67 +122,17 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
   return results;
 }
 
-// Helper to construct linear layout for PartitionedSharedEncodingAttr with
-// PaddedSharedEncodingAttr sublayout. This mirrors the logic in
-// partitionedSharedToLinearLayout but uses the linear component from the padded
-// layout.
-static LinearLayout constructPartitionedLinearLayoutWithPadded(
-    ArrayRef<int64_t> shape,
-    triton::gpu::PartitionedSharedEncodingAttr partitioned,
-    triton::gpu::PaddedSharedEncodingAttr paddedLayout) {
-  MLIRContext *ctx = partitioned.getContext();
-  unsigned numPartitions = partitioned.getNumPartitions();
-  unsigned numGroups = partitioned.getNumGroups();
-  unsigned partitionDim = partitioned.getPartitionDim();
-  auto outDimNames = standardOutDimNames(ctx, shape.size());
-
-  // Step 1: Get the linear component from the padded layout
-  LinearLayout baseLayout = paddedLayout.getLinearComponent();
-
-  // Step 2: partLayout maps "partition" -> piece selection along partitionDim.
-  LinearLayout partLayout = LinearLayout::identity1D(
-      numPartitions, str_attr("partition"), outDimNames[partitionDim]);
-  auto groupLayout = baseLayout * partLayout;
-
-  // Step 3: extend "offset" to address across groups.
-  LinearLayout extension = LinearLayout::identity1D(
-      numGroups, str_attr("offset"), outDimNames[partitionDim]);
-
-  return groupLayout * extension;
-}
-
 // Compute the distributed-to-shared memory layout conversion based on the
 // encoding type (padded, partitioned with padded sublayout, or standard linear
 // layouts).
 static LinearLayout computeDistributedToSharedLayout(MemDescType memDescTy,
                                                      LinearLayout regLayout) {
-  // Check for padded encoding (standalone or inside partitioned)
-  auto encoding = memDescTy.getEncoding();
-  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(encoding);
-  auto partitionedEnc =
-      dyn_cast<triton::gpu::PartitionedSharedEncodingAttr>(encoding);
-  triton::gpu::PaddedSharedEncodingAttr paddedPartitionLayout = nullptr;
-  if (partitionedEnc) {
-    paddedPartitionLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-        partitionedEnc.getPartitionLayout());
+  if (isPaddedEncoding(memDescTy.getEncoding())) {
+    auto sharedLL = paddedLinearLayout(memDescTy);
+    return regLayout.invertAndCompose(sharedLL);
   }
-
-  LinearLayout cvt = LinearLayout::empty();
-  if (paddedEnc) {
-    // Standalone padded layout
-    const auto &sharedLL = paddedEnc.getLinearComponent();
-    cvt = regLayout.invertAndCompose(sharedLL);
-  } else if (paddedPartitionLayout) {
-    // Partitioned layout with padded sublayout
-    auto shape = memDescTy.getAllocShape().take_back(memDescTy.getRank());
-    auto sharedLL = constructPartitionedLinearLayoutWithPadded(
-        shape, partitionedEnc, paddedPartitionLayout);
-    cvt = regLayout.invertAndCompose(sharedLL);
-  } else {
-    auto sharedLayout = toLinearLayout(memDescTy);
-    cvt = regLayout.invertAndCompose(sharedLayout);
-  }
-  return cvt;
+  auto sharedLayout = toLinearLayout(memDescTy);
+  return regLayout.invertAndCompose(sharedLayout);
 }
 
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,

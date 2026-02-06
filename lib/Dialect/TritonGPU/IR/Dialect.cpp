@@ -1915,10 +1915,10 @@ LogicalResult PartitionedSharedEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, unsigned numPartitions,
     unsigned numGroups, unsigned partitionDim,
     SharedEncodingTrait partitionLayout) {
-  // Check numPartitions is a power of 2 and > 0
-  if (numPartitions == 0 || !llvm::isPowerOf2_32(numPartitions))
-    return emitError()
-           << "numPartitions must be a power of 2 and greater than 0";
+  // Check numPartitions is a power of 2 and >= 2
+  // (numPartitions == 1 is just the inner layout, use that directly instead)
+  if (numPartitions < 2 || !llvm::isPowerOf2_32(numPartitions))
+    return emitError() << "numPartitions must be a power of 2 and at least 2";
 
   // Check numGroups is a power of 2 and > 0
   if (numGroups == 0 || !llvm::isPowerOf2_32(numGroups))
@@ -4350,4 +4350,22 @@ std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
     return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
   }
   return std::nullopt;
+}
+
+PaddedSharedEncodingAttr triton::gpu::getPaddedEncoding(Attribute encoding) {
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(encoding))
+    return padded;
+  if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
+    return dyn_cast<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout());
+  return nullptr;
+}
+
+bool triton::gpu::isPaddedEncoding(Attribute encoding) {
+  return getPaddedEncoding(encoding) != nullptr;
+}
+
+unsigned triton::gpu::getMinInterval(Attribute encoding) {
+  auto padded = getPaddedEncoding(encoding);
+  assert(padded && "expected padded encoding or partitioned wrapping padded");
+  return padded.getMinInterval();
 }

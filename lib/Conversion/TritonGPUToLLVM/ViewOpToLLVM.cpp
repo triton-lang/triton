@@ -515,9 +515,9 @@ struct MemDescIndexOpConversion
                                   prevOffsets.end());
 
     // Apply padding based on the amount we move the base ptr
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+    if (isPaddedEncoding(dstTy.getEncoding())) {
       auto bitwidth = dstTy.getElementTypeBitWidth();
-      auto paddingShifts = getPaddedSharedShifts(padEnc, bitwidth,
+      auto paddingShifts = getPaddedSharedShifts(dstTy.getEncoding(), bitwidth,
                                                  /*offsetInBytes=*/false);
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }

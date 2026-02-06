@@ -1185,7 +1185,6 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   unsigned numGroups = partitioned.getNumGroups();
   unsigned partitionDim = partitioned.getPartitionDim();
   auto partitionLayout = partitioned.getPartitionLayout();
-  auto outDimNames = standardOutDimNames(ctx, shape.size());
 
   // Each logical piece has this size along the partition dimension
   int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
@@ -1194,25 +1193,12 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
   partitionShape[partitionDim] = pieceSize;
 
-  // Step 1: baseLayout maps (offset, block) -> coordinates within ONE piece.
+  // baseLayout maps (offset, block) -> coordinates within ONE piece.
   // Output size along partitionDim = pieceSize.
-  // Note: PaddedSharedEncodingAttr in partitionLayout must be handled in
-  // lowering, not here. This function only creates fully linear layouts.
-  assert(!isa<PaddedSharedEncodingAttr>(partitionLayout) &&
-         "PaddedSharedEncodingAttr in partitioned layout must be handled in "
-         "lowering");
   LinearLayout baseLayout = toLinearLayout(partitionShape, partitionLayout);
 
-  // Step 2: partLayout maps "partition" -> piece selection along partitionDim.
-  LinearLayout partLayout = LinearLayout::identity1D(
-      numPartitions, S("partition"), outDimNames[partitionDim]);
-  auto groupLayout = baseLayout * partLayout;
-
-  // Step 3: extend "offset" to address across groups.
-  LinearLayout extension = LinearLayout::identity1D(numGroups, S("offset"),
-                                                    outDimNames[partitionDim]);
-
-  return groupLayout * extension;
+  return constructPartitionedLayout(baseLayout, numPartitions, numGroups,
+                                    partitionDim);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
@@ -1290,6 +1276,24 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+LinearLayout paddedLinearLayout(MemDescType type) {
+  auto encoding = type.getEncoding();
+  assert(isPaddedEncoding(encoding) &&
+         "expected padded encoding or partitioned wrapping padded");
+
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+    return padded.getLinearComponent();
+  }
+
+  auto partitioned = cast<PartitionedSharedEncodingAttr>(encoding);
+  auto padded =
+      cast<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout());
+  LinearLayout baseLayout = padded.getLinearComponent();
+  return constructPartitionedLayout(baseLayout, partitioned.getNumPartitions(),
+                                    partitioned.getNumGroups(),
+                                    partitioned.getPartitionDim());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
