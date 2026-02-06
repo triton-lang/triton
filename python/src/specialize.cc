@@ -187,18 +187,24 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
 
   // Check mode attribute for im2col vs tiled (only for Gluon TensorDescriptor)
   bool is_im2col = false;
-  if (has_layout && PyObject_HasAttr(arg, mode_attr)) {
+  if (has_layout) {
     auto mode_obj = from_new_ref(PyObject_GetAttr(arg, mode_attr));
-    if (mode_obj) {
-      auto mode_str = from_new_ref(PyObject_Str(mode_obj.ptr()));
-      if (mode_str) {
-        const char *mode_cstr = PyUnicode_AsUTF8(mode_str.ptr());
-        if (mode_cstr && strcmp(mode_cstr, "im2col") == 0) {
-          is_im2col = true;
-        }
-      }
+    if (!mode_obj)
+      return {};
+    if (!PyUnicode_Check(mode_obj.ptr())) {
+      PyErr_SetString(PyExc_TypeError,
+                      "TensorDescriptor.mode must be a string");
+      return {};
     }
-    PyErr_Clear(); // Clear any errors from optional attribute access
+    const char *mode_cstr = PyUnicode_AsUTF8(mode_obj.ptr());
+    if (!mode_cstr)
+      return {};
+    is_im2col = strcmp(mode_cstr, "im2col") == 0;
+    if (!is_im2col && strcmp(mode_cstr, "tiled") != 0) {
+      PyErr_Format(PyExc_ValueError, "Unrecognized TensorDescriptor mode: '%s'",
+                   mode_cstr);
+      return {};
+    }
   }
 
   desc_cstr = is_im2col ? "tensordesc_im2col<" : "tensordesc<";
@@ -230,14 +236,15 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   // This allows the driver to know the N-dimensional shape/strides to pass
   if (is_im2col) {
     auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
-    if (tensor_shape_obj) {
-      Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
-      if (tensor_rank > 0) {
-        desc_cstr += ",input_rank=";
-        desc_cstr += std::to_string(tensor_rank);
-      }
+    if (!tensor_shape_obj)
+      return {};
+    Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
+    if (tensor_rank < 0)
+      return {};
+    if (tensor_rank > 0) {
+      desc_cstr += ",input_rank=";
+      desc_cstr += std::to_string(tensor_rank);
     }
-    PyErr_Clear();
   }
 
   if (has_layout) {
