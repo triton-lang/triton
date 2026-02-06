@@ -40,6 +40,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_commit,
     tcgen05_copy,
     float2,
+    clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
@@ -3421,3 +3422,50 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
     # Verify reduction output
     # Use equal_nan=True when testing NaN propagation
     torch.testing.assert_close(expected_red, red_output, atol=1e-5, rtol=1e-5, equal_nan=use_nan)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_clc_basic(num_ctas):
+
+    @gluon.jit
+    def clc_kernel(WasLaunched, IsCancelled, ProgramId, smem_size: ttgl.constexpr):
+        # Large shared memory allocation to force 1 block per SM
+        cga_layout: ttgl.constexpr = [[0]] if ttgl.num_ctas() == 2 else []
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], layout)
+
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        clc_mbar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_mbar, count=1)
+
+        clc.try_cancel(clc_result, clc_mbar, multicast=True)
+        mbarrier.expect(clc_mbar, 16)
+        mbarrier.wait(clc_mbar, 0)
+
+        response = clc.load_result(clc_result)
+        pid = ttgl.program_id(0)
+        ttgl.store(WasLaunched + pid, True)
+        ttgl.store(IsCancelled + pid, response.is_canceled())
+        ttgl.store(ProgramId + pid, response.program_id(0))
+        dummy._keep_alive()
+
+    dev_props = torch.cuda.get_device_properties("cuda")
+    num_sms = dev_props.multi_processor_count
+    smem_size = dev_props.shared_memory_per_block_optin // num_ctas
+    grid = 2 * (num_sms // num_ctas)
+
+    was_launched = torch.zeros([grid], dtype=torch.bool, device="cuda")
+    is_cancelled = torch.zeros([grid], dtype=torch.bool, device="cuda")
+    program_ids = torch.zeros([grid], dtype=torch.int32, device="cuda")
+    clc_kernel[(grid, )](was_launched, is_cancelled, program_ids, smem_size, num_ctas=num_ctas)
+
+    num_launched = torch.sum(was_launched).item()
+    assert num_launched < grid
+
+    num_cancelled = torch.sum(is_cancelled).item()
+    assert num_launched + num_cancelled == grid
+
+    for pid in range(grid):
+        if is_cancelled[pid]:
+            assert not was_launched[program_ids[pid]]
