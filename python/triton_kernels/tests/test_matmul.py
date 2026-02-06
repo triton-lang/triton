@@ -360,7 +360,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
     gammas       = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
-    gain         = None if not do_gain    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
+    gain         = None if not do_gain    else 2**torch.randint(-5, 0, b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
 
     # --- create fused activation ---
     fused_activation = None
