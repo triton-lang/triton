@@ -62,6 +62,7 @@ def _p_matmul(
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
+             Gain, stride_g_e, # Gain
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
@@ -445,6 +446,11 @@ def _p_matmul(
                 bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
         else:
             bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
+        if Gain is not None:
+            GainPtrs = Gain + expt_id1 * stride_g_e + offs_y_n
+            gain = tl.load(GainPtrs, mask=mask_n, other=1.0)
+        else:
+            gain = tl.full([BLOCK_N], 1, dtype=tl.float32)
         if Betas is not None:
             betas = tl.load(Betas + start_m1 + offs_m, mask=mask_m, other=0.0)
         else:
@@ -461,6 +467,7 @@ def _p_matmul(
 
         accs = (acc,)
         biases = (bias,)
+        gains = (gain,)
 
         if SUBTILE_FACTOR >= 2:
             if SWAP_XW:
@@ -471,6 +478,8 @@ def _p_matmul(
             accs = (acc0, acc1)
             bias0, bias1 = bias.reshape(2, BLOCK_N // 2).permute(1, 0).split()
             biases = (bias0, bias1)
+            gain0, gain1 = gain.reshape(2, BLOCK_N // 2).permute(1, 0).split()
+            gains = (gain0, gain1)
 
         if SUBTILE_FACTOR >= 4:
             if SWAP_XW:
@@ -485,6 +494,9 @@ def _p_matmul(
             bias00, bias01 = bias0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
             bias10, bias11 = bias1.reshape(2, BLOCK_N // 4).permute(1, 0).split()
             biases = (bias00, bias01, bias10, bias11)
+            gain00, gain01 = gain0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            gain10, gain11 = gain1.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            gains = (gain00, gain01, gain10, gain11)
 
         tl.static_assert(EPILOGUE_BLOCK_N == BLOCK_N // SUBTILE_FACTOR)
         tl.static_assert(len(accs) == SUBTILE_FACTOR)
@@ -495,6 +507,7 @@ def _p_matmul(
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
             acc_tile *= x_scale * w_scale
+            acc_tile *= gains[a_i][None, :]
 
             if SWAP_XW:
                 acc_tile = acc_tile.T

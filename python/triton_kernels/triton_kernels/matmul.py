@@ -231,6 +231,7 @@ def matmul(a, b, bias,
     precision_config: PrecisionConfig | None = None,
     betas: torch.Tensor | None = None,
     gammas: torch.Tensor | None = None,
+    gain: torch.Tensor | None = None,
     out_alpha: float | None = None,
     c: torch.Tensor | None = None,
     fused_comm: FusedComm | None = None,
@@ -399,6 +400,7 @@ def matmul(a, b, bias,
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
+    gain_stride = None if gain is None else gain.stride(0)
     # moe metadata
     expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(b_ragged_metadata, opt_flags.block_k)
     expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(a_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
@@ -511,6 +513,7 @@ def matmul(a, b, bias,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
+                   gain, gain_stride,
                    None if ragged_dimension == "M" else a.shape[-2],
                    N, K, K_W,
                    betas, gammas,
@@ -657,6 +660,7 @@ def matmul_torch(a, b, bias,
                  precision_config: PrecisionConfig = None,
                  betas = None,
                  gammas = None,
+                 gain = None,
                  round_x = None, round_y = None,
                  ):
     a, b = apply_precision(a, b, precision_config)
@@ -675,10 +679,16 @@ def matmul_torch(a, b, bias,
             w_start = int(w_slice_offs[expt].item())
             x_slice = a[:, x_start:x_start + k]
             w_slice = b[w_start:w_start + k, :]
+            bias_expt = None
+            if bias is not None:
+                bias_expt = bias if bias.ndim == 1 else bias[expt]
+            gain_expt = None
+            if gain is not None:
+                gain_expt = gain if gain.ndim == 1 else gain[expt]
             out_expt = matmul_torch(
-                x_slice, w_slice, None, None,
+                x_slice, w_slice, bias_expt, None,
                 None, None, None, PrecisionConfig(),
-                betas, gammas,
+                betas, gammas, gain_expt,
                 round_x, round_y,
             )
             out[expt] = out_expt.to(out.dtype)
@@ -700,6 +710,8 @@ def matmul_torch(a, b, bias,
         round_y = lambda x: x
     if bias is not None and bias.ndim == 1:
         bias = bias.view(1, *bias.shape)
+    if gain is not None and gain.ndim == 1:
+        gain = gain.view(1, *gain.shape)
     if b.ndim == 2:
         b = b.view(1, *b.shape)
     if a.ndim == 2:
@@ -723,6 +735,8 @@ def matmul_torch(a, b, bias,
         batch = i if is_input_batched else 0
         out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
                            b[i].float())
+        if gain is not None:
+            out *= gain[i, :]
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:

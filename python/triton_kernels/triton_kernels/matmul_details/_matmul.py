@@ -39,6 +39,7 @@ def _matmul(
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
+             Gain, stride_g_e, # Gain
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
@@ -410,6 +411,11 @@ def _matmul(
             bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
     else:
         bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
+    if Gain is not None:
+        GainPtrs = Gain + expt_id * stride_g_e + offs_y_n
+        gain = tl.load(GainPtrs, mask=mask_n, other=1.0)
+    else:
+        gain = tl.full([BLOCK_N], 1, dtype=tl.float32)
     if Betas is not None:
         betas = tl.load(Betas + start_m + offs_m, mask=mask_m, other=0.0)
     else:
@@ -427,6 +433,7 @@ def _matmul(
     if SWAP_XW:
         acc = acc.trans()
     acc *= x_scale * w_scale
+    acc *= gain[None, :]
     acc = acc + bias[None, :] * betas[:, None]
     if out_alpha is not None:
         acc *= out_alpha

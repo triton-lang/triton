@@ -207,9 +207,10 @@ def _build_test_op_cases():
     (False, False, "pad_a"),
 ])
 @pytest.mark.parametrize("do_gamma", [False,True])
+@pytest.mark.parametrize("do_gain", [False,True])
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
-def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
+def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, do_gain, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
@@ -217,7 +218,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
     try:
-        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
+        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, do_gain, is_persistent, num_warps, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
                  swiglu_opts, device, opt_flags_scope)
@@ -227,7 +228,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
     if skip_message is not None:
         pytest.skip(skip_message)
 
-def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
+def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, do_gain, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
@@ -359,6 +360,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
     gammas       = None if not do_gamma   else 2**torch.randint(-5, 0, (m, ), dtype=torch.float32, device=device)
+    gain         = None if not do_gain    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
 
     # --- create fused activation ---
     fused_activation = None
@@ -401,7 +403,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas, epilogue=epilogue, c=c,
+                           gammas=gammas, gain=gain, epilogue=epilogue, c=c,
                            fused_activation=fused_activation)
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
@@ -411,7 +413,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     ref_y = matmul_torch(a, b, bias,  #
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
-                        gammas=gammas)
+                        gammas=gammas, gain=gain)
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
