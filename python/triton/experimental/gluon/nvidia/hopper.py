@@ -41,7 +41,7 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     assert layout.element_bitwidth in [
         8, 16, 32
     ], (f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {layout.element_bitwidth}")
-    return rank, dtype_str
+    return rank
 
 
 @dataclass
@@ -55,7 +55,9 @@ class TensorDescriptor:
     round_f32_to_tf32: bool = False
 
     def __post_init__(self):
-        rank, _ = _validate_common_descriptor(
+        rank = len(self.shape)
+        assert len(self.block_shape) == rank, f"tiled: block_shape must match rank {rank}"
+        rank = _validate_common_descriptor(
             self.base,
             self.shape,
             self.strides,
@@ -64,7 +66,6 @@ class TensorDescriptor:
             self.round_f32_to_tf32,
             self.block_shape,
         )
-        assert len(self.block_shape) == rank, f"tiled: block_shape must match rank {rank}"
         validate_block_shape(self.block_shape)
 
     @property
@@ -116,7 +117,8 @@ class TensorDescriptorIm2Col:
     pixel_box_upper_corner: Optional[List[int]] = None  # Im2col: box end offsets (DHW)
 
     def __post_init__(self):
-        rank, _ = _validate_common_descriptor(
+        assert len(self.block_shape) == 2, "im2col: block_shape must be 2D"
+        rank = _validate_common_descriptor(
             self.base,
             self.shape,
             self.strides,
@@ -125,7 +127,6 @@ class TensorDescriptorIm2Col:
             self.round_f32_to_tf32,
             self.block_shape,
         )
-        assert len(self.block_shape) == 2, "im2col: block_shape must be 2D"
         # Validate element_strides if provided
         if self.element_strides is not None:
             assert len(self.element_strides

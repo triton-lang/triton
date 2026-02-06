@@ -628,9 +628,9 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
   if (!blockSizeFast)
     goto cleanup;
   int blockRank = PySequence_Fast_GET_SIZE(blockSizeFast);
-  if (blockRank < 2) {
+  if (blockRank != 2) {
     PyErr_SetString(PyExc_RuntimeError,
-                    "blockSize must have at least 2 dimensions for im2col");
+                    "blockSize must have exactly 2 dimensions for im2col");
     goto cleanup;
   }
 
