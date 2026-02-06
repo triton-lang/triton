@@ -314,32 +314,33 @@ def _p_matmul(
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
             # --- load x_scale ---
-            x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
-            if is_x_microscaled:
-                if XMxScalePtrs is not None: # not using TMA for x scale load
-                    # dividing MX_PACK_DIVISOR by W_K_DIVISOR because off_k_w is
-                    # already divided by W_K_DIVISOR (2 for mxfp4 where 2 fp4
-                    # values are packed per Byte along K)
-                    off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
-                    if EVEN_K:
-                        mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
-                    else:
-                        mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                    mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
-                else: # use TMA for x scale load - only cover batched case for now
-                    if X_TMA_MODE == "dense":
-                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
-                    else:
-                        # slice_block_off_m points to the start of the current slice in the padded version
-                        # + off_m points to the current block in the slice
-                        off_m_scale = slice_block_off_m + off_m // 128
-                    x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
-                    x_scales = unswizzle_act_mx_scale_bw(x_scales)
-            elif x_format == "fp16" or x_format == "bf16":
-                x_scales: tl.constexpr = None
-            else:
-                x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
+            if is_w_microscaled:
+                x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
+                if is_x_microscaled:
+                    if XMxScalePtrs is not None: # not using TMA for x scale load
+                        # dividing MX_PACK_DIVISOR by W_K_DIVISOR because off_k_w is
+                        # already divided by W_K_DIVISOR (2 for mxfp4 where 2 fp4
+                        # values are packed per Byte along K)
+                        off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
+                        if EVEN_K:
+                            mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+                        else:
+                            mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
+                        mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
+                        x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                    else: # use TMA for x scale load - only cover batched case for now
+                        if X_TMA_MODE == "dense":
+                            off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                        else:
+                            # slice_block_off_m points to the start of the current slice in the padded version
+                            # + off_m points to the current block in the slice
+                            off_m_scale = slice_block_off_m + off_m // 128
+                        x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
+                        x_scales = unswizzle_act_mx_scale_bw(x_scales)
+                elif x_format == "fp16" or x_format == "bf16":
+                    x_scales: tl.constexpr = None
+                else:
+                    x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
 
             # --- load w ---
             if W_TRANSPOSE:
@@ -348,8 +349,8 @@ def _p_matmul(
                 w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])
 
             # --- load w_scale ---
-            w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
             if is_w_microscaled:
+                w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
                 off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
                 tl.static_assert(MX_PACK_DIVISOR % W_K_DIVISOR == 0)
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
