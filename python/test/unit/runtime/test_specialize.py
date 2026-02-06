@@ -79,7 +79,7 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         inner = canonicalize_dtype(arg.base.dtype)
         type_name = "tensordesc_im2col" if arg.mode == "im2col" else "tensordesc"
         # For im2col mode, include the original tensor rank in the signature
-        rank_suffix = f",rank={len(arg.shape)}" if arg.mode == "im2col" else ""
+        rank_suffix = f",input_rank={len(arg.shape)}" if arg.mode == "im2col" else ""
         return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))
