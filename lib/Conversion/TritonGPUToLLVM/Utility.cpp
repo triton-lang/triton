@@ -3,6 +3,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -230,6 +231,10 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   auto xorPart =
       treeReduce(xors, [&b](Value x, Value y) { return b.xor_(x, y); });
   return b.or_(orPart, xorPart, /*disjoint=*/true);
+}
+
+bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
+  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 
 } // namespace triton::gpu
@@ -1426,31 +1431,40 @@ size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
   return linear;
 }
 
+LLVM::GlobalOp getOrInsertGlobalConstant(RewriterBase &rewriter,
+                                         ModuleOp module, Type type,
+                                         Attribute content, StringRef key) {
+  for (auto op : module.getOps<LLVM::GlobalOp>()) {
+    if (op.getConstant() && op.getLinkage() == LLVM::Linkage::Internal &&
+        op.getType() == type && op.getValueAttr() == content)
+      return op;
+  }
+
+  unsigned stringNumber = 0;
+  SmallString<16> name;
+  do {
+    name.clear();
+    (key + Twine(stringNumber++)).toStringRef(name);
+  } while (module.lookupSymbol(name));
+  RewriterBase::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(module.getBody());
+  return LLVM::GlobalOp::create(rewriter, UnknownLoc::get(type.getContext()),
+                                type, /*isConstant=*/true,
+                                LLVM::Linkage::Internal, name, content);
+}
+
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
-  unsigned stringNumber = 0;
-  SmallString<16> stringConstName;
-  do {
-    stringConstName.clear();
-    (key + Twine(stringNumber++)).toStringRef(stringConstName);
-  } while (moduleOp.lookupSymbol(stringConstName));
 
   llvm::SmallString<64> contentStr(content);
   size_t contentSize = contentStr.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
-
-  LLVM::GlobalOp global;
-  {
-    RewriterBase::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = LLVM::GlobalOp::create(rewriter, UnknownLoc::get(ctx), globalType,
-                                    /*isConstant=*/true,
-                                    LLVM::Linkage::Internal, stringConstName,
-                                    rewriter.getStringAttr(contentStr));
-  }
+  auto contentAttr = rewriter.getStringAttr(contentStr);
+  LLVM::GlobalOp global = getOrInsertGlobalConstant(
+      rewriter, moduleOp, globalType, contentAttr, key);
 
   Value zero = b.i32_val(0);
   Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
@@ -1572,6 +1586,22 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
     vals.push_back(val);
   }
   return vals;
+}
+
+std::tuple<Block *, Block *, Block *>
+createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
+  Block *prevBlock = b.getInsertionBlock();
+  Block *ifBlock = b.splitBlock(prevBlock, b.getInsertionPoint());
+
+  // Split a block after the call.
+  Block *thenBlock = b.splitBlock(ifBlock, ifBlock->begin());
+  b.setInsertionPointToEnd(ifBlock);
+  LLVM::BrOp::create(b, loc, thenBlock);
+  b.setInsertionPointToEnd(prevBlock);
+  LLVM::CondBrOp::create(b, loc, cnd, ifBlock, thenBlock);
+  b.setInsertionPointToStart(thenBlock);
+
+  return {prevBlock, ifBlock, thenBlock};
 }
 
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,

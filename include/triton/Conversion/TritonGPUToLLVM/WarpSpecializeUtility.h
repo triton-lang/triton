@@ -10,12 +10,38 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SetVector.h"
 #include <functional>
+#include <optional>
 
 namespace mlir {
 namespace triton {
 
 // Forward declaration
 class TritonLLVMIRRewriter;
+
+//===----------------------------------------------------------------------===//
+// lowerWarpSpecializeBarriers
+//===----------------------------------------------------------------------===//
+
+class WarpSpecializeBarrierHelper {
+public:
+  virtual ~WarpSpecializeBarrierHelper() = default;
+
+  virtual bool isBarrierOp(Operation *op) const = 0;
+  virtual Type getBarrierHandleType(MLIRContext *ctx) const = 0;
+  virtual FailureOr<Value>
+  getBarrierHandle(TritonLLVMIRRewriter &b,
+                   std::optional<unsigned> partitionIdx) = 0;
+  virtual void createBarrier(TritonLLVMIRRewriter &b, unsigned numWarps,
+                             Value handle) = 0;
+  LogicalResult createBarrier(TritonLLVMIRRewriter &b, unsigned numWarps,
+                              std::optional<unsigned> partitionIdx);
+};
+
+// Assign hardware barriers to each warp group and rewrite warp group barriers
+// into named barrier instructions. There is a maximum number of named barriers.
+LogicalResult
+lowerWarpSpecializeBarriers(ModuleOp module,
+                            WarpSpecializeBarrierHelper &barrierHelper);
 
 //===----------------------------------------------------------------------===//
 // convertOpTypes

@@ -4,7 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-#include "llvm/Support/Casting.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -29,27 +29,29 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
 
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
-                                             bool packedSize) {
+                                             bool packedSize,
+                                             gpu::TMAMode mode) {
   auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
   return triton::gpu::getTMABlockShape(
       shapePerCTA, mmaEnc.getElementBitWidth(), mmaEnc.getSwizzlingByteWidth(),
-      mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize);
+      mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize, mode);
 }
 
-inline SmallVector<int64_t> getTMABlockShape(RankedTensorType ty,
-                                             bool packedSize) {
+inline SmallVector<int64_t>
+getTMABlockShape(RankedTensorType ty, bool packedSize, gpu::TMAMode mode) {
   auto shapePerCTA = gpu::getShapePerCTA(ty);
-  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize);
+  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
 }
 
 inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
-                                             bool packedSize) {
+                                             bool packedSize,
+                                             gpu::TMAMode mode) {
   auto shapePerCTA = gpu::getShapePerCTA(ty);
-  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize);
+  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
 }
 
-FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty);
-FailureOr<int> getTMAElementType(Location loc, TensorDescType ty);
+FailureOr<int> getTMASwizzleMode(Location loc, triton::TensorDescInterface ty);
+FailureOr<int> getTMAElementType(Location loc, triton::TensorDescInterface ty);
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);

@@ -58,10 +58,10 @@ void fillTDMDescriptor(
 void fillTDMDescriptorForGatherScatter(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, SmallVector<Value> &group0,
-    SmallVector<Value> &group1, SmallVector<Value> &group2,
-    SmallVector<Value> &group3, Value ldsRowOffset, Value globalColOffset,
-    Value ldsPtr, Value pred, Value barrierPtr,
+    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    SmallVector<Value> &group0, SmallVector<Value> &group1,
+    SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
+    Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices);
 
@@ -101,6 +101,7 @@ size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
                           ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                          unsigned padInterval, unsigned padAmount,
                           Value ldsPtr, Value pred, Type elementType,
                           Value barrierPtr,
                           const triton::LinearLayout &cgaLayout, Value ctaId,

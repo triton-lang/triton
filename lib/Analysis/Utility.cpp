@@ -4,6 +4,8 @@
 
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
@@ -22,33 +24,6 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
-
-SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto order = toLinearEncoding(srcTy).getOrder();
-  auto it = std::find(order.begin(), order.end(), axis);
-  // delete the axis from order
-  order.erase(it);
-  // insert axis at the beginning of order
-  order.insert(order.begin(), axis);
-  return order;
-}
-
-// Thread offset is the thread index offset of two adjacent threads on the
-// reduction axis within the warp.
-unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
-  auto *ctx = srcEncoding.getContext();
-  auto linearLayout = toLinearLayout(srcTy);
-  auto kLane = mlir::StringAttr::get(ctx, "lane");
-  const auto &bases = linearLayout.getBases();
-  const auto &lanes = bases.find(kLane)->second;
-  auto offset = 1;
-  for (const auto &lane : lanes) {
-    if (lane[axis] != 0)
-      break;
-    offset *= 2;
-  }
-  return offset;
-}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -107,29 +82,6 @@ bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
-  SmallVector<unsigned> smemShape;
-  // This case doesn't need inter-warp communication
-  if (isWarpSynchronous())
-    return {0, 0};
-
-  smemShape = convertType<unsigned>(srcShape);
-  smemShape[axis] = getInterWarpSizeWithUniqueData();
-
-  return smemShape;
-}
-
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  auto smemShape = getScratchRepShape();
-  auto elems = product<unsigned>(smemShape);
-
-  unsigned bytesPerElem = 0;
-  for (const auto &ty : srcElementTypes) {
-    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
-  }
-  return bytesPerElem * elems;
-}
-
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
@@ -155,6 +107,262 @@ bool ReduceOpHelper::isAssociative() {
     return WalkResult::advance();
   });
   return !hasNoAssociativeOp;
+}
+
+ReduceOpHelper::InThreadVectorizeOpKind
+ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
+                                           bool supportBitwidth16Elementwise,
+                                           bool supportBitwidth32Elementwise) {
+  Operation *reduceOperation = op.getOperation();
+  if (axisPack < 4 || reduceOperation->getNumOperands() != 1 ||
+      reduceOperation->getNumResults() != 1)
+    return InThreadVectorizeOpKind::None;
+
+  assert(reduceOperation->getNumRegions() == 1 &&
+         "expected a single combine region");
+  Region &combineRegion = reduceOperation->getRegion(0);
+  Block &block = combineRegion.front();
+  if (block.getOperations().size() != 2)
+    return InThreadVectorizeOpKind::None;
+  Operation &combiner = block.front();
+
+  Type elemTy = srcElementTypes.front();
+  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  if (bitwidth == 16 && !supportBitwidth16Elementwise)
+    return InThreadVectorizeOpKind::None;
+  if (bitwidth == 32 && !supportBitwidth32Elementwise)
+    return InThreadVectorizeOpKind::None;
+
+  bool is16Bit = bitwidth == 16;
+  bool isF32 = elemTy.isF32();
+  if (!is16Bit && !isF32)
+    return InThreadVectorizeOpKind::None;
+
+  if (isa<arith::AddFOp>(combiner)) {
+    return (is16Bit || isF32) ? InThreadVectorizeOpKind::AddF
+                              : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MulFOp>(combiner)) {
+    return (is16Bit || isF32) ? InThreadVectorizeOpKind::MulF
+                              : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MinNumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MinNumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MaxNumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MaxNumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MinimumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MinimumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MaximumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MaximumF
+                   : InThreadVectorizeOpKind::None;
+  }
+
+  if (!elemTy.isInteger(16))
+    return InThreadVectorizeOpKind::None;
+
+  if (isa<arith::AddIOp>(combiner)) {
+    return InThreadVectorizeOpKind::AddI;
+  }
+  if (isa<arith::MulIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MulI;
+  }
+  if (isa<arith::MinSIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MinSI;
+  }
+  if (isa<arith::MaxSIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MaxSI;
+  }
+  if (isa<arith::MinUIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MinUI;
+  }
+  if (isa<arith::MaxUIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MaxUI;
+  }
+
+  return InThreadVectorizeOpKind::None;
+}
+
+Value ReduceOpHelper::createInThreadVectorizedCombineOp(
+    OpBuilder &builder, Location loc, InThreadVectorizeOpKind kind, Value lhs,
+    Value rhs) {
+  auto vecTy = lhs.getType();
+  Value result;
+  switch (kind) {
+  case InThreadVectorizeOpKind::AddF:
+    result = LLVM::FAddOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MulF:
+    result = LLVM::FMulOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinNumF:
+    result = LLVM::MinNumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxNumF:
+    result = LLVM::MaxNumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinimumF:
+    result = LLVM::MinimumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaximumF:
+    result = LLVM::MaximumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::AddI:
+    result = LLVM::AddOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MulI:
+    result = LLVM::MulOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinSI:
+    result = LLVM::SMinOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxSI:
+    result = LLVM::SMaxOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinUI:
+    result = LLVM::UMinOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxUI:
+    result = LLVM::UMaxOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::None:
+  default:
+    llvm::report_fatal_error("Unsupported in-thread vectorize op kind");
+  }
+  return result;
+}
+
+ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
+                                                  int axis, bool isVectorized) {
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  const auto &bases = layout.getBases().lookup(kReg);
+  if (bases.empty())
+    return ColumnAction::identity(kReg, bases.size());
+
+  // We keep the first basis where it is if it's vectorized to pack it without
+  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
+  // to the front after it
+  SmallVector<size_t> perm;
+  if (isVectorized)
+    perm.push_back(0);
+  SmallVector<size_t> back;
+  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
+    if (bases[i][axis] != 0)
+      perm.push_back(i);
+    else
+      back.push_back(i);
+  }
+  perm.append(back.begin(), back.end());
+  return ColumnAction(perm, kReg, bases.size());
+}
+
+LinearLayout
+ReduceOpHelper::zeroBasesAlongDimAndReorder(const LinearLayout &layout,
+                                            unsigned axis, StringAttr dim) {
+  // Zeros out the basis along the specified axis in the given hardware
+  // dimension, and reindexes the remaining bases along axis so that each
+  // element is in linearly increasing order from the hardware's perspective.
+  // Note that for this reordering we need the operator to be commutative, but
+  // it's the only way to have a performant lowering.
+  LinearLayout::BasesT newBases;
+  for (auto [inDim, bases] : layout.getBases()) {
+    std::vector<std::vector<int32_t>> newInBases = bases;
+    if (inDim == dim) {
+      for (auto &basis : newInBases)
+        basis[axis] = 0;
+    }
+    newBases[inDim] = std::move(newInBases);
+  }
+
+  int32_t nextAxisBase = 1;
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      if (basis[axis] == 0)
+        continue;
+      basis[axis] = nextAxisBase;
+      nextAxisBase *= 2;
+    }
+  }
+
+  return LinearLayout(std::move(newBases), to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
+                                            unsigned axis) {
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  auto kWarp = mlir::StringAttr::get(ctx, "warp");
+  auto regBases = layout.getBases();
+  auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, layout);
+  int laneBits = layout.getInDimSizeLog2(kLane);
+  int neededLaneBits = llvm::Log2_32(linearAttr.getWarpsPerCTA()[axis]);
+  // TODO move to verifier
+  assert(neededLaneBits <= laneBits && "NYI: more inter-warps than lanes");
+  // Move the warp axis bases we need to reduce into lane bases, while
+  // keeping non-axis components in their original in-dim.
+  auto &laneBases = regBases[kLane];
+  auto &warpBases = regBases[kWarp];
+  int moved = 0;
+  for (auto &warpBasis : warpBases) {
+    if (warpBasis[axis] == 0)
+      continue;
+    assert(moved < neededLaneBits && "unexpected warp axis bases count");
+    std::swap(laneBases[moved], warpBasis);
+    moved++;
+  }
+
+  return LinearLayout(std::move(regBases), to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
+                                                  unsigned axis) {
+  auto *ctx = srcTy.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+
+  auto reduced = triton::gpu::toLinearLayout(srcTy);
+  reduced = reduced.sublayout({kReg, kLane, kWarp},
+                              to_vector(reduced.getOutDimNames()));
+  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
+
+  reduced = moveAxisBasesToFront(reduced, axis).apply(reduced);
+  reduced = zeroBasesAlongDimAndReorder(reduced, axis, kReg);
+  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
+  reduced = zeroBasesAlongDimAndReorder(reduced, axis, kLane);
+  return reduced;
+}
+
+SmallVector<unsigned>
+ReduceOpHelper::getScratchBytesForCvt(const LinearLayout &srcLayout,
+                                      const LinearLayout &dstLayout) {
+  SmallVector<unsigned> bytes(srcElementTypes.size(), 0);
+  auto *ctx = op.getContext();
+  SmallVector<int64_t> shape;
+  shape.reserve(srcLayout.getNumOutDims());
+  for (auto dim : srcLayout.getOutDimNames()) {
+    shape.push_back(srcLayout.getOutDimSize(dim));
+  }
+  auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
+  auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
+  for (unsigned i = 0; i < srcElementTypes.size(); ++i) {
+    auto elemTy = srcElementTypes[i];
+    if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
+      elemTy = IntegerType::get(ctx, 8);
+    auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
+    auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
+    if (!cvtNeedsSharedMemory(srcTy, dstTy))
+      continue;
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+    bytes[i] = elems * getBitwidth(srcTy) / 8;
+  }
+  return bytes;
 }
 
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {

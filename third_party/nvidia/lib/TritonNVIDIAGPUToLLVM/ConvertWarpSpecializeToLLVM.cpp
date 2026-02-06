@@ -38,23 +38,51 @@ enum BarrierIndex {
   kNumBarriers = 16
 };
 
-static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
-                          unsigned numThreads) {
-  assert(barIdx < kNumBarriers && "not enough barriers");
-  // If a partition has only 1 warp, use `bar.warp.sync`.
-  if (numThreads == 32)
-    LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
-  else
-    NVVM::BarrierOp::create(b, b.getLoc(), TypeRange{}, b.i32_val(barIdx),
-                            b.i32_val(numThreads), {}, Value{});
-}
+class NVIDIAWarpSpecializeBarrierHelper : public WarpSpecializeBarrierHelper {
+public:
+  NVIDIAWarpSpecializeBarrierHelper(unsigned numThreadsPerWarp)
+      : numThreadsPerWarp(numThreadsPerWarp) {}
 
-static void createAllBarrier(TritonLLVMIRRewriter &b, unsigned barIdx) {
-  assert(barIdx < kNumBarriers && "not enough barriers");
-  LLVM::createLLVMIntrinsicCallOp(b, b.getLoc(),
-                                  "llvm.nvvm.barrier.cta.sync.all",
-                                  void_ty(b.getContext()), b.i32_val(barIdx));
-}
+  bool isBarrierOp(Operation *op) const override {
+    return isa<NVVM::Barrier0Op>(op);
+  }
+
+  Type getBarrierHandleType(MLIRContext *ctx) const override {
+    return IntegerType::get(ctx, 32);
+  }
+
+  FailureOr<Value>
+  getBarrierHandle(TritonLLVMIRRewriter &b,
+                   std::optional<unsigned> partitionIdx) override {
+    unsigned barIdx;
+    if (!partitionIdx) {
+      barIdx = kDefaultWarpGroupBarrierIdx;
+    } else {
+      barIdx = *partitionIdx + kNumReservedBarriers;
+      if (barIdx >= kNumBarriers) {
+        return mlir::emitError(b.getLoc(), "cannot support more than ")
+               << (kNumBarriers - kNumReservedBarriers)
+               << " warp group partitions";
+      }
+    }
+    return b.i32_val(barIdx);
+  }
+
+  void createBarrier(TritonLLVMIRRewriter &b, unsigned numWarps,
+                     Value handle) override {
+    unsigned numThreads = numWarps * numThreadsPerWarp;
+    // If a partition has only 1 warp, use `bar.warp.sync`.
+    if (numThreads == 32) {
+      LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
+    } else {
+      NVVM::BarrierOp::create(b, b.getLoc(), TypeRange{}, handle,
+                              b.i32_val(numThreads), {}, Value{});
+    }
+  }
+
+private:
+  unsigned numThreadsPerWarp;
+};
 
 //===----------------------------------------------------------------------===//
 // lowerWarpSpecialize
@@ -69,49 +97,6 @@ static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs,
   NVVM::SetMaxRegisterOp::create(b, b.getLoc(), adjRegs, action);
 }
 
-// Assign hardware barriers to each warp group and rewrite warp group barriers
-// into `barrier.sync` instructions. There is a maximum number of barriers.
-static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
-                                              ArrayRef<WarpSpecializeOp> wsOps,
-                                              unsigned threadsPerWarp,
-                                              unsigned defaultWarpGroupSize) {
-  // HACK: Turn all `nvvm.barrier0` ops into warp group barriers.
-  func.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    // Walk into default regions but not partition regions.
-    if (isa<WarpSpecializePartitionsOp>(op))
-      return WalkResult::skip();
-
-    if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
-      TritonLLVMIRRewriter b(bar.getLoc(), bar);
-      createBarrier(b, kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize);
-      bar.erase();
-      return WalkResult::skip();
-    }
-    return WalkResult::advance();
-  });
-
-  // Each partition executes simultaneously, so each will get a different
-  // barrier ID, but note this means there is a maximum of 16 barriers.
-  for (WarpSpecializeOp op : wsOps) {
-    for (auto [idx, partition] : llvm::enumerate(op.getPartitionRegions())) {
-      unsigned barIdx = idx + kNumReservedBarriers;
-      if (barIdx >= kNumBarriers) {
-        return func.emitError("cannot support more than ")
-               << (kNumBarriers - kNumReservedBarriers)
-               << " warp group partitions";
-      }
-      unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
-      partition->walk([&](NVVM::Barrier0Op bar) {
-        TritonLLVMIRRewriter b(bar.getLoc(), bar);
-        createBarrier(b, barIdx, warpGroupSize);
-        bar.erase();
-      });
-    }
-  }
-
-  return success();
-}
-
 static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                                          const NVIDIA::TargetInfo &targetInfo) {
   SmallVector<WarpSpecializeOp> wsOps;
@@ -124,10 +109,6 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   auto module = cast<ModuleOp>(func->getParentOp());
   unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
   unsigned defaultNumWarps = lookupNumWarps(func);
-  unsigned defaultWarpGroupSize = threadsPerWarp * defaultNumWarps;
-  if (failed(rewriteWarpGroupBarriers(func, wsOps, threadsPerWarp,
-                                      defaultWarpGroupSize)))
-    return failure();
 
   auto totalNumWarpsAttr =
       module->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
@@ -197,7 +178,9 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
   WarpSpecializeCallbacks callbacks;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
-    createAllBarrier(b, barIdx);
+    assert(barIdx < kNumBarriers && "not enough barriers");
+    LLVM::createLLVMIntrinsicCallOp(
+        b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
   };
 
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
@@ -267,9 +250,14 @@ struct ConvertWarpSpecializeToLLVM
     if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
 
+    unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    NVIDIAWarpSpecializeBarrierHelper barrierHelper(threadsPerWarp);
+    if (failed(lowerWarpSpecializeBarriers(mod, barrierHelper)))
+      return signalPassFailure();
+
     SmallVector<LLVM::LLVMFuncOp> kernels;
     for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {
-      if (func.isPublic())
+      if (func.getLinkage() == LLVM::Linkage::External)
         kernels.push_back(func);
     }
     for (LLVM::LLVMFuncOp kernel : kernels)

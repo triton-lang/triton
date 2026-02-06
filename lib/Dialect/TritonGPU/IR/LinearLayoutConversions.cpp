@@ -195,13 +195,14 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
-                                       bool disableSwizzle) {
+                                       TMAMode mode, bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
-  auto tmaShape = triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
-                                                       /*packedSize=*/true);
+  auto tmaShape =
+      triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
+                                           /*packedSize=*/true, mode);
   if (shared.getSwizzlingByteWidth() == 0) {
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
@@ -1186,7 +1187,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       result = shared.toLinearLayout(shape);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(shape, shared);
+      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else if (auto tensorMemoryEncoding =
@@ -1339,7 +1341,8 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
-                                         LinearLayout ctaLayout) {
+                                         LinearLayout ctaLayout,
+                                         CGAEncodingAttr cgaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   SmallVector<int32_t> order;
@@ -1390,9 +1393,8 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
   ctaLayout = tileLayout.transposeOuts(outDimNames) * ctaLayout;
-  auto nonOpSelLayout = combineCtaCgaWithShape(
-      ctaLayout, CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2),
-      dotOperandShape);
+  auto nonOpSelLayout =
+      combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
 
   // This is the tricky part. For a single tile, only 16 threads
   // hold scale values, 4 for each thread. Other 16 thread in a warp

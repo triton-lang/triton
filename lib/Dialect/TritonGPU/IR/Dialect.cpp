@@ -1834,6 +1834,96 @@ SharedLinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 //===----------------------------------------------------------------------===//
+// PartitionedShared encoding
+//===----------------------------------------------------------------------===//
+
+void PartitionedSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{numPartitions = " << getNumPartitions()
+          << ", numGroups = " << getNumGroups()
+          << ", partitionDim = " << getPartitionDim()
+          << ", partitionLayout = " << getPartitionLayout() << "}>";
+}
+
+Attribute PartitionedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  unsigned numPartitions = 0;
+  unsigned numGroups = 0;
+  unsigned partitionDim = 0;
+  Attribute partitionLayout = nullptr;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "numPartitions") {
+      if (parseUInt(parser, attr, numPartitions, "numPartitions").failed())
+        return {};
+    } else if (attr.getName() == "numGroups") {
+      if (parseUInt(parser, attr, numGroups, "numGroups").failed())
+        return {};
+    } else if (attr.getName() == "partitionDim") {
+      if (parseUInt(parser, attr, partitionDim, "partitionDim").failed())
+        return {};
+    } else if (attr.getName() == "partitionLayout") {
+      partitionLayout = attr.getValue();
+    } else {
+      parser.emitError(parser.getNameLoc(), "unexpected key: ")
+          << attr.getName().strref();
+      return {};
+    }
+  }
+
+  if (!partitionLayout) {
+    parser.emitError(parser.getNameLoc(), "missing partitionLayout");
+    return {};
+  }
+
+  auto sharedEnc = mlir::dyn_cast<SharedEncodingTrait>(partitionLayout);
+
+  if (!sharedEnc) {
+    parser.emitError(parser.getNameLoc(),
+                     "partitionLayout must be a SharedEncodingTrait");
+    return {};
+  }
+
+  return PartitionedSharedEncodingAttr::get(parser.getContext(), numPartitions,
+                                            numGroups, partitionDim, sharedEnc);
+}
+
+CGAEncodingAttr PartitionedSharedEncodingAttr::getCGALayout() const {
+  auto layoutEncTrait = cast<LayoutEncodingTrait>(getPartitionLayout());
+  return layoutEncTrait.getCGALayout();
+}
+
+LogicalResult PartitionedSharedEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned numPartitions,
+    unsigned numGroups, unsigned partitionDim,
+    SharedEncodingTrait partitionLayout) {
+  // Check numPartitions is a power of 2 and > 0
+  if (numPartitions == 0 || !llvm::isPowerOf2_32(numPartitions))
+    return emitError()
+           << "numPartitions must be a power of 2 and greater than 0";
+
+  // Check numGroups is a power of 2 and > 0
+  if (numGroups == 0 || !llvm::isPowerOf2_32(numGroups))
+    return emitError() << "numGroups must be a power of 2 and greater than 0";
+
+  // Check partitionDim is within bounds of the layout rank
+  auto layoutEncTrait = cast<LayoutEncodingTrait>(partitionLayout);
+  unsigned rank = layoutEncTrait.getRank();
+  if (partitionDim >= rank)
+    return emitError() << "partitionDim (" << partitionDim
+                       << ") must be less than the layout rank (" << rank
+                       << ")";
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // PaddedShared encoding
 //===----------------------------------------------------------------------===//
 
@@ -4079,14 +4169,76 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   return dst;
 }
 
-FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
-    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
-    bool fp4Padded, bool isTransposed, bool packedSize,
-    function_ref<InFlightDiagnostic()> emitError) {
+// Helper function for im2col mode block shape calculation.
+// Im2col mode produces a 2D block: [pixelsPerColumn, channelsPerPixel]
+// Constraints:
+// - channelsPerPixel (contigDim): max 256, or swizzle byte size if enabled
+// - pixelsPerColumn (otherDim): max 1024, no splitting (single TMA message)
+// Doc:
+// https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                       int swizzleBytes, bool fp4Padded, bool isTransposed,
+                       bool packedSize,
+                       function_ref<InFlightDiagnostic()> emitError) {
+  assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
+
   SmallVector<int64_t> blockShape(shapePerCTA);
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
   if (fp4Padded)
     blockShape[contigDim] *= 2;
+
+  constexpr int64_t contigDimMax = 256;
+  constexpr int64_t otherDimMax = 1024;
+  int otherDim = (contigDim == 0) ? 1 : 0;
+
+  // Check that pixelsPerColumn doesn't exceed the hardware maximum of 1024.
+  // This constraint ensures a single TMA message can cover all pixels,
+  // avoiding the need for multiple messages along spatial dimensions (N, D,
+  // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
+  // that depend on input tensor shape and padding, which is non-trivial.
+  if (blockShape[otherDim] > otherDimMax) {
+    return emitError() << "im2col mode: pixelsPerColumn dimension "
+                       << blockShape[otherDim]
+                       << " exceeds the maximum supported value of "
+                       << otherDimMax;
+  }
+
+  // Clamp the contiguous dimension (channelsPerPixel) to max 256
+  blockShape[contigDim] = std::min(blockShape[contigDim], contigDimMax);
+
+  // Contiguous dim must equal the swizzle byte size if swizzle is enabled
+  if (swizzleBytes != 0) {
+    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+    if (blockShape[contigDim] < contigDimSize) {
+      return emitError() << "im2col mode: block shape along the contiguous "
+                            "dimension "
+                         << contigDim
+                         << " is too small for the swizzle byte size "
+                         << swizzleBytes << ", got " << blockShape[contigDim]
+                         << " but expected at least " << contigDimSize;
+    }
+    blockShape[contigDim] = contigDimSize;
+  }
+
+  if (fp4Padded && packedSize) {
+    blockShape[contigDim] /= 2;
+  }
+  return blockShape;
+}
+
+// Tiled mode block shape calculation.
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                      int swizzleBytes, bool fp4Padded, bool isTransposed,
+                      bool packedSize,
+                      function_ref<InFlightDiagnostic()> emitError) {
+  SmallVector<int64_t> blockShape(shapePerCTA);
+
+  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
+  if (fp4Padded)
+    blockShape[contigDim] *= 2;
+
   // All dimensions must be at most 256
   constexpr int64_t dimMax = 256;
   for (auto &size : blockShape)
@@ -4109,16 +4261,32 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
   }
   return blockShape;
 }
+
+FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
+  if (mode == TMAMode::Im2Col) {
+    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, swizzleBytes,
+                                  fp4Padded, isTransposed, packedSize,
+                                  emitError);
+  }
+  // Tiled mode
+  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
+                               fp4Padded, isTransposed, packedSize, emitError);
+}
+
 SmallVector<int64_t> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
-    bool fp4Padded, bool isTransposed, bool packedSize) {
-  return *getTMABlockShape(
-      shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded, isTransposed,
-      packedSize, []() -> InFlightDiagnostic {
-        llvm::report_fatal_error(
-            "Block shape is too small for the swizzle byte "
-            "size in NVMMA Shared Layout.");
-      });
+    bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
+  auto emitFatalError = []() -> InFlightDiagnostic {
+    llvm::report_fatal_error("getTMABlockShape failed: invalid block shape "
+                             "for TMA operation.");
+  };
+
+  return *getTMABlockShape(shapePerCTA, elementBitWidth, swizzleBytes,
+                           fp4Padded, isTransposed, packedSize, emitFatalError,
+                           mode);
 }
 
 SetVector<int> triton::gpu::getPartitionIds(Operation *op) {

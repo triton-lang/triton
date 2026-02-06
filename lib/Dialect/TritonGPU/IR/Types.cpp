@@ -198,7 +198,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
                                 enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
                                 enc.getTransposed(), /*packedSize=*/false,
-                                emitError)))
+                                emitError, TMAMode::Tiled)))
       return failure();
   } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
     auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
