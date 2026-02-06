@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -1704,7 +1705,9 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
   bool isKernel = triton::isKernel(funcOp);
   if (isKernel && targetInfo.isCuda()) {
     for (auto i : llvm::seq(amendedInputTy.size())) {
-      if (isa<TensorDescType>(amendedInputTy[i])) {
+      // Handle both regular TensorDescType and TensorDescIm2ColType for TMA
+      if (isa<TensorDescType, nvidia_gpu::TensorDescIm2ColType>(
+              amendedInputTy[i])) {
         funcOp.setArgAttr(i, "tt.nv_tma_desc",
                           mlir::IntegerAttr::get(i32_ty, 1));
       }

@@ -13,14 +13,19 @@ __all__ = ["async_copy_global_to_shared", "async_copy_shared_to_global", "store_
 
 
 @dataclass(eq=True)
-class tensor_descriptor_type(base_type):
+class _tensor_descriptor_type_base(base_type):
+    """Base class for tensor descriptor types (tiled and im2col)."""
     block_type: ttgl.block_type
     shape_type: ttgl.tuple_type
     strides_type: ttgl.tuple_type
     layout: NVMMASharedLayout
 
+    # Subclasses must override these
+    _type_name: str = ""
+    _mangle_prefix: str = ""
+
     def __str__(self) -> str:
-        return f"tensor_descriptor<{self.block_type}, {self.layout}>"
+        return f"{self._type_name}<{self.block_type}, {self.layout}>"
 
     @property
     def nbytes_per_cta(self) -> int:
@@ -30,46 +35,68 @@ class tensor_descriptor_type(base_type):
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
         return self.block_type.nbytes // num_cta_splits
 
+    def _get_ir_type(self, builder: ir.builder) -> ir.type:
+        raise NotImplementedError
+
     def _to_ir(self, builder: ir.builder) -> ir.type:
-        is_signed = self.block_type.element_ty.is_int_signed()
-        return builder.get_tensor_descriptor_layout_type(
-            self.block_type.to_ir(builder),
-            is_signed,
-            self.layout._to_ir(builder),
-        )
+        return self._get_ir_type(builder)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor, int]:
         handle = handles[cursor]
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor(handle, shape, strides, self.block_type, layout=self.layout)
+        im2col = isinstance(self, tensor_descriptor_im2col_type)
+        value = tensor_descriptor(handle, shape, strides, self.block_type, layout=self.layout, im2col=im2col)
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        is_signed = self.block_type.element_ty.is_int_signed()
-        ty = builder.get_tensor_descriptor_layout_type(
-            self.block_type.to_ir(builder),
-            is_signed,
-            self.layout._to_ir(builder),
-        )
-        out.append(ty)
+        out.append(self._get_ir_type(builder))
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
 
     def mangle(self) -> str:
-        return f"TD{self.block_type.mangle()}_{self.layout.mangle()}TD"
+        return f"{self._mangle_prefix}{self.block_type.mangle()}_{self.layout.mangle()}{self._mangle_prefix}"
+
+
+@dataclass(eq=True)
+class tensor_descriptor_type(_tensor_descriptor_type_base):
+    """Type for tiled tensor descriptors."""
+    _type_name: str = "tensor_descriptor"
+    _mangle_prefix: str = "TD"
+
+    def _get_ir_type(self, builder: ir.builder) -> ir.type:
+        is_signed = self.block_type.element_ty.is_int_signed()
+        return builder.get_tensor_descriptor_layout_type(self.block_type.to_ir(builder), is_signed,
+                                                         self.layout._to_ir(builder))
+
+
+@dataclass(eq=True)
+class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
+    """Type for im2col tensor descriptors (convolution-friendly access patterns)."""
+    _type_name: str = "tensor_descriptor_im2col"
+    _mangle_prefix: str = "TDI"
+
+    def _get_ir_type(self, builder: ir.builder) -> ir.type:
+        is_signed = self.block_type.element_ty.is_int_signed()
+        return builder.get_tensor_descriptor_im2col_layout_type(self.block_type.to_ir(builder), is_signed,
+                                                                self.layout._to_ir(builder))
 
 
 class tensor_descriptor(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout):
+                 layout: NVMMASharedLayout, im2col: bool = False):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                           layout=layout)
+        self._im2col = im2col
+        if im2col:
+            self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type,
+                                                      strides_type=self.strides.type, layout=layout)
+        else:
+            self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
+                                               layout=layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -96,6 +123,10 @@ class tensor_descriptor(base_value):
     def layout(self):
         return self.type.layout
 
+    @property
+    def is_im2col(self):
+        return self._im2col
+
 
 def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
     coord = list(coord)[-1]
@@ -121,7 +152,23 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
 
 
 @builtin
-def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, offsets=None,
+                                _semantic=None):
+    """
+    Copy data from global memory to shared memory using TMA.
+
+    Args:
+        tensor_desc: Tensor descriptor (tiled or im2col)
+        coord: Coordinates in the source tensor
+        barrier: Barrier for synchronization
+        result: Destination memory descriptor
+        pred: Predicate for conditional execution
+        multicast: Enable multicast (tiled mode only)
+        offsets: Im2col offsets (required for im2col mode, must be i16 values)
+            - For 3D tensors: 1 offset
+            - For 4D tensors: 2 offsets
+            - For 5D tensors: 3 offsets
+    """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
                               _semantic=_semantic)
@@ -129,6 +176,20 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
+
+    # Convert offsets to i16 IR values if provided
+    offsets_ir = None
+    if offsets is not None:
+        offsets_ir = []
+        for offset in offsets:
+            offset = _unwrap_if_constexpr(offset)
+            if isinstance(offset, int):
+                offsets_ir.append(_semantic.builder.get_int16(offset))
+            elif hasattr(offset, 'handle'):
+                offsets_ir.append(offset.handle)
+            else:
+                raise ValueError(f"Unsupported offset type: {type(offset)}")
+
     _semantic.builder.create_async_tma_copy_global_to_local(
         tensor_desc.handle,
         coord,
@@ -136,6 +197,7 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
         result.handle,
         pred.handle,
         multicast,
+        offsets_ir,
     )
 
 

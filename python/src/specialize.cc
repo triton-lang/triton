@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
@@ -61,7 +62,9 @@ static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
+static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
+static PyObject *mode_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
@@ -109,7 +112,9 @@ void init_interned_strings() {
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
   block_shape_attr = intern_from_string("block_shape");
+  shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
+  mode_attr = intern_from_string("mode");
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
@@ -179,7 +184,24 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
 
   std::string desc_cstr;
   desc_cstr.reserve(128);
-  desc_cstr = "tensordesc<";
+
+  // Check mode attribute for im2col vs tiled (only for Gluon TensorDescriptor)
+  bool is_im2col = false;
+  if (has_layout && PyObject_HasAttr(arg, mode_attr)) {
+    auto mode_obj = from_new_ref(PyObject_GetAttr(arg, mode_attr));
+    if (mode_obj) {
+      auto mode_str = from_new_ref(PyObject_Str(mode_obj.ptr()));
+      if (mode_str) {
+        const char *mode_cstr = PyUnicode_AsUTF8(mode_str.ptr());
+        if (mode_cstr && strcmp(mode_cstr, "im2col") == 0) {
+          is_im2col = true;
+        }
+      }
+    }
+    PyErr_Clear(); // Clear any errors from optional attribute access
+  }
+
+  desc_cstr = is_im2col ? "tensordesc_im2col<" : "tensordesc<";
   auto dtype_str = from_new_ref(PyObject_Str(type_str));
   if (!dtype_str)
     return {};
@@ -202,6 +224,21 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!block_shape_cstr)
     return {};
   desc_cstr += block_shape_cstr;
+
+  // For im2col mode, append input tensor rank after block_shape
+  // Format: tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
+  // This allows the driver to know the N-dimensional shape/strides to pass
+  if (is_im2col) {
+    auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
+    if (tensor_shape_obj) {
+      Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
+      if (tensor_rank > 0) {
+        desc_cstr += ",input_rank=";
+        desc_cstr += std::to_string(tensor_rank);
+      }
+    }
+    PyErr_Clear();
+  }
 
   if (has_layout) {
     auto layout_obj = from_new_ref(PyObject_GetAttr(arg, layout_attr));
