@@ -9,7 +9,12 @@ from triton.experimental.gluon.language._core import builtin, _unwrap_if_constex
 if TYPE_CHECKING:
     from triton._C import ir
 
-__all__ = ["async_copy_global_to_shared", "async_copy_shared_to_global", "store_wait"]
+__all__ = [
+    "async_copy_global_to_shared",
+    "async_copy_global_to_shared_im2col",
+    "async_copy_shared_to_global",
+    "store_wait",
+]
 
 
 @dataclass(eq=True)
@@ -39,16 +44,10 @@ class _tensor_descriptor_type_base(base_type):
         raise NotImplementedError
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
-        return self._get_ir_type(builder)
+        raise NotImplementedError
 
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor, int]:
-        handle = handles[cursor]
-        cursor += 1
-        shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
-        strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        im2col = isinstance(self, tensor_descriptor_im2col_type)
-        value = tensor_descriptor(handle, shape, strides, self.block_type, layout=self.layout, im2col=im2col)
-        return value, cursor
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        raise NotImplementedError
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         out.append(self._get_ir_type(builder))
@@ -70,6 +69,17 @@ class tensor_descriptor_type(_tensor_descriptor_type_base):
         return builder.get_tensor_descriptor_layout_type(self.block_type.to_ir(builder), is_signed,
                                                          self.layout._to_ir(builder))
 
+    def _to_ir(self, builder: ir.builder) -> ir.type:
+        return self._get_ir_type(builder)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        handle = handles[cursor]
+        cursor += 1
+        shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
+        strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
+        value = tensor_descriptor(handle, shape, strides, self.block_type, layout=self.layout)
+        return value, cursor
+
 
 @dataclass(eq=True)
 class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
@@ -82,21 +92,27 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
         return builder.get_tensor_descriptor_im2col_layout_type(self.block_type.to_ir(builder), is_signed,
                                                                 self.layout._to_ir(builder))
 
+    def _to_ir(self, builder: ir.builder) -> ir.type:
+        return self._get_ir_type(builder)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        handle = handles[cursor]
+        cursor += 1
+        shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
+        strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
+        value = tensor_descriptor_im2col(handle, shape, strides, self.block_type, layout=self.layout)
+        return value, cursor
+
 
 class tensor_descriptor(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout, im2col: bool = False):
+                 layout: NVMMASharedLayout):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self._im2col = im2col
-        if im2col:
-            self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type,
-                                                      strides_type=self.strides.type, layout=layout)
-        else:
-            self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                               layout=layout)
+        self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
+                                           layout=layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -123,9 +139,40 @@ class tensor_descriptor(base_value):
     def layout(self):
         return self.type.layout
 
+class tensor_descriptor_im2col(base_value):
+
+    def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
+                 layout: NVMMASharedLayout):
+        self.handle = handle
+        self.shape = ttgl.tuple(shape)
+        self.strides = ttgl.tuple(strides)
+        self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
+                                                  layout=layout)
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
+        self.shape._flatten_ir(handles)
+        self.strides._flatten_ir(handles)
+
     @property
-    def is_im2col(self):
-        return self._im2col
+    def nbytes_per_cta(self):
+        return self.type.nbytes_per_cta
+
+    @property
+    def block_type(self):
+        return self.type.block_type
+
+    @property
+    def block_shape(self):
+        return self.type.block_type.shape
+
+    @property
+    def dtype(self):
+        return self.type.block_type.element_ty
+
+    @property
+    def layout(self):
+        return self.type.layout
 
 
 def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
@@ -151,23 +198,31 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
         f"i.e. a multiple of {align} for dtype={dtype.codegen_name()}", _semantic=_semantic)
 
 
+def _convert_im2col_offsets(offsets, _semantic):
+    offsets_ir = []
+    for offset in offsets:
+        offset = _unwrap_if_constexpr(offset)
+        if isinstance(offset, int):
+            offsets_ir.append(_semantic.builder.get_int16(offset))
+        elif hasattr(offset, "handle"):
+            offsets_ir.append(offset.handle)
+        else:
+            raise ValueError(f"Unsupported offset type: {type(offset)}")
+    return offsets_ir
+
+
 @builtin
-def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, offsets=None,
-                                _semantic=None):
+def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
     """
     Copy data from global memory to shared memory using TMA.
 
     Args:
-        tensor_desc: Tensor descriptor (tiled or im2col)
+        tensor_desc: Tensor descriptor (tiled)
         coord: Coordinates in the source tensor
         barrier: Barrier for synchronization
         result: Destination memory descriptor
         pred: Predicate for conditional execution
-        multicast: Enable multicast (tiled mode only)
-        offsets: Im2col offsets (required for im2col mode, must be i16 values)
-            - For 3D tensors: 1 offset
-            - For 4D tensors: 2 offsets
-            - For 5D tensors: 3 offsets
+        multicast: Enable multicast 
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
@@ -177,18 +232,43 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
 
-    # Convert offsets to i16 IR values if provided
-    offsets_ir = None
-    if offsets is not None:
-        offsets_ir = []
-        for offset in offsets:
-            offset = _unwrap_if_constexpr(offset)
-            if isinstance(offset, int):
-                offsets_ir.append(_semantic.builder.get_int16(offset))
-            elif hasattr(offset, 'handle'):
-                offsets_ir.append(offset.handle)
-            else:
-                raise ValueError(f"Unsupported offset type: {type(offset)}")
+    _semantic.builder.create_async_tma_copy_global_to_local(
+        tensor_desc.handle,
+        coord,
+        barrier.handle,
+        result.handle,
+        pred.handle,
+        multicast,
+        None,
+    )
+
+
+@builtin
+def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False,
+                                       _semantic=None):
+    """
+    Copy data from global memory to shared memory using TMA in im2col mode.
+
+    Args:
+        tensor_desc: Tensor descriptor (im2col)
+        coord: Coordinates in the source tensor
+        offsets: Im2col offsets (must be i16 values)
+            - For 3D tensors: 1 offset
+            - For 4D tensors: 2 offsets
+            - For 5D tensors: 3 offsets
+        barrier: Barrier for synchronization
+        result: Destination memory descriptor
+        pred: Predicate for conditional execution
+        multicast: Enable multicast 
+    """
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared_im2col", "innermost coordinate",
+                              _semantic=_semantic)
+
+    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
+    pred = _semantic.to_tensor(pred)
+    multicast = _unwrap_if_constexpr(multicast)
+    offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(
         tensor_desc.handle,

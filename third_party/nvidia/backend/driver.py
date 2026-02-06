@@ -262,7 +262,7 @@ def make_tensordesc_arg(arg, metadata):
     if is_im2col:
         # Im2col mode - use im2col descriptor fill function
         # block_size from metadata is [pixelsPerColumn, channelsPerPixel] (possibly clamped)
-        element_strides = arg.elementStrides if arg.elementStrides is not None else [1] * len(shape)
+        element_strides = arg.element_strides if arg.element_strides is not None else [1] * len(shape)
         cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_im2col(
             arg.base.data_ptr(),
             swizzle,
@@ -272,8 +272,8 @@ def make_tensordesc_arg(arg, metadata):
             expanded_shape,
             strides,
             padding,
-            arg.pixelBoxLowerCorner,
-            arg.pixelBoxUpperCorner,
+            arg.pixel_box_lower_corner,
+            arg.pixel_box_upper_corner,
             element_strides,
         )
     else:

@@ -118,7 +118,7 @@ def tma_im2col_kernel(in_desc, out_desc):
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(in_desc, [0, 0, 0, 0], bar, smem, offsets=[0, 0])
+    tma.async_copy_global_to_shared_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
@@ -147,17 +147,16 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
         fp4_padded=False,
     )
 
-    in_desc = gluon.nvidia.hopper.TensorDescriptor(
+    in_desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
         base=inp,
         shape=list(inp.shape),
         strides=list(inp.stride()),
         block_shape=block_shape,
         layout=layout,
         padding="zero",
-        mode="im2col",
-        elementStrides=[1, 1, 1, 1],
-        pixelBoxLowerCorner=[0, 0],
-        pixelBoxUpperCorner=[0, 0],
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
     )
     out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
     tma_im2col_kernel[(1, )](in_desc, out_desc, num_warps=1)
