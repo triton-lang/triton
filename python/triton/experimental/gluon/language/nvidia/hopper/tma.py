@@ -104,15 +104,14 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
         return value, cursor
 
 
-class tensor_descriptor(base_value):
+class _tensor_descriptor_value_base(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout):
+                 layout: NVMMASharedLayout, type_cls):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                           layout=layout)
+        self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -140,40 +139,18 @@ class tensor_descriptor(base_value):
         return self.type.layout
 
 
-class tensor_descriptor_im2col(base_value):
+class tensor_descriptor(_tensor_descriptor_value_base):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
                  layout: NVMMASharedLayout):
-        self.handle = handle
-        self.shape = ttgl.tuple(shape)
-        self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type,
-                                                  strides_type=self.strides.type, layout=layout)
+        super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_type)
 
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        handles.append(self.handle)
-        self.shape._flatten_ir(handles)
-        self.strides._flatten_ir(handles)
 
-    @property
-    def nbytes_per_cta(self):
-        return self.type.nbytes_per_cta
+class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 
-    @property
-    def block_type(self):
-        return self.type.block_type
-
-    @property
-    def block_shape(self):
-        return self.type.block_type.shape
-
-    @property
-    def dtype(self):
-        return self.type.block_type.element_ty
-
-    @property
-    def layout(self):
-        return self.type.layout
+    def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
+                 layout: NVMMASharedLayout):
+        super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_im2col_type)
 
 
 def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
