@@ -106,8 +106,9 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-FailureOr<int> getTMASwizzleMode(Location loc, TensorDescType ty) {
-  auto encoding = ty.getBlockType().getEncoding();
+FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
+  auto blockType = ty.getBlockType();
+  auto encoding = blockType.getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
@@ -160,15 +161,15 @@ enum TMA_ELEMENT_TYPES {
   TMA_B6P2X16 = 15,
 };
 
-FailureOr<int> getTMAElementType(Location loc, TensorDescType ty) {
-  auto encoding = ty.getBlockType().getEncoding();
-  auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
+  auto blockType = ty.getBlockType();
+  auto encoding = blockType.getEncoding();
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
     return TMA_B4X16_P64;
 
-  auto elemTy = ty.getBlockType().getElementType();
+  auto elemTy = blockType.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {
@@ -216,8 +217,9 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   int paddingScale = fp4Padded ? 2 : 1;
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
-  auto blockShape =
-      getTMABlockShape(encoding, shapePerCTA, /*packedSize=*/false);
+  // MakeTensorDescOp creates tiled descriptors (not im2col)
+  auto blockShape = getTMABlockShape(encoding, shapePerCTA,
+                                     /*packedSize=*/false, gpu::TMAMode::Tiled);
   auto contigDimSize = blockShape.back();
 
   llvm::SmallVector<Value> boxDim;
