@@ -41,6 +41,7 @@ static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_callable_cls = nullptr;
 static PyObject *tensor_descriptor_cls = nullptr;
 static PyObject *nvidia_tensor_descriptor_cls = nullptr;
+static PyObject *nvidia_tensor_descriptor_im2col_cls = nullptr;
 static PyObject *amd_tensor_descriptor_cls = nullptr;
 static PyObject *canonicalize_dtype_fn = nullptr;
 static PyObject *canonicalize_ptr_dtype_fn = nullptr;
@@ -64,7 +65,6 @@ static PyObject *_fields_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
-static PyObject *mode_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
@@ -114,7 +114,6 @@ void init_interned_strings() {
   block_shape_attr = intern_from_string("block_shape");
   shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
-  mode_attr = intern_from_string("mode");
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
@@ -131,6 +130,8 @@ bool init_globals() noexcept try {
       import_from("triton.tools.tensor_descriptor", "TensorDescriptor");
   nvidia_tensor_descriptor_cls = import_from(
       "triton.experimental.gluon.nvidia.hopper", "TensorDescriptor");
+  nvidia_tensor_descriptor_im2col_cls = import_from(
+      "triton.experimental.gluon.nvidia.hopper", "TensorDescriptorIm2Col");
   amd_tensor_descriptor_cls =
       import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
 
@@ -185,26 +186,13 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   std::string desc_cstr;
   desc_cstr.reserve(128);
 
-  // Check mode attribute for im2col vs tiled (only for Gluon TensorDescriptor)
+  // Determine im2col by class type (Gluon only).
   bool is_im2col = false;
-  if (has_layout) {
-    auto mode_obj = from_new_ref(PyObject_GetAttr(arg, mode_attr));
-    if (!mode_obj)
+  if (has_layout && nvidia_tensor_descriptor_im2col_cls) {
+    int is_inst = PyObject_IsInstance(arg, nvidia_tensor_descriptor_im2col_cls);
+    if (is_inst < 0)
       return {};
-    if (!PyUnicode_Check(mode_obj.ptr())) {
-      PyErr_SetString(PyExc_TypeError,
-                      "TensorDescriptor.mode must be a string");
-      return {};
-    }
-    const char *mode_cstr = PyUnicode_AsUTF8(mode_obj.ptr());
-    if (!mode_cstr)
-      return {};
-    is_im2col = strcmp(mode_cstr, "im2col") == 0;
-    if (!is_im2col && strcmp(mode_cstr, "tiled") != 0) {
-      PyErr_Format(PyExc_ValueError, "Unrecognized TensorDescriptor mode: '%s'",
-                   mode_cstr);
-      return {};
-    }
+    is_im2col = is_inst == 1;
   }
 
   desc_cstr = is_im2col ? "tensordesc_im2col<" : "tensordesc<";
@@ -492,6 +480,11 @@ void init_type_handler_cache() {
   if (nvidia_tensor_descriptor_cls &&
       PyType_Check(nvidia_tensor_descriptor_cls)) {
     type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_cls] =
+        handle_gluon_tensor_descriptor;
+  }
+  if (nvidia_tensor_descriptor_im2col_cls &&
+      PyType_Check(nvidia_tensor_descriptor_im2col_cls)) {
+    type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_im2col_cls] =
         handle_gluon_tensor_descriptor;
   }
   if (amd_tensor_descriptor_cls && PyType_Check(amd_tensor_descriptor_cls)) {

@@ -37,11 +37,10 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
             assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
         assert tl.target_info.cuda_capability_geq(10, 0), "fp4_padded requires blackwell or newer"
     assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
-        f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}"
-    )
-    assert layout.element_bitwidth in [8, 16, 32], (
-        f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {layout.element_bitwidth}"
-    )
+        f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
+    assert layout.element_bitwidth in [
+        8, 16, 32
+    ], (f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {layout.element_bitwidth}")
     return rank, dtype_str
 
 

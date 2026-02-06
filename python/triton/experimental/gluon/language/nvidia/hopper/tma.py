@@ -139,6 +139,7 @@ class tensor_descriptor(base_value):
     def layout(self):
         return self.type.layout
 
+
 class tensor_descriptor_im2col(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
@@ -146,8 +147,8 @@ class tensor_descriptor_im2col(base_value):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                                  layout=layout)
+        self.type = tensor_descriptor_im2col_type(block_type, shape_type=self.shape.type,
+                                                  strides_type=self.strides.type, layout=layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -222,7 +223,7 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
         barrier: Barrier for synchronization
         result: Destination memory descriptor
         pred: Predicate for conditional execution
-        multicast: Enable multicast 
+        multicast: Enable multicast
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
@@ -259,7 +260,7 @@ def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, res
         barrier: Barrier for synchronization
         result: Destination memory descriptor
         pred: Predicate for conditional execution
-        multicast: Enable multicast 
+        multicast: Enable multicast
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared_im2col", "innermost coordinate",
