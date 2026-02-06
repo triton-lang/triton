@@ -143,8 +143,8 @@ def expand_signature(signature, tensordesc_meta):
             tensor_rank = None
             if is_im2col:
                 rank_match = re.search(r",input_rank=(\d+)", sig)
-                if rank_match:
-                    tensor_rank = int(rank_match.group(1))
+                assert rank_match, "Expected tensordesc_im2col to have input_rank"
+                tensor_rank = int(rank_match.group(1))
 
             # For im2col with input_rank, use tensor's rank; otherwise use block_shape ndim
             ndim = tensor_rank if tensor_rank else block_ndim
