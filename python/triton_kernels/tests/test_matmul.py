@@ -381,7 +381,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
     c_scale_global = wrap_list([4.00]) if c_dtype.has_global_scale else None
-    c_absmax = wrap_list([0]) if c_dtype.has_global_scale else None
     precision_opt = PrecisionConfig(
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
         out_dtype=c_dtype.torch_dtype,
@@ -402,10 +401,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas, epilogue=epilogue, c=c, c_absmax=c_absmax,
+                           gammas=gammas, epilogue=epilogue, c=c,
                            fused_activation=fused_activation)
-        if c_dtype.has_global_scale:
-            tri_y_scale = c_absmax.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
@@ -413,12 +410,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
                         gammas=gammas,
-                        c=c,
-                        c_absmax=c_absmax)
+                        c=c)
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
-    if c_dtype.has_global_scale:
-        ref_y_scale = c_absmax.clone()
 
     # --- check results ---
     if c_dtype.has_mx_scale:
@@ -430,9 +424,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif b_dtype.is_mxfloat4:
         maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
-    if c_dtype.has_global_scale:
-        assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
-               f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
 def test_set_idle_sms():

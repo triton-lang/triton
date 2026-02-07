@@ -44,7 +44,7 @@ def setup_nvidia(monkeypatch):
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
         "compute_block_n",
-        lambda n, arch, precision_config: (64, 32),
+        lambda n, arch, precision_config, **kwargs: (64, 32),
     )
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
@@ -54,7 +54,7 @@ def setup_nvidia(monkeypatch):
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
         "compute_block_k",
-        lambda m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in: 32,
+        lambda m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in, **kwargs: 32,
     )
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
@@ -69,7 +69,7 @@ def setup_nvidia(monkeypatch):
     monkeypatch.setattr(
         opt_flags.opt_flags_nvidia,
         "compute_num_warps",
-        lambda block_m, block_n, is_persistent, precision_config, constraints: 4,
+        lambda block_m, block_n, is_persistent, precision_config, constraints, **kwargs: 4,
     )
 
     fake_target = types.SimpleNamespace(backend="cuda", arch=100)

@@ -1,4 +1,3 @@
-from triton_kernels.numerics_details.flexpoint import load_scale, float_to_flex, update_scale
 import triton
 import triton.language as tl
 
@@ -13,8 +12,8 @@ def clip(x, limit, clip_lower: tl.constexpr):
 
 
 @triton.jit
-def thread_local_absmax(x, BLOCK_SIZE: tl.constexpr, NUM_THREADS: tl.constexpr):
-    return tl.max(tl.reshape(tl.abs(x), [NUM_THREADS, BLOCK_SIZE // NUM_THREADS], can_reorder=True), axis=1)
+def load_scale(scale_ptr):
+    return 1.0 if scale_ptr is None else tl.load(scale_ptr)
 
 
 def swiglu_repr(specialization):
@@ -78,8 +77,6 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
         M = tl.load(NTokens)
         M_BLOCKS = (M + BLOCK_M - 1) // BLOCK_M
 
-    local_max = tl.full([tl.extra.cuda.num_threads()], 0.0, tl.float32)
-
     a_scale = load_scale(AScale)
     out_expected_scale = load_scale(OutExpectedScale)
 
@@ -106,15 +103,6 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
                 a_packed = tl.load(A + packed_offs, mask=packed_mask, other=0.)
         a_gelu, a_linear = tl.split(tl.reshape(a_packed, (BLOCK_M, BLOCK_N, 2)))
         out = compute_swiglu(a_gelu, a_linear, a_scale, alpha, limit)
-        # update flexpoint stats and divide by scale
-        # we don't need masking because of the `other` when loading `A`
-        if OutActualScale is not None:
-            absmax = thread_local_absmax(out, out.numel, tl.extra.cuda.num_threads())
-            local_max = tl.maximum(local_max, absmax)
-        out = float_to_flex(out, out_expected_scale,
-                            None,  # ActualScale: local absmax is tracked and updated after the loop
-                            OutChecksumScale, None, Out, flexpoint_saturate_inf)
+        out = out / out_expected_scale
         mask = mask_m[:, None] if EVEN_N else mask_m[:, None] & mask_n[None, :]
         tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
-
-    update_scale(local_max, OutActualScale, Out)

@@ -6,7 +6,6 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizz
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
-from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
@@ -22,6 +21,11 @@ from ._common import (
 def round_f32_to_tf32(x: tl.tensor):
     ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
+
+
+@triton.jit
+def load_scale(scale_ptr):
+    return 1.0 if scale_ptr is None else tl.load(scale_ptr)
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
@@ -483,8 +487,8 @@ def _matmul(
     else:
         if PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
-            YActualScale = YActualScale + start_z_out
-        out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
+        if YExpectedScale is not None:
+            out = out / load_scale(YExpectedScale)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
     if pYPtrs is None:

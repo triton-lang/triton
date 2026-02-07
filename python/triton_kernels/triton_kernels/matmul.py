@@ -223,7 +223,6 @@ def matmul(a, b, bias,
     gammas: torch.Tensor | None = None,
     out_alpha: float | None = None,
     c: torch.Tensor | Tensor | None = None,
-    c_absmax: torch.Tensor | None = None,
     fused_comm: FusedComm | None = None,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
@@ -491,12 +490,11 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     # split-k scratchpad is fp32/fp16 accumulation, not the final output dtype.
-    # output flex scaling is applied in the reduce step.
+    # output scaling is applied in the reduce step.
     out_global_scale = None if has_scratchpad else c_scale_global
-    out_absmax = None if has_scratchpad else c_absmax
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
-                   *((None, out_matmul_scale, None) if out_matmul_has_mx else (out_global_scale, out_absmax, None)),
+                   *((None, out_matmul_scale, None) if out_matmul_has_mx else (out_global_scale, None, None)),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    a.scale_global,
@@ -564,8 +562,6 @@ def matmul(a, b, bias,
             y = memory["output"].view(-1, memory["output"].shape[-1]),
             y_dtype = memory["output"].dtype,
             y_scale_global = c_scale_global,
-            y_absmax = c_absmax,
-            y_saturate_inf = precision_config.flexpoint_saturate_inf,
             y_has_mx = c_scale_mx is not None,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
@@ -639,17 +635,6 @@ def scale(val, scal):
         assert val.ndim == 3
         return val / scal[:, None, None]
 
-def compute_actual_scale(x, dtype, per_batch_scale=False):
-    from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-    max_finite = {
-        torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
-        torch.float8_e4m3fn: MAX_FINITE_FLOAT8E4NV,
-        torch.float8_e4m3fnuz: MAX_FINITE_FLOAT8E4B8,
-    }[dtype]
-    maxvals = x.abs().amax(dim=tuple(range(1, x.ndim))) if per_batch_scale else x.abs().max()
-    return maxvals / max_finite
-
-
 def matmul_torch(a, b, bias,
                  a_ragged_metadata: RaggedTensorMetadata | None = None,
                  b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -660,7 +645,6 @@ def matmul_torch(a, b, bias,
                  gammas = None,
                  round_x = None, round_y = None,
                  c: torch.Tensor | Tensor | None = None,
-                 c_absmax: torch.Tensor | None = None,
                  ):
     if precision_config is None:
         precision_config = PrecisionConfig()
@@ -696,8 +680,6 @@ def matmul_torch(a, b, bias,
                 round_y=round_y,
             )
             out[expt] = out_expt.to(out.dtype)
-        if c_absmax is not None:
-            c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
         return scale(out, None if c is None else c.scale_global)
 
     is_input_batched = a.ndim == 3
@@ -748,8 +730,6 @@ def matmul_torch(a, b, bias,
         out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
         msk = scatter_indx != -1
         out[scatter_indx[msk], :] = y[msk, :]
-    if c_absmax is not None:
-        c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
     return scale(out, None if c is None else c.scale_global)
 
 

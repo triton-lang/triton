@@ -70,19 +70,10 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     device = "cuda"
     x = torch.randn((B, M, N), device=device, dtype=torch.float32, requires_grad=True)
     x_scale_mx, x_scale_global = None, None
-    y_scale_global, y_absmax_tri, y_absmax_ref = None, None, None
+    y_scale_global = None
     if is_mx := dtype_str.startswith("mx"):
         dtype = dtype_str_to_torch(dtype_str.removeprefix("mx"))
         x, x_scale_mx = downcast_to_mxfp_torch(x.to(torch.float16), dtype, axis=-1)
-    if is_flex := dtype_str.startswith("flex"):
-        dtype = dtype_str_to_torch(dtype_str.removeprefix("flex"))
-        expected_scale = torch.tensor([4], device=device, dtype=torch.float32)
-        x_scale_global = torch.tensor([2], device=device, dtype=torch.float32)
-        x = x / x_scale_global
-        x = x.to(dtype)
-        y_scale_global = expected_scale
-        y_absmax_tri = torch.zeros_like(expected_scale)
-        y_absmax_ref = torch.zeros_like(expected_scale)
     mask = init_mask(mask_mode, B, M, N, device)
     expected_exception = ValueError if dim == 2 and is_mx else None
     if expected_exception is not None:
@@ -105,7 +96,6 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         x_scale_mx=x_scale_mx,
         x_scale_global=x_scale_global,
         y_scale_global=y_scale_global,
-        y_absmax=y_absmax_tri,
         postprocess_fn1=postprocess_fn_tri,
     )
     y_ref, y_ref_mxscale = reduce_torch(
@@ -115,15 +105,12 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         x_scale_mx=x_scale_mx,
         x_scale_global=x_scale_global,
         y_scale_global=y_scale_global,
-        y_absmax=y_absmax_ref,
         postprocess_fn1=postprocess_fn_ref,
     )
     if is_mx:
         y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
         y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)
     assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
-    if is_flex:
-        assert torch.allclose(y_absmax_tri, y_absmax_ref, atol=1e-3, rtol=1e-3)
     run_bwd = postprocess_fn is None and "float8" not in dtype_str
     if run_bwd:
         dy = torch.randn_like(y_tri)

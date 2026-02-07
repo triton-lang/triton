@@ -7,12 +7,6 @@ import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
 from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw, unswizzle_act_mx_scale_bw
-from triton_kernels.numerics_details.flexpoint import (
-    float_to_flex,
-    load_scale,
-    nan_propagating_absmax_reduce,
-    compute_scale,
-)
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
@@ -37,6 +31,10 @@ def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
         return tensor_or_desc.dtype
     else:
         raise ValueError(f"Invalid type: {type(tensor_or_desc)}")
+
+@triton.jit
+def load_scale(scale_ptr):
+    return 1.0 if scale_ptr is None else tl.load(scale_ptr)
 
 @triton.jit
 def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
@@ -172,7 +170,7 @@ def _p_matmul(
 
     index_type: tl.constexpr = tl.int64
 
-    USE_FLEXPOINT_SCALE: tl.constexpr = YActualScale is not None or YChecksumScale is not None
+    USE_FLEXPOINT_SCALE: tl.constexpr = YExpectedScale is not None or YChecksumScale is not None
     HAS_SCATTER: tl.constexpr = WriteBackIndx is not None
     HAS_GATHER: tl.constexpr = GatherIndx is not None
     USE_GATHER_TMA: tl.constexpr = HAS_GATHER and X_TMA_MODE == "dense"
@@ -199,12 +197,6 @@ def _p_matmul(
     # start negative; will be incremented at the top of the loop
     if INDEPENDENT_EPILOGUE:
         tile_id1 = tl.program_id(0) - NUM_SMS
-
-    # Keep track of local max for updating flexpoint scales.
-    USE_LOCAL_ABSMAX: tl.constexpr = (YActualScale is not None) and (not PER_BATCH_OUT_SCALE) and (not is_out_microscaled) and (pYPtrs is None)
-    if USE_LOCAL_ABSMAX:
-        THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
-        local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
@@ -566,23 +558,13 @@ def _p_matmul(
                 YActualScalePtrs = YActualScale + offs_y_mx_k.to(index_type) * stride_y_mx_k + offs_y_mx_z.to(index_type) * stride_y_mx_z + offs_y_mx_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
                 tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
             else:
-                # Flexpoint
-                if USE_LOCAL_ABSMAX:
-                    out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
-                    local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
-
+                # Global scale
                 if PER_BATCH_OUT_SCALE:
                     ExpectedScale = YExpectedScale + start_z1
-                    ActualScale = YActualScale + start_z1
                 else:
                     ExpectedScale = YExpectedScale
-                    ActualScale = None  # local absmax is tracked and updated after the loop
-
-                out = float_to_flex(
-                    out, ExpectedScale, ActualScale, YChecksumScale,
-                    None, # mask: out is manually masked to 0
-                    YPtr, FLEXPOINT_SATURATE_INF
-                )
+                if ExpectedScale is not None:
+                    out = out / load_scale(ExpectedScale)
                 if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
                     out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
@@ -635,11 +617,6 @@ def _p_matmul(
                     else:
                         tl.multiple_of(peer_Y_ptr, [16, 16])
                     tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
-
-
-    # Update the flexpoint scales
-    if USE_LOCAL_ABSMAX:
-        tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
 
     if pYPtrs is not None:
         all_writes_issued.fn(*all_writes_issued.captured)
