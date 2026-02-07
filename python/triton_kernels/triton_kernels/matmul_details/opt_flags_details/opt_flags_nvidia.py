@@ -7,10 +7,11 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 
 
-def is_x_scale_swizzled(precision_config):
-    return (precision_config is not None and precision_config.a_mx_scale is not None
-            and isinstance(precision_config.a_mx_scale, Tensor)
-            and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
+def is_x_scale_swizzled(precision_config, a_mx_scale=None):
+    if a_mx_scale is None and precision_config is not None:
+        a_mx_scale = getattr(precision_config, "a_mx_scale", None)
+    return (a_mx_scale is not None and isinstance(a_mx_scale, Tensor)
+            and isinstance(a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -22,21 +23,33 @@ def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
     return batch_size * grid_m * grid_n
 
 
-def compute_block_n(n: int, arch, precision_config):
+def compute_block_n(n: int, arch, precision_config, b_mx_scale=None):
     # block_n:
-    layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
+    if b_mx_scale is None and precision_config is not None:
+        b_mx_scale = getattr(precision_config, "b_mx_scale", None)
+    layout = None if not isinstance(b_mx_scale, Tensor) else b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
         block_n = 2 * layout.num_warps * 2 * 8
         return block_n, block_n
-    elif precision_config.max_num_imprecise_acc is None and n > 128:
+    elif getattr(precision_config, "max_num_imprecise_acc", None) is None and n > 128:
         return 256, 256
     else:
         target = min(128, triton.next_power_of_2(n))
         return max(8, target), max(16, target)
 
 
-def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
+def compute_block_k(
+    m: int,
+    k: int | None,
+    is_persistent: bool,
+    lhs_dtype,
+    rhs_dtype,
+    precision_config,
+    has_y_acc_in,
+    a_mx_scale=None,
+    b_mx_scale=None,
+):
     lhs_width = lhs_dtype.bitwidth
     rhs_width = rhs_dtype.bitwidth
     # block_k needs to match the cacheline size (1024 bits)
@@ -44,13 +57,15 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
-    elif is_persistent and is_x_scale_swizzled(precision_config):
+    elif is_persistent and is_x_scale_swizzled(precision_config, a_mx_scale=a_mx_scale):
         # x scale has been swizzled to BlackwellActMXScaleLayout, enforce block_k to be multiple of 128
         block_k = max(block_k, 128)
     elif k is not None:  # cover small k case
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
-    has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
+    if b_mx_scale is None and precision_config is not None:
+        b_mx_scale = getattr(precision_config, "b_mx_scale", None)
+    has_mx_weight_scale = b_mx_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
         # Cap block_k to conserve smem to increase num_stages
         block_k = min(block_k, 128)
@@ -71,8 +86,10 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     return split_k
 
 
-def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints):
-    layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
+def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints, b_mx_scale=None):
+    if b_mx_scale is None and precision_config is not None:
+        b_mx_scale = getattr(precision_config, "b_mx_scale", None)
+    layout = None if not isinstance(b_mx_scale, Tensor) else b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
     num_warps = constraints.get("num_warps", None)
@@ -96,12 +113,15 @@ def compute_num_stages(
     *,
     epilogue_subtile,
     occupancy_target,
+    b_mx_scale=None,
 ):
-    if precision_config.max_num_imprecise_acc is not None:
+    if getattr(precision_config, "max_num_imprecise_acc", None) is not None:
         return 3
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
+    if b_mx_scale is None and precision_config is not None:
+        b_mx_scale = getattr(precision_config, "b_mx_scale", None)
+    if has_native_mxfp and b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
         # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
         # smem_capacity accordingly.
         # w/o this, gets the following error:
@@ -114,13 +134,13 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
-    if has_native_mxfp and getattr(precision_config, "b_mx_scale", None) is not None:
+    if has_native_mxfp and b_mx_scale is not None:
         if rhs_dtype == FP4:
             # 4-bit e2m1 weights are padded 2x
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
             stage_size += block_k * block_n * weight_size
 
-    if precision_config.b_mx_scale is not None:
+    if b_mx_scale is not None:
         # mx scales
         stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
 

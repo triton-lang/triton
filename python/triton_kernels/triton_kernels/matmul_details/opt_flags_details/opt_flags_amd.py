@@ -3,9 +3,11 @@ import triton
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
 
 
-def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config):
+def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config, b_mx_scale=None):
     lhs_width = lhs_dtype.bitwidth / 8
     rhs_width = rhs_dtype.bitwidth / 8
+    if b_mx_scale is None and precision_config is not None:
+        b_mx_scale = getattr(precision_config, "b_mx_scale", None)
 
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count
@@ -28,7 +30,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
 
     # TODO: block_k = 128 seems to work better for now.
     #       perhaps due to increased number of k loops to pipeline
-    if precision_config.b_mx_scale is not None:
+    if b_mx_scale is not None:
         if get_cdna_version() != 4:
             block_k = 128
 

@@ -7,7 +7,7 @@ import torch
 import argparse
 import triton_kernels.roofline as roofline
 from triton_kernels.swiglu import swiglu_fn
-from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul import matmul, PrecisionConfig, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version
 from triton_kernels.tensor_details import layout
 from triton_kernels.reduce import reduce
@@ -16,7 +16,6 @@ from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tens
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
-from triton_kernels.numerics import InFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 
 
@@ -35,31 +34,40 @@ def parse_dtype(dtype):
 def quantize_weight(w, dtype, **opt):
     if dtype == torch.bfloat16:
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, InFlexData(), None
+        return wq, None, None
     elif dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 else torch.float8_e4m3fnuz
         wq = w.to(fp8e4_dtype)
         wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), None
+        return wq, w.abs().max().unsqueeze(0), None
     else:
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
             w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
             w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
-        return w, InFlexData(), w_scale
+        return w, None, w_scale
 
 
 def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
-            wg_global, bg_global, pcg,  # gate parameters / precision config
-            w1_ep_local, b1_ep_local, pc1, act1,  # first matmul parameters / precision config / fused activation
-            w2_ep_local, b2_ep_local, pc2,  # second matmul parameters / precision config
+            wg_global, bg_global, pcg, wg_scale_global, wg_scale_mx,  # gate parameters / precision config / scales
+            w1_ep_local, b1_ep_local, pc1, w1_scale_global, w1_scale_mx,
+            act1,  # first matmul parameters / precision config / scales / fused activation
+            w2_ep_local, b2_ep_local, pc2, w2_scale_global,
+            w2_scale_mx,  # second matmul parameters / precision config / scales
             n_expts_act, expt_assignment,  # expert assignment
             rank,  # distributed context
             symm_mem_pool,  # symmetric memory pool
             ):
     # gate matrix multiplication
-    l_dp_local = matmul(x_dp_local_bf16, wg_global, bg_global, precision_config=pcg)
+    l_dp_local = matmul(
+        x_dp_local_bf16,
+        wg_global,
+        bg_global,
+        precision_config=pcg,
+        b_scale_global=wg_scale_global,
+        b_scale_mx=wg_scale_mx,
+    )
     # active global logits (sparse)
     l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, symm_mem_pool=symm_mem_pool)
     # expert histogram, dispatch/combine indx
@@ -74,10 +82,11 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_assignment.expt_map[rank, :])
     # first matmul + swiglu
     y_ep_local = matmul(y_ep_local, w1_ep_local, b1_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc1, fused_activation=act1)
+                        precision_config=pc1, fused_activation=act1, b_scale_global=w1_scale_global,
+                        b_scale_mx=w1_scale_mx)
     # second matmul
     y_ep_local = matmul(y_ep_local, w2_ep_local, b2_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc2)
+                        precision_config=pc2, b_scale_global=w2_scale_global, b_scale_mx=w2_scale_mx)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx, symm_mem_pool)
     # weighted average of the output token from experts
@@ -137,12 +146,12 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             "scale_layout_opts": scale_layout_opts,
         }
         opt2 = deepcopy(opt1)
-    wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
-    w1_ep_local, w1_flex, w1_scale = quantize_weight(w1_ep_local, w_dtype, **opt1)
-    w2_ep_local, w2_flex, w2_scale = quantize_weight(w2_ep_local, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
+    wg_global, wg_scale_global, wg_scale_mx = quantize_weight(wg_global, torch.bfloat16)
+    w1_ep_local, w1_scale_global, w1_scale_mx = quantize_weight(w1_ep_local, w_dtype, **opt1)
+    w2_ep_local, w2_scale_global, w2_scale_mx = quantize_weight(w2_ep_local, w_dtype, **opt2)
+    pcg = PrecisionConfig()
+    pc1 = PrecisionConfig()
+    pc2 = PrecisionConfig()
 
     # -- init activation --
     x_dp_local_fp8 = torch.randn((batch // n_ranks, dim1), device=dev).to(x_dtype)
@@ -161,9 +170,9 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     with torch.cuda.stream(stream):
         with torch.cuda.graph(g):
             run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
-                    wg_global, bg_global, pcg,  #
-                    w1_ep_local, b1_ep_local, pc1, act1,  #
-                    w2_ep_local, b2_ep_local, pc2,  #
+                    wg_global, bg_global, pcg, wg_scale_global, wg_scale_mx,  #
+                    w1_ep_local, b1_ep_local, pc1, w1_scale_global, w1_scale_mx, act1,  #
+                    w2_ep_local, b2_ep_local, pc2, w2_scale_global, w2_scale_mx,  #
                     n_expts_act, expt_assignment, rank, symm_mem_pool)
     for i in range(100):
         g.replay()
