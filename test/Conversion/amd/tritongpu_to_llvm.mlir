@@ -219,7 +219,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK-LABEL: reduce_xor_max
   tt.func @reduce_xor_max(%arg0: tensor<32xf32, #blocked4>) {
     // CHECK: rocdl.ds_swizzle
-    // CHECK: llvm.intr.maxnum
 
     // CHECK: rocdl.update.dpp
     // CHECK-SAME: with 280, 15, 12, false : i32

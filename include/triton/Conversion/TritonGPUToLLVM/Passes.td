@@ -42,4 +42,8 @@ def TritonGPUAllocateWarpGroups : Pass<"tritongpu-allocate-warp-groups", "mlir::
   }];
 }
 
+def CanonicalizeLLVMIR : Pass<"canonicalize-llvm-ir", "mlir::LLVM::LLVMFuncOp"> {
+  let summary = "Canonicalize LLVM IR";
+}
+
 #endif

@@ -16,15 +16,15 @@ import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
-from triton._internal_testing import is_hip, is_blackwell
+from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_torch(context, tmp_path: pathlib.Path):
+def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
-    torch.ones((2, 2), device="cuda")
+    torch.ones((2, 2), device=device)
     proton.exit_scope()
     proton.finalize()
     with temp_file.open() as f:
@@ -51,13 +51,13 @@ def test_torch(context, tmp_path: pathlib.Path):
                 queue.append(child)
 
 
-def test_triton(tmp_path: pathlib.Path):
+def test_triton(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="cuda")
+    x = torch.tensor([2], device=device)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -76,8 +76,8 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
-def test_cudagraph(tmp_path: pathlib.Path):
+@pytest.mark.skipif(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
+def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -89,8 +89,8 @@ def test_cudagraph(tmp_path: pathlib.Path):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def fn():
-        a = torch.ones((2, 2), device="cuda")
-        b = torch.ones((2, 2), device="cuda")
+        a = torch.ones((2, 2), device=device)
+        b = torch.ones((2, 2), device=device)
         c = a + b
         foo[(1, )](a, b, c)
 
@@ -149,8 +149,8 @@ def test_cudagraph(tmp_path: pathlib.Path):
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support cudagraph deactivation")
-def test_cudagraph_deactivate(tmp_path):
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
+def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -160,10 +160,10 @@ def test_cudagraph_deactivate(tmp_path):
 
     def fn(session):
         with proton.scope("scope_a"):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         proton.deactivate(session)
         with proton.scope("scope_b"):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         proton.activate(session)
         with proton.scope("scope_c"):
             c = a + b
@@ -214,13 +214,13 @@ def test_cudagraph_deactivate(tmp_path):
     assert scope_c_frame is not None
 
 
-def test_metrics(tmp_path: pathlib.Path):
+def test_metrics(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="cuda")
+    x = torch.tensor([2], device=device)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -235,11 +235,11 @@ def test_metrics(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["bar"] == [1, 2, 3]
 
 
-def test_scope_backward(tmp_path: pathlib.Path):
+def test_scope_backward(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("ones1"):
-        a = torch.ones((100, 100), device="cuda", requires_grad=True)
+        a = torch.ones((100, 100), device=device, requires_grad=True)
     with proton.scope("plus"):
         a2 = a * a * a
     with proton.scope("ones2"):
@@ -254,12 +254,12 @@ def test_scope_backward(tmp_path: pathlib.Path):
     assert len(data[0]["children"]) == 4
 
 
-def test_cpu_timed_scope(tmp_path: pathlib.Path):
+def test_cpu_timed_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_cpu_timed_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.cpu_timed_scope("test0"):
         with proton.cpu_timed_scope("test1"):
-            torch.ones((100, 100), device="cuda")
+            torch.ones((100, 100), device=device)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -270,7 +270,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert test1_frame["metrics"]["cpu_time (ns)"] > 0
 
 
-def test_get_data(tmp_path: pathlib.Path):
+def test_get_data(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tree_json.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
@@ -280,7 +280,7 @@ def test_get_data(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("test"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         foo[(1, )](x, x, 4)
         foo[(1, )](x, x, 4)
 
@@ -304,12 +304,12 @@ def test_get_data(tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_clear_data(tmp_path: pathlib.Path):
+def test_clear_data(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_clear_data.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     with proton.scope("test0"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         x + x  # type: ignore
 
     proton.deactivate(session, flushing=True)
@@ -332,17 +332,17 @@ def test_clear_data(tmp_path: pathlib.Path):
     assert "elementwise" in kernel_frame["frame"]["name"]
 
 
-def test_clear_data_up_to_phase(tmp_path: pathlib.Path):
+def test_clear_data_up_to_phase(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_clear_data_up_to_phase.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     with proton.scope("phase0"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         x + x  # type: ignore
 
     phase1 = proton.data.advance_phase(session)
     with proton.scope("phase1"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         x + x  # type: ignore
 
     proton.deactivate(session, flushing=True)
@@ -355,13 +355,13 @@ def test_clear_data_up_to_phase(tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_data_is_phase_complete(tmp_path: pathlib.Path):
+def test_data_is_phase_complete(tmp_path: pathlib.Path, device: str):
     temp_path = tmp_path / "test_data_is_phase_complete.hatchet"
     session = proton.start(str(temp_path.with_suffix("")), context="shadow")
 
     def fn():
         with proton.scope("test0"):
-            x = torch.ones((2, 2), device="cuda")
+            x = torch.ones((2, 2), device=device)
             x + x  # type: ignore
 
     fn()
@@ -386,7 +386,7 @@ def test_data_is_phase_complete(tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_hook_launch(tmp_path: pathlib.Path):
+def test_hook_launch(tmp_path: pathlib.Path, device: str):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
@@ -402,7 +402,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -419,7 +419,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_hook_launch_filter(tmp_path: pathlib.Path):
+def test_hook_launch_filter(tmp_path: pathlib.Path, device: str):
 
     foo_metadata_invoked = False
     bar_metadata_invoked = False
@@ -444,7 +444,7 @@ def test_hook_launch_filter(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton_filter.hatchet"
 
@@ -479,7 +479,7 @@ def test_hook_launch_filter(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
+def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
@@ -491,7 +491,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
@@ -511,7 +511,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
             queue.append(child)
 
 
-def test_hook_with_third_party(tmp_path: pathlib.Path):
+def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     third_party_hook_invoked = False
 
     def third_party_hook(metadata) -> None:
@@ -532,7 +532,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_with_third_party.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -546,7 +546,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_hook_multiple_threads(tmp_path: pathlib.Path):
+def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
         return {"name": "foo_test"}
@@ -564,9 +564,9 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x_foo = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x_foo = torch.tensor([2], device=device, dtype=torch.float32)
     y_foo = torch.zeros_like(x_foo)
-    x_bar = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x_bar = torch.tensor([2], device=device, dtype=torch.float32)
     y_bar = torch.zeros_like(x_bar)
 
     temp_file = tmp_path / "test_hook.hatchet"
@@ -604,9 +604,9 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
     assert root[1]["metrics"]["count"] == 100
 
 
-def test_pcsampling(tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("HIP backend does not support pc sampling")
+def test_pcsampling(tmp_path: pathlib.Path, device: str):
+    if not is_cuda():
+        pytest.skip("Only CUDA backend supports pc sampling")
 
     import os
 
@@ -622,7 +622,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_pcsampling.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
@@ -640,13 +640,13 @@ def test_pcsampling(tmp_path: pathlib.Path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-def test_deactivate(tmp_path: pathlib.Path):
+def test_deactivate(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_deactivate.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
-    torch.randn((10, 10), device="cuda")
+    torch.randn((10, 10), device=device)
     proton.activate(session_id)
-    torch.zeros((10, 10), device="cuda")
+    torch.zeros((10, 10), device=device)
     proton.deactivate(session_id)
     proton.finalize()
     with temp_file.open() as f:
@@ -657,18 +657,18 @@ def test_deactivate(tmp_path: pathlib.Path):
     assert "device_id" in data[0]["children"][0]["metrics"]
 
 
-def test_multiple_sessions(tmp_path: pathlib.Path):
+def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
     temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     session_id1 = proton.start(str(temp_file1.with_suffix("")))
     with proton.scope("scope0"):
-        torch.randn((10, 10), device="cuda")
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device=device)
+        torch.randn((10, 10), device=device)
     proton.deactivate(session_id0)
     proton.finalize(session_id0)
     with proton.scope("scope1"):
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device=device)
     proton.finalize(session_id1)
     # kernel has been invoked twice in session 0 and three times in session 1
     with temp_file0.open() as f:
@@ -682,7 +682,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     assert scope0_count + scope1_count == 3
 
 
-def test_trace(tmp_path: pathlib.Path):
+def test_trace(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_trace.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
@@ -692,7 +692,7 @@ def test_trace(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
@@ -708,7 +708,7 @@ def test_trace(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-def test_scope_multiple_threads(tmp_path: pathlib.Path):
+def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
@@ -719,7 +719,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
         for i in range(N):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
-            torch.ones((1, ), device="cuda")
+            torch.ones((1, ), device=device)
             proton.exit_scope()
 
     threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
@@ -740,8 +740,9 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     assert names == expected
 
 
+@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
-def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
+def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
         fresh_knobs.proton.enable_nvtx = enable_nvtx
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
@@ -750,7 +751,7 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
     with proton.scope("proton_scope"):
         torch.cuda.nvtx.range_push("nvtx_range0")
         torch.cuda.nvtx.range_push("nvtx_range1")
-        torch.ones((1, ), device="cuda")
+        torch.ones((1, ), device=device)
         torch.cuda.nvtx.range_pop()
         torch.cuda.nvtx.range_pop()
 
@@ -778,15 +779,15 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
     assert kernel["metrics"]["count"] == 1
 
 
-def test_tensor_metrics_scope(tmp_path: pathlib.Path):
+def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
-    x = torch.ones((10, 10), device="cuda", dtype=torch.float32)
+    x = torch.ones((10, 10), device=device, dtype=torch.float32)
     x_mean = x.mean()
     x_std = x.std()
     with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device=device)
         torch.zeros_like(x)
 
     proton.finalize()
@@ -807,11 +808,11 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
     assert test_frame["metrics"]["x_std"] == 0.0
 
 
-def test_tensor_metrics_hook(tmp_path: pathlib.Path):
+def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        metric_value = torch.tensor(8.0, device="cuda")
+        metric_value = torch.tensor(8.0, device=device)
         return {"name": "foo_test", "flops": metric_value}
 
     @triton.jit(launch_metadata=metadata_fn)
@@ -819,7 +820,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.ones((8, ), device="cuda", dtype=torch.float32)
+    x = torch.ones((8, ), device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
 
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -841,8 +842,8 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
-def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -857,11 +858,11 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
 
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         with proton.metadata_state():
             a_sum = a.sum()
         with proton.scope("scope_b", metrics={"sum": a_sum}):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         c = a + b
         foo[(1, )](a, b, c)
         with proton.metadata_state():
@@ -928,15 +929,15 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
-def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
     def fn(session):
         proton.deactivate(session)
         with proton.scope("scope_b", metrics={"sum": 4}):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         proton.activate(session)
         c = b * 2  # noqa: F841
 
@@ -980,7 +981,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
         assert c_frame["metrics"]["count"] == 10
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires at least two CUDA devices")
@@ -1073,7 +1074,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
-def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
+def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
@@ -1082,7 +1083,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         if i != 0 and i % 1000 == 0:
             proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}", metrics={"count": 1}):
-            torch.zeros((100), device="cuda")
+            torch.zeros((100), device=device)
 
     proton.finalize(output_format=data_format)
 
@@ -1107,10 +1108,10 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
     assert num_scopes == 10000
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
-def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size):
+def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
@@ -1127,7 +1128,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
 
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         c = a + a
         foo[(1, )](a, a, c)
 
@@ -1180,13 +1181,13 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
-def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path):
+def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path, device: str):
     fresh_knobs.proton.enable_hw_trace = True
     temp_file = tmp_path / "test_hw_trace.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)  # noqa: F841
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)  # noqa: F841
 
     proton.finalize()
 

@@ -180,12 +180,21 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         auto regOrder = llEnc.getOrder();
         auto threadOrder = llEnc.getThreadOrder();
 
-        auto contig = llEnc.getElemsPerThread(srcTy.getShape());
         SetVector<unsigned> orderSet;
-        if (contig[regOrder[0]] > 1)
-          orderSet.insert(regOrder[0]);
-        orderSet.insert(threadOrder.begin(), threadOrder.end());
-        order = orderSet.takeVector();
+
+        auto regContig = llEnc.getContigPerThread()[regOrder[0]];
+        unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+        unsigned finalRegContig =
+            fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);
+        // We only apply the order change if we find a vector size which works
+        // for async copy.
+        if (finalRegContig > 0) {
+          // Preserve the fastest reg dim for contig > 1 to keep vectorization.
+          if (finalRegContig > 1)
+            orderSet.insert(regOrder[0]);
+          orderSet.insert(threadOrder.begin(), threadOrder.end());
+          order = orderSet.takeVector();
+        }
       }
 
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();

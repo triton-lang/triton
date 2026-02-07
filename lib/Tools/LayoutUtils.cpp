@@ -44,61 +44,49 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
     return layout;
   }
   MLIRContext *ctx = shape.begin()->first.getContext();
-
   auto bases = layout.getBases();
-
   auto kRegister = StringAttr::get(ctx, "register");
-  std::set<int32_t> broadcastedDims;
 
-  for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
-    auto outDimName = outDim.value();
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    if (actualSize <= desiredSize) {
-      continue;
-    }
-    assert(actualSize % desiredSize == 0);
-    // <inDimName, basisIdx, outValue>
-    std::vector<std::tuple<StringAttr, int, int>> sortedBases;
-    for (auto [inDimName, basis] : bases) {
-      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
-        auto outValue = basis[basisIdx][outDim.index()];
-        if (outValue == 0) {
-          continue;
-        }
-        assert(llvm::isPowerOf2_32(outValue));
-        sortedBases.emplace_back(inDimName, basisIdx, outValue);
-      }
-    }
-    // From the largest basis to the smallest.
-    llvm::sort(sortedBases,
-               [](auto a, auto b) { return std::get<2>(a) > std::get<2>(b); });
-    for (auto [inDimName, basisIdx, outValue] : sortedBases) {
-      if (actualSize <= desiredSize) {
-        break;
-      }
-      if (!broadcastRegisters && inDimName == kRegister) {
-        broadcastedDims.insert(basisIdx);
-      } else {
-        bases[inDimName][basisIdx][outDim.index()] = 0;
-      }
-      actualSize >>= 1;
-    }
-  }
-  if (!broadcastRegisters) {
-    // Remove broadcasted registers
-    std::vector<std::vector<int32_t>> newBasesRegister;
-    for (auto [idx, basis] : llvm::enumerate(bases[kRegister])) {
-      // Remove if it's broadcasted
-      if (broadcastedDims.find(idx) == broadcastedDims.end()) {
-        newBasesRegister.push_back(std::move(basis));
-      }
-    }
-    bases[kRegister] = std::move(newBasesRegister);
-  }
   auto outDims = layout.getOutDims();
   for (auto &[outDim, outDimSize] : outDims) {
-    outDimSize = std::min<int32_t>(outDimSize, shape.lookup(outDim));
+    auto newOutDim = shape.lookup(outDim);
+    // Shape should be a non-zero power of 2
+    assert(llvm::isPowerOf2_32(newOutDim) && newOutDim != 0);
+    outDimSize = std::min<int32_t>(outDimSize, newOutDim);
+  }
+
+  // Ensure no base exceeds the resized out-dim sizes.
+  SmallVector<int32_t> outDimSizes;
+  for (auto &pair : outDims) {
+    outDimSizes.push_back(pair.second);
+  }
+  for (auto &[inDimName, inDimBases] : bases) {
+    bool dropBroadcasting = (!broadcastRegisters && inDimName == kRegister);
+    std::vector<std::vector<int32_t>> newBasesRegister;
+    for (auto &basis : inDimBases) {
+      bool wasZero = true;
+      bool isZero = true;
+      for (size_t i = 0; i < basis.size(); ++i) {
+        int32_t original = basis[i];
+        if (original != 0) {
+          wasZero = false;
+        }
+        if (original >= outDimSizes[i]) {
+          basis[i] = 0;
+        }
+        if (basis[i] != 0) {
+          isZero = false;
+        }
+      }
+      if (dropBroadcasting) {
+        if (wasZero || !isZero) {
+          newBasesRegister.push_back(std::move(basis));
+        }
+      }
+    }
+    if (dropBroadcasting) {
+      inDimBases = std::move(newBasesRegister);
+    }
   }
 
   return LinearLayout(std::move(bases), std::move(outDims),

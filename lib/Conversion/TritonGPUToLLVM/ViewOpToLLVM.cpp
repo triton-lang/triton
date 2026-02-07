@@ -93,11 +93,11 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    if (!mlir::dyn_cast<SplatElementsAttr>(value))
+    auto values = dyn_cast<SplatElementsAttr>(op.getValue());
+    if (!values)
       return failure();
     auto loc = op->getLoc();
     LLVM::ConstantOp arithConstantOp;
-    auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
     if (type::isFloat(elemType)) {
@@ -118,43 +118,6 @@ struct ArithConstantSplatOpConversion
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
-    return success();
-  }
-};
-
-// Convert arith::ConstantOp with an array DenseElementsAttr to a
-// LLVM::StructType value.
-struct ArithConstantArrayOpConversion
-    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
-  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto value = op.getValue();
-    if (!mlir::dyn_cast<DenseElementsAttr>(value))
-      return failure();
-    if (mlir::isa<SplatElementsAttr>(value))
-      return failure();
-    auto tensorTy = cast<RankedTensorType>(op.getType());
-    auto loc = op->getLoc();
-    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
-    auto elemType = values.getElementType();
-    SmallVector<Value> llVals;
-    for (auto v : values.getValues<APInt>()) {
-      auto ll = LLVM::ConstantOp::create(rewriter, loc, elemType, v);
-      llVals.push_back(ll);
-    }
-    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
-
-    if (elemsPerThread != llVals.size()) {
-      op->emitError(
-          "Right now we only support constant arrays with the same number of "
-          "elements as the number of threads per warp");
-      return failure();
-    }
-    auto llStruct =
-        packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
-    rewriter.replaceOp(op, {llStruct});
     return success();
   }
 };
@@ -627,7 +590,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);

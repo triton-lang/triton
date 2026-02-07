@@ -834,7 +834,8 @@ if __name__ == "__main__":
 #   Hopper and Blackwell: we are not double-buffering the accumulator and
 #   leaving 256 columns of TMEM unused.
 # - On Blackwell, we can use `clusterlaunchcontrol` to dynamically schedule
-#   work in conjunction with the GPU, getting the best of both worlds.
+#   work in conjunction with the GPU, getting the best of both worlds. This is
+#   explored further in tutorial 12.
 #
 # Main takeaways:
 #

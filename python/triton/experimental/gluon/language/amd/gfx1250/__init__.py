@@ -95,4 +95,5 @@ def get_wmma_scale_layout(dot_operand_layout, shape):
     mdim = parent.instr_shape[0]
     reg_bases = parent.reg_bases
     warp_bases = parent.warp_bases
-    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases)
+    cga_bases = parent.cga_layout
+    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases, cga_bases)

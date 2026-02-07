@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -24,6 +25,22 @@ inline bool isZeroConst(Value v) {
 
 class ReduceOpHelper {
 public:
+  enum class InThreadVectorizeOpKind {
+    None,
+    AddF,
+    MulF,
+    MinNumF,
+    MaxNumF,
+    MinimumF,
+    MaximumF,
+    AddI,
+    MulI,
+    MinSI,
+    MaxSI,
+    MinUI,
+    MaxUI,
+  };
+
   explicit ReduceOpHelper(triton::ReduceOp op)
       : op(op.getOperation()), axis(op.getAxis()) {
     auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
@@ -42,30 +59,41 @@ public:
     }
   }
 
-  ArrayRef<int64_t> getSrcShape() { return srcShape; }
-
-  Attribute getSrcLayout() { return srcEncoding; }
-
-  triton::ReduceOp getOperation() { return op; }
-
-  unsigned getThreadOffsetOnReductionAxis();
-
-  bool isWarpSynchronous();
+  RankedTensorType getSrcTy() { return srcTy; }
 
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
 
-  // The shape of the shared memory space needed for the reduction.
-  SmallVector<unsigned> getScratchRepShape();
-
-  SmallVector<unsigned> getOrderWithAxisAtBeginning();
-
-  unsigned getScratchSizeInBytes();
-
   bool isReduceWithinCTA();
 
   bool isAssociative();
+
+  unsigned getScratchSizeInBytes();
+
+  InThreadVectorizeOpKind
+  getInThreadVectorizeOpKind(unsigned axisPack,
+                             bool supportBitwidth16Elementwise,
+                             bool supportBitwidth32Elementwise);
+
+  static triton::ColumnAction
+  moveAxisBasesToFront(const triton::LinearLayout &layout, int axis,
+                       bool isVectorized = false);
+
+  static triton::LinearLayout
+  zeroBasesAlongDimAndReorder(const triton::LinearLayout &layout, unsigned axis,
+                              mlir::StringAttr dim);
+
+  static triton::LinearLayout getInterLayout(const triton::LinearLayout &layout,
+                                             unsigned axis);
+
+  static triton::LinearLayout reducedRegLaneLayout(RankedTensorType srcTy,
+                                                   unsigned axis);
+
+  static Value createInThreadVectorizedCombineOp(OpBuilder &builder,
+                                                 Location loc,
+                                                 InThreadVectorizeOpKind kind,
+                                                 Value lhs, Value rhs);
 
 private:
   triton::ReduceOp op;
