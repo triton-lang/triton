@@ -40,9 +40,6 @@ class _tensor_descriptor_type_base(base_type):
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
         return self.block_type.nbytes // num_cta_splits
 
-    def _get_ir_type(self, builder: ir.builder) -> ir.type:
-        raise NotImplementedError
-
     def _to_ir(self, builder: ir.builder) -> ir.type:
         raise NotImplementedError
 
@@ -50,7 +47,7 @@ class _tensor_descriptor_type_base(base_type):
         raise NotImplementedError
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        out.append(self._get_ir_type(builder))
+        out.append(self._to_ir(builder))
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
 
@@ -64,13 +61,10 @@ class tensor_descriptor_type(_tensor_descriptor_type_base):
     _type_name: str = "tensor_descriptor"
     _mangle_prefix: str = "TD"
 
-    def _get_ir_type(self, builder: ir.builder) -> ir.type:
+    def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
         return builder.get_tensor_descriptor_layout_type(self.block_type.to_ir(builder), is_signed,
                                                          self.layout._to_ir(builder))
-
-    def _to_ir(self, builder: ir.builder) -> ir.type:
-        return self._get_ir_type(builder)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         handle = handles[cursor]
@@ -87,13 +81,10 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
     _type_name: str = "tensor_descriptor_im2col"
     _mangle_prefix: str = "TDI"
 
-    def _get_ir_type(self, builder: ir.builder) -> ir.type:
+    def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
         return builder.get_tensor_descriptor_im2col_layout_type(self.block_type.to_ir(builder), is_signed,
                                                                 self.layout._to_ir(builder))
-
-    def _to_ir(self, builder: ir.builder) -> ir.type:
-        return self._get_ir_type(builder)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         handle = handles[cursor]
