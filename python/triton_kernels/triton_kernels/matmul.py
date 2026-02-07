@@ -224,6 +224,7 @@ def matmul(a, b, bias,
     gammas: torch.Tensor | None = None,
     out_alpha: float | None = None,
     c: torch.Tensor | Tensor | None = None,
+    c_absmax: torch.Tensor | None = None,
     fused_comm: FusedComm | None = None,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
@@ -259,32 +260,37 @@ def matmul(a, b, bias,
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
-    c_data = c.storage.data if isinstance(c, Tensor) else c
-    d_data = d.storage.data if isinstance(d, Tensor) else d
+    if c is not None and not isinstance(c, Tensor):
+        c = wrap_torch_tensor(c)
+    if d is not None and not isinstance(d, Tensor):
+        d = wrap_torch_tensor(d)
+    c_data = None if c is None else c.storage.data
+    d_data = None if d is None else d.storage.data
     if not isinstance(a, Tensor):
         a = wrap_torch_tensor(a)
     if not isinstance(b, Tensor):
-        dtype = FP4 if b.dtype == torch.uint8 else None
-        b = wrap_torch_tensor(b, dtype=dtype)
+        b_dtype = FP4 if b.dtype == torch.uint8 else None
+        b = wrap_torch_tensor(b, dtype=b_dtype)
     a_scale_global = a.scale_global
     a_scale = a.scale_mx
-    if a_scale is not None and not isinstance(a_scale, Tensor):
+    if isinstance(a_scale, torch.Tensor):
         a_scale = wrap_torch_tensor(a_scale)
     b_scale_global = b.scale_global
     b_scale = b.scale_mx
+    if isinstance(b_scale, torch.Tensor):
+        b_scale = wrap_torch_tensor(b_scale)
     b_has_mx = b_scale is not None
     if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
         assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
-    if b_scale is not None and not isinstance(b_scale, Tensor):
-        b_scale = wrap_torch_tensor(b_scale)
     if b_scale is not None:
         b_scale.storage.data = b_scale.data.view(torch.uint8)
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
-    c_scale_global = None if not isinstance(c, Tensor) else c.scale_global
-    c_absmax = None if not isinstance(c, Tensor) else c.scale_actual
-    c_scale_mx = None if not isinstance(c, Tensor) else c.scale_mx
-    d_scale_global = None if not isinstance(d, Tensor) else d.scale_global
+    c_scale_global = None if c is None else c.scale_global
+    c_scale_mx = None if c is None else c.scale_mx
+    if isinstance(c_scale_mx, torch.Tensor):
+        c_scale_mx = wrap_torch_tensor(c_scale_mx)
+    d_scale_global = None if d is None else d.scale_global
 
     # unpack a scale
     a_has_mx = a_scale is not None
@@ -597,7 +603,7 @@ def matmul(a, b, bias,
     if not (is_input_batched or b_ragged_metadata is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None and c_scale_mx is not None:
-        c_scale_mx_torch = c_scale_mx.storage.data if isinstance(c_scale_mx, Tensor) else c_scale_mx
+        c_scale_mx_torch = c_scale_mx.storage.data
         if out_final_mx_scale.data_ptr() != c_scale_mx_torch.data_ptr():
             c_scale_mx_torch.copy_(out_final_mx_scale)
     return out_final
@@ -675,14 +681,17 @@ def matmul_torch(a, b, bias,
                  gammas = None,
                  round_x = None, round_y = None,
                  c: torch.Tensor | Tensor | None = None,
+                 c_absmax: torch.Tensor | None = None,
                  ):
     if precision_config is None:
         precision_config = PrecisionConfig()
+    if c is not None and not isinstance(c, Tensor):
+        c = wrap_torch_tensor(c)
     if not isinstance(a, Tensor):
         a = wrap_torch_tensor(a)
     if not isinstance(b, Tensor):
-        dtype = FP4 if b.dtype == torch.uint8 else None
-        b = wrap_torch_tensor(b, dtype=dtype)
+        b_dtype = FP4 if b.dtype == torch.uint8 else None
+        b = wrap_torch_tensor(b, dtype=b_dtype)
     a, b = apply_precision(a, b, precision_config)
 
     if b_ragged_metadata is not None:
@@ -708,9 +717,9 @@ def matmul_torch(a, b, bias,
                 round_y=round_y,
             )
             out[expt] = out_expt.to(out.dtype)
-        if isinstance(c, Tensor) and c.scale_actual is not None:
-            c.scale_actual.copy_(compute_actual_scale(out, precision_config.out_dtype))
-        return scale(out, c.scale_global if isinstance(c, Tensor) else None)
+        if c_absmax is not None:
+            c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
+        return scale(out, None if c is None else c.scale_global)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -760,9 +769,9 @@ def matmul_torch(a, b, bias,
         out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
         msk = scatter_indx != -1
         out[scatter_indx[msk], :] = y[msk, :]
-    if isinstance(c, Tensor) and c.scale_actual is not None:
-        c.scale_actual.copy_(compute_actual_scale(out, precision_config.out_dtype))
-    return scale(out, c.scale_global if isinstance(c, Tensor) else None)
+    if c_absmax is not None:
+        c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
+    return scale(out, None if c is None else c.scale_global)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,

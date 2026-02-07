@@ -15,7 +15,7 @@ from triton_kernels.topk import topk
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata  # ragged tensor
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
 # quantization
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, Tensor
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 
 
@@ -39,17 +39,16 @@ def quantize_weight(w, dtype, **opt):
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 else torch.float8_e4m3fnuz
         wq = w.to(fp8e4_dtype)
         wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
-        wq = wrap_torch_tensor(wq)
-        wq.scale_global = w.abs().max().unsqueeze(0)
-        return wq
+        return wrap_torch_tensor(wq, scale_global=w.abs().max().unsqueeze(0))
     else:
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
             w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
             w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
-        w.scale_mx = w_scale
-        return w
+        if isinstance(w, Tensor):
+            return Tensor(w.storage, dtype=w.dtype, shape=w.shape, shape_max=w.shape_max, scale_mx=w_scale)
+        return wrap_torch_tensor(w, dtype=FP4, scale_mx=w_scale)
 
 
 def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations

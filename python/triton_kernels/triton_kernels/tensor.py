@@ -36,7 +36,6 @@ class Tensor:
     shape: list[int] | None = None
     shape_max: list[int] | None = None
     scale_global: torch.Tensor | None = None
-    scale_actual: torch.Tensor | None = None
     scale_mx: object | None = None
 
     def __post_init__(self):
@@ -209,7 +208,11 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
+def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None, scale_global=None,
+                      scale_mx=None):
+    assert isinstance(torch_tensor, torch.Tensor), f"`wrap_torch_tensor` expects torch.Tensor, got {type(torch_tensor)}"
+    if isinstance(scale_mx, torch.Tensor):
+        scale_mx = wrap_torch_tensor(scale_mx)
     if dtype is None:
         dtype = torch_tensor.dtype
     dtype = torch_dtype_to_dtype(dtype)
@@ -229,9 +232,8 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
         dtype=dtype,
         shape=shape,
         shape_max=shape_max,
-        scale_global=None,
-        scale_actual=None,
-        scale_mx=None,
+        scale_global=scale_global,
+        scale_mx=scale_mx,
     )
 
 

@@ -20,17 +20,16 @@ def _quantize_weight(w, dtype, **opt):
         wq = w.to(fp8e4_dtype)
         if is_cuda() and not cuda_capability_geq(10, 0):
             wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
-        wq = wrap_torch_tensor(wq)
-        wq.scale_global = w.abs().max().unsqueeze(0)
-        return wq
+        return wrap_torch_tensor(wq, scale_global=w.abs().max().unsqueeze(0))
     else:
         assert dtype == "mx4", f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
             w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
             w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
-        w.scale_mx = w_scale
-        return w
+        if isinstance(w, Tensor):
+            return Tensor(w.storage, dtype=w.dtype, shape=w.shape, shape_max=w.shape_max, scale_mx=w_scale)
+        return wrap_torch_tensor(w, dtype=FP4, scale_mx=w_scale)
 
 
 @dataclass

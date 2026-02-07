@@ -375,7 +375,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     c = torch.empty(c_shape, dtype=c_dtype.torch_dtype, device=device)
     if c_transpose:
         c = c.mT.contiguous().mT
-    c = wrap_torch_tensor(c)
 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
@@ -387,36 +386,35 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
         out_dtype=c_dtype.torch_dtype,
     )
-    a_scale_mx = a_scales
-    b_scale_mx = b_scale_tri
     c_scale_mx = None
-    a.scale_global = a_scale_global
-    b.scale_global = b_scale_global
-    c.scale_global = c_scale_global
-    c.scale_actual = c_absmax
-    a.scale_mx = a_scale_mx
-    b.scale_mx = b_scale_mx
-    c.scale_mx = c_scale_mx
 
     # --- create epilogue ---
     epilogue = None
     if c_dtype.has_mx_scale:
         c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
         c_scale_mx = torch.empty(c_scale_shape, dtype=torch.uint8, device=a.device)
-        c.scale_mx = c_scale_mx
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
+    if isinstance(a, Tensor):
+        a = Tensor(a.storage, dtype=a.dtype, shape=a.shape, shape_max=a.shape_max, scale_global=a_scale_global, scale_mx=a_scales)
+    else:
+        a = wrap_torch_tensor(a, scale_global=a_scale_global, scale_mx=a_scales)
+    if isinstance(b, Tensor):
+        b = Tensor(b.storage, dtype=b.dtype, shape=b.shape, shape_max=b.shape_max, scale_global=b_scale_global, scale_mx=b_scale_tri)
+    else:
+        b = wrap_torch_tensor(b, scale_global=b_scale_global, scale_mx=b_scale_tri)
+    c = wrap_torch_tensor(c, scale_global=c_scale_global, scale_mx=c_scale_mx)
 
     # --- triton implementation ---
     try:
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
-                           gammas=gammas, epilogue=epilogue, c=c,
+                           gammas=gammas, epilogue=epilogue, c=c, c_absmax=c_absmax,
                            fused_activation=fused_activation)
         if c_dtype.has_global_scale:
-            tri_y_scale = c.scale_actual.clone()
+            tri_y_scale = c_absmax.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
@@ -424,11 +422,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
                         gammas=gammas,
-                        c=c)
+                        c=c,
+                        c_absmax=c_absmax)
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
-        ref_y_scale = c.scale_actual.clone()
+        ref_y_scale = c_absmax.clone()
 
     # --- check results ---
     if c_dtype.has_mx_scale:
