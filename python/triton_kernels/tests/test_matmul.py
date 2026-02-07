@@ -328,7 +328,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     do_scatter = do_scatter and mode != "batched"
 
     # --- create inputs ---
-    a, a_scales, a_ragged_metadata = make_random_tensor(
+    a, a_ragged_metadata = make_random_tensor(
         shape=(m, k),
         n_slices = n_slices,
         dtype = a_dtype,
@@ -339,8 +339,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
+        scale_global = 1.25 if a_dtype.has_global_scale else None,
     )
-    b, b_scale_tri, b_ragged_metadata = make_random_tensor(
+    b, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
         n_slices = n_slices,
         dtype = b_dtype,
@@ -353,6 +354,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         is_mx_rowmajor = not colmajor_mxfp_weight,
         value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
         scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
+        scale_global = 1.25 if b_dtype.has_global_scale else None,
     )
     if not isinstance(a, Tensor):
         a = wrap_torch_tensor(a)
@@ -378,32 +380,21 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
-    a_scale_global = wrap_list([1.25]) if c_dtype.has_global_scale else None
-    b_scale_global = wrap_list([1.25]) if b_dtype.has_global_scale else None
     c_scale_global = wrap_list([4.00]) if c_dtype.has_global_scale else None
     c_absmax = wrap_list([0]) if c_dtype.has_global_scale else None
     precision_opt = PrecisionConfig(
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
         out_dtype=c_dtype.torch_dtype,
     )
-    c_scale_mx = None
 
     # --- create epilogue ---
+    c_scale_mx = None
     epilogue = None
     if c_dtype.has_mx_scale:
         c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
         c_scale_mx = torch.empty(c_scale_shape, dtype=torch.uint8, device=a.device)
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
-
-    if isinstance(a, Tensor):
-        a = Tensor(a.storage, dtype=a.dtype, shape=a.shape, shape_max=a.shape_max, scale_global=a_scale_global, scale_mx=a_scales)
-    else:
-        a = wrap_torch_tensor(a, scale_global=a_scale_global, scale_mx=a_scales)
-    if isinstance(b, Tensor):
-        b = Tensor(b.storage, dtype=b.dtype, shape=b.shape, shape_max=b.shape_max, scale_global=b_scale_global, scale_mx=b_scale_tri)
-    else:
-        b = wrap_torch_tensor(b, scale_global=b_scale_global, scale_mx=b_scale_tri)
     c = wrap_torch_tensor(c, scale_global=c_scale_global, scale_mx=c_scale_mx)
 
     # --- triton implementation ---

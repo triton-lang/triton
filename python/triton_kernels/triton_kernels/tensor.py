@@ -36,7 +36,7 @@ class Tensor:
     shape: list[int] | None = None
     shape_max: list[int] | None = None
     scale_global: torch.Tensor | None = None
-    scale_mx: object | None = None
+    scale_mx: "Tensor | None" = None
 
     def __post_init__(self):
         assert isinstance(self.storage, Storage)
@@ -96,9 +96,9 @@ class Tensor:
             return self.shape
         return self.shape[i]
 
-        @property
-        def specialization_key(self):
-            return (tuple(self.data.shape), self.data.dtype)
+    @property
+    def specialization_key(self):
+        return (tuple(self.data.shape), self.data.dtype)
 
 
 def is_tma_compliant(tensor):

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from triton_kernels.numerics import InFlexData, OutFlexData
 import torch
 import triton
 from .swiglu_details._swiglu import _swiglu, _swiglu_fn
@@ -7,19 +6,24 @@ from triton_kernels import target_info
 
 
 @dataclass(frozen=True)
-class FlexCtx:
-    out_data: OutFlexData = OutFlexData()
-    inp_data: InFlexData = InFlexData()
+class PrecisionConfig:
+    limit: float | None = None
+    out_scale_global: torch.Tensor | None = None
+    out_absmax: torch.Tensor | None = None
+    out_checksum_scale: torch.Tensor | None = None
+    inp_scale_global: torch.Tensor | None = None
+    out_dtype: torch.dtype | None = None
+    inp_dtype: torch.dtype | None = None
     saturate_inf: bool = False
 
 
-@dataclass(frozen=True)
-class PrecisionConfig:
-    limit: float
-    flex_ctx: FlexCtx = FlexCtx()
-
-
 swiglu_fn = _swiglu_fn
+
+
+def _reinterpret_if_needed(x: torch.Tensor, dtype: torch.dtype | None):
+    if dtype is None or x.dtype.itemsize > 1:
+        return x
+    return x.view(dtype)
 
 
 class SwiGLU(torch.autograd.Function):
@@ -31,7 +35,6 @@ class SwiGLU(torch.autograd.Function):
         assert a.stride()[-1] == 1
         assert a.shape[-1] % 2 == 0
         out = torch.empty(size=(M, N // 2), dtype=a.dtype, device=a.device)
-        flex_ctx = precision_config.flex_ctx
         # optimization hyperparameters
         BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
         num_warps = 4
@@ -54,12 +57,12 @@ class SwiGLU(torch.autograd.Function):
         if routing_data is not None:
             n_tokens = routing_data.expt_data.token_offs[routing_data.n_expts_tot]
         _swiglu[grid](
-            flex_ctx.out_data.reinterpret(out),
-            flex_ctx.out_data.expected_scale,
-            flex_ctx.out_data.actual_scale,
-            flex_ctx.out_data.checksum_scale,
-            flex_ctx.inp_data.reinterpret(a),
-            flex_ctx.inp_data.scale,
+            _reinterpret_if_needed(out, precision_config.out_dtype),
+            precision_config.out_scale_global,
+            precision_config.out_absmax,
+            precision_config.out_checksum_scale,
+            _reinterpret_if_needed(a, precision_config.inp_dtype),
+            precision_config.inp_scale_global,
             alpha,
             M,
             N // 2,
@@ -74,7 +77,7 @@ class SwiGLU(torch.autograd.Function):
             EVEN_N=(N // 2) % BLOCK_N == 0,
             M_BLOCKS=M_BLOCKS,
             N_BLOCKS=N_BLOCKS,
-            flexpoint_saturate_inf=flex_ctx.saturate_inf,
+            flexpoint_saturate_inf=precision_config.saturate_inf,
             num_warps=num_warps,
             **kwargs,
         )

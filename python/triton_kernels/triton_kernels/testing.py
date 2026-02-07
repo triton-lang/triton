@@ -288,7 +288,9 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
-                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
+                       squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None,
+                       scale_global=None):
+    scale_global = torch.tensor([scale_global], device=device) if scale_global is not None else None
     # allocate buffer
     buffer_shape = ((n_slices, ) if ragged_dim is None else tuple()) + shape
     buffer_dtype = torch.bfloat16 if dtype.has_mx_scale else dtype.torch_dtype
@@ -307,8 +309,9 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     if transpose:
         buffer = buffer.mT.contiguous().mT
     # handle mxfp
-    scales = None
-    if mxfp_dim is not None:
+    if mxfp_dim is None:
+        buffer = wrap_torch_tensor(buffer, scale_global=scale_global)
+    else:
         assert dtype.has_mx_scale
         buffer_dtype = dtype.torch_dtype
         if is_mx_rowmajor:
@@ -316,7 +319,7 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
         else:
             buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None)
+        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None, scale_global=scale_global)
         scales = wrap_torch_tensor(scales)
         if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout
@@ -326,4 +329,13 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             if callable(scale_hbm_swizzling):
                 scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata)
             scales = convert_layout(scales, scale_hbm_swizzling)
-    return buffer, scales, ragged_metadata
+        buffer = wrap_torch_tensor(
+            buffer.storage.data,
+            dtype=buffer.dtype,
+            shape=buffer.shape,
+            shape_max=buffer.shape_max,
+            layout=buffer.storage.layout,
+            scale_global=scale_global,
+            scale_mx=scales,
+        )
+    return buffer, ragged_metadata

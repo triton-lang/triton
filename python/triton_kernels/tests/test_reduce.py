@@ -3,7 +3,6 @@ import torch
 from triton.testing import do_bench
 from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
-from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 import triton
 import triton.language as tl
@@ -70,24 +69,25 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     torch.manual_seed(0)
     device = "cuda"
     x = torch.randn((B, M, N), device=device, dtype=torch.float32, requires_grad=True)
-    x_mscale, x_flex = None, None
-    y_flex_tri, y_flex_ref = None, None
+    x_scale_mx, x_scale_global = None, None
+    y_scale_global, y_absmax_tri, y_absmax_ref = None, None, None
     if is_mx := dtype_str.startswith("mx"):
         dtype = dtype_str_to_torch(dtype_str.removeprefix("mx"))
-        x, x_mscale = downcast_to_mxfp_torch(x.to(torch.float16), dtype, axis=-1)
+        x, x_scale_mx = downcast_to_mxfp_torch(x.to(torch.float16), dtype, axis=-1)
     if is_flex := dtype_str.startswith("flex"):
         dtype = dtype_str_to_torch(dtype_str.removeprefix("flex"))
         expected_scale = torch.tensor([4], device=device, dtype=torch.float32)
-        x_flex = InFlexData(scale=torch.tensor([2], device=device, dtype=torch.float32))
-        x = x / x_flex.scale
+        x_scale_global = torch.tensor([2], device=device, dtype=torch.float32)
+        x = x / x_scale_global
         x = x.to(dtype)
-        y_flex_tri = OutFlexData(expected_scale=expected_scale, actual_scale=torch.empty_like(expected_scale))
-        y_flex_ref = OutFlexData(expected_scale=expected_scale, actual_scale=torch.empty_like(expected_scale))
+        y_scale_global = expected_scale
+        y_absmax_tri = torch.zeros_like(expected_scale)
+        y_absmax_ref = torch.zeros_like(expected_scale)
     mask = init_mask(mask_mode, B, M, N, device)
     expected_exception = ValueError if dim == 2 and is_mx else None
     if expected_exception is not None:
         with pytest.raises(expected_exception):
-            reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale)
+            reduce(x, dim=dim, mask=mask, x_scale_mx=x_scale_mx)
         return
     if postprocess_fn == "plus_ten":
         postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a_reduce, ("a", ), reduction_n=2),
@@ -98,16 +98,32 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     # run forward pass
     x_tri = x.clone().detach().requires_grad_(True)
     x_ref = x.clone().detach().requires_grad_(True)
-    y_tri, y_tri_mxscale = reduce(x_tri, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
-                                  postprocess_fn1=postprocess_fn_tri)
-    y_ref, y_ref_mxscale = reduce_torch(x_ref, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_ref,
-                                        postprocess_fn1=postprocess_fn_ref)
+    y_tri, y_tri_mxscale = reduce(
+        x_tri,
+        dim=dim,
+        mask=mask,
+        x_scale_mx=x_scale_mx,
+        x_scale_global=x_scale_global,
+        y_scale_global=y_scale_global,
+        y_absmax=y_absmax_tri,
+        postprocess_fn1=postprocess_fn_tri,
+    )
+    y_ref, y_ref_mxscale = reduce_torch(
+        x_ref,
+        dim=dim,
+        mask=mask,
+        x_scale_mx=x_scale_mx,
+        x_scale_global=x_scale_global,
+        y_scale_global=y_scale_global,
+        y_absmax=y_absmax_ref,
+        postprocess_fn1=postprocess_fn_ref,
+    )
     if is_mx:
         y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
         y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)
     assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
     if is_flex:
-        torch.allclose(y_flex_tri.actual_scale, y_flex_ref.actual_scale, atol=1e-3, rtol=1e-3)
+        assert torch.allclose(y_absmax_tri, y_absmax_ref, atol=1e-3, rtol=1e-3)
     run_bwd = postprocess_fn is None and "float8" not in dtype_str
     if run_bwd:
         dy = torch.randn_like(y_tri)

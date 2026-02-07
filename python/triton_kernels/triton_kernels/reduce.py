@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import quantize_mxfp8_fn
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from typing import Optional
 from .specialize import SpecializationModule, ClosureArg, FnSpecs
 
@@ -63,10 +63,8 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     K: tl.constexpr, S0, X_S1, Y_S1,  #
                     POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
                     POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
-                    XFlex,  # TODO: remove this
-                    XGlobalScale,  # x global scale
-                    YFlexExpected, YFlexActual, YFlexChecksum,
-                    Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
+                    XScaleGlobal,  # x global scale
+                    YScaleGlobal, YAbsmax, Y_SATURATE_INF: tl.constexpr,  # y flex (global) scale
                     IS_MASK_NONE: tl.constexpr,  #
                     BROADCAST_R: tl.constexpr,  #
                     BROADCAST_S0: tl.constexpr,  #
@@ -98,7 +96,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     valid_x_s1 = offs_x_s1 < X_S1
     valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
     y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
-    x_flex_scale = load_scale(XFlex)
+    x_scale_global = load_scale(XScaleGlobal)
     for k in (tl.static_range if K <= 8 else tl.range)(0, K):
         x_ptrs = X + k * stride_xr + offs_s0[:, None] * stride_x0 + offs_x_s1[None, :] * stride_x1
         mask = valid_s0[:, None] & valid_x_s1[None, :]
@@ -116,7 +114,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
             xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
             xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
             x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_X_S1])
-        x = x * x_flex_scale
+        x = x * x_scale_global
         if not IS_SCALE_NONE:
             k_term_s = 0 if SCALE_BROADCAST_R else (k * stride_sr)
             s0_term_s = 0 if SCALE_BROADCAST_S0 else (offs_s0[:, None] * stride_s0)
@@ -127,13 +125,11 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         y += x
     if POSTPROCESS_FN1 is not None:
         y = POSTPROCESS_FN1(y, *postprocess_fn1_args)
-    if XGlobalScale is not None:
-        y *= tl.load(XGlobalScale)
     offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
     offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
     valid_y_s1 = offs_y_s1 < Y_S1
     valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 32)
-    y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
+    y = float_to_flex(y, YScaleGlobal, YAbsmax, None, None, Y, Y_SATURATE_INF)
     # TODO (phil): keeping for backward compatibility, but will remove !
     if YMx is None and POSTPROCESS_FN2 is not None:
         y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
@@ -160,12 +156,12 @@ def reduce_forward(
     dim: int,
     mask: Optional[torch.Tensor] = None,
     scale: Optional[torch.Tensor] = None,
-    x_mxscale: Optional[torch.Tensor] = None,
-    x_flex: Optional[InFlexData] = InFlexData(),
-    x_global_scale: Optional[torch.Tensor] = None,
+    x_scale_mx: Optional[torch.Tensor] = None,
+    x_scale_global: Optional[torch.Tensor] = None,
     y_dtype: Optional[torch.dtype] = None,
-    y_flex: Optional[OutFlexData] = OutFlexData(),
-    y_flex_saturate_inf: bool = False,
+    y_scale_global: Optional[torch.Tensor] = None,
+    y_absmax: Optional[torch.Tensor] = None,
+    y_saturate_inf: bool = False,
     y_has_mx: Optional[bool] = None,
     y: Optional[torch.Tensor] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
@@ -205,24 +201,19 @@ def reduce_forward(
         dim += x.ndim
     if dim not in (0, 1, 2):
         raise ValueError("dim must be in {0,1,2}")
-    if x_mxscale is not None:
+    if x_scale_mx is not None:
         if dim == 2:
             raise ValueError("reduction over the micro-scaled dimension not supported")
-        assert x.shape[:-1] == x_mxscale.shape[:-1]
-        assert triton.cdiv(x.shape[-1], 32) * 32 == x_mxscale.shape[-1] * 32
-    # assert not y_flex.is_per_batch
+        assert x.shape[:-1] == x_scale_mx.shape[:-1]
+        assert triton.cdiv(x.shape[-1], 32) * 32 == x_scale_mx.shape[-1] * 32
     if postprocess_fn1 is None:
         postprocess_fn1 = PostprocessFn()
     if postprocess_fn2 is None:
         postprocess_fn2 = PostprocessFn()
     if y_dtype is None:
         y_dtype = x.dtype
-    if y_flex is None:
-        y_flex = OutFlexData()
-    if x_flex is None:
-        x_flex = InFlexData()
     if y_has_mx is None:
-        y_has_mx = x_mxscale is not None
+        y_has_mx = x_scale_mx is not None
     # input shapes
     dims = (0, 1, 2)
     nonred = tuple(d for d in dims if d != dim)
@@ -231,20 +222,20 @@ def reduce_forward(
     if y is None:
         y = torch.empty((S0, Y_S1), device=x.device, dtype=y_dtype)
     assert y.shape == (S0, Y_S1), f"y.shape: {y.shape} != ({S0}, {Y_S1})"
-    y_mxscale = None
+    y_scale_mx = None
     if y_has_mx:
-        y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=torch.uint8)
+        y_scale_mx = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=torch.uint8)
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
     stride_x1 = x.stride(nonred[1])
     # Strides for X mx scales
-    stride_xmxr = None if x_mxscale is None else x_mxscale.stride(dim)
-    stride_xmx0 = None if x_mxscale is None else x_mxscale.stride(nonred[0])
-    stride_xmx1 = None if x_mxscale is None else x_mxscale.stride(nonred[1])
+    stride_xmxr = None if x_scale_mx is None else x_scale_mx.stride(dim)
+    stride_xmx0 = None if x_scale_mx is None else x_scale_mx.stride(nonred[0])
+    stride_xmx1 = None if x_scale_mx is None else x_scale_mx.stride(nonred[1])
     # Strides for Y mx scales
-    stride_ymx0 = None if y_mxscale is None else y_mxscale.stride(0)
-    stride_ymx1 = None if y_mxscale is None else y_mxscale.stride(1)
+    stride_ymx0 = None if y_scale_mx is None else y_scale_mx.stride(0)
+    stride_ymx1 = None if y_scale_mx is None else y_scale_mx.stride(1)
     # Mask strides (broadcast allowed via stride 0)
     stride_mr, stride_m0, stride_m1 = _get_strides(mask, dim)
     # Scale strides (broadcast allowed via stride 0)
@@ -258,17 +249,17 @@ def reduce_forward(
     reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                                 postprocess_fn2=postprocess_fn2.specs)._reduce_forward
     reduce_kernel[grid](
-        x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
-        x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
-        y_flex.reinterpret(y), y.stride(0), y.stride(1),  #
-        y_mxscale, stride_ymx0, stride_ymx1,  #
+        x, stride_xr, stride_x0, stride_x1,  #
+        x_scale_mx, stride_xmxr, stride_xmx0, stride_xmx1,  #
+        y, y.stride(0), y.stride(1),  #
+        y_scale_mx, stride_ymx0, stride_ymx1,  #
         mask, stride_mr, stride_m0, stride_m1,  #
         scale, stride_sr, stride_s0, stride_s1,  #
         unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
         *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
-        x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
-        y_flex_saturate_inf,  #
+        x_scale_global, y_scale_global, y_absmax,  #
+        y_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
         BROADCAST_R=(stride_mr == 0),  #
         BROADCAST_S0=(stride_m0 == 0),  #
@@ -283,7 +274,7 @@ def reduce_forward(
         DIM=dim,  #
         num_warps=4  #
     )
-    return y, y_mxscale
+    return y, y_scale_mx
 
 
 # ------------------------------------------------------------
@@ -315,7 +306,7 @@ def _reduce_backward(
     S0,
     X_S1,
     Y_S1,  # shapes
-    XFlex,  # global input flex scale (scalar device buffer)
+    XScaleGlobal,  # global input scale (scalar device buffer)
     IS_MASK_NONE: tl.constexpr,
     BROADCAST_R: tl.constexpr,
     BROADCAST_S0: tl.constexpr,
@@ -358,7 +349,7 @@ def _reduce_backward(
     dy = tl.load(dy_ptrs, mask=valid_s0[:, None] & valid_y_from_x[None, :], other=0.0).to(tl.float32)
 
     # Global flex scale (scalar)
-    x_flex_scale = load_scale(XFlex)
+    x_scale_global = load_scale(XScaleGlobal)
 
     # Loop over the reduced dimension
     for k in tl.range(0, K, num_stages=2):
@@ -370,7 +361,7 @@ def _reduce_backward(
             xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
             g = (g.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32]) * xmx[:, :, None]).reshape([BLOCK_S0, BLOCK_X_S1])
         # Multiply by global input flex scale
-        g = g * x_flex_scale
+        g = g * x_scale_global
         # Multiply by per-element Scale if provided
         if not IS_SCALE_NONE:
             k_term_s = 0 if SCALE_BROADCAST_R else (k * stride_sr)
@@ -399,8 +390,8 @@ def reduce_backward(
     *,
     mask: Optional[torch.Tensor],
     scale: Optional[torch.Tensor],
-    x_mxscale: Optional[torch.Tensor],
-    x_flex: Optional[InFlexData],
+    x_scale_mx: Optional[torch.Tensor],
+    x_scale_global: Optional[torch.Tensor],
     postprocess_fn1: Optional[PostprocessFn],
     x_strides: tuple[int, int, int],
     x_mx_strides: Optional[tuple[int, int, int]],
@@ -423,12 +414,9 @@ def reduce_backward(
     Y_S1 = X_S1 // reduction_n
     assert dy.shape == (S0, Y_S1), f"dY shape {dy.shape} mismatch with (S0={S0}, Y_S1={Y_S1})"
 
-    # Strides for dX must match the element size of the tensor passed to the kernel.
-    # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.
-    dx_view = x_flex.reinterpret(dx)
-    stride_xr, stride_x0, stride_x1 = _get_strides(dx_view, dim)
+    stride_xr, stride_x0, stride_x1 = _get_strides(dx, dim)
     stride_xmxr = stride_xmx0 = stride_xmx1 = 0
-    if x_mxscale is not None:
+    if x_scale_mx is not None:
         stride_xmxr, stride_xmx0, stride_xmx1 = x_mx_strides
 
     stride_mr, stride_m0, stride_m1 = _get_strides(mask, dim, mask_strides)
@@ -443,11 +431,11 @@ def reduce_backward(
         dy,
         dy.stride(0),
         dy.stride(1),
-        dx_view,
+        dx,
         stride_xr,
         stride_x0,
         stride_x1,
-        x_mxscale,
+        x_scale_mx,
         stride_xmxr,
         stride_xmx0,
         stride_xmx1,
@@ -464,7 +452,7 @@ def reduce_backward(
         S0,
         X_S1,
         Y_S1,
-        x_flex.scale,
+        x_scale_global,
         IS_MASK_NONE=(mask is None),
         BROADCAST_R=(stride_mr == 0),
         BROADCAST_S0=(stride_m0 == 0),
@@ -496,9 +484,10 @@ class _ReduceAutograd(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, dim: int, mask: Optional[torch.Tensor], scale: Optional[torch.Tensor],
-                x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], x_global_scale: Optional[torch.Tensor],
-                y_dtype: Optional[torch.dtype], y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool,
-                y_has_mx: Optional[bool], y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
+                x_scale_mx: Optional[torch.Tensor], x_scale_global: Optional[torch.Tensor],
+                y_dtype: Optional[torch.dtype], y_scale_global: Optional[torch.Tensor],
+                y_absmax: Optional[torch.Tensor], y_saturate_inf: bool, y_has_mx: Optional[bool],
+                y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
                 postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
@@ -506,12 +495,12 @@ class _ReduceAutograd(torch.autograd.Function):
             dim=dim,
             mask=mask,
             scale=scale,
-            x_mxscale=x_mxscale,
-            x_flex=x_flex,
-            x_global_scale=x_global_scale,
+            x_scale_mx=x_scale_mx,
+            x_scale_global=x_scale_global,
             y_dtype=y_dtype,
-            y_flex=y_flex,
-            y_flex_saturate_inf=y_flex_saturate_inf,
+            y_scale_global=y_scale_global,
+            y_absmax=y_absmax,
+            y_saturate_inf=y_saturate_inf,
             y_has_mx=y_has_mx,
             y=y,
             postprocess_fn1=postprocess_fn1,
@@ -526,11 +515,11 @@ class _ReduceAutograd(torch.autograd.Function):
         ctx.device = x.device
         ctx.mask = mask
         ctx.scale = scale
-        ctx.x_mxscale = x_mxscale
-        ctx.x_flex = x_flex if x_flex is not None else InFlexData()
+        ctx.x_scale_mx = x_scale_mx
+        ctx.x_scale_global = x_scale_global
         ctx.postprocess_fn1 = postprocess_fn1 if postprocess_fn1 is not None else PostprocessFn()
         ctx.x_strides = tuple(x.stride())
-        ctx.x_mx_strides = tuple(x_mxscale.stride()) if x_mxscale is not None else None
+        ctx.x_mx_strides = tuple(x_scale_mx.stride()) if x_scale_mx is not None else None
         ctx.mask_strides = tuple(mask.stride()) if mask is not None else None
         ctx.scale_strides = tuple(scale.stride()) if scale is not None else None
         ctx.y_has_mx = bool(y_mx is not None)
@@ -542,7 +531,7 @@ class _ReduceAutograd(torch.autograd.Function):
     def backward(ctx, grad_y: torch.Tensor, grad_y_mxscale: Optional[torch.Tensor] = None):
         # We do not support grads through MX-quantized outputs (no torch compute in bwd)
         if ctx.y_has_mx:
-            raise NotImplementedError("Backward with y_mxscale (MX-quantized outputs) is not supported.")
+            raise NotImplementedError("Backward with y_scale_mx (MX-quantized outputs) is not supported.")
 
         # Allocate grad for x; (no torch compute)
         dx = torch.empty(ctx.x_shape, dtype=ctx.x_dtype, device=grad_y.device)
@@ -553,8 +542,8 @@ class _ReduceAutograd(torch.autograd.Function):
             dim=ctx.dim,
             mask=ctx.mask,
             scale=ctx.scale,
-            x_mxscale=ctx.x_mxscale,
-            x_flex=ctx.x_flex,
+            x_scale_mx=ctx.x_scale_mx,
+            x_scale_global=ctx.x_scale_global,
             postprocess_fn1=ctx.postprocess_fn1,
             x_strides=ctx.x_strides,
             x_mx_strides=ctx.x_mx_strides,
@@ -571,21 +560,20 @@ def reduce(
     dim: int,
     mask: Optional[torch.Tensor] = None,
     scale: Optional[torch.Tensor] = None,
-    x_mxscale: Optional[torch.Tensor] = None,
-    x_flex: Optional[InFlexData] = InFlexData(),
-    x_global_scale: Optional[torch.Tensor] = None,
+    x_scale_mx: Optional[torch.Tensor] = None,
+    x_scale_global: Optional[torch.Tensor] = None,
     y: Optional[torch.Tensor] = None,
     y_dtype: Optional[torch.dtype] = None,
-    y_flex: Optional[OutFlexData] = OutFlexData(),
-    y_flex_saturate_inf: bool = False,
+    y_scale_global: Optional[torch.Tensor] = None,
+    y_absmax: Optional[torch.Tensor] = None,
+    y_saturate_inf: bool = False,
     y_has_mx: Optional[bool] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
     unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
-    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, x_global_scale, y_dtype, y_flex,  #
-                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2,
-                                 unpadded_batch_size)
+    return _ReduceAutograd.apply(x, dim, mask, scale, x_scale_mx, x_scale_global, y_dtype, y_scale_global, y_absmax,  #
+                                 y_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2, unpadded_batch_size)
 
 
 # ------------------------------------------------------------
@@ -603,18 +591,18 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 
 def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,  #
                  scale: Optional[torch.Tensor] = None,  #
-                 x_mxscale: Optional[torch.Tensor] = None,  #
-                 x_flex: Optional[InFlexData] = InFlexData(), y_flex: Optional[OutFlexData] = OutFlexData(),
-                 y_flex_saturate_inf: bool = False, postprocess_fn1: Optional[callable] = None,
-                 unpadded_batch_size: Optional[torch.Tensor] = None):
+                 x_scale_mx: Optional[torch.Tensor] = None,  #
+                 x_scale_global: Optional[torch.Tensor] = None, y_scale_global: Optional[torch.Tensor] = None,
+                 y_absmax: Optional[torch.Tensor] = None, y_saturate_inf: bool = False,
+                 postprocess_fn1: Optional[callable] = None, unpadded_batch_size: Optional[torch.Tensor] = None):
     from triton_kernels.numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
     x_dtype = x.dtype
     # upcast input
-    if x_mxscale is not None:
-        x = upcast_from_mxfp_torch(x, x_mxscale, torch.float32, axis=-1)
+    if x_scale_mx is not None:
+        x = upcast_from_mxfp_torch(x, x_scale_mx, torch.float32, axis=-1)
     x = x.to(torch.float32)
-    if x_flex is not None:
-        x *= x_flex.scale
+    if x_scale_global is not None:
+        x *= x_scale_global
     # upcast scale
     if scale is None:
         scale = torch.ones(1, dtype=torch.float32, device=x.device)
@@ -626,12 +614,13 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
     ret = torch.where(mask, x * scale, 0).sum(dim=dim)
     if postprocess_fn1 is not None:
         ret = postprocess_fn1(ret)
-    if y_flex is not None:
-        y_flex.actual_scale.copy_(compute_actual_scale(ret, x_dtype, y_flex.is_per_batch))
-        ret = (ret / y_flex.expected_scale).to(x_dtype)
+    if y_scale_global is not None:
+        if y_absmax is not None:
+            y_absmax.copy_(compute_actual_scale(ret, x_dtype))
+        ret = (ret / y_scale_global).to(x_dtype)
     # downcast output
     ret_mxscale = None
-    if x_mxscale is not None:
-        assert y_flex is None
+    if x_scale_mx is not None:
+        assert y_scale_global is None and y_absmax is None
         ret, ret_mxscale = downcast_to_mxfp_torch(ret, torch.float8_e4m3fn, axis=-1)
     return ret.to(x_dtype), ret_mxscale
