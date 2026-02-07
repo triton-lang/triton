@@ -400,7 +400,7 @@ def matmul(a, b, bias,
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
-    gain_stride = None if gain is None else gain.stride(0)
+    gain_stride = None if gain is None else 0 if gain.ndim == 1 else gain.stride(0)
     # moe metadata
     expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(b_ragged_metadata, opt_flags.block_k)
     expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(a_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
