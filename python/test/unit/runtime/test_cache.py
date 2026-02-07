@@ -891,3 +891,28 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     kernel[(1, )](output, fn_b)
     assert counter == 1
     assert output.item() == 31
+
+
+def test_base32_non_hex_key(tmp_path, monkeypatch):
+    """Regression test for https://github.com/triton-lang/triton/issues/5013.
+
+    get_cache_manager must accept arbitrary string keys, not only hex strings.
+    """
+    import hashlib
+    from triton.runtime.cache import _base32, get_cache_manager
+
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(tmp_path))
+    triton.knobs.cache.dir = str(tmp_path)
+
+    # hex key should still work (backward compat)
+    hex_key = hashlib.sha256(b"test").hexdigest()
+    result_hex = _base32(hex_key)
+    assert isinstance(result_hex, str) and len(result_hex) > 0
+
+    # non-hex key must not raise ValueError
+    result_plain = _base32("test_hash")
+    assert isinstance(result_plain, str) and len(result_plain) > 0
+
+    # get_cache_manager with non-hex key must not crash
+    cm = get_cache_manager("test_hash")
+    assert cm is not None

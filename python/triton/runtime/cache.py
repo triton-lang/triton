@@ -247,8 +247,14 @@ class RemoteCacheManager(CacheManager):
 
 
 def _base32(key):
-    # Assume key is a hex string.
-    return base64.b32encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
+    # Try to decode as hex (all internal callers use hexdigest keys).
+    # Fall back to hashing for arbitrary string keys from external callers
+    # (see https://github.com/triton-lang/triton/issues/5013).
+    try:
+        key_bytes = bytes.fromhex(key)
+    except (ValueError, AttributeError):
+        key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
+    return base64.b32encode(key_bytes).decode("utf-8").rstrip("=")
 
 
 def get_cache_manager(key) -> CacheManager:
