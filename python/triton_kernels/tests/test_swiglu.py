@@ -1,4 +1,4 @@
-from triton_kernels.swiglu import swiglu, swiglu_torch, PrecisionConfig
+from triton_kernels.swiglu import swiglu, swiglu_torch
 from triton_kernels.testing import assert_close
 import torch
 import pytest
@@ -26,7 +26,6 @@ def test_op(M, N, limit, device, alpha=0.5):
     torch.manual_seed(2)
     # initialize data
     x = alloc_rand([M, N], device=device, dtype=torch.bfloat16)
-    precision_config = PrecisionConfig(limit=limit)
-    tri_y = swiglu(x, alpha, precision_config)
-    ref_y = swiglu_torch(x, alpha, precision_config)
+    tri_y = swiglu(x, alpha, limit=limit)
+    ref_y = swiglu_torch(x, alpha, limit=limit)
     assert_close(tri_y, ref_y)

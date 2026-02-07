@@ -17,7 +17,6 @@ from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 from triton_kernels.swiglu import swiglu, swiglu_fn
-from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import Tensor, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.dtype import FP32
@@ -412,7 +411,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                         gammas=gammas,
                         c=c)
     if swiglu_opts is not None:
-        ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
+        ref_y = swiglu(ref_y, alpha=swiglu_opts[0], limit=swiglu_opts[1])
 
     # --- check results ---
     if c_dtype.has_mx_scale:

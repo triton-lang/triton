@@ -1,96 +1,82 @@
-from dataclasses import dataclass
 import torch
 import triton
 from .swiglu_details._swiglu import _swiglu, _swiglu_fn
 from triton_kernels import target_info
 
-
-@dataclass(frozen=True)
-class PrecisionConfig:
-    limit: float | None = None
-    out_scale_global: torch.Tensor | None = None
-    out_absmax: torch.Tensor | None = None
-    out_checksum_scale: torch.Tensor | None = None
-    inp_scale_global: torch.Tensor | None = None
-    out_dtype: torch.dtype | None = None
-    inp_dtype: torch.dtype | None = None
-    saturate_inf: bool = False
-
-
 swiglu_fn = _swiglu_fn
 
 
-def _reinterpret_if_needed(x: torch.Tensor, dtype: torch.dtype | None):
-    if dtype is None or x.dtype.itemsize > 1:
-        return x
-    return x.view(dtype)
-
-
-class SwiGLU(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, a, alpha, precision_config, routing_data):
-        N = a.shape[-1]
-        M = a.numel() // N
-        assert a.stride()[-1] == 1
-        assert a.shape[-1] % 2 == 0
-        out = torch.empty(size=(M, N // 2), dtype=a.dtype, device=a.device)
-        # optimization hyperparameters
-        BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
-        num_warps = 4
-        kwargs = {'maxnreg': 64} if not target_info.is_hip() else {}
-        # launch semi-persistent kernel
-        N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
-        num_sms = target_info.num_sms()
-        if routing_data is not None:
-            waves_per_sm = 32 if target_info.is_hip() else 128
-            num_pid = num_sms * (waves_per_sm // num_warps)
-            M_BLOCKS = max(1, triton.cdiv(num_pid, N_BLOCKS))
-            grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
+def swiglu(
+    a,
+    alpha,
+    limit=None,
+    out_scale_global=None,
+    a_scale_global=None,
+    out_dtype=None,
+    routing_data=None,
+):
+    del out_dtype
+    N = a.shape[-1]
+    M = a.numel() // N
+    assert a.stride()[-1] == 1
+    assert a.shape[-1] % 2 == 0
+    out = torch.empty(size=(M, N // 2), dtype=a.dtype, device=a.device)
+    # optimization hyperparameters
+    BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
+    num_warps = 4
+    kwargs = {'maxnreg': 64} if not target_info.is_hip() else {}
+    # launch semi-persistent kernel
+    N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
+    num_sms = target_info.num_sms()
+    if routing_data is not None:
+        waves_per_sm = 32 if target_info.is_hip() else 128
+        num_pid = num_sms * (waves_per_sm // num_warps)
+        M_BLOCKS = max(1, triton.cdiv(num_pid, N_BLOCKS))
+        grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
+    else:
+        M_BLOCKS = triton.cdiv(M, BLOCK_M)
+        if M_BLOCKS * N_BLOCKS >= 8 * num_sms:
+            grid = (8 * num_sms, )
         else:
-            M_BLOCKS = triton.cdiv(M, BLOCK_M)
-            if M_BLOCKS * N_BLOCKS >= 8 * num_sms:
-                grid = (8 * num_sms, )
-            else:
-                grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
-        n_tokens = None
-        if routing_data is not None:
-            n_tokens = routing_data.expt_data.token_offs[routing_data.n_expts_tot]
-        _swiglu[grid](
-            _reinterpret_if_needed(out, precision_config.out_dtype),
-            precision_config.out_scale_global,
-            precision_config.out_absmax,
-            precision_config.out_checksum_scale,
-            _reinterpret_if_needed(a, precision_config.inp_dtype),
-            precision_config.inp_scale_global,
-            alpha,
-            M,
-            N // 2,
-            a.shape[-1],
-            1,
-            out.shape[-1],
-            1,
-            precision_config.limit,
-            n_tokens,
-            BLOCK_M=BLOCK_M,
-            BLOCK_N=BLOCK_N,
-            EVEN_N=(N // 2) % BLOCK_N == 0,
-            M_BLOCKS=M_BLOCKS,
-            N_BLOCKS=N_BLOCKS,
-            flexpoint_saturate_inf=precision_config.saturate_inf,
-            num_warps=num_warps,
-            **kwargs,
-        )
-        out = out.view(a.shape[:-1] + out.shape[-1:])
-        return out
+            grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
+    n_tokens = None
+    if routing_data is not None:
+        n_tokens = routing_data.expt_data.token_offs[routing_data.n_expts_tot]
+    _swiglu[grid](
+        out,
+        out_scale_global,
+        a,
+        a_scale_global,
+        alpha,
+        M,
+        N // 2,
+        a.shape[-1],
+        1,
+        out.shape[-1],
+        1,
+        limit,
+        n_tokens,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        EVEN_N=(N // 2) % BLOCK_N == 0,
+        M_BLOCKS=M_BLOCKS,
+        N_BLOCKS=N_BLOCKS,
+        num_warps=num_warps,
+        **kwargs,
+    )
+    out = out.view(a.shape[:-1] + out.shape[-1:])
+    return out
 
 
-def swiglu(a, alpha, precision_config, routing_data=None):
-    return SwiGLU.apply(a, alpha, precision_config, routing_data)
-
-
-def swiglu_torch(a, alpha, precision_config):
-    limit = precision_config.limit
+def swiglu_torch(
+    a,
+    alpha,
+    limit=None,
+    out_scale_global=None,
+    a_scale_global=None,
+    out_dtype=None,
+):
+    del out_scale_global, a_scale_global, out_dtype
     a_gelu = a[..., ::2]
     if limit is not None:
         a_gelu = a_gelu.clamp(max=limit)
@@ -99,5 +85,4 @@ def swiglu_torch(a, alpha, precision_config):
         a_linear = a_linear.clamp(min=-limit, max=limit)
 
     out_gelu = a_gelu * torch.sigmoid(alpha * a_gelu)
-    out = out_gelu * (a_linear + 1)
-    return out
+    return out_gelu * (a_linear + 1)
