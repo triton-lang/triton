@@ -18,6 +18,7 @@ from triton_kernels.testing import assert_close, make_random_tensor
 from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
+from triton_kernels.tensor import Tensor, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.dtype import FP32
 
@@ -353,6 +354,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
         scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
     )
+    if not isinstance(a, Tensor):
+        a = wrap_torch_tensor(a)
+    if not isinstance(b, Tensor):
+        b = wrap_torch_tensor(b)
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)
@@ -370,6 +375,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     c = torch.empty(c_shape, dtype=c_dtype.torch_dtype, device=device)
     if c_transpose:
         c = c.mT.contiguous().mT
+    c = wrap_torch_tensor(c)
 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
@@ -384,12 +390,20 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     a_scale_mx = a_scales
     b_scale_mx = b_scale_tri
     c_scale_mx = None
+    a.scale_global = a_scale_global
+    b.scale_global = b_scale_global
+    c.scale_global = c_scale_global
+    c.scale_actual = c_absmax
+    a.scale_mx = a_scale_mx
+    b.scale_mx = b_scale_mx
+    c.scale_mx = c_scale_mx
 
     # --- create epilogue ---
     epilogue = None
     if c_dtype.has_mx_scale:
         c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
         c_scale_mx = torch.empty(c_scale_shape, dtype=torch.uint8, device=a.device)
+        c.scale_mx = c_scale_mx
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
@@ -400,16 +414,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
                            gammas=gammas, epilogue=epilogue, c=c,
-                           fused_activation=fused_activation,
-                           a_scale_global=a_scale_global,
-                           b_scale_global=b_scale_global,
-                           c_scale_global=c_scale_global,
-                           c_absmax=c_absmax,
-                           a_scale_mx=a_scale_mx,
-                           b_scale_mx=b_scale_mx,
-                           c_scale_mx=c_scale_mx)
+                           fused_activation=fused_activation)
         if c_dtype.has_global_scale:
-            tri_y_scale = c_absmax.clone()
+            tri_y_scale = c.scale_actual.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
@@ -417,16 +424,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                         a_ragged_metadata, b_ragged_metadata,
                         gather_indx, scatter_indx, precision_opt,
                         gammas=gammas,
-                        a_scale_global=a_scale_global,
-                        b_scale_global=b_scale_global,
-                        c_scale_global=c_scale_global,
-                        c_absmax=c_absmax,
-                        a_scale_mx=a_scale_mx,
-                        b_scale_mx=b_scale_mx)
+                        c=c)
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
-        ref_y_scale = c_absmax.clone()
+        ref_y_scale = c.scale_actual.clone()
 
     # --- check results ---
     if c_dtype.has_mx_scale:

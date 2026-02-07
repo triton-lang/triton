@@ -220,19 +220,11 @@ def matmul(a, b, bias,
     betas: torch.Tensor | None = None,
     gammas: torch.Tensor | None = None,
     out_alpha: float | None = None,
-    c: torch.Tensor | None = None,
+    c: torch.Tensor | Tensor | None = None,
     fused_comm: FusedComm | None = None,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
-    d: torch.Tensor | None = None,
-    a_scale_global: torch.Tensor | None = None,
-    b_scale_global: torch.Tensor | None = None,
-    c_scale_global: torch.Tensor | None = None,
-    d_scale_global: torch.Tensor | None = None,
-    c_absmax: torch.Tensor | None = None,
-    a_scale_mx: torch.Tensor | Tensor | None = None,
-    b_scale_mx: torch.Tensor | Tensor | None = None,
-    c_scale_mx: torch.Tensor | Tensor | None = None,
+    d: torch.Tensor | Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -264,12 +256,20 @@ def matmul(a, b, bias,
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
-    # unpack b scale
-    b_scale = b_scale_mx
-    b_has_mx = b_scale is not None
+    c_data = c.storage.data if isinstance(c, Tensor) else c
+    d_data = d.storage.data if isinstance(d, Tensor) else d
+    if not isinstance(a, Tensor):
+        a = wrap_torch_tensor(a)
     if not isinstance(b, Tensor):
         dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
+    a_scale_global = a.scale_global
+    a_scale = a.scale_mx
+    if a_scale is not None and not isinstance(a_scale, Tensor):
+        a_scale = wrap_torch_tensor(a_scale)
+    b_scale_global = b.scale_global
+    b_scale = b.scale_mx
+    b_has_mx = b_scale is not None
     if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
         assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if b_scale is not None and not isinstance(b_scale, Tensor):
@@ -278,14 +278,14 @@ def matmul(a, b, bias,
         b_scale.storage.data = b_scale.data.view(torch.uint8)
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
+    c_scale_global = None if not isinstance(c, Tensor) else c.scale_global
+    c_absmax = None if not isinstance(c, Tensor) else c.scale_actual
+    c_scale_mx = None if not isinstance(c, Tensor) else c.scale_mx
+    d_scale_global = None if not isinstance(d, Tensor) else d.scale_global
+
     # unpack a scale
-    a_scale = a_scale_mx
     a_has_mx = a_scale is not None
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
-    if a_scale is not None and not isinstance(a_scale, Tensor):
-        a_scale = wrap_torch_tensor(a_scale)
-    if not isinstance(a, Tensor):
-        a = wrap_torch_tensor(a)
     a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
@@ -301,8 +301,8 @@ def matmul(a, b, bias,
         batch_size = b.shape[0]
     else:
         batch_size = 1
-    if d is not None:
-        d_is_c = c is not None and d.data_ptr() == c.data_ptr() and d.stride() == c.stride()
+    if d_data is not None:
+        d_is_c = c_data is not None and d_data.data_ptr() == c_data.data_ptr() and d_data.stride() == c_data.stride()
     else:
         d_is_c = None
     K = a.shape[-1]
@@ -318,8 +318,8 @@ def matmul(a, b, bias,
         (b_scale is None or is_tma_compliant(b_scale)) and
         (ragged_dimension != "M" or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
-        (c is None or c.stride(-1) == 1) and
-        (d is None or d_is_c) and
+        (c_data is None or c_data.stride(-1) == 1) and
+        (d_data is None or d_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
@@ -337,7 +337,7 @@ def matmul(a, b, bias,
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
-        a_transpose, d is not None,
+        a_transpose, d_data is not None,
         block_k = block_k,
         a_mx_scale=a_scale,
         b_mx_scale=b_scale,
@@ -373,7 +373,7 @@ def matmul(a, b, bias,
                                  gather_indx, scatter_indx, batch_size,
                                  fused_comm.n_reduce_shards if fused_comm is not None else 1,
                                  opt_flags)
-    memory = apply_allocation(allocation, c)
+    memory = apply_allocation(allocation, c_data)
     # early exit
     if batch_size * M * N == 0:
         ret = memory["output"].squeeze(0)
@@ -415,13 +415,13 @@ def matmul(a, b, bias,
     b = Tensor(_canonicalize_storage(b.storage, 3), dtype=b.dtype, shape=b.shape, shape_max=b.shape_max)
     c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
     # create tma descriptor for x
-    if d is not None:
+    if d_data is not None:
         assert opt_flags.split_k == 1, "d + split_k is not supported."
         assert scatter_indx is None, "d + scatter is not supported."
-        if d.ndim == 2:
-            d = d.unsqueeze(0)
-        assert d.shape == out_matmul.shape[-3:]
-        d_strides = d.stride()
+        if d_data.ndim == 2:
+            d_data = d_data.unsqueeze(0)
+        assert d_data.shape == out_matmul.shape[-3:]
+        d_strides = d_data.stride()
     else:
         d_strides = (None, None, None)
 
@@ -433,7 +433,7 @@ def matmul(a, b, bias,
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
-        and (d is None or d_is_c)
+        and (d_data is None or d_is_c)
         and fused_comm is None
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
@@ -441,18 +441,16 @@ def matmul(a, b, bias,
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
     c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c.storage.data
     # create tma descriptor for w
-    b_has_tma = opt_flags.is_persistent
-    b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b.storage.data
-    if b_has_tma and precision_config.allow_tf32 and b.storage.data.dtype == torch.float32:
+    b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if opt_flags.is_persistent else b.storage.data
+    if opt_flags.is_persistent and precision_config.allow_tf32 and b.storage.data.dtype == torch.float32:
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
     b_transpose = b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
-        b_scale_storage = b_scale.storage
         b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
-        if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
+        if isinstance(b_scale.storage.layout, (StridedLayout, HopperMXScaleLayout)):
             b_scale = Tensor(_canonicalize_storage(b_scale.storage, 3), dtype=b_scale.dtype, shape=b_scale.shape, shape_max=b_scale.shape_max)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
         b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
@@ -495,17 +493,13 @@ def matmul(a, b, bias,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
-    out_global_scale = c_scale_global
-    out_absmax = c_absmax
-    if has_scratchpad:
-        # split-k scratchpad is fp32/fp16 accumulation, not the final output dtype.
-        # output flex scaling is applied in the reduce step.
-        out_global_scale = None
-        out_absmax = None
-    out_scale_args = (None, out_matmul_scale, None) if out_matmul_has_mx else (out_global_scale, out_absmax, None)
+    # split-k scratchpad is fp32/fp16 accumulation, not the final output dtype.
+    # output flex scaling is applied in the reduce step.
+    out_global_scale = None if has_scratchpad else c_scale_global
+    out_absmax = None if has_scratchpad else c_absmax
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
-                   *out_scale_args,
+                   *((None, out_matmul_scale, None) if out_matmul_has_mx else (out_global_scale, out_absmax, None)),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    a_scale_global,
@@ -513,7 +507,7 @@ def matmul(a, b, bias,
                    b_tensor_or_tma, b.storage.data, *b.storage.data.stride(), b_transpose,
                    b_scale_global,
                    b_scale_tensor_or_tma, *b_scale_strides,
-                   d, *d_strides,
+                   d_data, *d_strides,
                    d_scale_global, d_is_c,
                    bias, bias_stride,
                    None if ragged_dimension == "M" else a.shape[-2],
@@ -613,10 +607,6 @@ def apply_precision(
     x_tri,
     w_tri,
     precision_config: PrecisionConfig,
-    a_scale_global: torch.Tensor | None = None,
-    b_scale_global: torch.Tensor | None = None,
-    a_scale_mx: torch.Tensor | Tensor | None = None,
-    b_scale_mx: torch.Tensor | Tensor | None = None,
 ):
     from .tensor import convert_layout
     from .tensor_details import layout
@@ -627,25 +617,25 @@ def apply_precision(
             return x.clone()
         return x.float() * scale
 
-    if a_scale_mx is not None:
-        a_scale = a_scale_mx
+    if x_tri.scale_mx is not None:
+        a_scale = x_tri.scale_mx if isinstance(x_tri.scale_mx, Tensor) else wrap_torch_tensor(x_tri.scale_mx)
         mx_axis = x_tri.storage.data.ndim -1
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
         x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
-        x_ref = apply(x_tri, a_scale_global)
+        x_ref = apply(x_tri.storage.data, x_tri.scale_global)
 
-    if b_scale_mx is not None:
-        b_scale = b_scale_mx
+    if w_tri.scale_mx is not None:
+        b_scale = w_tri.scale_mx if isinstance(w_tri.scale_mx, Tensor) else wrap_torch_tensor(w_tri.scale_mx)
         mx_axis = w_tri.storage.data.ndim - 2
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)
         w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
     else:
-        w_ref = apply(w_tri, b_scale_global)
+        w_ref = apply(w_tri.storage.data, w_tri.scale_global)
 
     return (
         x_ref, w_ref,
@@ -681,48 +671,43 @@ def matmul_torch(a, b, bias,
                  betas = None,
                  gammas = None,
                  round_x = None, round_y = None,
-                 a_scale_global: torch.Tensor | None = None,
-                 b_scale_global: torch.Tensor | None = None,
-                 c_scale_global: torch.Tensor | None = None,
-                 d_scale_global: torch.Tensor | None = None,
-                 c_absmax: torch.Tensor | None = None,
-                 a_scale_mx: torch.Tensor | Tensor | None = None,
-                 b_scale_mx: torch.Tensor | Tensor | None = None,
+                 c: torch.Tensor | Tensor | None = None,
                  ):
     if precision_config is None:
         precision_config = PrecisionConfig()
-    a, b = apply_precision(
-        a, b, precision_config,
-        a_scale_global=a_scale_global,
-        b_scale_global=b_scale_global,
-        a_scale_mx=a_scale_mx,
-        b_scale_mx=b_scale_mx,
-    )
+    if not isinstance(a, Tensor):
+        a = wrap_torch_tensor(a)
+    if not isinstance(b, Tensor):
+        dtype = FP4 if b.dtype == torch.uint8 else None
+        b = wrap_torch_tensor(b, dtype=dtype)
+    a, b = apply_precision(a, b, precision_config)
 
     if b_ragged_metadata is not None:
         n_expts_tot = b_ragged_metadata.slice_sizes.shape[0]
         m, n = a.shape[-2], b.shape[-1]
         out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=a.device)
-        x_slice_offs = a_ragged_metadata.slice_offs
-        w_slice_offs = b_ragged_metadata.slice_offs
         for expt in range(n_expts_tot):
             k = int(b_ragged_metadata.slice_sizes[expt].item())
             if k == 0:
                 continue
-            x_start = int(x_slice_offs[expt].item())
-            w_start = int(w_slice_offs[expt].item())
+            x_start = int(a_ragged_metadata.slice_offs[expt].item())
+            w_start = int(b_ragged_metadata.slice_offs[expt].item())
             x_slice = a[:, x_start:x_start + k]
             w_slice = b[w_start:w_start + k, :]
             out_expt = matmul_torch(
-                x_slice, w_slice, None, None,
-                None, None, None, PrecisionConfig(),
-                betas, gammas,
-                round_x, round_y,
+                x_slice,
+                w_slice,
+                None,
+                precision_config=PrecisionConfig(),
+                betas=betas,
+                gammas=gammas,
+                round_x=round_x,
+                round_y=round_y,
             )
             out[expt] = out_expt.to(out.dtype)
-        if c_absmax is not None:
-            c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
-        return scale(out, c_scale_global)
+        if isinstance(c, Tensor) and c.scale_actual is not None:
+            c.scale_actual.copy_(compute_actual_scale(out, precision_config.out_dtype))
+        return scale(out, c.scale_global if isinstance(c, Tensor) else None)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -743,9 +728,8 @@ def matmul_torch(a, b, bias,
         a = a.view(1, *a.shape)
     # memory offsets
     if a_ragged_metadata is not None and not is_input_batched:
-        sizes = a_ragged_metadata.slice_sizes
-        off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
-        off[1:] = torch.cumsum(sizes, 0)
+        off = torch.zeros(a_ragged_metadata.slice_sizes.shape[0] + 1, dtype=torch.int32)
+        off[1:] = torch.cumsum(a_ragged_metadata.slice_sizes, 0)
         offs = list(itertools.pairwise(off))
     else:
         offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
@@ -773,9 +757,9 @@ def matmul_torch(a, b, bias,
         out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
         msk = scatter_indx != -1
         out[scatter_indx[msk], :] = y[msk, :]
-    if c_absmax is not None:
-        c_absmax.copy_(compute_actual_scale(out, precision_config.out_dtype))
-    return scale(out, c_scale_global)
+    if isinstance(c, Tensor) and c.scale_actual is not None:
+        c.scale_actual.copy_(compute_actual_scale(out, precision_config.out_dtype))
+    return scale(out, c.scale_global if isinstance(c, Tensor) else None)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,

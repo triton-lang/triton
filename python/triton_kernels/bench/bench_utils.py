@@ -14,20 +14,23 @@ import torch
 def _quantize_weight(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, None, None
+        return wrap_torch_tensor(wq)
     elif dtype == "fp8":
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 else torch.float8_e4m3fnuz
         wq = w.to(fp8e4_dtype)
         if is_cuda() and not cuda_capability_geq(10, 0):
             wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, w.abs().max().unsqueeze(0), None
+        wq = wrap_torch_tensor(wq)
+        wq.scale_global = w.abs().max().unsqueeze(0)
+        return wq
     else:
         assert dtype == "mx4", f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
             w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
             w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
-        return w, None, w_scale
+        w.scale_mx = w_scale
+        return w
 
 
 @dataclass
@@ -35,12 +38,6 @@ class MlpNumerics:
     wg: torch.Tensor | Tensor | None
     w1: torch.Tensor | Tensor | None
     w2: torch.Tensor | Tensor | None
-    wg_scale_global: torch.Tensor | None
-    w1_scale_global: torch.Tensor | None
-    w2_scale_global: torch.Tensor | None
-    wg_scale_mx: torch.Tensor | Tensor | None
-    w1_scale_mx: torch.Tensor | Tensor | None
-    w2_scale_mx: torch.Tensor | Tensor | None
     pcg: PrecisionConfig
     pc1: PrecisionConfig
     pc2: PrecisionConfig
@@ -70,20 +67,14 @@ def _make_mx4_quantization_opts(batch: int, w_dtype: str) -> dict:
 
 def prepare_mlp_numerics(batch: int, w_dtype: str, wg, w1, w2) -> MlpNumerics:
     quantization_opts = _make_mx4_quantization_opts(batch, w_dtype)
-    wg, wg_scale_global, wg_scale_mx = _quantize_weight(wg, "bf16")
-    w1, w1_scale_global, w1_scale_mx = _quantize_weight(w1, w_dtype, **deepcopy(quantization_opts))
-    w2, w2_scale_global, w2_scale_mx = _quantize_weight(w2, w_dtype, **deepcopy(quantization_opts))
+    wg = _quantize_weight(wg, "bf16")
+    w1 = _quantize_weight(w1, w_dtype, **deepcopy(quantization_opts))
+    w2 = _quantize_weight(w2, w_dtype, **deepcopy(quantization_opts))
     activation = _make_default_mlp_activation()
     return MlpNumerics(
         wg=wg,
         w1=w1,
         w2=w2,
-        wg_scale_global=wg_scale_global,
-        w1_scale_global=w1_scale_global,
-        w2_scale_global=w2_scale_global,
-        wg_scale_mx=wg_scale_mx,
-        w1_scale_mx=w1_scale_mx,
-        w2_scale_mx=w2_scale_mx,
         pcg=PrecisionConfig(),
         pc1=PrecisionConfig(),
         pc2=PrecisionConfig(),

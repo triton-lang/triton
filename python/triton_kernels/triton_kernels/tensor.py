@@ -35,6 +35,9 @@ class Tensor:
     dtype: IntegerType | FloatType
     shape: list[int] | None = None
     shape_max: list[int] | None = None
+    scale_global: torch.Tensor | None = None
+    scale_actual: torch.Tensor | None = None
+    scale_mx: object | None = None
 
     def __post_init__(self):
         assert isinstance(self.storage, Storage)
@@ -217,7 +220,15 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
         layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
-    return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
+    return Tensor(
+        Storage(torch_tensor, layout),
+        dtype=dtype,
+        shape=shape,
+        shape_max=shape_max,
+        scale_global=None,
+        scale_actual=None,
+        scale_mx=None,
+    )
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):

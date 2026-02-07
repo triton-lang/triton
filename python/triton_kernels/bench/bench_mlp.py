@@ -34,27 +34,28 @@ def parse_dtype(dtype):
 def quantize_weight(w, dtype, **opt):
     if dtype == torch.bfloat16:
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, None, None
+        return wrap_torch_tensor(wq)
     elif dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 else torch.float8_e4m3fnuz
         wq = w.to(fp8e4_dtype)
         wq = wq.transpose(-1, -2).contiguous().transpose(-1, -2)
-        return wq, w.abs().max().unsqueeze(0), None
+        wq = wrap_torch_tensor(wq)
+        wq.scale_global = w.abs().max().unsqueeze(0)
+        return wq
     else:
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
             w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
             w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
-        return w, None, w_scale
+        w.scale_mx = w_scale
+        return w
 
 
 def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
-            wg_global, bg_global, pcg, wg_scale_global, wg_scale_mx,  # gate parameters / precision config / scales
-            w1_ep_local, b1_ep_local, pc1, w1_scale_global, w1_scale_mx,
-            act1,  # first matmul parameters / precision config / scales / fused activation
-            w2_ep_local, b2_ep_local, pc2, w2_scale_global,
-            w2_scale_mx,  # second matmul parameters / precision config / scales
+            wg_global, bg_global, pcg,  # gate parameters / precision config
+            w1_ep_local, b1_ep_local, pc1, act1,  # first matmul parameters / precision config / fused activation
+            w2_ep_local, b2_ep_local, pc2,  # second matmul parameters / precision config
             n_expts_act, expt_assignment,  # expert assignment
             rank,  # distributed context
             symm_mem_pool,  # symmetric memory pool
@@ -65,8 +66,6 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
         wg_global,
         bg_global,
         precision_config=pcg,
-        b_scale_global=wg_scale_global,
-        b_scale_mx=wg_scale_mx,
     )
     # active global logits (sparse)
     l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, symm_mem_pool=symm_mem_pool)
@@ -82,11 +81,10 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_assignment.expt_map[rank, :])
     # first matmul + swiglu
     y_ep_local = matmul(y_ep_local, w1_ep_local, b1_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc1, fused_activation=act1, b_scale_global=w1_scale_global,
-                        b_scale_mx=w1_scale_mx)
+                        precision_config=pc1, fused_activation=act1)
     # second matmul
     y_ep_local = matmul(y_ep_local, w2_ep_local, b2_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc2, b_scale_global=w2_scale_global, b_scale_mx=w2_scale_mx)
+                        precision_config=pc2)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx, symm_mem_pool)
     # weighted average of the output token from experts
@@ -146,9 +144,9 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             "scale_layout_opts": scale_layout_opts,
         }
         opt2 = deepcopy(opt1)
-    wg_global, wg_scale_global, wg_scale_mx = quantize_weight(wg_global, torch.bfloat16)
-    w1_ep_local, w1_scale_global, w1_scale_mx = quantize_weight(w1_ep_local, w_dtype, **opt1)
-    w2_ep_local, w2_scale_global, w2_scale_mx = quantize_weight(w2_ep_local, w_dtype, **opt2)
+    wg_global = quantize_weight(wg_global, torch.bfloat16)
+    w1_ep_local = quantize_weight(w1_ep_local, w_dtype, **opt1)
+    w2_ep_local = quantize_weight(w2_ep_local, w_dtype, **opt2)
     pcg = PrecisionConfig()
     pc1 = PrecisionConfig()
     pc2 = PrecisionConfig()
@@ -170,9 +168,9 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     with torch.cuda.stream(stream):
         with torch.cuda.graph(g):
             run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
-                    wg_global, bg_global, pcg, wg_scale_global, wg_scale_mx,  #
-                    w1_ep_local, b1_ep_local, pc1, w1_scale_global, w1_scale_mx, act1,  #
-                    w2_ep_local, b2_ep_local, pc2, w2_scale_global, w2_scale_mx,  #
+                    wg_global, bg_global, pcg,  #
+                    w1_ep_local, b1_ep_local, pc1, act1,  #
+                    w2_ep_local, b2_ep_local, pc2,  #
                     n_expts_act, expt_assignment, rank, symm_mem_pool)
     for i in range(100):
         g.replay()
