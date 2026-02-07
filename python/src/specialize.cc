@@ -229,10 +229,8 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
     Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
     if (tensor_rank < 0)
       return {};
-    if (tensor_rank > 0) {
-      desc_cstr += ",input_rank=";
-      desc_cstr += std::to_string(tensor_rank);
-    }
+    desc_cstr += ",input_rank=";
+    desc_cstr += std::to_string(tensor_rank);
   }
 
   if (has_layout) {
