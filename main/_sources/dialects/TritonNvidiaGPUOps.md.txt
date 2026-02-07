@@ -277,6 +277,144 @@ Traits: `VerifyTensorLayoutsTrait`
 | `pred` | 1-bit signless integer |
 
 
+### `ttng.clc_get_program_id` (triton::nvidia_gpu::CLCGetProgramIdOp)
+
+_Get CTA ID coordinate from CLC response_
+
+Syntax:
+
+```
+operation ::= `ttng.clc_get_program_id` $clcResult `,` $dim attr-dict `:` type($clcResult) `->` type($result)
+```
+
+Decodes the CLC response to get the first CTA ID coordinate of the
+canceled cluster. The dim attribute specifies which dimension (0=x, 1=y, 2=z).
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>dim</code></td><td>::mlir::triton::ProgramIDDimAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `clcResult` | 128-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer |
+
+
+### `ttng.clc_is_canceled` (triton::nvidia_gpu::CLCIsCanceledOp)
+
+_Check if CLC response indicates successful cancellation_
+
+Syntax:
+
+```
+operation ::= `ttng.clc_is_canceled` $clcResult attr-dict `:` type($clcResult) `->` type($is_canceled)
+```
+
+Decodes the CLC response to check if a cluster was successfully
+canceled. Returns true if canceled, false otherwise.
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `clcResult` | 128-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `is_canceled` | 1-bit signless integer |
+
+
+### `ttng.clc_load_result` (triton::nvidia_gpu::CLCLoadResultOp)
+
+_Load CLC response from shared memory into registers_
+
+Syntax:
+
+```
+operation ::= `ttng.clc_load_result` $src attr-dict `:` qualified(type($src)) `->` type($clcResult)
+```
+
+Loads the 128-bit CLC response from shared memory into two i64 registers.
+This allows subsequent is_canceled and get_first_ctaid operations to
+operate on registers without re-reading shared memory.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `clcResult` | 128-bit signless integer |
+
+
+### `ttng.clc_try_cancel` (triton::nvidia_gpu::CLCTryCancelOp)
+
+_Issue CLC try_cancel to cancel a pending cluster_
+
+Syntax:
+
+```
+operation ::= `ttng.clc_try_cancel` $result `,` $mbarrier attr-dict `:` qualified(type($result)) `,` qualified(type($mbarrier))
+```
+
+Issues a clusterlaunchcontrol.try_cancel instruction to atomically cancel
+a pending cluster launch. The result is written asynchronously to the
+result buffer and the mbarrier is signaled on completion.
+
+This is used for dynamic persistent kernels on Blackwell (SM100+).
+
+The result buffer must be 16-byte aligned shared memory.
+The mbarrier must be 8-byte aligned shared memory.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>multicast</code></td><td>::mlir::IntegerAttr</td><td>1-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `mbarrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `ttng.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
 
 Syntax:
