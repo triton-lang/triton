@@ -70,14 +70,13 @@ def matmul_tma_set_block_size_hook(nargs):
     two_ctas = bool(nargs["TWO_CTAS"])
 
     tile_m = block_m * (2 if two_ctas else 1)
-    tile_n = block_n
-
+    tile_n = block_n * (2 if two_ctas else 1)
     nargs["a_desc"].block_shape = [tile_m, block_k]
     nargs["b_desc"].block_shape = [block_k, tile_n]
     nargs["c_desc"].block_shape = [tile_m, epilogue_size_n]
 
     if two_ctas:
-        cga_layouts = [[1, 0], [0, 1], [1, 0]]
+        cga_layouts = [[[1, 0]], [[0, 1]], [[1, 0]]]
         for desc, cga_layout in zip(("a_desc", "b_desc", "c_desc"), cga_layouts):
             nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
                 nargs[desc].block_shape,
@@ -183,10 +182,11 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
+    TWO_CTAS: gl.constexpr
 
     @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, MINOR_DIM, GRID_TILE_WIDTH):
+                 acc_empty_bars, acc_ready_bars, MINOR_DIM, GRID_TILE_WIDTH, TWO_CTAS):
         self.a_desc = a_desc
         self.b_desc = b_desc
         self.c_desc = c_desc
@@ -199,6 +199,7 @@ class PartitionArgs:
         self.acc_ready_bars = acc_ready_bars
         self.MINOR_DIM = gl.constexpr(MINOR_DIM)
         self.GRID_TILE_WIDTH = gl.constexpr(GRID_TILE_WIDTH)
+        self.TWO_CTAS = gl.constexpr(TWO_CTAS)
 
     @gluon.jit
     def get_scheduler(self):
@@ -251,7 +252,7 @@ def matmul_load_partition(p):
         for k in range(0, K, BLOCK_K):
             bar = p.load_ready_bars.index(state.index)
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
-            mbarrier.expect(bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
+            mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
             tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
             tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
@@ -267,31 +268,20 @@ def matmul_mma_partition(p):
     scheduler = p.get_scheduler()
 
     for _ in range(scheduler.get_num_tiles()):
-        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
+        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         use_acc = False
         for _ in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
+            # TODO Is this needed?
+            if p.TWO_CTAS:
+                fence_async_shared(cluster=True)
             tcgen05_mma(p.a_bufs.index(load_state.index), p.b_bufs.index(load_state.index), acc_buf, use_acc=use_acc,
                         mbarriers=[p.load_empty_bars.index(load_state.index)])
             load_state = load_state.next()
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
-
-
-@gluon.jit
-def _split_n(x, N: gl.constexpr):
-    gl.static_assert(N > 0 and (N & (N - 1)) == 0, "n must be positive and a power of two")
-    split_count: gl.constexpr = N.bit_length() - 1
-    xs = (x, )
-    for _ in gl.static_range(split_count):
-        next_xs = ()
-        for j in gl.static_range(len(xs)):
-            x = xs[j]
-            next_xs += x.reshape(x.shape[0], 2, x.shape[1] // 2).permute(0, 2, 1).split()
-        xs = next_xs
-    return xs
 
 
 @gluon.jit
@@ -303,41 +293,38 @@ def matmul_epilogue_partition(p):
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (TILE_M, TILE_N),
-        p.acc_bufs.type.layout,
-        gl.num_warps(),
-        cga_layout=p.c_desc.layout.cga_layout,
-    )
     acc_smem = gl.allocate_shared_memory(dtype, [TILE_M, SPLIT_TILE_N], p.c_desc.layout)
     scheduler = p.get_scheduler()
 
     for idx in range(scheduler.get_num_tiles()):
         off_m, off_n = scheduler.get_offsets(idx)
 
-        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
-        acc_state = acc_state.next()
+        ready_state = acc_state
+        acc_buf = p.acc_bufs.index(ready_state.index)
+        mbarrier.wait(p.acc_ready_bars.index(ready_state.index), ready_state.phase)
+        acc_state = ready_state.next()
 
-        accs = _split_n(acc, SUBTILE_FACTOR)
         for i in gl.static_range(SUBTILE_FACTOR):
+            acc_sub = acc_buf.slice(SPLIT_TILE_N * i, SPLIT_TILE_N)
             tma.store_wait(pendings=0)
-            acc_smem.store(accs[i].to(dtype))
-            if i == 0:
-                mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            # TODO Do we need a 2CTA fence here??
+            acc_smem.store(
+                acc_sub.load(
+                    get_tmem_reg_layout(
+                        gl.float32,
+                        (TILE_M, SPLIT_TILE_N),
+                        acc_sub.type.layout,
+                        gl.num_warps(),
+                        cga_layout=p.c_desc.layout.cga_layout,
+                    )).to(dtype))
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * i], acc_smem)
-    tma.store_wait(pendings=0)
+        # Signal that the accumulator slot can be reused only after all stores are done.
+        tma.store_wait(pendings=0)
+        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
 
 
-@triton.autotune(
-    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
-    key=["M", "N", "K"],
-)
 @gluon.jit
-def matmul_kernel(
+def _matmul_kernel(
     a_desc,
     b_desc,
     c_desc,
@@ -362,27 +349,32 @@ def matmul_kernel(
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
 
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
+    # Pallas `consumed_barrier` and `ab_tma_barrier` are CTA-local barriers,
+    # even in collective mode. Keep these local and rely on tcgen05 multicast
+    # commit for cross-CTA synchronization.
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES)
     for i in gl.static_range(STAGES):
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(
-        [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        [BLOCK_SIZE_M, BLOCK_N],
         col_stride=1,
         cta_split_num=(2, 1) if TWO_CTAS else None,
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [2, BLOCK_M, BLOCK_N], tmem_layout)
-    acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
-    acc_ready_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
-    for i in gl.static_range(2):
-        mbarrier.init(acc_empty_bars.index(i), count=1)
-        mbarrier.init(acc_ready_bars.index(i), count=1)
-
     if TWO_CTAS:
-        mbarrier.sync_cluster_init()
+        # `acc_empty_bars` models Pallas store_done_barrier, which is cluster-wide in 2CTA mode.
+        acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=True)
+    else:
+        acc_empty_bars = mbarrier.allocate_mbarrier(batch=2)
+    # `acc_ready_bars` models Pallas mma_done_barrier, which is local to each CTA.
+    acc_ready_bars = mbarrier.allocate_mbarrier(batch=2)
+    for i in gl.static_range(2):
+        mbarrier.init(acc_empty_bars.index(i), count=2 if TWO_CTAS else 1)
+        mbarrier.init(acc_ready_bars.index(i), count=1)
 
     p = PartitionArgs(
         a_desc,
@@ -397,6 +389,7 @@ def matmul_kernel(
         acc_ready_bars,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
+        TWO_CTAS,
     )
 
     gl.warp_specialize([
@@ -404,6 +397,92 @@ def matmul_kernel(
         (matmul_load_partition, (p, )),
         (matmul_mma_partition, (p, )),
     ], [1, 1], [24, 24])
+
+
+matmul_kernel = triton.autotune(
+    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
+    key=["M", "N", "K"],
+)(_matmul_kernel)
+
+
+def matmul_with_config(
+    a,
+    b,
+    *,
+    block_size_m=128,
+    block_size_n=128,
+    block_size_k=64,
+    grid_minor_dim=0,
+    grid_tile_width=1,
+    stages=4,
+    two_ctas=False,
+    epilogue_size_n=32,
+):
+    if two_ctas and block_size_n > 128:
+        raise ValueError("two_ctas only supports BLOCK_SIZE_N <= 128")
+    M, K = a.shape
+    K1, N = b.shape
+    if K != K1:
+        raise ValueError(f"incompatible shapes: {a.shape} and {b.shape}")
+    if a.dtype != torch.float16 or b.dtype != torch.float16:
+        raise ValueError("matmul only supports fp16 inputs")
+
+    tile_m = block_size_m * (2 if two_ctas else 1)
+    tile_n = block_size_n * (2 if two_ctas else 1)
+    if M % tile_m != 0 or N % tile_n != 0 or K % block_size_k != 0:
+        raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_size_k)}")
+
+    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    dummy_block = [1, 1]
+    dummy_layout = gl.NVMMASharedLayout.get_default_for(dummy_block, gl.float16)
+    a_desc = TensorDescriptor.from_tensor(a, dummy_block, dummy_layout)
+    b_desc = TensorDescriptor.from_tensor(b, dummy_block, dummy_layout)
+    c_desc = TensorDescriptor.from_tensor(c, dummy_block, dummy_layout)
+
+    matmul_tma_set_block_size_hook({
+        "a_desc": a_desc,
+        "b_desc": b_desc,
+        "c_desc": c_desc,
+        "BLOCK_SIZE_M": block_size_m,
+        "BLOCK_SIZE_N": block_size_n,
+        "BLOCK_SIZE_K": block_size_k,
+        "GRID_MINOR_DIM": grid_minor_dim,
+        "GRID_TILE_WIDTH": grid_tile_width,
+        "STAGES": stages,
+        "TWO_CTAS": two_ctas,
+        "EPILOGUE_SIZE_N": epilogue_size_n,
+    })
+
+    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
+
+    def grid(meta):
+        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        block_k = meta["BLOCK_SIZE_K"]
+        if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
+            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
+        num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
+        return (min(num_sms, num_tiles), )
+
+    _matmul_kernel[grid](
+        a_desc,
+        b_desc,
+        c_desc,
+        M,
+        N,
+        K,
+        block_size_m,
+        block_size_n,
+        block_size_k,
+        grid_minor_dim,
+        grid_tile_width,
+        stages,
+        two_ctas,
+        epilogue_size_n,
+        num_warps=4,
+        num_ctas=2 if two_ctas else 1,
+    )
+    return c
 
 
 def matmul(a, b):
@@ -415,21 +494,18 @@ def matmul(a, b):
         raise ValueError("matmul only supports fp16 inputs")
 
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
-
     dummy_block = [1, 1]
     dummy_layout = gl.NVMMASharedLayout.get_default_for(dummy_block, gl.float16)
     a_desc = TensorDescriptor.from_tensor(a, dummy_block, dummy_layout)
     b_desc = TensorDescriptor.from_tensor(b, dummy_block, dummy_layout)
     c_desc = TensorDescriptor.from_tensor(c, dummy_block, dummy_layout)
 
+    num_sms = torch.cuda.get_device_properties(a.device).multi_processor_count
+
     def grid(meta):
-        block_m = meta["BLOCK_SIZE_M"]
-        block_n = meta["BLOCK_SIZE_N"]
+        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
         block_k = meta["BLOCK_SIZE_K"]
-        two_ctas = bool(meta["TWO_CTAS"])
-        tile_m = block_m * (2 if two_ctas else 1)
-        tile_n = block_n
         if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
             raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)

@@ -558,14 +558,25 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
 
 void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
                  bool twoCTAs) {
+  auto mod = func->getParentOfType<ModuleOp>();
+  auto totalNumWarpsAttr =
+      mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  bool warpSpecialized =
+      totalNumWarpsAttr &&
+      totalNumWarpsAttr.getInt() > triton::gpu::lookupNumWarps(func);
   func.walk([&](LLVM::ReturnOp ret) {
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
     if (twoCTAs) {
-      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
-      NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
+      // In warp-specialized kernels, worker warps are parked in the switch
+      // loop and do not execute return epilogues. Emitting a cluster barrier
+      // here deadlocks because only the default warpgroup reaches it.
+      if (!warpSpecialized) {
+        NVVM::ClusterArriveRelaxedOp::create(b, loc, UnitAttr::get(ctx));
+        NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
+      }
     } else {
       NVVM::Barrier0Op::create(b, loc);
     }
