@@ -17,6 +17,13 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
 
+def is_blackwell():
+    if not torch.cuda.is_available():
+        return False
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
+
+
 def _as_gl_dtype(torch_dtype):
     if torch_dtype == torch.float16:
         return gl.float16
@@ -432,7 +439,68 @@ def matmul(a, b):
     return c
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize(
+    "grid_minor_dim,grid_tile_width,stages,block_size_n",
+    [
+        (0, 1, 2, 128),
+        (1, 8, 4, 128),
+        (0, 16, 2, 256),
+    ],
+)
+def test_matmul_single_cta_configs(grid_minor_dim, grid_tile_width, stages, block_size_n):
+    M, N, K = 512, 512, 256
+    torch.manual_seed(0)
+    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
+    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
+    expected = torch.matmul(a, b)
+    actual = matmul_with_config(
+        a,
+        b,
+        block_size_m=128,
+        block_size_n=block_size_n,
+        block_size_k=64,
+        grid_minor_dim=grid_minor_dim,
+        grid_tile_width=grid_tile_width,
+        stages=stages,
+        two_ctas=False,
+        epilogue_size_n=32,
+    )
+    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize(
+    "grid_minor_dim,grid_tile_width,stages",
+    [
+        (1, 1, 2),
+        (1, 4, 4),
+        (0, 12, 6),
+        (0, 8, 4),
+    ],
+)
+def test_matmul_two_cta_configs(grid_minor_dim, grid_tile_width, stages):
+    M, N, K = 512, 512, 256
+    torch.manual_seed(0)
+    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
+    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
+    expected = torch.matmul(a, b)
+    actual = matmul_with_config(
+        a,
+        b,
+        block_size_m=128,
+        block_size_n=128,
+        block_size_k=64,
+        grid_minor_dim=grid_minor_dim,
+        grid_tile_width=grid_tile_width,
+        stages=stages,
+        two_ctas=True,
+        epilogue_size_n=32,
+    )
+    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize(
     "M,N,K",
     [
@@ -440,13 +508,22 @@ def matmul(a, b):
         (512, 256, 256),
     ],
 )
-def test_matmul_matches_torch(M, N, K):
+def test_matmul_autotuned_matches_torch(M, N, K):
     torch.manual_seed(0)
     a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
     b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
     expected = torch.matmul(a, b)
     actual = matmul(a, b)
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_matmul_with_config_rejects_invalid_collective_config():
+    M, N, K = 512, 512, 256
+    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
+    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
+    with pytest.raises(ValueError, match="BLOCK_SIZE_N <= 128"):
+        _ = matmul_with_config(a, b, two_ctas=True, block_size_n=256)
 
 
 def main():
