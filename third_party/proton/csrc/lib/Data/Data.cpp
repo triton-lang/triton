@@ -12,7 +12,18 @@ namespace proton {
 void Data::initPhaseStore(PhaseStoreBase &store) {
   phaseStore = &store;
   currentPhasePtr = phaseStore->createPtr(0);
+  phaseStore->createPtr(kVirtualPhase);
   activePhases.insert(0);
+}
+
+DataEntry Data::addOp(const std::string &opName) {
+  std::vector<Context> contexts;
+  if (contextSource != nullptr)
+    contexts = contextSource->getContexts();
+  if (!opName.empty())
+    contexts.emplace_back(opName);
+  const auto phase = currentPhase.load(std::memory_order_relaxed);
+  return addOp(phase, kRootEntryId, contexts);
 }
 
 size_t Data::advancePhase() {

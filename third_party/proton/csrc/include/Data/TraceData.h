@@ -2,6 +2,7 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include <map>
 #include <memory>
 #include <unordered_map>
 
@@ -16,17 +17,13 @@ public:
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
-  DataEntry addOp(const std::string &name) override;
-
   DataEntry addOp(size_t phase, size_t eventId,
                   const std::vector<Context> &contexts) override;
 
-  void
-  addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) override;
+  DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) override;
 
   void
-  addMetrics(size_t phase, size_t entryId,
+  addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
   class Trace;

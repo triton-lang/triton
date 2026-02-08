@@ -27,21 +27,27 @@ enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 struct DataEntry {
   /// `entryId` is a unique identifier for the entry in the data.
   size_t id{Scope::DummyScopeId};
+  /// `linkedId` is the linked target entry id (e.g., static graph node id).
+  /// It is `Scope::DummyScopeId` when this entry is not a linked entry.
+  size_t linkedId{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
   /// `metrics` is a map from metric kind to metric accumulator associated
   /// with the entry.
-  /// Flexible metrics cannot be directly stored here since they maybe added by
-  /// both the frontend and the backend.
-  /// Use `Data::addMetrics` and `Data::addMetrics` to add flexible
-  /// metrics.
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
+  /// `flexibleMetrics` is a map from metric name to flexible metric
+  /// accumulator associated with the entry.
+  std::reference_wrapper<std::map<std::string, FlexibleMetric>>
+      flexibleMetrics;
 
   explicit DataEntry(size_t id, size_t phase,
-                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
-      : id(id), phase(phase), metrics(metrics) {}
+                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+                     std::map<std::string, FlexibleMetric> &flexibleMetrics,
+                     size_t linkedId = Scope::DummyScopeId)
+      : id(id), linkedId(linkedId), phase(phase), metrics(metrics),
+        flexibleMetrics(flexibleMetrics) {}
 
-  void upsertMetric(std::unique_ptr<Metric> metric) {
+  void upsertMetric(std::unique_ptr<Metric> metric) const {
     if (!metric)
       return;
     auto &metricsMap = metrics.get();
@@ -52,11 +58,39 @@ struct DataEntry {
       it->second->updateMetric(*metric);
     }
   }
+
+  void upsertFlexibleMetric(const FlexibleMetric &metric) const {
+    auto &flexibleMetricsMap = flexibleMetrics.get();
+    const auto &metricName = metric.getValueName(0);
+    auto it = flexibleMetricsMap.find(metricName);
+    if (it == flexibleMetricsMap.end()) {
+      flexibleMetricsMap.emplace(metricName, metric);
+    } else {
+      it->second.updateMetric(metric);
+    }
+  }
+
+  void upsertFlexibleMetrics(
+      const std::map<std::string, MetricValueType> &metrics) const {
+    auto &flexibleMetricsMap = flexibleMetrics.get();
+    for (const auto &[metricName, metricValue] : metrics) {
+      auto it = flexibleMetricsMap.find(metricName);
+      if (it == flexibleMetricsMap.end()) {
+        flexibleMetricsMap.emplace(metricName,
+                                   FlexibleMetric(metricName, metricValue));
+      } else {
+        it->second.updateValue(metricValue);
+      }
+    }
+  }
 };
 
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
+  static constexpr size_t kVirtualPhase =
+      std::numeric_limits<size_t>::max() - 1;
+  static constexpr size_t kRootEntryId = Scope::DummyScopeId;
 
   struct PhaseInfo {
     size_t current{0};
@@ -100,7 +134,7 @@ public:
   /// If `opName` is empty, just use the current context as is.
   /// Otherwise obtain the current context and append `opName` to it. Return the
   /// entry id of the added op.
-  virtual DataEntry addOp(const std::string &opName = {}) = 0;
+  DataEntry addOp(const std::string &opName = {});
 
   /// Add an op with custom contexts to the data.
   /// This is often used when context source is not available or when
@@ -114,6 +148,11 @@ public:
   virtual DataEntry addOp(size_t phase, size_t entryId,
                           const std::vector<Context> &contexts) = 0;
 
+  /// Link a base op in the current phase to a target op in the virtual phase.
+  /// Returns the linked entry in the current phase whose metrics can be
+  /// updated.
+  virtual DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) = 0;
+
   /// Record a batch of named metrics for a scope to the data of the current
   /// phase.
   ///
@@ -122,17 +161,6 @@ public:
   /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
   addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
-
-  /// Record a batch of named metrics for an entry.
-  ///
-  /// This is primarily intended for user-defined metrics defined in Python and
-  /// added lazily by the backend profiler.
-  /// `metrics` is a map from metric name to value to be applied to `entryId`.
-  ///
-  /// The same as `addOp`, `phase` is important for asynchronous profilers.
-  virtual void
-  addMetrics(size_t phase, size_t entryId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// To Json
@@ -169,6 +197,16 @@ protected:
     }
     // Otherwise, no need to lock for other phases since they won't be updated
     // by the application thread
+    return lock;
+  }
+
+  [[nodiscard]] std::unique_lock<std::shared_mutex>
+  lockIfCurrentOrStaticPhase(size_t phase) {
+    std::unique_lock<std::shared_mutex> lock(mutex, std::defer_lock);
+    const auto currentPhaseValue = currentPhase.load(std::memory_order_relaxed);
+    if (phase == currentPhaseValue || phase == kVirtualPhase) {
+      lock.lock();
+    }
     return lock;
   }
 

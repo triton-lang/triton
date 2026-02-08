@@ -263,8 +263,8 @@ void InstrumentationProfiler::doAddMetrics(
       data->addMetrics(scopeId, scalarMetrics);
     }
   } else {
-    for (auto [data, entry] : dataToEntryMap) {
-      data->addMetrics(entry.phase, entry.id, scalarMetrics);
+    for (auto [_, entry] : dataToEntryMap) {
+      entry.upsertFlexibleMetrics(scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the

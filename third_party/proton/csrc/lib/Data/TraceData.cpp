@@ -4,6 +4,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -51,6 +52,10 @@ public:
     size_t contextId = TraceContext::DummyId;
     std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
+    std::map<size_t, std::map<MetricKind, std::unique_ptr<Metric>>>
+        linkedTargetMetrics = {};
+    std::map<size_t, std::map<std::string, FlexibleMetric>>
+        linkedTargetFlexibleMetrics = {};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
   };
@@ -147,46 +152,30 @@ void TraceData::exitScope(const Scope &scope) {
   scopeIdToEventId.erase(scope.scopeId);
 }
 
-DataEntry TraceData::addOp(const std::string &name) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto *currentTrace = currentPhasePtrAs<Trace>();
-  std::vector<Context> contexts;
-  contexts = contextSource->getContexts();
-  if (!name.empty()) // not a placeholder event
-    contexts.emplace_back(name);
-  auto contextId = currentTrace->addContexts(contexts);
-  auto eventId = currentTrace->addEvent(contextId);
-  auto &event = currentTrace->getEvent(eventId);
-  return DataEntry(eventId, currentPhase.load(std::memory_order_relaxed),
-                   event.metrics);
-}
-
 DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
-  auto lock = lockIfCurrentPhase(phase);
+  auto lock = lockIfCurrentOrStaticPhase(phase);
   auto *trace = phasePtrAs<Trace>(phase);
-  // Add a new context under it and update the context
-  auto &event = trace->getEvent(eventId);
-  auto contextId = trace->addContexts(contexts, event.contextId);
-  auto newEventId = trace->addEvent(contextId);
+  const auto parentContextId = (eventId == Data::kRootEntryId)
+                                    ? Trace::TraceContext::RootId
+                                    : eventId;
+  const auto contextId = trace->addContexts(contexts, parentContextId);
+  const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, phase, newEvent.metrics);
+  return DataEntry(newEventId, phase, newEvent.metrics,
+                   newEvent.flexibleMetrics);
 }
 
-void TraceData::addMetrics(
-    size_t phase, size_t eventId,
-    const std::map<std::string, MetricValueType> &metrics) {
-  auto lock = lockIfCurrentPhase(phase);
-  auto *trace = phasePtrAs<Trace>(phase);
-  auto &event = trace->getEvent(eventId);
-  for (auto [metricName, metricValue] : metrics) {
-    if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
-      event.flexibleMetrics.emplace(metricName,
-                                    FlexibleMetric(metricName, metricValue));
-    } else {
-      event.flexibleMetrics.at(metricName).updateValue(metricValue);
-    }
-  }
+DataEntry TraceData::linkOp(size_t baseEntryId, size_t targetEntryId) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  const auto phase = currentPhase.load(std::memory_order_relaxed);
+  auto *trace = currentPhasePtrAs<Trace>();
+  auto &baseEvent = trace->getEvent(baseEntryId);
+  auto &linkedMetrics = baseEvent.linkedTargetMetrics[targetEntryId];
+  auto &linkedFlexibleMetrics =
+      baseEvent.linkedTargetFlexibleMetrics[targetEntryId];
+  return DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics,
+                   targetEntryId);
 }
 
 void TraceData::addMetrics(
@@ -224,15 +213,22 @@ namespace {
 // Structure to pair CycleMetric with its context for processing
 struct CycleMetricWithContext {
   const CycleMetric *cycleMetric;
-  uint32_t contextId;
+  std::vector<Context> contexts;
 
-  CycleMetricWithContext(const CycleMetric *metric, uint32_t ctx)
-      : cycleMetric(metric), contextId(ctx) {}
+  CycleMetricWithContext(const CycleMetric *metric, std::vector<Context> ctx)
+      : cycleMetric(metric), contexts(std::move(ctx)) {}
 };
 
-std::vector<KernelTrace>
-convertToTimelineTrace(TraceData::Trace *trace,
-                       std::vector<CycleMetricWithContext> &cycleEvents) {
+struct KernelMetricWithContext {
+  const KernelMetric *kernelMetric;
+  std::vector<Context> contexts;
+
+  KernelMetricWithContext(const KernelMetric *metric, std::vector<Context> ctx)
+      : kernelMetric(metric), contexts(std::move(ctx)) {}
+};
+
+std::vector<KernelTrace> convertToTimelineTrace(
+    std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
 
   auto getInt64Value = [](const CycleMetric *metric,
@@ -351,7 +347,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
             break;
           }
 
-          auto scopeName = trace->getContexts(event.contextId).back().name;
+          auto scopeName = event.contexts.back().name;
           if (scopeNameToId.count(scopeName) == 0) {
             scopeIdToName[curScopeId] = scopeName;
             scopeNameToId[scopeName] = curScopeId;
@@ -378,7 +374,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
     }
     std::vector<std::string> callStack;
     if (!sortedEvents.empty()) {
-      auto contexts = trace->getContexts(kernelEvent.contextId);
+      auto &contexts = kernelEvent.contexts;
       if (!contexts.empty()) {
         callStack.resize(contexts.size() - 1);
         std::transform(contexts.begin(), contexts.end() - 1, callStack.begin(),
@@ -396,26 +392,24 @@ convertToTimelineTrace(TraceData::Trace *trace,
   return results;
 }
 
-void dumpCycleMetricTrace(TraceData::Trace *trace,
-                          std::vector<CycleMetricWithContext> &cycleEvents,
+void dumpCycleMetricTrace(std::vector<CycleMetricWithContext> &cycleEvents,
                           std::ostream &os) {
-  auto timeline = convertToTimelineTrace(trace, cycleEvents);
+  auto timeline = convertToTimelineTrace(cycleEvents);
   auto writer = StreamChromeTraceWriter(timeline, "");
   writer.write(os);
 }
 
-void dumpKernelMetricTrace(
-    TraceData::Trace *trace, uint64_t minTimeStamp,
-    std::map<size_t, std::vector<const TraceData::Trace::TraceEvent *>>
-        &streamTraceEvents,
-    std::ostream &os) {
+void dumpKernelMetricTrace(uint64_t minTimeStamp,
+                           const std::map<size_t,
+                                          std::vector<KernelMetricWithContext>>
+                               &streamTraceEvents,
+                           std::ostream &os) {
   // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
     json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
-    for (auto const *event : events) {
-      auto *kernelMetrics = static_cast<KernelMetric *>(
-          event->metrics.at(MetricKind::Kernel).get());
+    for (const auto &event : events) {
+      auto *kernelMetrics = event.kernelMetric;
       uint64_t startTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
@@ -424,8 +418,7 @@ void dumpKernelMetricTrace(
       double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
       double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
 
-      auto contextId = event->contextId;
-      auto contexts = trace->getContexts(contextId);
+      const auto &contexts = event.contexts;
 
       json element;
       element["name"] = contexts.back().name;
@@ -435,7 +428,7 @@ void dumpKernelMetricTrace(
       element["dur"] = dur;
       element["tid"] = streamId; // thread id = stream
       json callStack = json::array();
-      for (auto const &ctx : contexts) {
+      for (const auto &ctx : contexts) {
         callStack.push_back(ctx.name);
       }
       element["args"]["call_stack"] = std::move(callStack);
@@ -450,35 +443,73 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
+  std::set<size_t> staticTargetEntryIds;
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    for (const auto &[_, event] : trace->getEvents()) {
+      for (const auto &[targetEntryId, _] : event.linkedTargetMetrics) {
+        staticTargetEntryIds.insert(targetEntryId);
+      }
+      for (const auto &[targetEntryId, _] : event.linkedTargetFlexibleMetrics) {
+        staticTargetEntryIds.insert(targetEntryId);
+      }
+    }
+  });
+
+  std::map<size_t, std::vector<Context>> targetIdToStaticContexts;
+  if (!staticTargetEntryIds.empty()) {
+    tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *staticTrace) {
+      for (auto targetEntryId : staticTargetEntryIds) {
+        auto contexts = staticTrace->getContexts(targetEntryId);
+        if (!contexts.empty() && contexts.front().name == "ROOT") {
+          contexts.erase(contexts.begin());
+        }
+        targetIdToStaticContexts.emplace(targetEntryId, std::move(contexts));
+      }
+    });
+  }
+
   tracePhases.withPtr(phase, [&](Trace *trace) {
     auto &events = trace->getEvents();
     // stream id -> trace event
-    std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
+    std::map<size_t, std::vector<KernelMetricWithContext>> streamTraceEvents;
     uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
     bool hasKernelMetrics = false, hasCycleMetrics = false;
-    // Data structure for efficient cycle metrics conversion
-    std::map<uint64_t, int> kernelBlockNum;
     std::vector<CycleMetricWithContext> cycleEvents;
     cycleEvents.reserve(events.size());
-    for (auto &entry : events) {
-      auto &event = entry.second;
-      if (event.metrics.count(MetricKind::Kernel)) {
-        auto *kernelMetric = static_cast<KernelMetric *>(
-            event.metrics.at(MetricKind::Kernel).get());
-        auto streamId =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
-        streamTraceEvents[streamId].push_back(&event);
 
-        uint64_t startTime =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-        minTimeStamp = std::min(minTimeStamp, startTime);
-        hasKernelMetrics = true;
-      }
-      if (event.metrics.count(MetricKind::Cycle)) {
-        auto *cycleMetric = static_cast<CycleMetric *>(
-            event.metrics.at(MetricKind::Cycle).get());
-        cycleEvents.emplace_back(cycleMetric, event.contextId);
-        hasCycleMetrics = true;
+    auto processMetricMaps =
+        [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+            const std::vector<Context> &contexts) {
+          if (auto kernelIt = metrics.find(MetricKind::Kernel);
+              kernelIt != metrics.end()) {
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(kernelIt->second.get());
+            const auto streamId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StreamId));
+            streamTraceEvents[streamId].emplace_back(kernelMetric, contexts);
+            const auto startTime = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StartTime));
+            minTimeStamp = std::min(minTimeStamp, startTime);
+            hasKernelMetrics = true;
+          }
+          if (auto cycleIt = metrics.find(MetricKind::Cycle);
+              cycleIt != metrics.end()) {
+            auto *cycleMetric = static_cast<CycleMetric *>(cycleIt->second.get());
+            cycleEvents.emplace_back(cycleMetric, contexts);
+            hasCycleMetrics = true;
+          }
+        };
+
+    for (const auto &[_, event] : events) {
+      auto baseContexts = trace->getContexts(event.contextId);
+      processMetricMaps(event.metrics, baseContexts);
+      for (const auto &[targetEntryId, linkedMetrics] :
+           event.linkedTargetMetrics) {
+        auto contexts = baseContexts;
+        auto &staticContexts = targetIdToStaticContexts[targetEntryId];
+        contexts.insert(contexts.end(), staticContexts.begin(),
+                        staticContexts.end());
+        processMetricMaps(linkedMetrics, contexts);
       }
 
       if (hasKernelMetrics && hasCycleMetrics) {
@@ -487,11 +518,11 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
 
     if (hasCycleMetrics) {
-      dumpCycleMetricTrace(trace, cycleEvents, os);
+      dumpCycleMetricTrace(cycleEvents, os);
     }
 
     if (hasKernelMetrics) {
-      dumpKernelMetricTrace(trace, minTimeStamp, streamTraceEvents, os);
+      dumpKernelMetricTrace(minTimeStamp, streamTraceEvents, os);
     }
   });
 }

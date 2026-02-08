@@ -2,7 +2,7 @@
 #define PROTON_PROFILER_GRAPH_H_
 
 #include "Context/Context.h"
-#include "Data/Metric.h"
+#include "Data/Data.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +11,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
@@ -22,11 +21,9 @@ class Data;
 class Runtime;
 
 struct GraphState {
-  using Callpath = std::vector<Context>;
-
   struct NodeState {
-    // Mapping from Data object to captured callpath.
-    std::map<Data *, Callpath> captureContexts;
+    // Data -> entry id in the virtual phase static graph.
+    std::map<Data *, size_t> dataToStaticEntryId;
     // A unique id for the graph node
     uint64_t nodeId{};
     // Whether the node is missing name
@@ -39,10 +36,6 @@ struct GraphState {
 
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
-  using NodeStateRef = std::reference_wrapper<NodeState>;
-  // Cached per-Data callpath groups: Data -> (callpath -> [nodeStates...])
-  std::map<Data *, std::map<Callpath, std::vector<NodeStateRef>>>
-      dataToCallpathToNodeStates;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation
   std::map<uint64_t, NodeState> nodeIdToState;
@@ -64,7 +57,7 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    std::map<Data *, std::vector<size_t>> dataToEntryIds;
+    std::map<Data *, std::vector<DataEntry>> dataToEntries;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -84,9 +77,8 @@ struct PendingGraphQueue {
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
   void push(size_t numNodes, size_t numWords,
-            const std::map<Data *, std::vector<size_t>> &dataToEntryIds) {
-    pendingGraphs.emplace_back(
-        PendingGraph{numNodes, numWords, dataToEntryIds});
+            const std::map<Data *, std::vector<DataEntry>> &dataToEntries) {
+    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataToEntries});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -98,7 +90,7 @@ public:
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
   void push(size_t phase,
-            const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
+            const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
             size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks

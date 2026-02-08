@@ -4,6 +4,7 @@
 #include "Context/Context.h"
 #include "Data.h"
 #include "nlohmann/json.hpp"
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -24,17 +25,13 @@ public:
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
-  DataEntry addOp(const std::string &name) override;
-
   DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;
 
-  void
-  addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) override;
+  DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) override;
 
   void
-  addMetrics(size_t phase, size_t entryId,
+  addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
 protected:
@@ -48,8 +45,9 @@ private:
   // the background threads concurrently, so methods that access them should be
   // protected by a (shared) mutex.
   class Tree;
-  json buildHatchetJson(TreeData::Tree *tree) const;
-  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
+  json buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *staticTree) const;
+  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree,
+                                           TreeData::Tree *staticTree) const;
 
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
