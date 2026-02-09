@@ -228,7 +228,7 @@ def load_partition(p):
         # Input tile via TMA im2col (offsets must be i16)
         tma.async_copy_global_to_shared_im2col(
             p.in_desc,
-            [batch_id, out_y - config.pad_h, out_x - config.pad_w, iter_ci * BLOCK_K],
+            [batch_id, out_y * config.stride_h - config.pad_h, out_x * config.stride_w - config.pad_w, iter_ci * BLOCK_K],
             [iter_r.to(tl.int16), iter_s.to(tl.int16)],
             ready_bar,
             p.a_bufs.index(index),
@@ -446,10 +446,15 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     # The pixel_box defines the access boundary per batch:
     #   Lower = pixel_box_lower_corner + offsets
     #   Upper = [H, W] + pixel_box_upper_corner + offsets
-    # The window size (Upper - Lower) must equal (out_h, out_w) so that
-    # TMA enumerates exactly the output pixel grid per batch.
-    #   window_h = H + upper_h - lower_h = out_h = H + 2*padding - R + 1
-    #   => upper_h = padding - R + 1 (with lower_h = -padding)
+    # With element_strides = [1, stride, stride, 1], TMA steps by `stride`
+    # in H/W between output pixels. The window must contain exactly out_h * out_w
+    # pixels per batch:
+    #   pixels_h = floor((window_h - 1) / stride) + 1 = out_h
+    #   => window_h = (out_h - 1) * stride + 1
+    #   => upper_h = (out_h - 1) * stride + 1 - H - padding
+    upper_h = (out_h - 1) * stride + 1 - H - padding
+    upper_w = (out_w - 1) * stride + 1 - W - padding
+
     input_block_shape = [BLOCK_M, BLOCK_K]
     input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, gl.float16)
     in_desc = TensorDescriptorIm2Col(
@@ -459,9 +464,9 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
         block_shape=input_block_shape,
         layout=input_layout,
         padding="zero",
-        element_strides=[1, 1, 1, 1],
+        element_strides=[1, stride, stride, 1],
         pixel_box_lower_corner=[-padding, -padding],
-        pixel_box_upper_corner=[padding - R + 1, padding - S + 1],
+        pixel_box_upper_corner=[upper_h, upper_w],
     )
 
     # TMA tiled descriptor for weight: (Co, R*S*Ci) = (N_GEMM, K_GEMM)
@@ -496,7 +501,7 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
 @pytest.mark.parametrize("H,W", [(64, 64)])
 @pytest.mark.parametrize("Ci,Co", [(384, 384)])
 @pytest.mark.parametrize("R,S", [(3, 3), (4, 4), (5, 5)])
-@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
 def test_op(N, H, W, Ci, Co, R, S, stride, padding):
@@ -570,7 +575,7 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, num_buffers, provider):
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    ms = triton.testing.do_bench(fn, warmup=100, rep=500)
+    ms = triton.testing.do_bench(fn)
 
     out_h = (H + 2 * pad_val - R) // stride_val + 1
     out_w = (W + 2 * pad_val - S) // stride_val + 1
