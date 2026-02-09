@@ -49,7 +49,11 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
                                         dstLayoutNoBroadcast, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  return smem.getTotalOutDimSize() / reps;
+  // The smem has the same cta layout as the srcLayout, so we use that instead
+  // We remove the number of elements that are duplicated in the cta layout
+  auto nBlocks = product(triton::gpu::getCTASplitNum(
+      gpu::LinearEncodingAttr::get(ctx, srcLayout)));
+  return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,

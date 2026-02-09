@@ -1,4 +1,5 @@
 #include "TargetInfo.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
@@ -131,6 +132,11 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(targets);
+}
+
+void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
+  triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
+  triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
