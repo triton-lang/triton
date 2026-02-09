@@ -9,6 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
+from . import tmem_double_buffer
 from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
@@ -28,6 +29,7 @@ __all__ = [
     "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
+    "tmem_double_buffer",
     "TensorMemoryScalesLayout",
     "tma",
     "_TensorMemoryLinearLayout",
