@@ -425,19 +425,37 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     N, H, W, Ci = input_tensor.shape
     Co, R, S, Ci_w = weight_tensor.shape
     assert Ci == Ci_w, "Input and weight channel dimensions must match"
+    if stride <= 0:
+        raise ValueError(f"stride must be positive, got {stride}")
+    if padding < 0:
+        raise ValueError(f"padding must be non-negative, got {padding}")
 
     out_h = (H + 2 * padding - R) // stride + 1
     out_w = (W + 2 * padding - S) // stride + 1
+    if out_h <= 0 or out_w <= 0:
+        raise ValueError(
+            "Invalid convolution geometry: computed output size "
+            f"({out_h}, {out_w}) from H={H}, W={W}, R={R}, S={S}, "
+            f"stride={stride}, padding={padding}."
+        )
+
+    # Tile parameters for this kernel variant.
+    # Current implementation requires Ci to be divisible by BLOCK_K because
+    # load/mma partitions assume full K-tiles without tail handling.
+    BLOCK_M = 256
+    BLOCK_N = 256
+    BLOCK_K = 64
+    GROUP_SIZE_M = 4
+    if Ci % BLOCK_K != 0:
+        raise ValueError(
+            f"Unsupported Ci={Ci}: this kernel requires Ci % BLOCK_K == 0 "
+            f"(BLOCK_K={BLOCK_K})."
+        )
 
     output = torch.empty((N, out_h, out_w, Co), device=input_tensor.device, dtype=torch.float16)
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
-
-    BLOCK_M = 256
-    BLOCK_N = 256
-    BLOCK_K = 64
-    GROUP_SIZE_M = 4
 
     grid = (triton.cdiv(M_GEMM, BLOCK_M) * triton.cdiv(N_GEMM, BLOCK_N),)
 
