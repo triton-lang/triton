@@ -34,11 +34,28 @@ struct GraphState {
     size_t metricNumWords{};
   };
 
+  struct NodeLaunchState {
+    uint64_t nodeId{};
+    bool isMissingName{};
+    bool isMetricNode{};
+  };
+
+  struct DataLaunchState {
+    // Ordered target static entry ids for one Data*.
+    std::vector<size_t> targetEntryIds;
+    // Ordered node metadata aligned with targetEntryIds.
+    std::vector<NodeLaunchState> nodeStates;
+  };
+
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation
   std::map<uint64_t, NodeState> nodeIdToState;
+  // Precomputed per-Data launch links, rebuilt lazily when graph structure
+  // changes. Duplicate targetEntryIds are preserved in order.
+  std::map<Data *, DataLaunchState> dataToLaunchState;
+  bool dataToLaunchStateDirty{true};
   // Identify whether a node is a metric kernel node.
   // NOTE: This set has to be ordered to match the node creation order.
   std::set<uint64_t> metricKernelNodeIds;
