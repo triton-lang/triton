@@ -178,8 +178,7 @@ DataEntry TraceData::linkOp(size_t baseEntryId, size_t targetEntryId) {
   auto &linkedMetrics = baseEvent.linkedTargetMetrics[targetEntryId];
   auto &linkedFlexibleMetrics =
       baseEvent.linkedTargetFlexibleMetrics[targetEntryId];
-  return DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics,
-                   targetEntryId);
+  return DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics);
 }
 
 void TraceData::addMetrics(

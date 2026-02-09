@@ -117,6 +117,7 @@ private:
   MetricBuffer *metricBuffer{};
   Runtime *runtime{};
   mutable std::mutex mutex;
+  // device -> phase -> slot
   std::map<void *, std::map<size_t, std::shared_ptr<Slot>>> pool;
 };
 

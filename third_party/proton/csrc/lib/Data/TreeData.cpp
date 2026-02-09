@@ -850,8 +850,7 @@ DataEntry TreeData::linkOp(size_t baseEntryId, size_t targetEntryId) {
   auto &linkedMetrics = baseNode.linkedTargetMetrics[targetEntryId];
   auto &linkedFlexibleMetrics =
       baseNode.linkedTargetFlexibleMetrics[targetEntryId];
-  return DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics,
-                   targetEntryId);
+  return DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics);
 }
 
 void TreeData::addMetrics(

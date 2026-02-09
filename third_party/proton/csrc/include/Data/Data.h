@@ -27,9 +27,6 @@ enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 struct DataEntry {
   /// `entryId` is a unique identifier for the entry in the data.
   size_t id{Scope::DummyScopeId};
-  /// `linkedId` is the linked target entry id (e.g., static graph node id).
-  /// It is `Scope::DummyScopeId` when this entry is not a linked entry.
-  size_t linkedId{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
   /// `metrics` is a map from metric kind to metric accumulator associated
@@ -41,9 +38,8 @@ struct DataEntry {
 
   explicit DataEntry(size_t id, size_t phase,
                      std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-                     std::map<std::string, FlexibleMetric> &flexibleMetrics,
-                     size_t linkedId = Scope::DummyScopeId)
-      : id(id), linkedId(linkedId), phase(phase), metrics(metrics),
+                     std::map<std::string, FlexibleMetric> &flexibleMetrics)
+      : id(id), phase(phase), metrics(metrics),
         flexibleMetrics(flexibleMetrics) {}
 
   void upsertMetric(std::unique_ptr<Metric> metric) const {
@@ -55,17 +51,6 @@ struct DataEntry {
       metricsMap.emplace(metric->getKind(), std::move(metric));
     } else {
       it->second->updateMetric(*metric);
-    }
-  }
-
-  void upsertFlexibleMetric(const FlexibleMetric &metric) const {
-    auto &flexibleMetricsMap = flexibleMetrics.get();
-    const auto &metricName = metric.getValueName(0);
-    auto it = flexibleMetricsMap.find(metricName);
-    if (it == flexibleMetricsMap.end()) {
-      flexibleMetricsMap.emplace(metricName, metric);
-    } else {
-      it->second.updateMetric(metric);
     }
   }
 
@@ -100,7 +85,7 @@ public:
     }
   };
 
-  Data(const std::string &path, ContextSource *contextSource = nullptr)
+  Data(const std::string &path, ContextSource *contextSource)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
 
