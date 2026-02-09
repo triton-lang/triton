@@ -231,8 +231,8 @@ struct KernelMetricWithContext {
       : kernelMetric(metric), contexts(std::move(ctx)) {}
 };
 
-std::vector<KernelTrace> convertToTimelineTrace(
-    std::vector<CycleMetricWithContext> &cycleEvents) {
+std::vector<KernelTrace>
+convertToTimelineTrace(std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
 
   auto getInt64Value = [](const CycleMetric *metric,
@@ -403,11 +403,11 @@ void dumpCycleMetricTrace(std::vector<CycleMetricWithContext> &cycleEvents,
   writer.write(os);
 }
 
-void dumpKernelMetricTrace(uint64_t minTimeStamp,
-                           const std::map<size_t,
-                                          std::vector<KernelMetricWithContext>>
-                               &streamTraceEvents,
-                           std::ostream &os) {
+void dumpKernelMetricTrace(
+    uint64_t minTimeStamp,
+    const std::map<size_t, std::vector<KernelMetricWithContext>>
+        &streamTraceEvents,
+    std::ostream &os) {
   // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
     json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
@@ -498,7 +498,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
           }
           if (auto cycleIt = metrics.find(MetricKind::Cycle);
               cycleIt != metrics.end()) {
-            auto *cycleMetric = static_cast<CycleMetric *>(cycleIt->second.get());
+            auto *cycleMetric =
+                static_cast<CycleMetric *>(cycleIt->second.get());
             cycleEvents.emplace_back(cycleMetric, contexts);
             hasCycleMetrics = true;
           }

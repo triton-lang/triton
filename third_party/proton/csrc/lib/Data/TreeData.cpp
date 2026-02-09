@@ -53,14 +53,14 @@ struct MetricSummary {
         (1u << static_cast<uint32_t>(deviceId));
   }
 
-  void observeMetrics(
-      const std::map<MetricKind, std::unique_ptr<Metric>> &metrics) {
+  void
+  observeMetrics(const std::map<MetricKind, std::unique_ptr<Metric>> &metrics) {
     for (const auto &[metricKind, metric] : metrics) {
       if (metricKind == MetricKind::Kernel) {
         hasKernelMetric = true;
         auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
-        uint64_t deviceId = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceId));
+        uint64_t deviceId =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
         uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
         updateDeviceIdMask(deviceType, deviceId);
@@ -69,10 +69,10 @@ struct MetricSummary {
       } else if (metricKind == MetricKind::Cycle) {
         hasCycleMetric = true;
         auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
-        uint64_t deviceId = std::get<uint64_t>(
-            cycleMetric->getValue(CycleMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            cycleMetric->getValue(CycleMetric::DeviceType));
+        uint64_t deviceId =
+            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
+        uint64_t deviceType =
+            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
         updateDeviceIdMask(deviceType, deviceId);
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are tracked in a separate map.
@@ -217,8 +217,8 @@ private:
   std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
 
-json TreeData::buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *staticTree)
-    const {
+json TreeData::buildHatchetJson(TreeData::Tree *tree,
+                                TreeData::Tree *staticTree) const {
   std::vector<json *> jsonNodes(tree->size(), nullptr);
   json output = json::array();
   output.push_back(json::object());
@@ -327,62 +327,67 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *staticTree
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
-    const auto contextName = treeNode.name;
-    auto contextId = treeNode.id;
-    json *jsonNode = jsonNodes[contextId];
-    (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
-    (*jsonNode)["metrics"] = json::object();
-    auto &metricsJson = (*jsonNode)["metrics"];
-    appendMetrics(metricsJson, treeNode.metrics, treeNode.flexibleMetrics);
-    auto &childrenArray = (*jsonNode)["children"];
-    childrenArray = json::array();
-    const bool hasLinkedTargets = !treeNode.linkedTargetMetrics.empty() ||
-                                  !treeNode.linkedTargetFlexibleMetrics.empty();
-    childrenArray.get_ref<json::array_t &>().reserve(
-        treeNode.children.size() +
-        (hasLinkedTargets ? staticRootNode.children.size() : 0));
-    for (const auto &child : treeNode.children) {
-      childrenArray.push_back(json::object());
-      jsonNodes[child.id] = &childrenArray.back();
-    }
-    if (!hasLinkedTargets) {
-      return;
-    }
-    std::function<void(size_t, json &)> appendLinkedStaticNode =
-        [&](size_t staticNodeId, json &outNode) {
-      const auto &staticNode = staticTree->getNode(staticNodeId);
-      const auto metricsIt = treeNode.linkedTargetMetrics.find(staticNodeId);
-      const auto flexibleIt =
-          treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
-      outNode = json::object();
-      outNode["frame"] = {{"name", staticNode.name}, {"type", "function"}};
-      outNode["metrics"] = json::object();
-      if (metricsIt != treeNode.linkedTargetMetrics.end() ||
-          flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
-        const auto &linkedMetrics =
-            (metricsIt != treeNode.linkedTargetMetrics.end())
-                ? metricsIt->second
-                : emptyMetrics;
-        const auto &linkedFlexibleMetrics =
-            (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
-                ? flexibleIt->second
-                : emptyFlexibleMetrics;
-        appendMetrics(outNode["metrics"], linkedMetrics, linkedFlexibleMetrics);
-      }
-      outNode["children"] = json::array();
-      auto &linkedChildren = outNode["children"];
-      linkedChildren.get_ref<json::array_t &>().reserve(staticNode.children.size());
-      for (const auto &child : staticNode.children) {
-        linkedChildren.push_back(json::object());
-        appendLinkedStaticNode(child.id, linkedChildren.back());
-      }
-    };
+        const auto contextName = treeNode.name;
+        auto contextId = treeNode.id;
+        json *jsonNode = jsonNodes[contextId];
+        (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
+        (*jsonNode)["metrics"] = json::object();
+        auto &metricsJson = (*jsonNode)["metrics"];
+        appendMetrics(metricsJson, treeNode.metrics, treeNode.flexibleMetrics);
+        auto &childrenArray = (*jsonNode)["children"];
+        childrenArray = json::array();
+        const bool hasLinkedTargets =
+            !treeNode.linkedTargetMetrics.empty() ||
+            !treeNode.linkedTargetFlexibleMetrics.empty();
+        childrenArray.get_ref<json::array_t &>().reserve(
+            treeNode.children.size() +
+            (hasLinkedTargets ? staticRootNode.children.size() : 0));
+        for (const auto &child : treeNode.children) {
+          childrenArray.push_back(json::object());
+          jsonNodes[child.id] = &childrenArray.back();
+        }
+        if (!hasLinkedTargets) {
+          return;
+        }
+        std::function<void(size_t, json &)> appendLinkedStaticNode =
+            [&](size_t staticNodeId, json &outNode) {
+              const auto &staticNode = staticTree->getNode(staticNodeId);
+              const auto metricsIt =
+                  treeNode.linkedTargetMetrics.find(staticNodeId);
+              const auto flexibleIt =
+                  treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
+              outNode = json::object();
+              outNode["frame"] = {{"name", staticNode.name},
+                                  {"type", "function"}};
+              outNode["metrics"] = json::object();
+              if (metricsIt != treeNode.linkedTargetMetrics.end() ||
+                  flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
+                const auto &linkedMetrics =
+                    (metricsIt != treeNode.linkedTargetMetrics.end())
+                        ? metricsIt->second
+                        : emptyMetrics;
+                const auto &linkedFlexibleMetrics =
+                    (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
+                        ? flexibleIt->second
+                        : emptyFlexibleMetrics;
+                appendMetrics(outNode["metrics"], linkedMetrics,
+                              linkedFlexibleMetrics);
+              }
+              outNode["children"] = json::array();
+              auto &linkedChildren = outNode["children"];
+              linkedChildren.get_ref<json::array_t &>().reserve(
+                  staticNode.children.size());
+              for (const auto &child : staticNode.children) {
+                linkedChildren.push_back(json::object());
+                appendLinkedStaticNode(child.id, linkedChildren.back());
+              }
+            };
 
-    for (const auto &staticChild : staticRootNode.children) {
-      json linkedRootChildNode;
-      appendLinkedStaticNode(staticChild.id, linkedRootChildNode);
-      childrenArray.push_back(std::move(linkedRootChildNode));
-    }
+        for (const auto &staticChild : staticRootNode.children) {
+          json linkedRootChildNode;
+          appendLinkedStaticNode(staticChild.id, linkedRootChildNode);
+          childrenArray.push_back(std::move(linkedRootChildNode));
+        }
       });
 
   if (metricSummary.hasKernelMetric) {
@@ -440,8 +445,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *staticTree
   return output;
 }
 
-std::vector<uint8_t> TreeData::buildHatchetMsgPack(
-    TreeData::Tree *tree, TreeData::Tree *staticTree) const {
+std::vector<uint8_t>
+TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
+                              TreeData::Tree *staticTree) const {
   MsgPackWriter writer;
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
@@ -563,113 +569,116 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(
     return metricEntries;
   };
 
-  auto packMetrics = [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-                         const std::map<std::string, FlexibleMetric> &flexibleMetrics,
-                         bool isRoot) {
-    writer.packMap(countMetricEntries(metrics, flexibleMetrics, isRoot));
-    for (const auto &[metricKind, metric] : metrics) {
-      if (metricKind == MetricKind::Kernel) {
-        if (isRoot) {
-          writer.packStr(kernelMetricDurationName);
-          writer.packUInt(0);
-          writer.packStr(kernelMetricInvocationsName);
-          writer.packUInt(0);
-          continue;
-        }
+  auto packMetrics =
+      [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+          const std::map<std::string, FlexibleMetric> &flexibleMetrics,
+          bool isRoot) {
+        writer.packMap(countMetricEntries(metrics, flexibleMetrics, isRoot));
+        for (const auto &[metricKind, metric] : metrics) {
+          if (metricKind == MetricKind::Kernel) {
+            if (isRoot) {
+              writer.packStr(kernelMetricDurationName);
+              writer.packUInt(0);
+              writer.packStr(kernelMetricInvocationsName);
+              writer.packUInt(0);
+              continue;
+            }
 
-        auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
-        uint64_t duration = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Duration));
-        uint64_t invocations = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Invocations));
-        uint64_t deviceId = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceType));
-        const auto &deviceTypeName =
-            kDeviceTypeNames[static_cast<size_t>(deviceType)];
-        writer.packStr(kernelMetricDurationName);
-        writer.packUInt(duration);
-        writer.packStr(kernelMetricInvocationsName);
-        writer.packUInt(invocations);
-        writer.packStr(kernelMetricDeviceIdName);
-        writer.packStr(std::to_string(deviceId));
-        writer.packStr(kernelMetricDeviceTypeName);
-        writer.packStr(deviceTypeName);
-      } else if (metricKind == MetricKind::PCSampling) {
-        auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto &valueName = pcSamplingMetric->getValueName(i);
-          writer.packStr(valueName);
-          if (isRoot) {
-            writer.packUInt(0);
+            auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
+            uint64_t duration = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
+            uint64_t invocations = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Invocations));
+            uint64_t deviceId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceType));
+            const auto &deviceTypeName =
+                kDeviceTypeNames[static_cast<size_t>(deviceType)];
+            writer.packStr(kernelMetricDurationName);
+            writer.packUInt(duration);
+            writer.packStr(kernelMetricInvocationsName);
+            writer.packUInt(invocations);
+            writer.packStr(kernelMetricDeviceIdName);
+            writer.packStr(std::to_string(deviceId));
+            writer.packStr(kernelMetricDeviceTypeName);
+            writer.packStr(deviceTypeName);
+          } else if (metricKind == MetricKind::PCSampling) {
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
+            for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+              const auto &valueName = pcSamplingMetric->getValueName(i);
+              writer.packStr(valueName);
+              if (isRoot) {
+                writer.packUInt(0);
+              } else {
+                writer.packUInt(
+                    std::get<uint64_t>(pcSamplingMetric->getValues()[i]));
+              }
+            }
+          } else if (metricKind == MetricKind::Cycle) {
+            if (isRoot) {
+              writer.packStr(cycleMetricDurationName);
+              writer.packUInt(0);
+              writer.packStr(cycleMetricNormalizedDurationName);
+              writer.packUInt(0);
+              continue;
+            }
+
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
+            uint64_t duration = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::Duration));
+            double normalizedDuration = std::get<double>(
+                cycleMetric->getValue(CycleMetric::NormalizedDuration));
+            uint64_t deviceId = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceType));
+
+            writer.packStr(cycleMetricDurationName);
+            writer.packUInt(duration);
+            writer.packStr(cycleMetricNormalizedDurationName);
+            writer.packDouble(normalizedDuration);
+            writer.packStr(cycleMetricDeviceIdName);
+            writer.packStr(std::to_string(deviceId));
+            writer.packStr(cycleMetricDeviceTypeName);
+            writer.packStr(std::to_string(deviceType));
           } else {
-            writer.packUInt(std::get<uint64_t>(pcSamplingMetric->getValues()[i]));
+            throw std::runtime_error("MetricKind not supported");
           }
         }
-      } else if (metricKind == MetricKind::Cycle) {
-        if (isRoot) {
-          writer.packStr(cycleMetricDurationName);
-          writer.packUInt(0);
-          writer.packStr(cycleMetricNormalizedDurationName);
-          writer.packUInt(0);
-          continue;
-        }
-
-        auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
-        uint64_t duration = std::get<uint64_t>(
-            cycleMetric->getValue(CycleMetric::Duration));
-        double normalizedDuration = std::get<double>(
-            cycleMetric->getValue(CycleMetric::NormalizedDuration));
-        uint64_t deviceId = std::get<uint64_t>(
-            cycleMetric->getValue(CycleMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            cycleMetric->getValue(CycleMetric::DeviceType));
-
-        writer.packStr(cycleMetricDurationName);
-        writer.packUInt(duration);
-        writer.packStr(cycleMetricNormalizedDurationName);
-        writer.packDouble(normalizedDuration);
-        writer.packStr(cycleMetricDeviceIdName);
-        writer.packStr(std::to_string(deviceId));
-        writer.packStr(cycleMetricDeviceTypeName);
-        writer.packStr(std::to_string(deviceType));
-      } else {
-        throw std::runtime_error("MetricKind not supported");
-      }
-    }
-    for (const auto &[_, flexibleMetric] : flexibleMetrics) {
-      const auto &valueName = flexibleMetric.getValueName(0);
-      writer.packStr(valueName);
-      packFlexibleMetricValue(flexibleMetric.getValues()[0]);
-    }
-
-    if (isRoot) {
-      if (metricSummary.hasKernelMetric &&
-          metrics.find(MetricKind::Kernel) == metrics.end()) {
-        writer.packStr(kernelMetricDurationName);
-        writer.packUInt(0);
-        writer.packStr(kernelMetricInvocationsName);
-        writer.packUInt(0);
-      }
-      if (metricSummary.hasPCSamplingMetric &&
-          metrics.find(MetricKind::PCSampling) == metrics.end()) {
-        PCSamplingMetric pcSamplingMetric;
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto &valueName = pcSamplingMetric.getValueName(i);
+        for (const auto &[_, flexibleMetric] : flexibleMetrics) {
+          const auto &valueName = flexibleMetric.getValueName(0);
           writer.packStr(valueName);
-          writer.packUInt(0);
+          packFlexibleMetricValue(flexibleMetric.getValues()[0]);
         }
-      }
-      if (metricSummary.hasCycleMetric &&
-          metrics.find(MetricKind::Cycle) == metrics.end()) {
-        writer.packStr(cycleMetricDurationName);
-        writer.packUInt(0);
-        writer.packStr(cycleMetricNormalizedDurationName);
-        writer.packUInt(0);
-      }
-    }
-  };
+
+        if (isRoot) {
+          if (metricSummary.hasKernelMetric &&
+              metrics.find(MetricKind::Kernel) == metrics.end()) {
+            writer.packStr(kernelMetricDurationName);
+            writer.packUInt(0);
+            writer.packStr(kernelMetricInvocationsName);
+            writer.packUInt(0);
+          }
+          if (metricSummary.hasPCSamplingMetric &&
+              metrics.find(MetricKind::PCSampling) == metrics.end()) {
+            PCSamplingMetric pcSamplingMetric;
+            for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+              const auto &valueName = pcSamplingMetric.getValueName(i);
+              writer.packStr(valueName);
+              writer.packUInt(0);
+            }
+          }
+          if (metricSummary.hasCycleMetric &&
+              metrics.find(MetricKind::Cycle) == metrics.end()) {
+            writer.packStr(cycleMetricDurationName);
+            writer.packUInt(0);
+            writer.packStr(cycleMetricNormalizedDurationName);
+            writer.packUInt(0);
+          }
+        }
+      };
   std::function<void(TreeData::Tree::TreeNode &)> packNode =
       [&](TreeData::Tree::TreeNode &treeNode) {
         writer.packMap(3);
@@ -684,50 +693,55 @@ std::vector<uint8_t> TreeData::buildHatchetMsgPack(
         writer.packStr("metrics");
         packMetrics(treeNode.metrics, treeNode.flexibleMetrics,
                     treeNode.id == TreeData::Tree::TreeNode::RootId);
-        const bool hasLinkedTargets = !treeNode.linkedTargetMetrics.empty() ||
-                                      !treeNode.linkedTargetFlexibleMetrics.empty();
+        const bool hasLinkedTargets =
+            !treeNode.linkedTargetMetrics.empty() ||
+            !treeNode.linkedTargetFlexibleMetrics.empty();
 
-        std::function<void(size_t)> packLinkedStaticNode = [&](size_t staticNodeId) {
-          const auto &staticNode = staticTree->getNode(staticNodeId);
-          writer.packMap(3);
+        std::function<void(size_t)> packLinkedStaticNode =
+            [&](size_t staticNodeId) {
+              const auto &staticNode = staticTree->getNode(staticNodeId);
+              writer.packMap(3);
 
-          writer.packStr("frame");
-          writer.packMap(2);
-          writer.packStr("name");
-          writer.packStr(staticNode.name);
-          writer.packStr("type");
-          writer.packStr("function");
+              writer.packStr("frame");
+              writer.packMap(2);
+              writer.packStr("name");
+              writer.packStr(staticNode.name);
+              writer.packStr("type");
+              writer.packStr("function");
 
-          writer.packStr("metrics");
-          const auto metricsIt = treeNode.linkedTargetMetrics.find(staticNodeId);
-          const auto flexibleIt =
-              treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
-          if (metricsIt != treeNode.linkedTargetMetrics.end() ||
-              flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
-            const auto &linkedMetrics =
-                (metricsIt != treeNode.linkedTargetMetrics.end())
-                    ? metricsIt->second
-                    : emptyMetrics;
-            const auto &linkedFlexibleMetrics =
-                (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
-                    ? flexibleIt->second
-                    : emptyFlexibleMetrics;
-            packMetrics(linkedMetrics, linkedFlexibleMetrics, /*isRoot=*/false);
-          } else {
-            writer.packMap(0);
-          }
+              writer.packStr("metrics");
+              const auto metricsIt =
+                  treeNode.linkedTargetMetrics.find(staticNodeId);
+              const auto flexibleIt =
+                  treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
+              if (metricsIt != treeNode.linkedTargetMetrics.end() ||
+                  flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
+                const auto &linkedMetrics =
+                    (metricsIt != treeNode.linkedTargetMetrics.end())
+                        ? metricsIt->second
+                        : emptyMetrics;
+                const auto &linkedFlexibleMetrics =
+                    (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
+                        ? flexibleIt->second
+                        : emptyFlexibleMetrics;
+                packMetrics(linkedMetrics, linkedFlexibleMetrics,
+                            /*isRoot=*/false);
+              } else {
+                writer.packMap(0);
+              }
 
-          writer.packStr("children");
-          writer.packArray(static_cast<uint32_t>(staticNode.children.size()));
-          for (const auto &child : staticNode.children) {
-            packLinkedStaticNode(child.id);
-          }
-        };
+              writer.packStr("children");
+              writer.packArray(
+                  static_cast<uint32_t>(staticNode.children.size()));
+              for (const auto &child : staticNode.children) {
+                packLinkedStaticNode(child.id);
+              }
+            };
 
-        uint32_t linkedChildCount = hasLinkedTargets
-                                        ? static_cast<uint32_t>(
-                                              staticRootNode.children.size())
-                                        : 0;
+        uint32_t linkedChildCount =
+            hasLinkedTargets
+                ? static_cast<uint32_t>(staticRootNode.children.size())
+                : 0;
         writer.packStr("children");
         writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
                          linkedChildCount);

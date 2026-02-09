@@ -37,8 +37,7 @@ struct DataEntry {
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
   /// `flexibleMetrics` is a map from metric name to flexible metric
   /// accumulator associated with the entry.
-  std::reference_wrapper<std::map<std::string, FlexibleMetric>>
-      flexibleMetrics;
+  std::reference_wrapper<std::map<std::string, FlexibleMetric>> flexibleMetrics;
 
   explicit DataEntry(size_t id, size_t phase,
                      std::map<MetricKind, std::unique_ptr<Metric>> &metrics,

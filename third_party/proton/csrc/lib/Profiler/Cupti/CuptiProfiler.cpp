@@ -429,8 +429,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               !threadState.isMetricKernelLaunching)
             contexts.push_back(name);
           auto staticEntry =
-              data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
-                          contexts);
+              data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           nodeState.dataToStaticEntryId.insert_or_assign(data, staticEntry.id);
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
