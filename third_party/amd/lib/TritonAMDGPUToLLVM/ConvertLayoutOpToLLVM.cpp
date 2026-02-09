@@ -367,18 +367,6 @@ public:
                          ConversionPatternRewriter &rewriter) {
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     auto numRegs = inVals.size() / regBytes;
-    if (inVals.size() < regBytes) {
-      // We can not fill even one register with input values, adding some
-      // undefined bytes as a padding.
-      for (int i = inVals.size(); i < regBytes; ++i) {
-        auto poisonByte =
-            mlir::LLVM::PoisonOp::create(rewriter, loc, inVals[0].getType());
-        auto undefByte =
-            mlir::LLVM::FreezeOp::create(rewriter, loc, poisonByte);
-        inVals.push_back(undefByte);
-      }
-      numRegs = 1;
-    }
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::vector<Value> srcRegs(numRegs);
     for (int i = 0; i < numRegs; ++i) {
@@ -754,10 +742,12 @@ public:
     if (srcTy.getElementType().getIntOrFloatBitWidth() != 8)
       return failure();
 
-    // If destination is smaller than one register, skip.
+    // If destination or source is smaller than one register, skip.
     // Algorithm do not support such cases,
     // assuming default computations are simple already.
     if (conversion.getTotalInDimSize() < regBytes)
+      return failure();
+    if (conversion.getTotalOutDimSize() < regBytes)
       return failure();
 
     for (const auto &base : conversion.getBases().at(kRegister)) {

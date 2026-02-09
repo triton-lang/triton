@@ -146,7 +146,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_2in_4out
   tt.func @v_perm_small_convert_layout_with_broadcasting_2in_4out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
-    // CHECK: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
     tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
