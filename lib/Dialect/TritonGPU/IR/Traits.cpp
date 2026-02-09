@@ -14,52 +14,30 @@ LogicalResult OpTrait::impl::verifyEquivalentMemDescType(Type typeA,
                                                          Type typeB) {
   auto memdescA = dyn_cast<MemDescType>(typeA);
   auto memdescB = dyn_cast<MemDescType>(typeB);
-  if (memdescA || memdescB) {
-    if (!memdescA || !memdescB)
-      return failure();
-    if (memdescA.getShape() != memdescB.getShape())
-      return failure();
-    if (memdescA.getAllocShape() != memdescB.getAllocShape())
-      return failure();
-    if (memdescA.getElementType() != memdescB.getElementType())
-      return failure();
-    if (memdescA.getMemorySpace() != memdescB.getMemorySpace())
-      return failure();
-    if (memdescA.getMutableMemory() != memdescB.getMutableMemory())
-      return failure();
-
-    Attribute encodingA = memdescA.getEncoding();
-    Attribute encodingB = memdescB.getEncoding();
-    if (encodingA == encodingB)
-      return success();
-    if (static_cast<bool>(encodingA) != static_cast<bool>(encodingB))
-      return failure();
-
-    auto layoutInterface =
-        cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect());
-    return layoutInterface->verifyLayoutsAreEqual(memdescA.getShape(),
-                                                  encodingA, encodingB, {});
-  }
-  auto tensorTypeA = dyn_cast<RankedTensorType>(typeA);
-  auto tensorTypeB = dyn_cast<RankedTensorType>(typeB);
-  if (!(bool(tensorTypeA) && bool(tensorTypeB)))
-    return typeA == typeB ? success() : failure();
-  auto encodingA = tensorTypeA.getEncoding();
-  auto encodingB = tensorTypeB.getEncoding();
-  auto shapeA = tensorTypeA.getShape();
-  auto shapeB = tensorTypeB.getShape();
-  if (shapeA != shapeB)
+  if (!memdescA || !memdescB)
+    return success(memdescA == memdescB);
+  if (memdescA.getShape() != memdescB.getShape())
     return failure();
-  if (tensorTypeA.getElementType() != tensorTypeB.getElementType())
+  if (memdescA.getAllocShape() != memdescB.getAllocShape())
     return failure();
-  // If there's no encoding or the encodings are the same
+  if (memdescA.getElementType() != memdescB.getElementType())
+    return failure();
+  if (memdescA.getMemorySpace() != memdescB.getMemorySpace())
+    return failure();
+  if (memdescA.getMutableMemory() != memdescB.getMutableMemory())
+    return failure();
+
+  Attribute encodingA = memdescA.getEncoding();
+  Attribute encodingB = memdescB.getEncoding();
   if (encodingA == encodingB)
     return success();
-  if (bool(encodingA) != bool(encodingB))
+  if (static_cast<bool>(encodingA) != static_cast<bool>(encodingB))
     return failure();
 
-  return cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect())
-      ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {});
+  auto layoutInterface =
+      cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect());
+  return layoutInterface->verifyLayoutsAreEqual(memdescA.getShape(), encodingA,
+                                                encodingB, {});
 }
 
 // Check that the Triton layouts on op's operands and return types are valid.
