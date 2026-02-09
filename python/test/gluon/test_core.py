@@ -114,6 +114,57 @@ def test_tma():
 
 
 @gluon.jit
+def tma_im2col_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, in_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(pendings=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
+@pytest.mark.parametrize("channels_per_pixel", [32])
+@pytest.mark.parametrize("swizzle_byte_width", [32])
+def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
+    smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
+    if smem_bytes > 200000:
+        pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
+
+    inp = torch.arange(pixels_per_column * channels_per_pixel, device="cuda", dtype=torch.float32)
+    inp = inp.reshape(1, 1, pixels_per_column, channels_per_pixel)
+    out = torch.zeros(pixels_per_column, channels_per_pixel, device="cuda", dtype=torch.float32)
+
+    block_shape = [pixels_per_column, channels_per_pixel]
+    layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=swizzle_byte_width,
+        element_bitwidth=32,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    in_desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
+        base=inp,
+        shape=list(inp.shape),
+        strides=list(inp.stride()),
+        block_shape=block_shape,
+        layout=layout,
+        padding="zero",
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
+    )
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, num_warps=1)
+    torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
+
+
+@gluon.jit
 def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()
