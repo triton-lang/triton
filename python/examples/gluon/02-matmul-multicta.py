@@ -12,7 +12,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tensor_memory_descriptor,
 )
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import cluster, fence_async_shared, mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
@@ -70,6 +70,9 @@ def matmul_tma_set_block_size_hook(nargs):
     two_ctas = bool(nargs["TWO_CTAS"])
 
     tile_m = block_m * (2 if two_ctas else 1)
+    # Keeping this here because pallas does this, but in reality
+    # we should just multiply block_m by 2 if we want to compute
+    # the same number of elements per output tile
     tile_n = block_n * (2 if two_ctas else 1)
     nargs["a_desc"].block_shape = [tile_m, block_k]
     nargs["b_desc"].block_shape = [block_k, tile_n]
@@ -244,14 +247,16 @@ def matmul_load_partition(p):
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
 
-    state = Counter.create(1, p.load_empty_bars.shape[0])
+    concurrent_loads: gl.constexpr = p.load_ready_bars.shape[0]
+    state = Counter.create(1, concurrent_loads)
     scheduler = p.get_scheduler()
 
     for idx in range(scheduler.get_num_tiles()):
         off_m, off_n = scheduler.get_offsets(idx)
         for k in range(0, K, BLOCK_K):
+            pred = (idx > 0) or (k >= BLOCK_K * concurrent_loads)
+            mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
-            mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
             tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
             tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
@@ -267,15 +272,12 @@ def matmul_mma_partition(p):
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
     scheduler = p.get_scheduler()
 
-    for _ in range(scheduler.get_num_tiles()):
+    for i in range(scheduler.get_num_tiles()):
         acc_buf = p.acc_bufs.index(acc_state.index)
-        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
+        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i > 1))
         use_acc = False
-        for _ in range(0, K, BLOCK_K):
+        for k in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
-            # TODO Is this needed?
-            if p.TWO_CTAS:
-                fence_async_shared(cluster=True)
             tcgen05_mma(p.a_bufs.index(load_state.index), p.b_bufs.index(load_state.index), acc_buf, use_acc=use_acc,
                         mbarriers=[p.load_empty_bars.index(load_state.index)])
             load_state = load_state.next()
@@ -293,20 +295,21 @@ def matmul_epilogue_partition(p):
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_smem = gl.allocate_shared_memory(dtype, [TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    acc_smems = gl.allocate_shared_memory(dtype, [2, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = p.get_scheduler()
 
     for idx in range(scheduler.get_num_tiles()):
         off_m, off_n = scheduler.get_offsets(idx)
 
-        ready_state = acc_state
-        acc_buf = p.acc_bufs.index(ready_state.index)
-        mbarrier.wait(p.acc_ready_bars.index(ready_state.index), ready_state.phase)
-        acc_state = ready_state.next()
+        # TODO: we are not emitting read=True
+        tma.store_wait(pendings=0)
+        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+        acc_buf = p.acc_bufs.index(acc_state.index)
 
         for i in gl.static_range(SUBTILE_FACTOR):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * i, SPLIT_TILE_N)
-            tma.store_wait(pendings=0)
+            acc_smem = acc_smems.index(sub_acc_state.index)
             acc_smem.store(
                 acc_sub.load(
                     get_tmem_reg_layout(
@@ -318,9 +321,12 @@ def matmul_epilogue_partition(p):
                     )).to(dtype))
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * i], acc_smem)
+            # TODO: we are not emitting read=True
+            tma.store_wait(pendings=1)
+            sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.
-        tma.store_wait(pendings=0)
-        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
+        acc_state = acc_state.next()
 
 
 @gluon.jit
@@ -349,12 +355,12 @@ def _matmul_kernel(
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
 
-    # Pallas `consumed_barrier` and `ab_tma_barrier` are CTA-local barriers,
-    # even in collective mode. Keep these local and rely on tcgen05 multicast
-    # commit for cross-CTA synchronization.
+    # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
     load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
     for i in gl.static_range(STAGES):
+        # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
@@ -365,17 +371,20 @@ def _matmul_kernel(
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [2, BLOCK_M, BLOCK_N], tmem_layout)
-    if TWO_CTAS:
-        # `acc_empty_bars` models Pallas store_done_barrier, which is cluster-wide in 2CTA mode.
-        acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=True)
-    else:
-        acc_empty_bars = mbarrier.allocate_mbarrier(batch=2)
-    # `acc_ready_bars` models Pallas mma_done_barrier, which is local to each CTA.
+    # Equiv. store_done_barrier. Barrier Store TMA -> TCGEN05 MMA
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+    # Equiv. mma_done_barrier. Barrier TCGEN05 MMA -> Store TMA
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=2)
     for i in gl.static_range(2):
-        mbarrier.init(acc_empty_bars.index(i), count=2 if TWO_CTAS else 1)
+        mbarrier.init(acc_empty_bars.index(i), count=1)
+        # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
+    # TODO Can we lift the arrive or sink the wait?
+    if TWO_CTAS:
+        mbarrier.fence_init_release_cluster()
+        cluster.arrive(relaxed=True)
+        cluster.wait()
     p = PartitionArgs(
         a_desc,
         b_desc,
