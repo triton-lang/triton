@@ -2,35 +2,39 @@
 TMA im2col mode
 ================
 
-TMA im2col mode enables efficient loading of multi-dimensional tensor data,
-particularly useful for convolution operations. It loads a 2D block representing
-multiple pixels and their channels from a spatial window in the input tensor.
+TMA im2col mode enables efficient loading of tensor data and is described in
+the PTX ISA "im2col mode" section:
+https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
+This tutorial is a 4-D (NHWC) im2col example for convolution operations. It
+loads a 2D block representing multiple pixels and their channels from a spatial
+window in the input tensor.
 
 Block Shape:
     block_shape = [pixelsPerColumn, channelsPerPixel]
-    - pixelsPerColumn: number of pixels to load from spatial dimensions [N, H, W]
-    - channelsPerPixel: number of channels to load per pixel from dimension [C]
+    - pixelsPerColumn: number of pixels from spatial dims [N, H, W]
+    - channelsPerPixel: number of channels per pixel from [C]
 
 TensorDescriptor Parameters:
     - Input tensor: [N, H, W, C] in NHWC format
-    - pixel_box_lower_corner: [H_lo, W_lo] - lower boundary for TMA access
-    - pixel_box_upper_corner: [H_hi, W_hi] - upper boundary offset for TMA access
-    - element_strides: [1, 1, 1, 1] - contiguous element loading
-    - padding: "zero" or "nan" - fill value for out-of-bounds access
+    - pixel_box_lower_corner: [H_lo, W_lo] offset from (0, 0)
+    - pixel_box_upper_corner: [H_hi, W_hi] offset from (H, W)
+    - element_strides: [1, 1, 1, 1] for contiguous element access
+    - padding: "zero" or "nan" for out-of-bounds fills
 
 Access Boundary:
-    pixel_box_lower_corner, pixel_box_upper_corner, and offsets together define the
-    TMA access boundary in spatial dimensions:
-    - Lower bound: [H_lo + h_offset, W_lo + w_offset]
-    - Upper bound: [H + H_hi + h_offset, W + W_hi + w_offset]
+    pixel_box_lower_corner, pixel_box_upper_corner, and offsets define the
+    spatial access window:
+    - Lower bound = pixel_box_lower_corner + offsets
+    - Upper bound = [H, W] + pixel_box_upper_corner + offsets
+    - Bounds are interpreted as half-open: [lower, upper)
     
     The input tensor in global memory is NOT padded. When accessing outside
     [0, 0] to [H-1, W-1], TMA fills with the padding value.
 
 async_copy_global_to_shared_im2col:
     async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
-    - coord: [batch_idx, start_h, start_w, channel_start] - starting coordinates in the source tensor
-    - offsets: [h_offset, w_offset] - spatial offsets (i16 values)
+    - coord: [batch_idx, start_h, start_w, channel_start] start coords
+    - offsets: [h_offset, w_offset] spatial offsets (i16)
     
     Starting position (the first pixel): (batch_idx, start_h + h_offset, start_w + w_offset, channel_start)
 
@@ -167,6 +171,7 @@ def test_tma_im2col_simple():
 #     Loaded data: pixel 0->1, pixel 1->2, ..., pixel 15->16
 #
 #     Input [1, 4, 4, 32] spatial layout:     Output [16, 32] pixel order:
+#     Channel dimension is contiguous: each pixel stores 32 channels in order.
 #
 #     +----+----+----+----+                   pixel  0 = (H=0,W=0) -> value 1
 #     |  1 |  2 |  3 |  4 |  H=0              pixel  1 = (H=0,W=1) -> value 2
@@ -216,7 +221,8 @@ def test_tma_im2col_padded():
 #   - coord = [0, -1, -1, 0], offsets = [0, 0]
 #
 # Access Boundary with offsets=[0, 0]:
-#   - Lower: [-1, -1], Upper: [3, 3]
+#   - Lower = pixel_box_lower_corner + offsets = [-1, -1] + [0, 0]
+#   - Upper = [H, W] + pixel_box_upper_corner + offsets = [4, 4] + [-1, -1] + [0, 0]
 #   - Result: H in [-1, 3), W in [-1, 3)
 #   - Negative coordinates are outside tensor -> filled with padding (0)
 #
@@ -236,6 +242,7 @@ def test_tma_im2col_padded():
 # ::
 #
 #     Original 4x4 tensor:              Access boundary H in [-1,3), W in [-1,3):
+#     Note: padded cells are not stored in global memory; TMA fills them on load.
 #
 #          W=0  W=1  W=2  W=3                 W=-1  W=0  W=1  W=2
 #         +----+----+----+----+              +----+----+----+----+
@@ -284,8 +291,8 @@ def test_tma_im2col_offset():
 #   - coord = [0, -1, -1, 0], offsets = [1, 1]
 #
 # Access Boundary with offsets=[1, 1]:
-#   - Lower: [-1+1, -1+1] = [0, 0]
-#   - Upper: [4-1+1, 4-1+1] = [4, 4]
+#   - Lower = pixel_box_lower_corner + offsets = [-1, -1] + [1, 1]
+#   - Upper = [H, W] + pixel_box_upper_corner + offsets = [4, 4] + [-1, -1] + [1, 1]
 #   - Result: H in [0, 4), W in [0, 4) -> exactly the original tensor
 #
 # Comparison (Example 2 vs Example 3):
@@ -465,6 +472,8 @@ def test_tma_im2col_multi_batch_padded():
 # Configuration:
 #   - Input: [2, 4, 4, 32] - 2 batches of 4x4 images
 #   - pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]
+#   - Lower = pixel_box_lower_corner + offsets = [-1, -1] + [0, 0]
+#   - Upper = [H, W] + pixel_box_upper_corner + offsets = [4, 4] + [-1, -1] + [0, 0]
 #   - Access boundary per batch: H in [-1, 3), W in [-1, 3) (4x4 shifted region)
 #   - coord = [0, 1, 2, 0] - start at batch 0, H=1, W=2
 #
