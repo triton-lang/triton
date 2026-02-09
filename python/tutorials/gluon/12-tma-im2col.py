@@ -27,7 +27,7 @@ Access Boundary:
     - Lower bound = pixel_box_lower_corner + offsets
     - Upper bound = [H, W] + pixel_box_upper_corner + offsets
     - Bounds are interpreted as half-open: [lower, upper)
-    
+
     The input tensor in global memory is NOT padded. When accessing outside
     [0, 0] to [H-1, W-1], TMA fills with the padding value.
 
@@ -35,7 +35,7 @@ async_copy_global_to_shared_im2col:
     async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
     - coord: [batch_idx, start_h, start_w, channel_start] start coords
     - offsets: [h_offset, w_offset] spatial offsets (i16)
-    
+
     Starting position (the first pixel): (batch_idx, start_h + h_offset, start_w + w_offset, channel_start)
 
 """
@@ -43,6 +43,7 @@ async_copy_global_to_shared_im2col:
 import pytest
 import torch
 import triton
+import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 
@@ -53,6 +54,7 @@ from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier
 def is_hopper_or_newer():
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
+
 
 if __name__ == "__main__" and not is_hopper_or_newer():
     raise RuntimeError("This tutorial requires Hopper or newer NVIDIA GPU")
@@ -65,12 +67,9 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # configuration and load coordinates differ.
 
 
-import triton.language as tl
-
-
 @gluon.jit
-def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: int, coord_c: int,
-                      offset_h: tl.constexpr, offset_w: tl.constexpr):
+def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: int, coord_c: int, offset_h: tl.constexpr,
+                      offset_w: tl.constexpr):
     """Generic im2col kernel with configurable coordinates and offsets."""
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
 
@@ -97,7 +96,7 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
 def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord, offsets):
     """
     Shared function for all im2col examples.
-    
+
     Args:
         title: Description to print
         pixel_box_lower_corner: [H_lo, W_lo] lower boundary for TMA access
@@ -113,15 +112,19 @@ def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord,
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
     in_desc = TensorDescriptorIm2Col(
-        base=inp, shape=list(inp.shape), strides=list(inp.stride()),
-        block_shape=block_shape, layout=layout, padding="zero",
+        base=inp,
+        shape=list(inp.shape),
+        strides=list(inp.stride()),
+        block_shape=block_shape,
+        layout=layout,
+        padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=pixel_box_lower_corner,
         pixel_box_upper_corner=pixel_box_upper_corner,
     )
     out_desc = TensorDescriptor.from_tensor(out, block_shape, layout)
 
-    tma_im2col_kernel[(1,)](in_desc, out_desc, *coord, *offsets, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, *coord, *offsets, num_warps=1)
 
     print(title)
     print("\nLoaded data (pixel_id, value):")
@@ -184,7 +187,6 @@ def test_tma_im2col_simple():
 #     +----+----+----+----+
 #       W=0  W=1  W=2  W=3
 
-
 # %%
 # Example 2: Loading from Padded Region
 # =====================================
@@ -203,8 +205,7 @@ def run_tma_im2col_padded():
         offsets=[0, 0],
     )
     # Expected: row H=-1 all padded, then each row has W=-1 padded
-    expected = torch.tensor([0, 0, 0, 0, 0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11],
-                            device="cuda", dtype=torch.float32)
+    expected = torch.tensor([0, 0, 0, 0, 0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11], device="cuda", dtype=torch.float32)
     torch.testing.assert_close(out[:, 0], expected, atol=0, rtol=0)
 
 
@@ -256,7 +257,6 @@ def test_tma_im2col_padded():
 #         +----+----+----+----+              +----+----+----+----+
 #                                             ^
 #                                          padded (W<0)
-
 
 # %%
 # Example 3: Offset Shifts Access Boundary
@@ -315,7 +315,6 @@ def test_tma_im2col_offset():
 #     Key insight: offsets=[1,1] shifts the 4x4 access window from
 #     the padded region to exactly cover the original tensor data.
 
-
 # %%
 # Example 4: Loading Across Multiple Batches
 # ==========================================
@@ -336,8 +335,12 @@ def run_tma_im2col_multi_batch():
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
     in_desc = TensorDescriptorIm2Col(
-        base=inp, shape=list(inp.shape), strides=list(inp.stride()),
-        block_shape=block_shape, layout=layout, padding="zero",
+        base=inp,
+        shape=list(inp.shape),
+        strides=list(inp.stride()),
+        block_shape=block_shape,
+        layout=layout,
+        padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=[0, 0],
         pixel_box_upper_corner=[0, 0],
@@ -346,7 +349,7 @@ def run_tma_im2col_multi_batch():
 
     # coord=[0, 1, 3, 0] - start from batch 0, H=1, W=3, C=0
     # This is pixel index 1*4 + 3 = 7 in batch 0
-    tma_im2col_kernel[(1,)](in_desc, out_desc, 0, 1, 3, 0, 0, 0, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 3, 0, 0, 0, num_warps=1)
 
     print("Example 4: Loading across multiple batches")
     print("Input shape: [2, 4, 4, 32] (2 batches of 4x4 images)")
@@ -357,8 +360,8 @@ def run_tma_im2col_multi_batch():
         print(f"  pixel {pixel_id:2d}: value {value:2d}")
 
     # Expected: values 8-16 from batch 0, then 17-23 from batch 1
-    expected = torch.tensor([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
-                            device="cuda", dtype=torch.float32)
+    expected = torch.tensor([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], device="cuda",
+                            dtype=torch.float32)
     torch.testing.assert_close(out[:, 0], expected, atol=0, rtol=0)
 
 
@@ -413,7 +416,6 @@ def test_tma_im2col_multi_batch():
 # Key insight: Loading wraps from batch 0 into batch 1 seamlessly,
 # enabling efficient access patterns for convolution operations.
 
-
 # %%
 # Example 5: Multi-Batch with Padded Access Boundary
 # ==================================================
@@ -434,8 +436,12 @@ def run_tma_im2col_multi_batch_padded():
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
     in_desc = TensorDescriptorIm2Col(
-        base=inp, shape=list(inp.shape), strides=list(inp.stride()),
-        block_shape=block_shape, layout=layout, padding="zero",
+        base=inp,
+        shape=list(inp.shape),
+        strides=list(inp.stride()),
+        block_shape=block_shape,
+        layout=layout,
+        padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=[-1, -1],
         pixel_box_upper_corner=[-1, -1],
@@ -443,7 +449,7 @@ def run_tma_im2col_multi_batch_padded():
     out_desc = TensorDescriptor.from_tensor(out, block_shape, layout)
 
     # coord=[0, 1, 2, 0] - start from batch 0, H=1, W=2, C=0
-    tma_im2col_kernel[(1,)](in_desc, out_desc, 0, 1, 2, 0, 0, 0, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 2, 0, 0, 0, num_warps=1)
 
     print("Example 5: Multi-batch with padded access boundary")
     print("Input shape: [2, 4, 4, 32], pixel_box_lower_corner=[-1,-1], "
@@ -456,8 +462,7 @@ def run_tma_im2col_multi_batch_padded():
         print(f"  pixel {pixel_id:2d}: {value}")
 
     # Expected: 7, then padding + data pattern as described in documentation
-    expected = torch.tensor([7, 0, 9, 10, 11, 0, 0, 0, 0, 0, 17, 18, 19, 0, 21, 22],
-                            device="cuda", dtype=torch.float32)
+    expected = torch.tensor([7, 0, 9, 10, 11, 0, 0, 0, 0, 0, 17, 18, 19, 0, 21, 22], device="cuda", dtype=torch.float32)
     torch.testing.assert_close(out[:, 0], expected, atol=0, rtol=0)
 
 
@@ -531,15 +536,13 @@ def test_tma_im2col_multi_batch_padded():
 # (H=-1 or W=-1) are filled with zeros. This is useful for convolution
 # operations that need to handle image boundaries.
 
-
 if __name__ == "__main__":
     run_tma_im2col_simple()
-    print("\n" + "="*50 + "\n")
+    print("\n" + "=" * 50 + "\n")
     run_tma_im2col_padded()
-    print("\n" + "="*50 + "\n")
+    print("\n" + "=" * 50 + "\n")
     run_tma_im2col_offset()
-    print("\n" + "="*50 + "\n")
+    print("\n" + "=" * 50 + "\n")
     run_tma_im2col_multi_batch()
-    print("\n" + "="*50 + "\n")
+    print("\n" + "=" * 50 + "\n")
     run_tma_im2col_multi_batch_padded()
-
