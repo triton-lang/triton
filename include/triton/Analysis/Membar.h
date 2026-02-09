@@ -4,18 +4,26 @@
 #include "Allocation.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include <functional>
 #include <set>
 #include <tuple>
 
 namespace mlir {
 
 class OpBuilder;
+struct AllocationSlice;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
 using MembarFilterFn =
-    std::function<bool(Operation *, Operation *, Allocation *)>;
+    std::function<bool(Operation *, Operation *, bool /*lhsIsRead*/,
+                       bool /*rhsIsRead*/, Allocation *)>;
+
+/// Slice-level filter to allow backends to ignore specific aliasing cases.
+using MembarSliceFilterFn =
+    std::function<bool(const AllocationSlice &, const AllocationSlice &,
+                       bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
 
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
@@ -23,12 +31,14 @@ using MembarFilterFn =
 struct AllocationSlice {
 public:
   // Create allocation slice from a value, collecting subslice offsets
-  AllocationSlice(Value value, Interval<size_t> allocationInterval);
+  AllocationSlice(Value value, Interval<size_t> allocationInterval,
+                  Allocation::BufferId bufferId);
 
   // Builder for accesses that represent accesses to the whole
   // allocation (scratch buffers, ArriveBarrierOp, ..)
   AllocationSlice(Interval<size_t> interval)
-      : allocationInterval(interval), accessTy(nullptr) {}
+      : allocationInterval(interval), accessTy(nullptr),
+        bufferId(Allocation::InvalidBufferId) {}
 
   bool operator<(const AllocationSlice &other) const {
     return asTuple() < other.asTuple();
@@ -43,12 +53,26 @@ public:
   // Returns true if it can't prove the AllocationSlices are disjoint.
   bool intersects(const AllocationSlice &other) const;
 
+  Allocation::BufferId getBufferId() const { return bufferId; }
+
+  AllocationSlice translated(size_t offset,
+                             bool invalidateBufferId = false) const {
+    AllocationSlice shifted = *this;
+    shifted.allocationInterval = Interval<size_t>(
+        allocationInterval.start() + offset, allocationInterval.end() + offset);
+    if (invalidateBufferId)
+      shifted.bufferId = Allocation::InvalidBufferId;
+    return shifted;
+  }
+
   void print(raw_ostream &os) const;
 
 private:
-  std::tuple<Interval<size_t>, const void *, llvm::ArrayRef<int64_t>>
+  std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
+             llvm::ArrayRef<int64_t>>
   asTuple() const {
-    return {allocationInterval, accessTy.getAsOpaquePointer(), subsliceOffsets};
+    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
+            subsliceOffsets};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -56,6 +80,8 @@ private:
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access
   triton::gpu::MemDescType accessTy;
+  // Buffer id for partial sync on wait_barrier deps.
+  Allocation::BufferId bufferId;
 };
 
 struct BlockInfo {
@@ -103,15 +129,19 @@ struct BlockInfo {
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, MembarFilterFn filter,
-                     Allocation *allocation) const {
-    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices, filter,
-                                 allocation) ||
+                     Allocation *allocation,
+                     MembarSliceFilterFn sliceFilter = nullptr) const {
+    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
+                                 /*lhsIsRead=*/false, /*rhsIsRead=*/true,
+                                 filter, sliceFilter, allocation) ||
            /*WAR*/
-           isIntersected(syncReadSlices, other.syncWriteSlices, filter,
-                         allocation) ||
+           isIntersected(syncReadSlices, other.syncWriteSlices,
+                         /*lhsIsRead=*/true, /*rhsIsRead=*/false, filter,
+                         sliceFilter, allocation) ||
            /*WAW*/
-           isIntersected(syncWriteSlices, other.syncWriteSlices, filter,
-                         allocation);
+           isIntersected(syncWriteSlices, other.syncWriteSlices,
+                         /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
+                         sliceFilter, allocation);
   }
 
   /// Clears the slices because a barrier is inserted.
@@ -130,17 +160,42 @@ struct BlockInfo {
 
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
-                     MembarFilterFn filter, Allocation *allocation) const {
+                     bool lhsIsRead, bool rhsIsRead, MembarFilterFn filter,
+                     MembarSliceFilterFn sliceFilter,
+                     Allocation *allocation) const {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
-          for (auto lhsOp : lhs.second)
-            for (auto rhsOp : rhs.second)
-              if (!filter || !filter(lhsOp, rhsOp, allocation))
-                return true;
+          if (!sliceFilter || !sliceFilter(lhs.first, rhs.first, lhsIsRead,
+                                           rhsIsRead, allocation))
+            for (auto lhsOp : lhs.second)
+              for (auto rhsOp : rhs.second)
+                if (!filter ||
+                    !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead, allocation))
+                  return true;
     return false;
   }
 };
+
+inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
+                                              size_t callOffset) {
+  BlockInfo translatedBlockInfo;
+  auto translateSlices = [&](const BlockInfo::SliceMapT &srcSlices,
+                             BlockInfo::SliceMapT &dstSlices) {
+    for (const auto &[slice, ops] : srcSlices) {
+      auto translatedSlice =
+          slice.translated(callOffset, /*invalidateBufferId=*/true);
+      auto &dstOps = dstSlices[translatedSlice];
+      dstOps.insert(ops.begin(), ops.end());
+    }
+  };
+
+  translateSlices(calleeBlockInfo.syncReadSlices,
+                  translatedBlockInfo.syncReadSlices);
+  translateSlices(calleeBlockInfo.syncWriteSlices,
+                  translatedBlockInfo.syncWriteSlices);
+  return translatedBlockInfo;
+}
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis

@@ -578,6 +578,15 @@ void init_gluon_ir(py::module &&m) {
              auto blockTyLayout = blockTy.cloneWithEncoding(layout);
              return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
            })
+      .def("get_tensor_descriptor_im2col_layout_type",
+           [](GluonOpBuilder &self, Type blockType, bool isSigned,
+              Attribute layout) -> Type {
+             auto ctx = self.getContext();
+             auto blockTy = cast<RankedTensorType>(blockType);
+             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
+             return triton::nvidia_gpu::TensorDescIm2ColType::get(
+                 ctx, blockTyLayout);
+           })
       .def("is_convert_layout_trivial",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
              auto dstTy = cast<RankedTensorType>(resultTy);
@@ -832,6 +841,27 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_cluster_wait",
            [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
+      // CLC (Cluster Launch Control) ops - SM100+
+      .def("create_clc_try_cancel",
+           [](GluonOpBuilder &self, Value result, Value mbarrier,
+              bool multicast) {
+             self.create<ttng::CLCTryCancelOp>(result, mbarrier, multicast);
+           })
+      .def("create_clc_load_result",
+           [](GluonOpBuilder &self, Value result) -> Value {
+             auto i64Ty = self.getBuilder().getI64Type();
+             return self.create<ttng::CLCLoadResultOp>(result);
+           })
+      .def("create_clc_is_canceled",
+           [](GluonOpBuilder &self, Value clcResult) -> Value {
+             auto i1Ty = self.getBuilder().getI1Type();
+             return self.create<ttng::CLCIsCanceledOp>(clcResult);
+           })
+      .def("create_clc_get_program_id",
+           [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
+             auto i32Ty = self.getBuilder().getI32Type();
+             return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
+           })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
@@ -863,9 +893,13 @@ void init_gluon_ir(py::module &&m) {
 
       .def("create_async_tma_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-              Value barrier, Value result, Value pred, bool multicast) {
+              Value barrier, Value result, Value pred, bool multicast,
+              std::optional<std::vector<Value>> offsets) {
+             ValueRange offsetsRange =
+                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
              self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                 descPtr, coord, barrier, result, pred, multicast);
+                 descPtr, coord, offsetsRange, barrier, result, pred,
+                 multicast);
            })
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,

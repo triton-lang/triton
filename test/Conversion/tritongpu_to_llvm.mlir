@@ -1840,6 +1840,40 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 }
 
 // -----
+// CHECK-LABEL: @reduce_vec8_axisonly
+// CHECK-COUNT-7: llvm.fadd {{.*}} : f16
+// CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+// CHECK: llvm.return
+#blocked_vec8_axisonly = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_vec8_axisonly(%arg0: tensor<1x8xf16, #blocked_vec8_axisonly>) {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: f16, %b: f16):
+      %c = arith.addf %a, %b : f16
+      tt.reduce.return %c : f16
+    }) : (tensor<1x8xf16, #blocked_vec8_axisonly>) -> tensor<1xf16, #ttg.slice<{dim = 1, parent = #blocked_vec8_axisonly}>>
+    tt.return
+  }
+}
+
+// -----
+// CHECK-LABEL: @reduce_vec8_firstbasis_nonaxis
+// CHECK-COUNT-14: llvm.fadd {{.*}} : f16
+// CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+// CHECK: llvm.return
+#blocked_vec8_firstbasis_nonaxis = #ttg.blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_vec8_firstbasis_nonaxis(%arg0: tensor<64x8xf16, #blocked_vec8_firstbasis_nonaxis>) {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: f16, %b: f16):
+      %c = arith.addf %a, %b : f16
+      tt.reduce.return %c : f16
+    }) : (tensor<64x8xf16, #blocked_vec8_firstbasis_nonaxis>) -> tensor<64xf16, #ttg.slice<{dim = 1, parent = #blocked_vec8_firstbasis_nonaxis}>>
+    tt.return
+  }
+}
+
+// -----
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
@@ -1854,7 +1888,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     tt.return
   }
 }
-
 
 // -----
 

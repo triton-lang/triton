@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
@@ -40,6 +41,7 @@ static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_callable_cls = nullptr;
 static PyObject *tensor_descriptor_cls = nullptr;
 static PyObject *nvidia_tensor_descriptor_cls = nullptr;
+static PyObject *nvidia_tensor_descriptor_im2col_cls = nullptr;
 static PyObject *amd_tensor_descriptor_cls = nullptr;
 static PyObject *canonicalize_dtype_fn = nullptr;
 static PyObject *canonicalize_ptr_dtype_fn = nullptr;
@@ -61,6 +63,7 @@ static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
+static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
@@ -109,6 +112,7 @@ void init_interned_strings() {
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
   block_shape_attr = intern_from_string("block_shape");
+  shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
@@ -126,6 +130,8 @@ bool init_globals() noexcept try {
       import_from("triton.tools.tensor_descriptor", "TensorDescriptor");
   nvidia_tensor_descriptor_cls = import_from(
       "triton.experimental.gluon.nvidia.hopper", "TensorDescriptor");
+  nvidia_tensor_descriptor_im2col_cls = import_from(
+      "triton.experimental.gluon.nvidia.hopper", "TensorDescriptorIm2Col");
   amd_tensor_descriptor_cls =
       import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
 
@@ -179,7 +185,17 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
 
   std::string desc_cstr;
   desc_cstr.reserve(128);
-  desc_cstr = "tensordesc<";
+
+  // Determine im2col by class type (Gluon only).
+  bool is_im2col = false;
+  if (has_layout && nvidia_tensor_descriptor_im2col_cls) {
+    int is_inst = PyObject_IsInstance(arg, nvidia_tensor_descriptor_im2col_cls);
+    if (is_inst < 0)
+      return {};
+    is_im2col = is_inst == 1;
+  }
+
+  desc_cstr = is_im2col ? "tensordesc_im2col<" : "tensordesc<";
   auto dtype_str = from_new_ref(PyObject_Str(type_str));
   if (!dtype_str)
     return {};
@@ -202,6 +218,20 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!block_shape_cstr)
     return {};
   desc_cstr += block_shape_cstr;
+
+  // For im2col mode, append input tensor rank after block_shape
+  // Format: tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
+  // This allows the driver to know the N-dimensional shape/strides to pass
+  if (is_im2col) {
+    auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
+    if (!tensor_shape_obj)
+      return {};
+    Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
+    if (tensor_rank < 0)
+      return {};
+    desc_cstr += ",input_rank=";
+    desc_cstr += std::to_string(tensor_rank);
+  }
 
   if (has_layout) {
     auto layout_obj = from_new_ref(PyObject_GetAttr(arg, layout_attr));
@@ -448,6 +478,11 @@ void init_type_handler_cache() {
   if (nvidia_tensor_descriptor_cls &&
       PyType_Check(nvidia_tensor_descriptor_cls)) {
     type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_cls] =
+        handle_gluon_tensor_descriptor;
+  }
+  if (nvidia_tensor_descriptor_im2col_cls &&
+      PyType_Check(nvidia_tensor_descriptor_im2col_cls)) {
+    type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_im2col_cls] =
         handle_gluon_tensor_descriptor;
   }
   if (amd_tensor_descriptor_cls && PyType_Check(amd_tensor_descriptor_cls)) {

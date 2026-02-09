@@ -28,12 +28,15 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
@@ -348,6 +351,176 @@ struct ArriveBarrierOpConversion
     return success();
   }
 };
+
+// CLC (Cluster Launch Control) Ops - Blackwell SM100+
+struct CLCTryCancelOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCTryCancelOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCTryCancelOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit,
+                           NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCTryCancelOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+
+    // Use elect predicate - only one thread should issue CLC
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+
+    auto numCTAs = ttg::lookupNumCTAs(op);
+    if (numCTAs > 1) {
+      TritonLLVMOpBuilder b(loc, rewriter);
+      auto clusterCtaId = targetInfo->getClusterCTAId(rewriter, loc);
+      pred = b.and_(pred, b.icmp_eq(clusterCtaId, b.i32_val(0)));
+    }
+
+    std::string ptxAsm = "@$2 clusterlaunchcontrol.try_cancel.async.shared::cta"
+                         ".mbarrier::complete_tx::bytes";
+    if (op.getMulticast())
+      ptxAsm += ".multicast::cluster::all";
+    ptxAsm += ".b128 [$0], [$1];";
+
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand(adaptor.getResult(), "r");
+    auto *mbarOp = ptxBuilder.newOperand(adaptor.getMbarrier(), "r");
+    auto *predOp = ptxBuilder.newOperand(pred, "b");
+    clcOp({resultOp, mbarOp, predOp}, /*onlyAttachMLIRArgs=*/true);
+
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct CLCLoadResultOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCLoadResultOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCLoadResultOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCLoadResultOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        typeConverter->convertType(op.getSrc().getType().getElementType()),
+        rewriter);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto i128Ty = rewriter.getIntegerType(128);
+    auto res = b.load(i128Ty, smemObj.getBase());
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct CLCIsCanceledOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCIsCanceledOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCIsCanceledOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCIsCanceledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+    std::string ptxAsm =
+        "clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 $0, $1;";
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand("=b");
+    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
+    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
+
+    Value result =
+        ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffects=*/false);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+};
+
+struct CLCGetProgramIdOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::CLCGetProgramIdOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  CLCGetProgramIdOpConversion(LLVMTypeConverter &typeConverter,
+                              PatternBenefit benefit,
+                              NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::CLCGetProgramIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo->getComputeCapability() < 100) {
+      return op.emitError("CLC operations require SM100+ (Blackwell)");
+    }
+
+    auto loc = op.getLoc();
+
+    const char *dimName = [&] {
+      switch (op.getDim()) {
+      case ProgramIDDim::X:
+        return "x";
+      case ProgramIDDim::Y:
+        return "y";
+      case ProgramIDDim::Z:
+        return "z";
+      }
+      llvm::llvm_unreachable_internal("Invalid program id dim");
+    }();
+
+    auto ptxAsm = ("clusterlaunchcontrol.query_cancel.get_first_ctaid::" +
+                   llvm::Twine(dimName) + ".b32.b128 $0, $1;")
+                      .str();
+
+    PTXBuilder ptxBuilder;
+    auto &clcOp = *ptxBuilder.create(ptxAsm);
+    auto *resultOp = ptxBuilder.newOperand("=r");
+    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
+    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
+
+    Value result =
+        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+
+    // Convert ctaid to clusterid, which is the real program id
+    // Note that all cluster CTAs are distributed in the X dim
+    if (op.getDim() == ProgramIDDim::X) {
+      auto numCTAs = ttg::lookupNumCTAs(op);
+      if (numCTAs > 1) {
+        TritonLLVMOpBuilder b(loc, rewriter);
+        result = b.sdiv(result, b.i32_val(numCTAs));
+      }
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -361,4 +534,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<CLCGetProgramIdOpConversion>(typeConverter, benefit, targetInfo);
 }

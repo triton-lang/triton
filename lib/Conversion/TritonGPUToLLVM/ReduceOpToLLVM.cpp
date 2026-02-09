@@ -1,9 +1,13 @@
 #include "ReduceScanCommon.h"
 
+#include <memory>
 #include <tuple>
 #include <utility>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -29,21 +33,14 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isReduceWithinCTA() &&
-           "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
     unsigned axis = op.getAxis();
 
     auto *ctx = op.getContext();
-    auto kReg = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
 
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
-    regLl = regLl.sublayout({kReg, kLane, kWarp},
-                            to_vector(regLl.getOutDimNames()));
     // Remove broadcasting in registers as SliceLayout removes them
     auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
     if (!removeBroadcast.isIdentity()) {
@@ -61,46 +58,50 @@ public:
     std::tie(regLl, accs) =
         reduceWithinWarps(op, std::move(regLl), std::move(accs), rewriter);
 
-    if (helper.isWarpSynchronous()) {
-      // If all the values to be reduced are within the same warp there is
-      // nothing left to do.
-      packResults(op, accs, rewriter);
-      return success();
-    }
-
     // reducedRegLaneLayout is used in the AllocationAnalysis to get the size
     // of the scratch space.
     assert(regLl ==
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
+    // If we still need to reduce along warps / blocks:
     // Create temporary layout for reduction within warps.
-    LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
+    // By construction of tmpLl, we will iterate at most 2 times, as the maximum
+    // number of warp / block bases is 64 * 16 = 32 * 32
+    // That is, they fit in 2 rounds of warp reductions
+    // Even more, if we do two rounds, getInterLayout will make sure that the
+    // first one does not cross CTAs
+    auto kAxis = *(regLl.getOutDimNames().begin() + axis);
+    auto kBlock = StringAttr::get(ctx, "block");
+    bool lastCvtCrossesCTAs = false;
+    int i = 0;
+    while (regLl.getOutDimSize(kAxis) != 1) {
+      LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
 
-    auto smemBaseOffsets = getSmemBaseOffsets(op, regLl, tmpLl);
-    accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs,
-                               smemBaseOffsets);
+      // Emit a barrier if we are reusing the shmem
+      if (i > 0) {
+        sync(rewriter, loc, lastCvtCrossesCTAs);
+      }
+      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
+      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
 
-    std::tie(tmpLl, accs) =
-        reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
-    // Remove the axis dimension
-    assert(to_vector(tmpLl.getOutDimSizes())[axis] == 1);
-    tmpLl = removeStandardDim(tmpLl, axis);
+      std::tie(regLl, accs) =
+          reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
+      ++i;
+    }
+    assert(i <= 2 && "expected at most 2 rounds of warp reductions");
+    // Remove the axis dimension, which at this point is of size 1
+    regLl = removeStandardDim(regLl, axis);
 
     // Convert to output layout if we didn't fit the warp bases within zero
     // bases in the tmpLl
-    // TODO Prefer tmp layouts that omit this conversion whenever possible
     if (auto resultTy =
             dyn_cast<RankedTensorType>(op.getResult()[0].getType())) {
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
-      outputLayout = outputLayout.sublayout(
-          {kReg, kLane, kWarp}, to_vector(outputLayout.getOutDimNames()));
-      if (tmpLl != outputLayout) {
+      if (regLl != outputLayout) {
         // Reuse the shmem
-        auto b = TritonLLVMOpBuilder(loc, rewriter);
-        sync(rewriter, loc, op);
-        smemBaseOffsets = getSmemBaseOffsets(op, tmpLl, outputLayout);
-        accs = convertLayoutValues(loc, rewriter, op, tmpLl, outputLayout, accs,
-                                   smemBaseOffsets);
+        sync(rewriter, loc, lastCvtCrossesCTAs);
+        accs =
+            convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
     }
 
@@ -110,6 +111,25 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  SmallVector<Value>
+  treeReduceBinary(Location loc, ConversionPatternRewriter &rewriter,
+                   Region &combineOp,
+                   SmallVector<SmallVector<Value>> values) const {
+    // The number of elements is always a power of two
+    assert(llvm::isPowerOf2_64(values.size()) && !values.empty());
+    while (values.size() > 1) {
+      SmallVector<SmallVector<Value>> next;
+      for (size_t i = 0; i + 1 < values.size(); i += 2) {
+        SmallVector<Value> acc = values[i];
+        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
+        next.push_back(std::move(acc));
+      }
+      values = std::move(next);
+    }
+    return values.front();
+  }
+
   void accumulate(Location loc, ConversionPatternRewriter &rewriter,
                   Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
                   Value pred = {}) const {
@@ -134,9 +154,70 @@ private:
   }
 
   void sync(ConversionPatternRewriter &rewriter, Location loc,
-            triton::ReduceOp op) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier(triton::gpu::AddrSpace::Local);
+            bool crossCTA) const {
+    if (crossCTA) {
+      targetInfo.clusterBarrier(loc, rewriter);
+    } else {
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    }
+  }
+
+  void packVectorized(SmallVector<SmallVector<Value>> &accs,
+                      ConversionPatternRewriter &rewriter) const {
+    auto loc = accs.front().front().getLoc();
+    for (auto &acc : accs) {
+      SmallVector<Value> packedAcc;
+      for (unsigned reg = 0; reg < acc.size(); reg += 2) {
+        auto vector = packLLVector(loc, {acc[reg], acc[reg + 1]}, rewriter);
+        packedAcc.emplace_back(std::move(vector));
+      }
+      acc = std::move(packedAcc);
+    }
+  }
+
+  std::unique_ptr<Region> createVectorCombineRegion(
+      Location loc, Type elemTy,
+      ReduceOpHelper::InThreadVectorizeOpKind vectorizeKind,
+      ConversionPatternRewriter &rewriter) const {
+    if (vectorizeKind == ReduceOpHelper::InThreadVectorizeOpKind::None)
+      return nullptr;
+    MLIRContext *ctx = rewriter.getContext();
+    auto vecTy = vec_ty(elemTy, 2);
+
+    auto storage = std::make_unique<Region>();
+    auto *block = new Block();
+    storage->push_back(block);
+    block->addArgument(vecTy, loc);
+    block->addArgument(vecTy, loc);
+
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(block);
+    Value result = ReduceOpHelper::createInThreadVectorizedCombineOp(
+        builder, loc, vectorizeKind, block->getArgument(0),
+        block->getArgument(1));
+    triton::ReduceReturnOp::create(builder, loc, ValueRange{result});
+    return storage;
+  }
+
+  void unpackVectorized(Location loc, SmallVector<SmallVector<Value>> &accs,
+                        ConversionPatternRewriter &rewriter,
+                        Region *reduction) const {
+    for (auto &acc : accs) {
+      SmallVector<Value> unpacked;
+      for (Value val : acc) {
+        auto elems = unpackLLVector(loc, val, rewriter);
+        assert(elems.size() == 2 && "expected a 2-lane packed vector");
+        if (reduction) {
+          SmallVector<Value> cur = {elems[0]};
+          accumulate(loc, rewriter, *reduction, cur, {elems[1]});
+          unpacked.emplace_back(cur[0]);
+        } else {
+          unpacked.emplace_back(elems[0]);
+          unpacked.emplace_back(elems[1]);
+        }
+      }
+      acc = std::move(unpacked);
+    }
   }
 
   // Reduce along op axis for elements that are in the same thread. The
@@ -146,16 +227,25 @@ private:
                       SmallVector<SmallVector<Value>> accs,
                       ConversionPatternRewriter &rewriter) const {
     auto *ctx = op.getContext();
+    auto loc = op.getLoc();
+    unsigned axis = op.getAxis();
     auto kReg = str_attr("register");
     auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, layout);
     auto basesPerDim = linearAttr.basesPerDim(kReg, /*skipBroadcast=*/true);
-    unsigned axisPack = basesPerDim[op.getAxis()];
+    unsigned axisPack = basesPerDim[axis];
     if (axisPack == 1) {
       return {std::move(layout), std::move(accs)};
     }
 
+    ReduceOpHelper helper(op);
+    auto vectorizeKind = helper.getInThreadVectorizeOpKind(
+        axisPack, targetInfo.supportBitwidth16Elementwise(),
+        targetInfo.supportBitwidth32Elementwise());
+    bool vectorize =
+        vectorizeKind != ReduceOpHelper::InThreadVectorizeOpKind::None;
+
     // Bring the registers that move the axis to the front
-    auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, op.getAxis());
+    auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, axis, vectorize);
     if (!perm.isIdentity()) {
       layout = perm.apply(layout);
       for (auto &vals : accs) {
@@ -163,28 +253,57 @@ private:
       }
     }
 
-    // Reduce linearly
-    // TODO Perform a tree reduction
-    SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
-    for (unsigned regBase = 0; regBase < layout.getInDimSize(kReg);
-         regBase += axisPack) {
-      SmallVector<Value> acc;
+    // Pack the inputs into vector values
+    if (vectorize)
+      packVectorized(accs, rewriter);
+
+    // If we pack along the reduction axis we need to process half the registers
+    const auto &regBases = layout.getBases().lookup(kReg);
+    bool packAlongAxis = vectorize && regBases.front()[axis] != 0;
+    if (packAlongAxis)
+      axisPack /= 2;
+
+    // Create the vectorized region if needed
+    auto elemTy =
+        cast<RankedTensorType>(op.getOperandTypes().front()).getElementType();
+    std::unique_ptr<Region> vectorCombineRegion =
+        createVectorCombineRegion(loc, elemTy, vectorizeKind, rewriter);
+    Region &combineRegion =
+        vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
+
+    // Perform a tree reduction
+    unsigned numOperands = accs.size();
+    SmallVector<SmallVector<Value>> reduced(numOperands);
+    unsigned regs = accs.front().size();
+    for (unsigned regBase = 0; regBase < regs; regBase += axisPack) {
+      // Transpose from [opIdx][reg] into [reg][opIdx]
+      SmallVector<SmallVector<Value>> vals;
       for (unsigned i = 0; i < axisPack; ++i) {
-        SmallVector<Value> cur(op.getNumOperands());
-        for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
+        SmallVector<Value> cur(numOperands);
+        for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, cur);
+        vals.push_back(std::move(cur));
       }
-      for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx) {
+      auto acc =
+          treeReduceBinary(loc, rewriter, combineRegion, std::move(vals));
+      for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
     }
     accs = std::move(reduced);
 
+    // Unpack the vector values into the accumulator values
+    // Reduce one last time via the scalar combine op if we packed along the
+    // axis
+    if (vectorize) {
+      Region *reduceAfterUnpacking =
+          packAlongAxis ? &op.getCombineOp() : nullptr;
+      unpackVectorized(loc, accs, rewriter, reduceAfterUnpacking);
+    }
+
     // Update layout killing the axis bases along registers
-    layout =
-        ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(), kReg);
+    layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
     layout = actionRemoveBroadcastedRegs(layout).apply(layout);
     return {std::move(layout), std::move(accs)};
   }
@@ -276,8 +395,7 @@ private:
   convertLayoutValues(Location loc, ConversionPatternRewriter &rewriter,
                       triton::ReduceOp op, const LinearLayout &srcLayout,
                       const LinearLayout &dstLayout,
-                      const SmallVector<SmallVector<Value>> &inVals,
-                      ArrayRef<int64_t> smemBaseOffsets) const {
+                      const SmallVector<SmallVector<Value>> &inVals) const {
     SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
     auto *ctx = rewriter.getContext();
     SmallVector<int64_t> shape;
@@ -289,6 +407,7 @@ private:
     auto baseOffsetAttr = op->getAttrOfType<IntegerAttr>("allocation.offset");
     assert(baseOffsetAttr && "expected allocation.offset on reduce op");
     int64_t baseOffset = baseOffsetAttr.getValue().getZExtValue();
+    auto smemBaseOffsets = getSmemBaseOffsets(op, srcLayout, dstLayout);
     auto offsetTy = IntegerType::get(ctx, 32);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = op.getElementTypes()[i];
@@ -321,9 +440,16 @@ private:
   SmallVector<int64_t> getSmemBaseOffsets(triton::ReduceOp op,
                                           const LinearLayout &srcLayout,
                                           const LinearLayout &dstLayout) const {
-    constexpr int64_t kReduceScratchAlign = 16;
-    auto bytesPerOperand =
-        ReduceOpHelper(op).getScratchBytesForCvt(srcLayout, dstLayout);
+    // Hack:
+    // Here we know that we are never going to use ldmatrix/stmatrix
+    // instructions as by the time we go through shared memory, we have already
+    // reduced all the registers As such, we can use
+    // `getNumScratchElemsSwizzledCvt` which assumes ld.shared/st.shared
+    // instructions
+    // The proper way to lower reduce would be to lower it to:
+    // reduce_threads / reduce_lanes / convert_layout
+    // And let the AllocationAnalysis handle the shared memory allocation
+    // and membar the barriers
     std::vector<unsigned> indices(op.getNumOperands());
     std::iota(indices.begin(), indices.end(), 0);
     auto *ctx = op.getContext();
@@ -337,9 +463,12 @@ private:
     int64_t offset = 0;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
-      offset = llvm::alignTo(offset, kReduceScratchAlign);
       offsets[idx] = offset;
-      offset += bytesPerOperand[idx];
+      auto inputTy = op.getInputTypes()[idx];
+      auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
+                                                 getBitwidth(inputTy)) *
+                   (getBitwidth(inputTy) / 8);
+      offset += bytes;
     }
     return offsets;
   }

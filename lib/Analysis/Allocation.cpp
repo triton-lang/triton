@@ -38,48 +38,30 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
+unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout,
+                                       int bitwidth) {
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
+  auto srcLayoutNoBroadcast =
+      actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
+  auto dstLayoutNoBroadcast =
+      actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
+  auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
+                                        dstLayoutNoBroadcast, bitwidth);
+  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
+  // The smem has the same cta layout as the srcLayout, so we use that instead
+  // We remove the number of elements that are duplicated in the cta layout
+  auto nBlocks = product(triton::gpu::getCTASplitNum(
+      gpu::LinearEncodingAttr::get(ctx, srcLayout)));
+  return smem.getTotalOutDimSize() / (reps * nBlocks);
+}
+
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                        RankedTensorType dstTy) {
-  auto *ctx = srcTy.getContext();
-  auto srcLayout = gpu::toLinearLayout(srcTy);
-  auto dstLayout = gpu::toLinearLayout(dstTy);
-  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
-  dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto bitwidth = getBitwidth(srcTy);
-  auto smem = gpu::optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
-  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  return smem.getTotalOutDimSize() / reps;
+  return getNumScratchElemsSwizzledCvt(gpu::toLinearLayout(srcTy),
+                                       gpu::toLinearLayout(dstTy),
+                                       getBitwidth(srcTy));
 }
-
-namespace {
-constexpr int64_t kReduceScratchAlign = 16;
-
-Type getReduceMemElemTy(Type elemTy, MLIRContext *ctx) {
-  if (elemTy.isIntOrFloat() && elemTy.getIntOrFloatBitWidth() < 8)
-    return IntegerType::get(ctx, 8);
-  return elemTy;
-}
-
-int64_t getReduceScratchSizeBytes(triton::ReduceOp op,
-                                  ArrayRef<unsigned> bytesPerOperand) {
-  std::vector<unsigned> indices(op.getNumOperands());
-  std::iota(indices.begin(), indices.end(), 0);
-  auto *ctx = op.getContext();
-  std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-    auto lhsTy = getReduceMemElemTy(op.getElementTypes()[i], ctx);
-    auto rhsTy = getReduceMemElemTy(op.getElementTypes()[j], ctx);
-    return getIntOrFloatOrPtrBitWidth(lhsTy) >
-           getIntOrFloatOrPtrBitWidth(rhsTy);
-  });
-  // Aling to 16 bytes to allow for vectorisation
-  int64_t offset = 0;
-  for (unsigned idx : indices) {
-    offset += llvm::alignTo(bytesPerOperand[idx], kReduceScratchAlign);
-  }
-  return offset;
-}
-
-} // namespace
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
 // because Triton's block-based programming model ensures that
@@ -107,15 +89,7 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    ReduceOpHelper helper(reduceOp);
-    if (helper.isWarpSynchronous())
-      return 0;
-
-    auto regLl = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(),
-                                                      reduceOp.getAxis());
-    auto tmpLl = ReduceOpHelper::getInterLayout(regLl, reduceOp.getAxis());
-    auto bytesRegToTmp = helper.getScratchBytesForCvt(regLl, tmpLl);
-    return getReduceScratchSizeBytes(reduceOp, bytesRegToTmp);
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     ScanLoweringHelper helper(scanOp);
