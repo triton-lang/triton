@@ -635,11 +635,19 @@ def dot_fma(a, b, acc, _semantic=None):
     assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
     assert a.type.layout.operand_index == 0, "a's operand index must be 0"
     assert b.type.layout.operand_index == 1, "b's operand index must be 1"
+    assert len(acc.shape) == 2 or len(acc.shape) == 3
+    assert len(acc.shape) == len(a.shape) == len(b.shape)
 
-    M, N = acc.shape
-    K = a.shape[1]
-    if M * N * K > 2**19:
-        warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
+    if len(acc.shape) == 3:
+        B, M, N = acc.shape
+        K = a.shape[2]
+        if B * M * N * K > 2**19:
+            warnings.warn(f"Large batched dot FMA instruction size {B}x{M}x{N}x{K} may have slow compile times")
+    else:
+        M, N = acc.shape
+        K = a.shape[1]
+        if M * N * K > 2**19:
+            warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
