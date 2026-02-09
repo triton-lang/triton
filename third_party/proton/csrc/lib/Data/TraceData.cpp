@@ -156,9 +156,13 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
   auto lock = lockIfCurrentOrStaticPhase(phase);
   auto *trace = phasePtrAs<Trace>(phase);
-  const auto parentContextId = (eventId == Data::kRootEntryId)
-                                    ? Trace::TraceContext::RootId
-                                    : eventId;
+  auto parentContextId = 0;
+  if (eventId == Data::kRootEntryId) {
+    parentContextId = Trace::TraceContext::RootId;
+  } else {
+    auto &event = trace->getEvent(eventId);
+    parentContextId = event.contextId;
+  }
   const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
