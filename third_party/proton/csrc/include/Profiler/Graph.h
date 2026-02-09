@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
@@ -21,35 +22,32 @@ class Data;
 class Runtime;
 
 struct GraphState {
-  struct NodeState {
-    // Data -> entry id in the virtual phase static graph.
-    std::map<Data *, size_t> dataToStaticEntryId;
+  struct NodeLaunchState {
     // A unique id for the graph node
     uint64_t nodeId{};
     // Whether the node is missing name
     bool isMissingName{};
     // Whether the node is a metric kernel node
     bool isMetricNode{};
-    // Number of uint64 value words written to MetricBuffer by this node.
-    size_t metricNumWords{};
   };
 
   struct DataLaunchState {
     // Ordered target static entry ids for one Data*.
     std::vector<size_t> targetEntryIds;
-    // Ordered node-state pointers aligned with targetEntryIds.
-    std::vector<const NodeState *> nodeStates;
+    // Ordered node launch metadata aligned with targetEntryIds.
+    std::vector<NodeLaunchState> nodeStates;
   };
 
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
-  // Mapping from node id to node state, has to be ordered based on node id
-  // which is the order of node creation
-  std::map<uint64_t, NodeState> nodeIdToState;
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks. Duplicate targetEntryIds are preserved in
   // order.
   std::map<Data *, DataLaunchState> dataToLaunchState;
+  // Node ids that have launch-state entries, ordered by node creation order.
+  std::set<uint64_t> launchNodeIds;
+  // Per-node metric words for accounting during destroy callbacks.
+  std::map<uint64_t, size_t> nodeIdToMetricNumWords;
   // Identify whether a node is a metric kernel node.
   // NOTE: This set has to be ordered to match the node creation order.
   std::set<uint64_t> metricKernelNodeIds;
