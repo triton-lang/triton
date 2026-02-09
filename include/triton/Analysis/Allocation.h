@@ -5,7 +5,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <limits>
 
@@ -143,6 +142,11 @@ public:
   /// Returns if the given buffer is a virtual buffer.
   bool isVirtualBuffer(BufferId bufferId) const {
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
+  }
+
+  /// Returns if the given buffer is an explicit buffer.
+  bool isExplicitBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Explicit;
   }
 
   /// Returns the size of total shared memory allocated
