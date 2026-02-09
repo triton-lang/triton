@@ -442,6 +442,14 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     grid = (triton.cdiv(M_GEMM, BLOCK_M) * triton.cdiv(N_GEMM, BLOCK_N),)
 
     # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC
+    #
+    # The pixel_box defines the access boundary per batch:
+    #   Lower = pixel_box_lower_corner + offsets
+    #   Upper = [H, W] + pixel_box_upper_corner + offsets
+    # The window size (Upper - Lower) must equal (out_h, out_w) so that
+    # TMA enumerates exactly the output pixel grid per batch.
+    #   window_h = H + upper_h - lower_h = out_h = H + 2*padding - R + 1
+    #   => upper_h = padding - R + 1 (with lower_h = -padding)
     input_block_shape = [BLOCK_M, BLOCK_K]
     input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, gl.float16)
     in_desc = TensorDescriptorIm2Col(
@@ -453,7 +461,7 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
         padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=[-padding, -padding],
-        pixel_box_upper_corner=[-padding, -padding],
+        pixel_box_upper_corner=[padding - R + 1, padding - S + 1],
     )
 
     # TMA tiled descriptor for weight: (Co, R*S*Ci) = (N_GEMM, K_GEMM)
@@ -487,7 +495,7 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
 @pytest.mark.parametrize("N", [1, 128])
 @pytest.mark.parametrize("H,W", [(64, 64)])
 @pytest.mark.parametrize("Ci,Co", [(384, 384)])
-@pytest.mark.parametrize("R,S", [(3, 3)])
+@pytest.mark.parametrize("R,S", [(3, 3), (4, 4), (5, 5)])
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
