@@ -62,7 +62,7 @@ def test_add_metrics(tmp_path: pathlib.Path):
     libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend())
     id1 = libproton.record_scope()
     libproton.enter_scope(id1, "one")
-    libproton.add_metrics(id1, {"a": 1.0, "b": 2.0})
+    libproton.add_metrics(id1, {"a": 1.0, "b": 2.0, "veci": [1, 2, 3], "vecd": [1.0, 2.0, 3.0]})
     libproton.exit_scope(id1, "one")
     libproton.finalize_all("hatchet")
     assert temp_file.exists()
@@ -90,6 +90,6 @@ def test_set_metric_kernels():
 
 
 def test_tensor_metric_construction():
-    metric = libproton.TensorMetric(123, libproton.metric_double_index)
+    metric = libproton.TensorMetric(123, libproton.metric_type_double_index)
     assert metric.ptr == 123
-    assert metric.index == libproton.metric_double_index
+    assert metric.index == libproton.metric_type_double_index

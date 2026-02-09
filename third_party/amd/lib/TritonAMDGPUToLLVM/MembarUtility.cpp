@@ -38,8 +38,8 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
   Value op2Memdesc = getMemdescValue(op2);
   if (!op1Memdesc || !op2Memdesc)
     return false;
-  auto op1BufferIds = allocation->getBufferIds(op1Memdesc);
-  auto op2BufferIds = allocation->getBufferIds(op2Memdesc);
+  auto op1BufferIds = allocation->getAllBufferIdsWithAliases(op1Memdesc);
+  auto op2BufferIds = allocation->getAllBufferIdsWithAliases(op2Memdesc);
 
   // Check if operations access the same buffer
   bool sameBuffer = llvm::any_of(
@@ -64,7 +64,8 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 }
 } // namespace
 
-bool membarFilter(Operation *op1, Operation *op2, Allocation *allocation) {
+bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
+                  bool /*op2IsRead*/, Allocation *allocation) {
   return (filterAsyncLocalLoadsDependencies(op1, op2, allocation) ||
           filterLDSMemoryBarriersDependencies(op1, op2));
 }

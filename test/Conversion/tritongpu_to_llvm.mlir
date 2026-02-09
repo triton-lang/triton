@@ -1827,9 +1827,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 //       CHECK:   nvvm.barrier0
 //       CHECK:   nvvm.shfl.sync bfly
 //       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.barrier0
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sum_reduction(%arg0: tensor<1x1024xi32, #blocked>) {
     %11 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
@@ -1837,6 +1835,40 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
       %15 = arith.addi %arg2, %arg3 : i32
       tt.reduce.return %15 : i32
     }) : (tensor<1x1024xi32, #blocked>) -> tensor<1xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+// CHECK-LABEL: @reduce_vec8_axisonly
+// CHECK-COUNT-7: llvm.fadd {{.*}} : f16
+// CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+// CHECK: llvm.return
+#blocked_vec8_axisonly = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_vec8_axisonly(%arg0: tensor<1x8xf16, #blocked_vec8_axisonly>) {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: f16, %b: f16):
+      %c = arith.addf %a, %b : f16
+      tt.reduce.return %c : f16
+    }) : (tensor<1x8xf16, #blocked_vec8_axisonly>) -> tensor<1xf16, #ttg.slice<{dim = 1, parent = #blocked_vec8_axisonly}>>
+    tt.return
+  }
+}
+
+// -----
+// CHECK-LABEL: @reduce_vec8_firstbasis_nonaxis
+// CHECK-COUNT-14: llvm.fadd {{.*}} : f16
+// CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+// CHECK: llvm.return
+#blocked_vec8_firstbasis_nonaxis = #ttg.blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_vec8_firstbasis_nonaxis(%arg0: tensor<64x8xf16, #blocked_vec8_firstbasis_nonaxis>) {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: f16, %b: f16):
+      %c = arith.addf %a, %b : f16
+      tt.reduce.return %c : f16
+    }) : (tensor<64x8xf16, #blocked_vec8_firstbasis_nonaxis>) -> tensor<64xf16, #ttg.slice<{dim = 1, parent = #blocked_vec8_firstbasis_nonaxis}>>
     tt.return
   }
 }
@@ -1856,7 +1888,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     tt.return
   }
 }
-
 
 // -----
 
@@ -1918,10 +1949,8 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 //  CHECK-LABEL: reduce_md_slice
-//  CHECK: st.shared
-//  CHECK: st.shared
-//  CHECK: ld.shared
-//  CHECK: st.shared
+//  CHECK: llvm.store {{.*}} vector<2xi32>
+//  CHECK: llvm.load {{.*}} vector<2xi32>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
 #sliced = #ttg.slice<{dim = 2, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
@@ -2573,62 +2602,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "cuda:90"} {
+// CHECK: llvm.mlir.global internal constant @tensor_constant_0([0 : i32, 1 : i32, {{.*}}, 15 : i32]) {addr_space = 0 : i32} : !llvm.array<16 x i32>
+
 // CHECK-LABEL: @arith_constant_array
 tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
-  tt.return
-}
-}
-
-// -----
-
-
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @arith_constant_array
-tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
-  tt.return
-}
-}
-
-// -----
-
-
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @arith_constant_array
-tt.func private @arith_constant_array() {
-  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[C1:.+]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[C2:.+]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[C3:.+]] = llvm.mlir.constant(3 : i32) : i32
-  // CHECK: %[[S0:.+]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S1:.+]] = llvm.insertvalue %[[C0]], %[[S0]][0] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S2:.+]] = llvm.insertvalue %[[C1]], %[[S1]][1] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S3:.+]] = llvm.insertvalue %[[C2]], %[[S2]][2] : !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: %[[S4:.+]] = llvm.insertvalue %[[C3]], %[[S3]][3] : !llvm.struct<(i32, i32, i32, i32)>
-  %0 = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32, #blocked>
+  %0 = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : tensor<16xi32, #blocked>
+  // CHECK: nvvm.read.ptx.sreg.tid.x
+  // CHECK: [[ADDR:%.*]] = llvm.mlir.addressof @tensor_constant_0
+  // CHECK: [[OFFSET:%.*]] = llvm.getelementptr [[ADDR]]
+  // CHECK: [[VALUE:%.*]] = llvm.load [[OFFSET]]
+  // CHECK: llvm.insertvalue [[VALUE]], %{{.*}}[0]
   tt.return
 }
 }

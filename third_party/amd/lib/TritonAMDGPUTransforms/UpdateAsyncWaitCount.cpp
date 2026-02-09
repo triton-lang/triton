@@ -1,11 +1,13 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <limits>
 
 // This pass computes, for each AsyncWait, the number of outstanding async
@@ -133,9 +135,13 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
 //      ops already visited with the same number of outstanding ops. This
 //      prevents infinite recursion depths for loops without ops contributing
 // - `countFunc`: called on ops to determine if they contribute to the pathSum
+// - `countCommitGroups`: if true, decrement on AsyncCommitGroupOp (for commit
+//      group counting); if false, decrement numOutstanding when countFunc
+//      returns non-zero (for instruction counting).
 // TODO: walk static loops correctly to avoid conservative loops. (static loops
 // from Gluon are unrolled right now)
 using MemoCache = llvm::DenseSet<std::tuple<Operation *, int, int>>;
+template <bool countCommitGroups>
 int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
                             int numOutstanding, int pathSum, int bestPath,
                             MemoCache &branchStateCache,
@@ -159,9 +165,9 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
   // leading to a higher sum; repeated calls will return monotonically
   // decreasing values
   auto continueWalkFrom = [&](Operation *newCursor) {
-    auto pathResult =
-        computeMinCountBackward(newCursor, cursor, numOutstanding, pathSum,
-                                bestPath, branchStateCache, countFunc);
+    auto pathResult = computeMinCountBackward<countCommitGroups>(
+        newCursor, cursor, numOutstanding, pathSum, bestPath, branchStateCache,
+        countFunc);
     bestPath = std::min(bestPath, pathResult);
     return pathResult;
   };
@@ -259,9 +265,18 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
     }
 
     // Non-control-flow ops: keep walking and accumulate via countFunc
-    pathSum += countFunc(cursor);
-    if (isa<ttg::AsyncCommitGroupOp>(cursor)) {
-      numOutstanding--;
+    int count = countFunc(cursor);
+    pathSum += count;
+
+    // Decrement numOutstanding based on counting mode
+    if constexpr (countCommitGroups) {
+      if (isa<ttg::AsyncCommitGroupOp>(cursor))
+        numOutstanding--;
+    } else {
+      // For instruction counting: decrement when we find an operation that
+      // emits instructions
+      if (count > 0)
+        numOutstanding--;
     }
 
     cameFrom = cursor;
@@ -271,13 +286,27 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
   return std::min(pathSum, bestPath);
 }
 
-// Overload for ease of use with AsyncWait, see documentation above
+// Overload for ease of use with AsyncWait (counts commit groups)
 int computeMinCountBackward(ttg::AsyncWaitOp waitOp,
                             llvm::function_ref<int(Operation *)> countFunc) {
   MemoCache memoCache;
-  return computeMinCountBackward(waitOp, waitOp, waitOp.getNum(), 0,
-                                 std::numeric_limits<int>::max(), memoCache,
-                                 countFunc);
+  return computeMinCountBackward</*countCommitGroups=*/true>(
+      waitOp, waitOp, waitOp.getNum(), 0, std::numeric_limits<int>::max(),
+      memoCache, countFunc);
+}
+
+// Overload for ease of use with AsyncTDMWait (counts TDM instructions)
+int computeMinCountBackward(triton::amdgpu::AsyncTDMWait waitOp,
+                            llvm::function_ref<int(Operation *)> countFunc) {
+  MemoCache memoCache;
+  // `computeMinCountBackward` expects `numOutstanding` to be the number of
+  // outstanding ops to wait on. Since `AsyncTDMWait` counts the number of TDM
+  // ops to wait on, we have to subtract 1 to stop before the n'th op is
+  // reached.
+  int numOutstanding = static_cast<int>(waitOp.getNum()) - 1;
+  return computeMinCountBackward</*countCommitGroups=*/false>(
+      waitOp, waitOp, numOutstanding, 0, std::numeric_limits<int>::max(),
+      memoCache, countFunc);
 }
 
 // Follows the tokens of waitOp or walks the IR backwards from waitOp and
@@ -301,14 +330,10 @@ void updateWaitCount(WaitType waitOp,
       waitCnt = std::min(waitCnt, tokenWaitCnt);
     }
   } else {
-    // For AsyncWait we have to count the actual intrinsics instead of
-    // ttgir ops. For TDM wait this is not required as each tdm load will emit
-    // exactly one tensor load so we can keep the count.
-    if constexpr (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
-      waitCnt = computeMinCountBackward(waitOp, computeCountForOp);
-    } else {
-      waitCnt = waitOp.getNum();
-    }
+    // For tokenless waits we treat `num` as the number:
+    // - ttg.async_wait: number of outstanding commit groups
+    // - amdg.async_tdm_wait: number of outstanding TDM operations
+    waitCnt = computeMinCountBackward(waitOp, computeCountForOp);
   }
 
   if (waitCnt == std::numeric_limits<int>::max()) {
@@ -317,16 +342,20 @@ void updateWaitCount(WaitType waitOp,
   }
 
   if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
-    // Replace ttg.async_wait which counts outstanding commits groups with
-    // amdg.async_wait which counts the number of oustanding
-    // intrinsics
+    // Replace ttg.async_wait which counts outstanding commit groups with
+    // amdg.async_wait which counts the number of outstanding intrinsics
     auto tokens = waitOp.getAsyncToken();
     rewriter.setInsertionPointAfter(waitOp);
     rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
+  } else if (std::is_same_v<WaitType, triton::amdgpu::AsyncTDMWait>) {
+    // Replace amdg.async_tdm_wait (counts TDM operations) with
+    // amdg.async_tdm_intrinsic_wait (counts TDM intrinsics)
+    auto tokens = waitOp.getAsyncToken();
+    rewriter.setInsertionPointAfter(waitOp);
+    rewriter.replaceOpWithNewOp<amdgpu::AsyncTDMIntrinsicWait>(waitOp, tokens,
+                                                               waitCnt);
   } else {
-    // For TDM each TTGIR op will create exactly one intrinsics so we do not use
-    // a separate op
-    rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+    assert(false && "Unsupported wait type");
   }
 }
 
@@ -384,6 +413,47 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     for (auto waitOp : waitOps) {
       IRRewriter builder(waitOp->getContext());
       updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
+    }
+
+    // amdgpu.AsyncTDMWait should only count async tdm ops
+    SmallVector<triton::amdgpu::AsyncTDMWait> waitTDMOps;
+    getOperation()->walk([&](triton::amdgpu::AsyncTDMWait waitOp) {
+      waitTDMOps.push_back(waitOp);
+    });
+
+    DenseMap<Operation *, int> tdmIntrinsicCountCache;
+    auto countTDMInstructions = [&](Operation *op) -> int {
+      auto found = tdmIntrinsicCountCache.find(op);
+      if (found != tdmIntrinsicCountCache.end()) {
+        return found->second;
+      }
+
+      auto v = [&]() -> int {
+        using namespace triton::amdgpu;
+        // Load and store always emit 1 instrinsic
+        if (isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(op)) {
+          return 1;
+        } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
+          // For scatter and gather we need to get the count of TDM intrinsics
+          // based on the row indices tensor type
+          auto rowIndicesType =
+              cast<RankedTensorType>(op->getOperandTypes()[1]);
+          bool use32BitIndices =
+              rowIndicesType.getElementType().getIntOrFloatBitWidth() == 32;
+          size_t numIndices = rowIndicesType.getNumElements();
+          return mlir::LLVM::AMD::getTDMGatherScatterInstrinsicCount(
+              numIndices, use32BitIndices);
+        } else {
+          return 0;
+        }
+      }();
+      tdmIntrinsicCountCache[op] = v;
+      return v;
+    };
+
+    for (auto waitOp : waitTDMOps) {
+      IRRewriter builder(waitOp->getContext());
+      updateWaitCount(waitOp, countTDMInstructions, builder);
     }
   }
 };

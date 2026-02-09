@@ -274,14 +274,15 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
         const dataflow::IntegerValueRangeLattice *lattice =
             getLatticeElementFor(getProgramPointBefore(block), value);
         if (lattice != nullptr && !lattice->getValue().isUninitialized())
-          return getUpper ? lattice->getValue().getValue().smax()
-                          : lattice->getValue().getValue().smin();
+          return getUpper.value_or(false)
+                     ? lattice->getValue().getValue().smax()
+                     : lattice->getValue().getValue().smin();
       }
     }
     if (defaultVal)
       return *defaultVal;
-    return getUpper ? APInt::getSignedMaxValue(width)
-                    : APInt::getSignedMinValue(width);
+    return getUpper.value_or(false) ? APInt::getSignedMaxValue(width)
+                                    : APInt::getSignedMinValue(width);
   };
 
   Block *block = iv->getParentBlock();
@@ -711,23 +712,34 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
 
     unsigned firstIndex = 0;
     if (inputs.size() != lattices.size()) {
+      auto appendNonSuccessorInputs = [&](ValueRange allInputs) {
+        SmallVector<Value> nonSuccessorInputs;
+        SmallVector<dataflow::IntegerValueRangeLattice *> nonSuccessorLattices;
+        auto appendRange = [&](unsigned start, unsigned end) {
+          for (unsigned i = start; i < end; ++i) {
+            nonSuccessorInputs.push_back(allInputs[i]);
+            nonSuccessorLattices.push_back(lattices[i]);
+          }
+        };
+
+        appendRange(0, firstIndex);
+        appendRange(firstIndex + inputs.size(), allInputs.size());
+
+        if (!nonSuccessorInputs.empty())
+          visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
+                                       nonSuccessorLattices);
+      };
+
       if (successor.isParent()) {
         if (!inputs.empty()) {
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         }
-        visitNonControlFlowArguments(
-            branch, successor,
-            branch->getResults().slice(firstIndex, inputs.size()), lattices,
-            firstIndex);
+        appendNonSuccessorInputs(branch->getResults());
       } else {
         if (!inputs.empty()) {
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
         }
-        visitNonControlFlowArguments(
-            branch, successor,
-            successor.getSuccessor()->getArguments().slice(firstIndex,
-                                                           inputs.size()),
-            lattices, firstIndex);
+        appendNonSuccessorInputs(successor.getSuccessor()->getArguments());
       }
     }
 

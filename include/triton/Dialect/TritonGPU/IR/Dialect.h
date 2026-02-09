@@ -294,14 +294,21 @@ bool isInnermostContiguous(MemDescType type, unsigned numElems);
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
+// TMA tensor access modes
+enum class TMAMode {
+  Tiled, // Regular tiled tensor memory access
+  Im2Col // Im2col mode for convolution-friendly access patterns
+};
+
 FailureOr<SmallVector<int64_t>>
 getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                  int swizzleBytes, bool fp4Padded, bool isTransposed,
-                 bool packedSize, function_ref<InFlightDiagnostic()> emitError);
+                 bool packedSize, function_ref<InFlightDiagnostic()> emitError,
+                 TMAMode mode);
 SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
                                       int elementBitWidth, int swizzleBytes,
                                       bool fp4Padded, bool isTransposed,
-                                      bool packedSize);
+                                      bool packedSize, TMAMode mode);
 
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,

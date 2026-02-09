@@ -170,8 +170,8 @@ def topk_torch(
     if apply_softmax:
         y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
     if not has_user_provided_indx:
-        y_indx, sort_indices = torch.sort(y_indx, dim=1)
-        y_vals = torch.gather(y_vals, 1, sort_indices)
+        y_vals, sort_indices = torch.sort(y_vals.float(), dim=1, descending=True, stable=True)
+        y_indx = torch.gather(y_indx, 1, sort_indices)
     y_indx[n_rows:, :] = -1
     rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
     cols = y_indx.reshape(-1)  # 64-bit safe for div/mod

@@ -1,6 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/WarpSpecializeUtility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -11,6 +12,188 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+//===----------------------------------------------------------------------===//
+// lowerWarpSpecializeBarriers
+//===----------------------------------------------------------------------===//
+
+LogicalResult WarpSpecializeBarrierHelper::createBarrier(
+    TritonLLVMIRRewriter &b, unsigned numWarps,
+    std::optional<unsigned> partitionIdx) {
+  FailureOr<Value> handle = getBarrierHandle(b, partitionIdx);
+  if (failed(handle))
+    return failure();
+  createBarrier(b, numWarps, *handle);
+  return success();
+}
+
+static std::string mangleFunctionName(StringRef name) {
+  return (name + "_ws").str();
+}
+
+static LogicalResult lowerBarrier(Operation *op, unsigned numWarps,
+                                  std::optional<unsigned> partitionIdx,
+                                  WarpSpecializeBarrierHelper &barrierHelper) {
+  TritonLLVMIRRewriter b(op->getLoc(), op);
+  if (failed(barrierHelper.createBarrier(b, numWarps, partitionIdx)))
+    return failure();
+  op->erase();
+  return success();
+}
+
+static LogicalResult lowerCallOp(LLVM::CallOp callOp, unsigned numWarps,
+                                 std::optional<unsigned> partitionIdx,
+                                 WarpSpecializeBarrierHelper &barrierHelper) {
+  TritonLLVMIRRewriter b(callOp->getLoc(), callOp);
+  FailureOr<Value> handle = barrierHelper.getBarrierHandle(b, partitionIdx);
+  if (failed(handle))
+    return failure();
+  // Forward the barrier handle.
+  callOp.setCallee(mangleFunctionName(*callOp.getCallee()));
+  callOp.getCalleeOperandsMutable().append(*handle);
+  return success();
+}
+
+static LogicalResult
+lowerKernelBarriers(LLVM::LLVMFuncOp func,
+                    const DenseSet<StringAttr> &innerFunctions,
+                    WarpSpecializeBarrierHelper &barrierHelper) {
+  unsigned defaultNumWarps = lookupNumWarps(func);
+
+  // Turn all barrier ops into warp group barriers.
+  // HACK: Right now, higher-level passes generate all barriers that we
+  // interpret as warp group barriers, but they generate explicit warp group
+  // barriers.
+  SmallVector<WarpSpecializeOp> wsOps;
+  WalkResult result = func.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+    // Walk into default regions but not partition regions.
+    if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op)) {
+      wsOps.push_back(wsOp.getParentOp());
+      return WalkResult::skip();
+    }
+    if (barrierHelper.isBarrierOp(op)) {
+      return WalkResult(lowerBarrier(op, defaultNumWarps, /*partitionIdx=*/{},
+                                     barrierHelper));
+    }
+    if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+      if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+        return WalkResult::advance();
+      return WalkResult(lowerCallOp(callOp, defaultNumWarps,
+                                    /*partitionIdx=*/{}, barrierHelper));
+    }
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted())
+    return failure();
+
+  // Each partition executes simultaneously, so each will get a different
+  // barrier ID, but note this means there is a maximum of 16 barriers.
+  for (WarpSpecializeOp op : wsOps) {
+    for (auto [idx, partition] : llvm::enumerate(op.getPartitionRegions())) {
+      unsigned numWarps = op.getPartitionNumWarps()[idx];
+      WalkResult result = partition->walk([&, idx = idx](Operation *op) {
+        if (barrierHelper.isBarrierOp(op)) {
+          return WalkResult(lowerBarrier(op, numWarps, idx, barrierHelper));
+        }
+        if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+          if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+            return WalkResult::advance();
+          return WalkResult(lowerCallOp(callOp, numWarps, idx, barrierHelper));
+        }
+        return WalkResult::advance();
+      });
+      if (result.wasInterrupted())
+        return failure();
+    }
+  }
+
+  return success();
+}
+
+static LogicalResult
+lowerInnerFunctionBarriers(LLVM::LLVMFuncOp func,
+                           const DenseSet<StringAttr> &innerFunctions,
+                           WarpSpecializeBarrierHelper &barrierHelper) {
+  // Append a barrier handle argument.
+  LLVM::LLVMFunctionType type = func.getFunctionType();
+  SmallVector<Type> newArgTypes = to_vector(type.getParams());
+  newArgTypes.push_back(barrierHelper.getBarrierHandleType(type.getContext()));
+  func.setFunctionType(LLVM::LLVMFunctionType::get(
+      type.getReturnType(), newArgTypes, type.isVarArg()));
+  Value handle = func.getBody().addArgument(newArgTypes.back(), func.getLoc());
+
+  // Mangle the function to distinguish it from non-warp-specialized versions.
+  func.setSymName(mangleFunctionName(func.getSymName()));
+  if (ArrayAttr argAttrs = func.getArgAttrsAttr()) {
+    SmallVector<Attribute> newArgAttrs = to_vector(argAttrs.getValue());
+    newArgAttrs.push_back(DictionaryAttr::get(func.getContext(), {}));
+    func.setArgAttrsAttr(ArrayAttr::get(func.getContext(), newArgAttrs));
+  }
+
+  // Lower barrier ops.
+  auto numWarpsAttr = func->getAttrOfType<IntegerAttr>("ws_num_warps");
+  if (!numWarpsAttr) {
+    return func.emitError("function missing '") << "ws_num_warps"
+                                                << "' attribute";
+  }
+  unsigned numWarps = numWarpsAttr.getInt();
+
+  func.walk([&](Operation *op) {
+    if (barrierHelper.isBarrierOp(op)) {
+      TritonLLVMIRRewriter b(op->getLoc(), op);
+      barrierHelper.createBarrier(b, numWarps, handle);
+      op->erase();
+    } else if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
+      if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
+        return;
+      callOp.setCallee(mangleFunctionName(*callOp.getCallee()));
+      callOp.getCalleeOperandsMutable().append(handle);
+    }
+  });
+
+  return success();
+}
+
+LogicalResult mlir::triton::lowerWarpSpecializeBarriers(
+    ModuleOp module, WarpSpecializeBarrierHelper &barrierHelper) {
+  SmallVector<LLVM::LLVMFuncOp> wsKernels;
+  // Find all kernels and the warp specialize ops in them.
+  for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
+    WalkResult result =
+        func.walk([&](WarpSpecializeOp op) { return WalkResult::interrupt(); });
+    // Nothing to do. This kernel is not warp specialized.
+    if (!result.wasInterrupted())
+      continue;
+    if (func.getLinkage() != LLVM::Linkage::External) {
+      return func.emitError(
+          "only top-level kernel functions can be warp-specialized");
+    }
+    wsKernels.push_back(func);
+  }
+  // No warp specialization found.
+  if (wsKernels.empty())
+    return success();
+
+  DenseSet<StringAttr> innerFunctions;
+  for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
+    if (func.getLinkage() != LLVM::Linkage::External)
+      innerFunctions.insert(func.getSymNameAttr());
+  }
+
+  for (LLVM::LLVMFuncOp func : wsKernels) {
+    if (failed(lowerKernelBarriers(func, innerFunctions, barrierHelper)))
+      return failure();
+  }
+
+  for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
+    if (func.getLinkage() == LLVM::Linkage::External)
+      continue;
+    if (failed(lowerInnerFunctionBarriers(func, innerFunctions, barrierHelper)))
+      return failure();
+  }
+
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // convertOpTypes
