@@ -119,9 +119,9 @@ public:
     std::unordered_map<std::string_view, size_t> childIndex = {};
     std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
     std::map<std::string, FlexibleMetric> flexibleMetrics = {};
-    std::map<size_t, std::map<MetricKind, std::unique_ptr<Metric>>>
+    std::unordered_map<size_t, std::map<MetricKind, std::unique_ptr<Metric>>>
         linkedTargetMetrics = {};
-    std::map<size_t, std::map<std::string, FlexibleMetric>>
+    std::unordered_map<size_t, std::map<std::string, FlexibleMetric>>
         linkedTargetFlexibleMetrics = {};
     friend class Tree;
   };
