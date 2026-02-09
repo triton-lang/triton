@@ -128,6 +128,102 @@ def test_ravel(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [(8, 16), (16, 8)])
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("keep_dims", [False, True])
+def test_logsumexp(M, N, axis, keep_dims, device):
+
+    @triton.jit
+    def triton_logsumexp(out_ptr, x_ptr, stride_xm, M: tl.constexpr, N: tl.constexpr, axis: tl.constexpr,
+                         keep_dims: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs = offs_m[:, None] * stride_xm + offs_n[None, :]
+        x = tl.load(x_ptr + offs)
+        y = tl.logsumexp(x, axis=axis, keep_dims=keep_dims)
+        y = tl.ravel(y)
+        out_size: tl.constexpr = N if axis == 0 else M
+        tl.store(out_ptr + tl.arange(0, out_size), y)
+
+    x = torch.randn((M, N), device=device, dtype=torch.float32)
+    out_size = N if axis == 0 else M
+    out = torch.empty((out_size, ), device=device, dtype=torch.float32)
+    ref = torch.logsumexp(x, dim=axis, keepdim=keep_dims).reshape(-1)
+    triton_logsumexp[(1, )](out, x, x.stride(0), M, N, axis, keep_dims)
+    torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.interpreter
+def test_logsumexp_default_dim(device):
+
+    @triton.jit
+    def triton_logsumexp_default_dim(out_ptr, x_ptr, stride_xm, M: tl.constexpr, N: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs = offs_m[:, None] * stride_xm + offs_n[None, :]
+        x = tl.load(x_ptr + offs)
+        y = tl.logsumexp(x)
+        tl.store(out_ptr + tl.arange(0, N), y)
+
+    M, N = 8, 16
+    x = torch.randn((M, N), device=device, dtype=torch.float32)
+    out = torch.empty((N, ), device=device, dtype=torch.float32)
+    ref = torch.logsumexp(x, dim=0)
+    triton_logsumexp_default_dim[(1, )](out, x, x.stride(0), M, N)
+    torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [(8, 16), (16, 8)])
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_logcumsumexp(M, N, axis, reverse, device):
+
+    @triton.jit
+    def triton_logcumsumexp(out_ptr, x_ptr, stride_xm, M: tl.constexpr, N: tl.constexpr, axis: tl.constexpr,
+                            reverse: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs = offs_m[:, None] * stride_xm + offs_n[None, :]
+        x = tl.load(x_ptr + offs)
+        y = tl.logcumsumexp(x, axis=axis, reverse=reverse)
+        tl.store(out_ptr + offs, y)
+
+    x = torch.randn((M, N), device=device, dtype=torch.float32)
+    x[:, 0] = float("-inf")
+    out = torch.empty_like(x)
+
+    if reverse:
+        ref = torch.logcumsumexp(torch.flip(x, dims=(axis, )), dim=axis)
+        ref = torch.flip(ref, dims=(axis, ))
+    else:
+        ref = torch.logcumsumexp(x, dim=axis)
+
+    triton_logcumsumexp[(1, )](out, x, x.stride(0), M, N, axis, reverse)
+    torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.interpreter
+def test_logcumsumexp_default_axis(device):
+
+    @triton.jit
+    def triton_logcumsumexp_default_axis(out_ptr, x_ptr, stride_xm, M: tl.constexpr, N: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs = offs_m[:, None] * stride_xm + offs_n[None, :]
+        x = tl.load(x_ptr + offs)
+        y = tl.logcumsumexp(x)
+        tl.store(out_ptr + offs, y)
+
+    M, N = 8, 16
+    x = torch.randn((M, N), device=device, dtype=torch.float32)
+    out = torch.empty_like(x)
+    ref = torch.logcumsumexp(x, dim=0)
+    triton_logcumsumexp_default_axis[(1, )](out, x, x.stride(0), M, N)
+    torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("size_i, size_j, size_g", [[5, 7, 3]])
 def test_swizzle2d(size_i, size_j, size_g, device):
 

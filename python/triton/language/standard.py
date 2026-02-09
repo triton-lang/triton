@@ -66,6 +66,30 @@ def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
 
 @core._tensor_member_fn
 @jit
+def logsumexp(x, axis=None, keep_dims=False):
+    """
+    Computes the log-sum-exp reduction of :code:`x` along :code:`axis` in a numerically stable way.
+
+    :param x: the input values
+    :type x: Block
+    :param axis: the dimension along which to reduce. If :code:`None`, reduces along dimension 0.
+    :type axis: int
+    :param keep_dims: whether to keep reduced dimensions with size 1
+    :type keep_dims: bool
+    """
+    if axis is None:
+        _axis: core.constexpr = 0
+    else:
+        _axis: core.constexpr = axis
+    x_max = max(x, _axis, keep_dims=True)
+    ret = x_max + math.log(sum(math.exp(x - x_max), _axis, keep_dims=True))
+    if not keep_dims:
+        ret = squeeze(ret, _axis)
+    return ret
+
+
+@core._tensor_member_fn
+@jit
 def ravel(x, can_reorder=False):
     """
     Returns a contiguous flattened view of :code:`x`.
@@ -263,6 +287,13 @@ def _sum_combine(a, b):
     return a + b
 
 
+@jit
+def _logaddexp_combine(a, b):
+    m = core.maximum(a, b)
+    # Avoid inf-inf in the subtraction path when both inputs are -inf.
+    return core.where(m == -float("inf"), m, m + math.log(math.exp(a - m) + math.exp(b - m)))
+
+
 # sum
 
 
@@ -341,6 +372,17 @@ def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
         input = input.to(out_dtype)
 
     return core.associative_scan(input, axis, _sum_combine, reverse)
+
+
+@core._tensor_member_fn
+@jit
+@core._add_scan_docstr("logcumsumexp")
+def logcumsumexp(input, axis=0, reverse=False):
+    input = core._promote_bfloat16_to_float32(input)
+    core.static_assert(input.type.scalar.is_floating(), "logcumsumexp only supported for floating types")
+    if core.constexpr(input.dtype.primitive_bitwidth) < 32:
+        input = input.to(core.float32)
+    return core.associative_scan(input, axis, _logaddexp_combine, reverse)
 
 
 # cumprod

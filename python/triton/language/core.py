@@ -1224,6 +1224,9 @@ class tensor(base_value):
     def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
         ...
 
+    def logsumexp(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
     def ravel(self) -> tensor:
         ...
 
@@ -1249,6 +1252,9 @@ class tensor(base_value):
         ...
 
     def cumsum(self, axis=0, reverse=False) -> tensor:
+        ...
+
+    def logcumsumexp(self, axis=0, reverse=False) -> tensor:
         ...
 
     def cumprod(self, axis=0, reverse=False) -> tensor:
