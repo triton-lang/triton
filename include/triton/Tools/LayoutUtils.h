@@ -185,13 +185,6 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
 // Given a layout mapping onto dim0..dimn, remove a dimension `dim`
 // and rename the rest as dim0..dimn-1
 LinearLayout removeStandardDim(const LinearLayout &layout, int dim);
-
-// Given a base linear layout for a single partition piece, construct the full
-// partitioned linear layout.
-LinearLayout constructPartitionedLayout(const LinearLayout &baseLayout,
-                                        unsigned numPartitions,
-                                        unsigned numGroups,
-                                        unsigned partitionDim);
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

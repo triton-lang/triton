@@ -615,6 +615,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
+// cvt: Maps (reg, lane, warp, block) → (offset[, partition]).
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load

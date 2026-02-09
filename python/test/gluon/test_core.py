@@ -3529,7 +3529,7 @@ def test_clc_basic(num_ctas):
         if is_cancelled[pid]:
             assert not was_launched[program_ids[pid]]
 
-            
+
 @pytest.mark.skipif(not is_hip_rdna4(), reason="PartitionedSharedLayout only supported on AMD gfx1250")
 @pytest.mark.parametrize("M, K", [(64, 32), (128, 64)])
 @pytest.mark.parametrize("num_partitions", [2, 4])

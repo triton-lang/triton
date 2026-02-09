@@ -1179,12 +1179,8 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
 LinearLayout
 partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
                                 PartitionedSharedEncodingAttr partitioned) {
-  MLIRContext *ctx = partitioned.getContext();
   unsigned numLogicalPieces = partitioned.getNumLogicalPieces();
-  unsigned numPartitions = partitioned.getNumPartitions();
-  unsigned numGroups = partitioned.getNumGroups();
   unsigned partitionDim = partitioned.getPartitionDim();
-  auto partitionLayout = partitioned.getPartitionLayout();
 
   // Each logical piece has this size along the partition dimension
   int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
@@ -1194,11 +1190,27 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   partitionShape[partitionDim] = pieceSize;
 
   // baseLayout maps (offset, block) -> coordinates within ONE piece.
-  // Output size along partitionDim = pieceSize.
-  LinearLayout baseLayout = toLinearLayout(partitionShape, partitionLayout);
+  // For padded partition layouts, use the linear component (without padding).
+  auto partitionLayout = partitioned.getPartitionLayout();
+  LinearLayout baseLayout =
+      isa<PaddedSharedEncodingAttr>(partitionLayout)
+          ? cast<PaddedSharedEncodingAttr>(partitionLayout).getLinearComponent()
+          : toLinearLayout(partitionShape, partitionLayout);
 
-  return constructPartitionedLayout(baseLayout, numPartitions, numGroups,
-                                    partitionDim);
+  auto *ctx = partitioned.getContext();
+  auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
+
+  // partLayout maps "partition" -> piece selection along partitionDim.
+  auto kPartition = StringAttr::get(ctx, "partition");
+  LinearLayout partLayout = LinearLayout::identity1D(
+      partitioned.getNumPartitions(), kPartition, outDimNames[partitionDim]);
+
+  // Extend "offset" to address across groups.
+  auto kOffset = StringAttr::get(ctx, "offset");
+  LinearLayout extension = LinearLayout::identity1D(
+      partitioned.getNumGroups(), kOffset, outDimNames[partitionDim]);
+
+  return baseLayout * partLayout * extension;
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
@@ -1230,6 +1242,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else if (auto partitioned =
                    dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
+      assert(!isa<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout()) &&
+             "toLinearLayout does not support partitioned layouts wrapping "
+             "padded layouts; use paddedLinearLayout instead");
       result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
@@ -1288,12 +1303,8 @@ LinearLayout paddedLinearLayout(MemDescType type) {
   }
 
   auto partitioned = cast<PartitionedSharedEncodingAttr>(encoding);
-  auto padded =
-      cast<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout());
-  LinearLayout baseLayout = padded.getLinearComponent();
-  return constructPartitionedLayout(baseLayout, partitioned.getNumPartitions(),
-                                    partitioned.getNumGroups(),
-                                    partitioned.getPartitionDim());
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return partitionedSharedToLinearLayout(shape, partitioned);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

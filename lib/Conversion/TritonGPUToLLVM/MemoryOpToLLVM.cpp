@@ -27,12 +27,9 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
   bool isScatter = !storeVals.empty();
 
   // Get the shared memory layout (linear component for padded layouts)
-  LinearLayout sharedLayout;
-  if (isPaddedEncoding(memDescTy.getEncoding())) {
-    sharedLayout = paddedLinearLayout(memDescTy);
-  } else {
-    sharedLayout = toLinearLayout(memDescTy);
-  }
+  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
   LinearLayout invSharedLayout = sharedLayout.invert();
 
   // Get layout dimension names for all dims
@@ -122,19 +119,6 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
   return results;
 }
 
-// Compute the distributed-to-shared memory layout conversion based on the
-// encoding type (padded, partitioned with padded sublayout, or standard linear
-// layouts).
-static LinearLayout computeDistributedToSharedLayout(MemDescType memDescTy,
-                                                     LinearLayout regLayout) {
-  if (isPaddedEncoding(memDescTy.getEncoding())) {
-    auto sharedLL = paddedLinearLayout(memDescTy);
-    return regLayout.invertAndCompose(sharedLL);
-  }
-  auto sharedLayout = toLinearLayout(memDescTy);
-  return regLayout.invertAndCompose(sharedLayout);
-}
-
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
@@ -144,13 +128,12 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto regTy = cast<RankedTensorType>(regVal.getType());
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto kReg = str_attr("register");
-  auto kLane = str_attr("lane");
-  auto kWarp = str_attr("warp");
-  auto kOffset = str_attr("offset");
   auto regLayout = toLinearLayout(regTy);
+  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
+  auto cvt = regLayout.invertAndCompose(sharedLayout);
 
-  LinearLayout cvt = computeDistributedToSharedLayout(memDescTy, regLayout);
   auto kBlock = str_attr("block");
   // We could support it by removing this check if we ever want to
   if (!cvt.isTrivialOver({kBlock})) {
@@ -273,14 +256,12 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto kReg = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
-    auto kOffset = str_attr("offset");
-    auto kPartition = str_attr("partition");
     auto regLayout = toLinearLayout(regTy);
+    auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
+                            ? paddedLinearLayout(memDescTy)
+                            : toLinearLayout(memDescTy);
+    auto cvt = regLayout.invertAndCompose(sharedLayout);
 
-    LinearLayout cvt = computeDistributedToSharedLayout(memDescTy, regLayout);
     auto kBlock = str_attr("block");
     // We could support it by removing this check if we ever want to
     if (!cvt.isTrivialOver({kBlock})) {

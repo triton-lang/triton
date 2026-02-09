@@ -563,25 +563,4 @@ LinearLayout removeStandardDim(const LinearLayout &layout, int dim) {
   return LinearLayout(newLayout.getBases(), dimSizes, /*isSurjective*/ false);
 }
 
-LinearLayout constructPartitionedLayout(const LinearLayout &baseLayout,
-                                        unsigned numPartitions,
-                                        unsigned numGroups,
-                                        unsigned partitionDim) {
-  auto *ctx = baseLayout.getOutDimNames().begin()->getContext();
-  auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
-
-  // partLayout maps "partition" -> piece selection along partitionDim.
-  auto kPartition = StringAttr::get(ctx, "partition");
-  LinearLayout partLayout = LinearLayout::identity1D(numPartitions, kPartition,
-                                                     outDimNames[partitionDim]);
-  auto groupLayout = baseLayout * partLayout;
-
-  // Extend "offset" to address across groups.
-  auto kOffset = StringAttr::get(ctx, "offset");
-  LinearLayout extension =
-      LinearLayout::identity1D(numGroups, kOffset, outDimNames[partitionDim]);
-
-  return groupLayout * extension;
-}
-
 } // namespace mlir::triton

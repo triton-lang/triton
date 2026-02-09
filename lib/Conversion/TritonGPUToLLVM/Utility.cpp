@@ -613,24 +613,30 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
          "smemBases size must match partition dimension size");
   bool isPartitioned = smemBases.size() > 1;
 
-  // Extract the layout for vectorization analysis.
+  // Extract the partition sublayout before stripping it for vectorization.
   auto inDimNames = to_vector(cvt.getInDimNames());
-  // Remove kPartition
+  LinearLayout partitionLayout;
+  Value basesVec;
+  if (isPartitioned) {
+    partitionLayout = cvt.sublayout(inDimNames, {kPartition});
+    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
+  }
+
+  // Strip kPartition output for vectorization analysis.
   SmallVector<StringAttr> outDims = to_vector(cvt.getOutDimNames());
   llvm::erase(outDims, kPartition);
-  LinearLayout vectCvt = cvt.sublayout(inDimNames, outDims);
+  cvt = cvt.sublayout(inDimNames, outDims);
 
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, vectCvt, bitwidth, maybeMaxVecElems);
+      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
 
-  vectCvt = permutation.apply(vectCvt);
   cvt = permutation.apply(cvt);
   if (isStore) {
     vals = permutation.apply(vals);
   }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
-  auto quot = divideLeft(vectCvt, tile);
+  auto quot = divideLeft(cvt, tile);
   assert(quot.has_value() && "cvt must be divisible by tile");
   LinearLayout reps = zerosLike(tile) * *quot;
   assert(reps.hasInDim(kBlock));
@@ -642,19 +648,13 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto [nAdditive, permStrides] =
       actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
   reps = permStrides.apply(reps);
-  cvt = permStrides.apply(cvt);
 
+  if (isPartitioned) {
+    partitionLayout = permutation.apply(partitionLayout);
+    partitionLayout = permStrides.apply(partitionLayout);
+  }
   if (isStore) {
     vals = permStrides.apply(vals);
-  }
-
-  // For partitioned tensors, we need to compute the partition index
-  // dynamically and select from multiple base pointers.
-  LinearLayout partitionLayout;
-  Value basesVec;
-  if (isPartitioned) {
-    partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // PTX expects the address increments to be done in bytes
@@ -710,7 +710,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
 
       // Select the appropriate base pointer for partitioned tensors
-      Value baseToUse = smemBases[0];
+      Value smemBase = smemBases[0];
       if (isPartitioned) {
         // Compute the partition index dynamically.
         auto partitionResult = applyLinearLayout(loc, rewriter, partitionLayout,
@@ -719,14 +719,14 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                                   {kWarp, warpId},
                                                   {kBlock, blockId}});
         Value partitionIdx = partitionResult[0].second;
-        baseToUse = b.extract_element(basesVec, partitionIdx);
+        smemBase = b.extract_element(basesVec, partitionIdx);
       }
 
       std::optional<Value> innerCtaOffset;
       if (useBlockId) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
       }
-      auto vecAddr = b.gep(smemPtrTy, i8_ty, baseToUse, innerOffset,
+      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
       llvm::append_range(outVals, lowerInst(rewriter, loc, vals, vecAddr, i + j,
                                             vecTy, innerCtaOffset));
