@@ -19,7 +19,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_commit,
 )
 
-
 # ===-----------------------------------------------------------------------===#
 # Utilities
 # ===-----------------------------------------------------------------------===#
@@ -82,10 +81,8 @@ class ConvConfig:
     num_warps: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, N, H, W, Ci, Co, R, S, out_h, out_w,
-                 stride_h, stride_w, pad_h, pad_w,
-                 output_stride_n, output_stride_h, output_stride_w,
-                 BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, num_buffers, num_warps):
+    def __init__(self, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w, output_stride_n,
+                 output_stride_h, output_stride_w, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, num_buffers, num_warps):
         self.N = gl.constexpr(N)
         self.H = gl.constexpr(H)
         self.W = gl.constexpr(W)
@@ -170,8 +167,7 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
 
     @gluon.constexpr_function
-    def __init__(self, config, in_desc, weight_desc, output_ptr,
-                 a_bufs, b_bufs, load_empty_bars, load_ready_bars,
+    def __init__(self, config, in_desc, weight_desc, output_ptr, a_bufs, b_bufs, load_empty_bars, load_ready_bars,
                  acc_bufs, acc_empty_bars, acc_ready_bars):
         self.config = config
         self.in_desc = in_desc
@@ -195,7 +191,6 @@ class PartitionArgs:
 def load_partition(p):
     """Load partition: issues TMA copies for input (im2col) and weight tiles."""
     config = p.config
-    BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
     BLOCK_K: gl.constexpr = config.BLOCK_K
 
@@ -228,7 +223,10 @@ def load_partition(p):
         # Input tile via TMA im2col (offsets must be i16)
         tma.async_copy_global_to_shared_im2col(
             p.in_desc,
-            [batch_id, out_y * config.stride_h - config.pad_h, out_x * config.stride_w - config.pad_w, iter_ci * BLOCK_K],
+            [
+                batch_id, out_y * config.stride_h - config.pad_h, out_x * config.stride_w - config.pad_w,
+                iter_ci * BLOCK_K
+            ],
             [iter_r.to(tl.int16), iter_s.to(tl.int16)],
             ready_bar,
             p.a_bufs.index(index),
@@ -266,8 +264,7 @@ def mma_partition(p):
         mbarrier.wait(p.load_ready_bars.index(index), load_phase)
 
         # MMA: A is [M, K], B in smem is [N, K] so permute to [K, N]
-        tcgen05_mma(p.a_bufs.index(index), p.b_bufs.index(index).permute((1, 0)),
-                    acc_buf, use_acc=use_acc)
+        tcgen05_mma(p.a_bufs.index(index), p.b_bufs.index(index).permute((1, 0)), acc_buf, use_acc=use_acc)
 
         # Signal that load buffers are consumed
         tcgen05_commit(p.load_empty_bars.index(index))
@@ -295,8 +292,7 @@ def epilogue_partition(p):
     c_rows_layout: gl.constexpr = gl.SliceLayout(dim=1, parent=c_layout)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(block=(128, BLOCK_N), col_stride=1)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, config.num_warps)
+    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, config.num_warps)
 
     # Wait for accumulator to be ready
     mbarrier.wait(p.acc_ready_bars.index(0), phase=0)
@@ -317,10 +313,8 @@ def epilogue_partition(p):
     c_out_y = c_rem // config.out_w
     c_out_x = c_rem % config.out_w
 
-    c_offsets = (c_batch[:, None] * config.output_stride_n +
-                 c_out_y[:, None] * config.output_stride_h +
-                 c_out_x[:, None] * config.output_stride_w +
-                 offs_n[None, :])
+    c_offsets = (c_batch[:, None] * config.output_stride_n + c_out_y[:, None] * config.output_stride_h +
+                 c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
     c_mask = (offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM)
 
     fence_async_shared()
@@ -342,14 +336,28 @@ def epilogue_partition(p):
 
 @gluon.jit
 def conv2d_im2col_kernel(
-    in_desc, weight_desc, output,
-    N: gl.constexpr, H: gl.constexpr, W: gl.constexpr, Ci: gl.constexpr,
-    Co: gl.constexpr, R: gl.constexpr, S: gl.constexpr,
-    out_h: gl.constexpr, out_w: gl.constexpr,
-    output_stride_n: gl.constexpr, output_stride_h: gl.constexpr, output_stride_w: gl.constexpr,
-    stride_h: gl.constexpr, stride_w: gl.constexpr,
-    pad_h: gl.constexpr, pad_w: gl.constexpr,
-    BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
+    in_desc,
+    weight_desc,
+    output,
+    N: gl.constexpr,
+    H: gl.constexpr,
+    W: gl.constexpr,
+    Ci: gl.constexpr,
+    Co: gl.constexpr,
+    R: gl.constexpr,
+    S: gl.constexpr,
+    out_h: gl.constexpr,
+    out_w: gl.constexpr,
+    output_stride_n: gl.constexpr,
+    output_stride_h: gl.constexpr,
+    output_stride_w: gl.constexpr,
+    stride_h: gl.constexpr,
+    stride_w: gl.constexpr,
+    pad_h: gl.constexpr,
+    pad_w: gl.constexpr,
+    BLOCK_M: gl.constexpr,
+    BLOCK_N: gl.constexpr,
+    BLOCK_K: gl.constexpr,
     GROUP_SIZE_M: gl.constexpr,
     num_buffers: gl.constexpr,
     num_warps: gl.constexpr,
@@ -362,10 +370,28 @@ def conv2d_im2col_kernel(
         K = R * S * Ci          (reduction over filter x input channels)
     """
     config = ConvConfig(
-        N, H, W, Ci, Co, R, S, out_h, out_w,
-        stride_h, stride_w, pad_h, pad_w,
-        output_stride_n, output_stride_h, output_stride_w,
-        BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, num_buffers, num_warps,
+        N,
+        H,
+        W,
+        Ci,
+        Co,
+        R,
+        S,
+        out_h,
+        out_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        output_stride_n,
+        output_stride_h,
+        output_stride_w,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        GROUP_SIZE_M,
+        num_buffers,
+        num_warps,
     )
 
     # Allocate shared memory for multi-buffered loads
@@ -393,15 +419,23 @@ def conv2d_im2col_kernel(
     mbarrier.init(acc_ready_bars.index(0), count=1)
 
     p = PartitionArgs(
-        config, in_desc, weight_desc, output,
-        a_bufs, b_bufs, load_empty_bars, load_ready_bars,
-        acc_bufs, acc_empty_bars, acc_ready_bars,
+        config,
+        in_desc,
+        weight_desc,
+        output,
+        a_bufs,
+        b_bufs,
+        load_empty_bars,
+        load_ready_bars,
+        acc_bufs,
+        acc_empty_bars,
+        acc_ready_bars,
     )
 
     gl.warp_specialize([
-        (mma_partition, (p,)),
-        (load_partition, (p,)),
-        (epilogue_partition, (p,)),
+        (mma_partition, (p, )),
+        (load_partition, (p, )),
+        (epilogue_partition, (p, )),
     ], [4, 4], [384, 128])
 
 
@@ -433,11 +467,9 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     out_h = (H + 2 * padding - R) // stride + 1
     out_w = (W + 2 * padding - S) // stride + 1
     if out_h <= 0 or out_w <= 0:
-        raise ValueError(
-            "Invalid convolution geometry: computed output size "
-            f"({out_h}, {out_w}) from H={H}, W={W}, R={R}, S={S}, "
-            f"stride={stride}, padding={padding}."
-        )
+        raise ValueError("Invalid convolution geometry: computed output size "
+                         f"({out_h}, {out_w}) from H={H}, W={W}, R={R}, S={S}, "
+                         f"stride={stride}, padding={padding}.")
 
     # Tile parameters for this kernel variant.
     # Current implementation requires Ci to be divisible by BLOCK_K because
@@ -447,17 +479,15 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     BLOCK_K = 64
     GROUP_SIZE_M = 4
     if Ci % BLOCK_K != 0:
-        raise ValueError(
-            f"Unsupported Ci={Ci}: this kernel requires Ci % BLOCK_K == 0 "
-            f"(BLOCK_K={BLOCK_K})."
-        )
+        raise ValueError(f"Unsupported Ci={Ci}: this kernel requires Ci % BLOCK_K == 0 "
+                         f"(BLOCK_K={BLOCK_K}).")
 
     output = torch.empty((N, out_h, out_w, Co), device=input_tensor.device, dtype=torch.float16)
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
 
-    grid = (triton.cdiv(M_GEMM, BLOCK_M) * triton.cdiv(N_GEMM, BLOCK_N),)
+    grid = (triton.cdiv(M_GEMM, BLOCK_M) * triton.cdiv(N_GEMM, BLOCK_N), )
 
     # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC
     #
@@ -494,14 +524,28 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
     weight_desc = TensorDescriptor.from_tensor(weight_reshaped, weight_block_shape, weight_layout)
 
     conv2d_im2col_kernel[grid](
-        in_desc, weight_desc, output,
-        N, H, W, Ci,
-        Co, R, S,
-        out_h, out_w,
-        output.stride(0), output.stride(1), output.stride(2),
-        stride, stride,
-        padding, padding,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+        in_desc,
+        weight_desc,
+        output,
+        N,
+        H,
+        W,
+        Ci,
+        Co,
+        R,
+        S,
+        out_h,
+        out_w,
+        output.stride(0),
+        output.stride(1),
+        output.stride(2),
+        stride,
+        stride,
+        padding,
+        padding,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
         GROUP_SIZE_M=GROUP_SIZE_M,
         num_buffers=num_buffers,
         num_warps=num_warps,
@@ -551,15 +595,13 @@ STRIDE = [1]
 PADDING = [1]
 
 bench_configs = []
-for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [
-    (N, ch, sp, f, s, p)
-    for N in BATCH
-    for ch in CHANNELS
-    for sp in SPATIAL
-    for f in FILTER
-    for s in STRIDE
-    for p in PADDING
-]:
+for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [(N, ch, sp, f, s, p)
+                                                         for N in BATCH
+                                                         for ch in CHANNELS
+                                                         for sp in SPATIAL
+                                                         for f in FILTER
+                                                         for s in STRIDE
+                                                         for p in PADDING]:
     config = triton.testing.Benchmark(
         x_names=["num_buffers"],
         x_vals=[2, 3],
@@ -570,8 +612,15 @@ for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [
         ylabel="TFLOPS",
         plot_name=f"Conv2d N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
         args={
-            "N": N, "H": H, "W": W, "Ci": Ci, "Co": Co,
-            "R": R, "S": S, "stride_val": stride_val, "pad_val": pad_val,
+            "N": N,
+            "H": H,
+            "W": W,
+            "Ci": Ci,
+            "Co": Co,
+            "R": R,
+            "S": S,
+            "stride_val": stride_val,
+            "pad_val": pad_val,
         },
     )
     bench_configs.append(config)
