@@ -1338,7 +1338,7 @@ LogicalResult WarpYieldOp::verify() {
 static size_t getSharedMemorySize(Type type) {
   if (isa<IntegerType, FloatType>(type))
     return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
-  if (isa<PointerType, TensorDescType>(type))
+  if (isa<PointerType, TensorDescType, nvidia_gpu::TensorDescIm2ColType>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
     if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
