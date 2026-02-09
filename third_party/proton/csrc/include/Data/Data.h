@@ -137,13 +137,13 @@ public:
   ///
   /// For each element in `targetEntryIds`, create or retrieve the linked entry
   /// under `baseEntryId`, preserving input order and duplicates. If `onLinked`
-  /// is non-empty, it is invoked for each input item with the linked entry
+  /// is non-empty, it is invoked for each input item with a moved linked entry
   /// whose metrics can be updated.
   ///
   /// The callback is invoked while Data::mutex is held.
   virtual void
   linkOp(size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-         const std::function<void(const DataEntry &)> &onLinked) = 0;
+         const std::function<void(DataEntry &&)> &onLinked) = 0;
 
   /// Record a batch of named metrics for a scope to the data of the current
   /// phase.

@@ -30,7 +30,7 @@ public:
 
   void linkOp(
       size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-      const std::function<void(const DataEntry &)> &onLinked) override;
+      const std::function<void(DataEntry &&)> &onLinked) override;
 
   void
   addMetrics(size_t scopeId,

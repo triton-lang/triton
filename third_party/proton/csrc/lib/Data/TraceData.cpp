@@ -172,7 +172,7 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
 
 void TraceData::linkOp(
     size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-    const std::function<void(const DataEntry &)> &onLinked) {
+    const std::function<void(DataEntry &&)> &onLinked) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   const auto phase = currentPhase.load(std::memory_order_relaxed);
   auto *trace = currentPhasePtrAs<Trace>();

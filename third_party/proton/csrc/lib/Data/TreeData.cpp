@@ -844,7 +844,7 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
 
 void TreeData::linkOp(
     size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-    const std::function<void(const DataEntry &)> &onLinked) {
+    const std::function<void(DataEntry &&)> &onLinked) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   const auto phase = currentPhase.load(std::memory_order_relaxed);
   auto *tree = currentPhasePtrAs<Tree>();
@@ -854,8 +854,7 @@ void TreeData::linkOp(
     auto &linkedFlexibleMetrics =
         baseNode.linkedTargetFlexibleMetrics[targetEntryId];
     if (onLinked) {
-      onLinked(DataEntry(baseEntryId, phase, linkedMetrics,
-                         linkedFlexibleMetrics));
+      onLinked(DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics));
     }
   }
 }

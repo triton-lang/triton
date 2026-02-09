@@ -621,13 +621,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         size_t nodeStateIndex = 0;
         data->linkOp(
             baseEntry.id, launchState.targetEntryIds,
-            [&](const DataEntry &nodeEntry) {
+            [&](DataEntry &&nodeEntry) {
               const auto *nodeLaunchState = launchState.nodeStates[nodeStateIndex++];
               auto &graphNodeState =
                   graphNodeIdToState.emplace(nodeLaunchState->nodeId);
               graphNodeState.isMissingName = nodeLaunchState->isMissingName;
               graphNodeState.isMetricNode = nodeLaunchState->isMetricNode;
-              graphNodeState.setEntry(data, nodeEntry);
+              graphNodeState.setEntry(data, std::move(nodeEntry));
             });
       }
       if (timingEnabled) {
