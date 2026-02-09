@@ -186,7 +186,8 @@ class Prefetcher {
   scf::ForOp forOp;
   /// cache the YieldOp of this ForOp
   scf::YieldOp yieldOp;
-  ///
+  /// minimum transpose width
+  unsigned minTransposeWidth;
   // TODO: add a hook to infer prefetchWidth
   unsigned prefetchWidthM = 64;
   unsigned prefetchWidthN = 64;
@@ -241,7 +242,7 @@ class Prefetcher {
 public:
   Prefetcher() = delete;
 
-  Prefetcher(scf::ForOp forOp) : forOp(forOp) {
+  Prefetcher(scf::ForOp forOp, int minTransposeWidth) : forOp(forOp), minTransposeWidth(minTransposeWidth) {
     yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   }
 
@@ -749,18 +750,16 @@ LogicalResult Prefetcher::initialize() {
       unsigned maxM = mSize / (instrShape[0] * warpsPerCta[0]);
       unsigned maxN = nSize / (instrShape[1] * warpsPerCta[1]);
       unsigned maxK = kSize / (instrShape[2]);
-      // TODO(dtanner) increase to 128 for gfx1250
-      unsigned minTransposeWidth = 64;
       // Ensure tiles large enough for fast trans memory ops (lowerDsReadTr).  
       bool transA = transOp(aOpd.getDefiningOp(), 0);
       if (transA) {
-        m = std::max<unsigned>(1, minTransposeWidth / instrShape[0]);
-        k = std::max<unsigned>(1, minTransposeWidth / instrShape[2]);
+        m = std::max<unsigned>(m, minTransposeWidth / instrShape[0]);
+        k = std::max<unsigned>(k, minTransposeWidth / instrShape[2]);
       }
       bool transB = transOp(bOpd.getDefiningOp(), 1);
       if (transB) {
-        n = std::max<unsigned>(1, minTransposeWidth / instrShape[1]);
-        k = std::max<unsigned>(1, minTransposeWidth / instrShape[2]);
+        n = std::max<unsigned>(n, minTransposeWidth / instrShape[1]);
+        k = std::max<unsigned>(k, minTransposeWidth / instrShape[2]);
       }
       numInsts /= (m*n*k);
       LDBG("instr tile m: " << m << ", n: " << n << ", k: " << k);
@@ -951,6 +950,8 @@ scf::ForOp Prefetcher::createNewForOp() {
 } // anonymous namespace
 
 struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
+  using Base::Base;
+
   void runOnOperation() override {
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
@@ -961,7 +962,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       signalPassFailure();
     }
     getOperation()->walk([&](scf::ForOp forOp) {
-      Prefetcher prefetcher(forOp);
+      Prefetcher prefetcher(forOp, minTransposeWidth);
 
       if (prefetcher.initialize().failed())
         return;
