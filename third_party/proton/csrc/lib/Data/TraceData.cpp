@@ -380,8 +380,8 @@ std::vector<KernelTrace> convertToTimelineTrace(
     if (!sortedEvents.empty()) {
       auto &contexts = kernelEvent.contexts;
       if (!contexts.empty()) {
-        callStack.resize(contexts.size());
-        std::transform(contexts.begin(), contexts.end(), callStack.begin(),
+        callStack.resize(contexts.size() - 1);
+        std::transform(contexts.begin(), contexts.end() - 1, callStack.begin(),
                        [](const Context &c) { return c.name; });
       }
     }
