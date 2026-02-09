@@ -873,44 +873,36 @@ void TreeData::addMetrics(
 
 void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
   treePhases.withPtr(phase, [&](Tree *tree) {
-    Tree staticTreeCloned;
     treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      staticTreeCloned = staticTree->structure();
+      auto output = buildHatchetJson(tree, staticTree);
+      os << std::endl << output.dump(4) << std::endl;
     });
-    auto output = buildHatchetJson(tree, &staticTreeCloned);
-    os << std::endl << output.dump(4) << std::endl;
   });
 }
 
 void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
   treePhases.withPtr(phase, [&](Tree *tree) {
-    Tree staticTreeCloned;
     treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      staticTreeCloned = staticTree->structure();
+      auto msgPack = buildHatchetMsgPack(tree, staticTree);
+      os.write(reinterpret_cast<const char *>(msgPack.data()),
+               static_cast<std::streamsize>(msgPack.size()));
     });
-    auto msgPack = buildHatchetMsgPack(tree, &staticTreeCloned);
-    os.write(reinterpret_cast<const char *>(msgPack.data()),
-             static_cast<std::streamsize>(msgPack.size()));
   });
 }
 
 std::string TreeData::toJsonString(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
-    Tree staticTreeCloned;
-    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      staticTreeCloned = staticTree->structure();
+    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
+      return buildHatchetJson(tree, staticTree).dump();
     });
-    return buildHatchetJson(tree, &staticTreeCloned).dump();
   });
 }
 
 std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
-    Tree staticTreeCloned;
-    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      staticTreeCloned = staticTree->structure();
+    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
+      return buildHatchetMsgPack(tree, staticTree);
     });
-    return buildHatchetMsgPack(tree, &staticTreeCloned);
   });
 }
 
