@@ -137,17 +137,11 @@ public:
   virtual DataEntry addOp(size_t phase, size_t entryId,
                           const std::vector<Context> &contexts) = 0;
 
-  /// Link a base op in the current phase to target ops in the virtual phase.
+  /// Link a base op in the current phase to a target op in the virtual phase.
   ///
-  /// For each element in `targetEntryIds`, create or retrieve the linked entry
-  /// under `baseEntryId`, preserving input order and duplicates. If `onLinked`
-  /// is non-empty, it is invoked for each input item with a moved linked entry
-  /// whose metrics can be updated.
-  ///
-  /// The callback is invoked while Data::mutex is held.
-  virtual void linkOp(size_t baseEntryId,
-                      const std::vector<size_t> &targetEntryIds,
-                      const std::function<void(DataEntry &&)> &onLinked) = 0;
+  /// Create or retrieve the linked entry under `baseEntryId` for
+  /// `targetEntryId` and return the linked entry whose metrics can be updated.
+  virtual DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) = 0;
 
   /// Record a batch of named metrics for a scope to the data of the current
   /// phase.

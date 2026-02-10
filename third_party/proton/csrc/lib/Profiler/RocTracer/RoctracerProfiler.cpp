@@ -104,18 +104,15 @@ void processActivityKernel(
   auto &state = externIdToState[externId];
   if (!isGraph) {
     for (const auto &entry : state.dataEntries) {
-      auto *data = entry.data;
-      if (!data)
-        continue;
       if (auto metric = convertActivityToMetric(activity)) {
         if (state.isMissingName) {
-          auto childEntry = data->addOp(entry.phase, entry.id,
+          auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                         {Context(activity->kernel_name)});
           childEntry.upsertMetric(std::move(metric));
         } else {
           entry.upsertMetric(std::move(metric));
         }
-        detail::updateDataPhases(dataPhases, data, entry.phase);
+        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
       }
     }
   } else {
@@ -128,14 +125,11 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
     for (const auto &entry : state.dataEntries) {
-      auto *data = entry.data;
-      if (!data)
-        continue;
       if (auto metric = convertActivityToMetric(activity)) {
-        auto childEntry = data->addOp(entry.phase, entry.id,
+        auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                       {Context(activity->kernel_name)});
         childEntry.upsertMetric(std::move(metric));
-        detail::updateDataPhases(dataPhases, data, entry.phase);
+        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
       }
     }
   }

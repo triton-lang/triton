@@ -236,13 +236,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
               for (const auto &baseEntry : dataToEntryMap) {
-                if (!baseEntry.data) {
-                  continue;
-                }
-                auto *data = baseEntry.data;
-                auto entry = baseEntry;
-                auto kernelId = entry.id;
-                entry = data->addOp(entry.phase, kernelId, contexts);
+                auto kernelId = baseEntry.id;
+                auto entry =
+                    baseEntry.data->addOp(baseEntry.phase, kernelId, contexts);
                 entry.upsertMetric(std::make_unique<CycleMetric>(
                     event.first->cycle, event.second->cycle, duration,
                     normalizedDuration, kernelId, functionName,
