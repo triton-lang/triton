@@ -436,8 +436,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           auto staticEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           graphState.dataToNodeStates[data][staticEntry.id].insert_or_assign(
-              nodeId, GraphState::NodeState{staticEntry.id, nodeId,
-                                            isMissingName, isMetricNode});
+              nodeId, GraphState::NodeState{isMissingName, isMetricNode});
           graphState.launchNodeIds.insert_or_assign(nodeId, staticEntry.id);
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
@@ -463,7 +462,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
            originalGraphState.dataToNodeStates) {
         auto clonedNodeState =
             originalEntryIdToNodeStates.at(launchEntryId).at(originalNodeId);
-        clonedNodeState.nodeId = nodeId;
         graphState.dataToNodeStates[dataPtr][launchEntryId].insert_or_assign(
             nodeId, clonedNodeState);
       }

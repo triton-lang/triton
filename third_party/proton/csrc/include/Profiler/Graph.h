@@ -22,10 +22,6 @@ class Runtime;
 
 struct GraphState {
   struct NodeState {
-    // Static entry id linked from a launch entry.
-    size_t entryId{};
-    // A unique id for the graph node
-    uint64_t nodeId{};
     // Whether the node is missing name
     bool isMissingName{};
     // Whether the node is a metric kernel node
@@ -37,9 +33,9 @@ struct GraphState {
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
   // data -> (static_entry_id -> node_id -> graph-node metadata)
-  std::map<Data *, std::unordered_map<
-                       /*entry_id=*/size_t,
-                       std::unordered_map</*node_id=*/uint64_t, NodeState>>>
+  std::map<Data *,
+           std::map<
+               /*entry_id=*/size_t, std::map</*node_id=*/uint64_t, NodeState>>>
       dataToNodeStates;
   // Node ids that have launch-state entries and the associated static entry id.
   std::map<uint64_t, /*entry_id=*/size_t> launchNodeIds;
