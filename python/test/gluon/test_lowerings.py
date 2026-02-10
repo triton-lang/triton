@@ -5,6 +5,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 
 def _is_layout_applicable(layout) -> bool:
@@ -1347,3 +1348,99 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
 
     out_ref = torch.arange(0, M * N, device=device).reshape((M, N)).to(torch.float16)
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("M, K", [(64, 32), (128, 64)])
+@pytest.mark.parametrize("num_partitions", [2, 4])
+@pytest.mark.parametrize("num_groups", [1, 2])
+@pytest.mark.parametrize("partition_dim", [0, 1])
+@pytest.mark.parametrize("partition_layout_type", ["swizzled", "padded"])
+def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_dim, partition_layout_type):
+    """
+    Test that PartitionedSharedLayout works correctly with various configurations.
+
+    This test allocates shared memory with partitioned layout, performs a
+    round-trip copy (global -> shared -> global), and verifies data integrity.
+
+    Parameters:
+    - M, K: Tensor dimensions
+    - num_partitions: Number of physical memory partitions (2 or 4)
+    - num_groups: Number of groups (1 or 2)
+    - partition_dim: Dimension along which to partition (0=rows, 1=cols)
+    - partition_layout_type: Layout within each piece ("swizzled" or "padded")
+    """
+
+    @gluon.jit
+    def partitioned_copy_kernel(
+        input_ptr,
+        output_ptr,
+        M: ttgl.constexpr,
+        K: ttgl.constexpr,
+        partitioned_layout: ttgl.constexpr,
+    ):
+        # Define blocked layout for register operations
+        blocked: ttgl.constexpr = ttgl.BlockedLayout(
+            size_per_thread=[1, 8],
+            threads_per_warp=[8, 4],
+            warps_per_cta=[4, 1],
+            order=[1, 0],
+        )
+
+        # Create 2D indices
+        row_idx = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))[:, None]
+        col_idx = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, blocked))[None, :]
+        offsets = row_idx * K + col_idx
+
+        # Load data from global memory
+        data = ttgl.load(input_ptr + offsets)
+
+        # Allocate partitioned shared memory and store data
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], partitioned_layout, data)
+
+        # Load from shared memory
+        loaded = smem.load(blocked)
+
+        # Store back to global memory
+        ttgl.store(output_ptr + offsets, loaded)
+
+    # Create partition layout
+    if partition_layout_type == "swizzled":
+        inner_layout = ttgl.SwizzledSharedLayout(
+            vec=4,
+            per_phase=2,
+            max_phase=8,
+            order=[1, 0],
+        )
+    elif partition_layout_type == "padded":
+        inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
+            interval_padding_pairs=[[16, 4]],
+            shape=[M, K],
+            order=[1, 0],
+        )
+    else:
+        raise ValueError(f"Unknown partition_layout_type: {partition_layout_type}")
+
+    # Create partitioned layout
+    partitioned_layout = PartitionedSharedLayout(
+        num_partitions=num_partitions,
+        num_groups=num_groups,
+        partition_dim=partition_dim,
+        partition_layout=inner_layout,
+    )
+
+    # Create input/output tensors
+    input_tensor = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    output_tensor = torch.empty_like(input_tensor)
+
+    # Run the kernel
+    partitioned_copy_kernel[(1, )](
+        input_tensor,
+        output_tensor,
+        M,
+        K,
+        partitioned_layout,
+        num_warps=4,
+    )
+
+    # Verify output matches input
+    torch.testing.assert_close(output_tensor, input_tensor, atol=0, rtol=0)
