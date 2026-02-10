@@ -71,11 +71,11 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeState {
-      NodeState status{};
+      NodeState state{};
 
       // If the node is launched as a metric kernel, ignore its timing data.
-      bool isMetricNode() const { return status.isMetricNode(); }
-      bool isMissingName() const { return status.isMissingName(); }
+      bool isMetricNode() const { return state.isMetricNode(); }
+      bool isMissingName() const { return state.isMissingName(); }
 
       void addEntry(const DataEntry &entry) { dataEntries.push_back(entry); }
 

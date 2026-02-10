@@ -117,13 +117,7 @@ public:
     size_t id = DummyId;
     std::vector<ChildEntry> children = {};
     std::unordered_map<std::string_view, size_t> childIndex = {};
-    std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
-    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
-    std::map<size_t, std::map<MetricKind, std::unique_ptr<Metric>>>
-        linkedTargetMetrics = {};
-    std::map<size_t, std::map<std::string, FlexibleMetric>>
-        linkedTargetFlexibleMetrics = {};
-    std::mutex nodeMutex;
+    DataEntry::MetricSet metricSet{};
     friend class Tree;
   };
 
@@ -165,10 +159,10 @@ public:
   void upsertFlexibleMetric(size_t contextId,
                             const FlexibleMetric &flexibleMetric) {
     auto &node = treeNodeMap.at(contextId);
-    auto it = node.flexibleMetrics.find(flexibleMetric.getValueName(0));
-    if (it == node.flexibleMetrics.end()) {
-      node.flexibleMetrics.emplace(flexibleMetric.getValueName(0),
-                                   flexibleMetric);
+    auto &flexibleMetrics = node.metricSet.flexibleMetrics;
+    auto it = flexibleMetrics.find(flexibleMetric.getValueName(0));
+    if (it == flexibleMetrics.end()) {
+      flexibleMetrics.emplace(flexibleMetric.getValueName(0), flexibleMetric);
     } else {
       it->second.updateMetric(flexibleMetric);
     }
@@ -334,12 +328,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
-        appendMetrics(metricsJson, treeNode.metrics, treeNode.flexibleMetrics);
+        appendMetrics(metricsJson, treeNode.metricSet.metrics,
+                      treeNode.metricSet.flexibleMetrics);
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
         const bool hasLinkedTargets =
-            !treeNode.linkedTargetMetrics.empty() ||
-            !treeNode.linkedTargetFlexibleMetrics.empty();
+            !treeNode.metricSet.linkedMetrics.empty() ||
+            !treeNode.metricSet.linkedFlexibleMetrics.empty();
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() +
             (hasLinkedTargets ? staticRootNode.children.size() : 0));
@@ -354,21 +349,24 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             [&](size_t staticNodeId, json &outNode) {
               const auto &staticNode = staticTree->getNode(staticNodeId);
               const auto metricsIt =
-                  treeNode.linkedTargetMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedMetrics.find(staticNodeId);
               const auto flexibleIt =
-                  treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedFlexibleMetrics.find(
+                      staticNodeId);
               outNode = json::object();
               outNode["frame"] = {{"name", staticNode.name},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
-              if (metricsIt != treeNode.linkedTargetMetrics.end() ||
-                  flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
+              if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
+                  flexibleIt !=
+                      treeNode.metricSet.linkedFlexibleMetrics.end()) {
                 const auto &linkedMetrics =
-                    (metricsIt != treeNode.linkedTargetMetrics.end())
+                    (metricsIt != treeNode.metricSet.linkedMetrics.end())
                         ? metricsIt->second
                         : emptyMetrics;
                 const auto &linkedFlexibleMetrics =
-                    (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
+                    (flexibleIt !=
+                     treeNode.metricSet.linkedFlexibleMetrics.end())
                         ? flexibleIt->second
                         : emptyFlexibleMetrics;
                 appendMetrics(outNode["metrics"], linkedMetrics,
@@ -459,8 +457,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
-        metricSummary.observeMetrics(treeNode.metrics);
-        for (const auto &[_, linkedMetrics] : treeNode.linkedTargetMetrics) {
+        metricSummary.observeMetrics(treeNode.metricSet.metrics);
+        for (const auto &[_, linkedMetrics] :
+             treeNode.metricSet.linkedMetrics) {
           metricSummary.observeMetrics(linkedMetrics);
         }
       });
@@ -692,11 +691,12 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr("function");
 
         writer.packStr("metrics");
-        packMetrics(treeNode.metrics, treeNode.flexibleMetrics,
+        packMetrics(treeNode.metricSet.metrics,
+                    treeNode.metricSet.flexibleMetrics,
                     treeNode.id == TreeData::Tree::TreeNode::RootId);
         const bool hasLinkedTargets =
-            !treeNode.linkedTargetMetrics.empty() ||
-            !treeNode.linkedTargetFlexibleMetrics.empty();
+            !treeNode.metricSet.linkedMetrics.empty() ||
+            !treeNode.metricSet.linkedFlexibleMetrics.empty();
 
         std::function<void(size_t)> packLinkedStaticNode =
             [&](size_t staticNodeId) {
@@ -712,17 +712,20 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
               writer.packStr("metrics");
               const auto metricsIt =
-                  treeNode.linkedTargetMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedMetrics.find(staticNodeId);
               const auto flexibleIt =
-                  treeNode.linkedTargetFlexibleMetrics.find(staticNodeId);
-              if (metricsIt != treeNode.linkedTargetMetrics.end() ||
-                  flexibleIt != treeNode.linkedTargetFlexibleMetrics.end()) {
+                  treeNode.metricSet.linkedFlexibleMetrics.find(
+                      staticNodeId);
+              if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
+                  flexibleIt !=
+                      treeNode.metricSet.linkedFlexibleMetrics.end()) {
                 const auto &linkedMetrics =
-                    (metricsIt != treeNode.linkedTargetMetrics.end())
+                    (metricsIt != treeNode.metricSet.linkedMetrics.end())
                         ? metricsIt->second
                         : emptyMetrics;
                 const auto &linkedFlexibleMetrics =
-                    (flexibleIt != treeNode.linkedTargetFlexibleMetrics.end())
+                    (flexibleIt !=
+                     treeNode.metricSet.linkedFlexibleMetrics.end())
                         ? flexibleIt->second
                         : emptyFlexibleMetrics;
                 packMetrics(linkedMetrics, linkedFlexibleMetrics,
@@ -840,9 +843,7 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
   auto *tree = phasePtrAs<Tree>(phase);
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, phase, this, node.metrics,
-                   node.flexibleMetrics, node.linkedTargetMetrics,
-                   node.linkedTargetFlexibleMetrics, node.nodeMutex);
+  return DataEntry(newContextId, phase, this, node.metricSet);
 }
 
 void TreeData::addMetrics(

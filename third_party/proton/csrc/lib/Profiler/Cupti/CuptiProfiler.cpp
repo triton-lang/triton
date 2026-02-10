@@ -623,21 +623,22 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
         baseEntry.handle(
-            [&](auto &, auto &, auto &linkedTargetMetrics,
-                auto &linkedTargetFlexibleMetrics) {
+            [&](auto &, auto &, auto &linkedMetricsByTarget,
+                auto &linkedFlexibleMetricsByTarget) {
               for (const auto &[targetEntryId, nodeIdToStates] :
                    nodeStateIt->second) {
-                auto &linkedMetrics = linkedTargetMetrics[targetEntryId];
+                auto &linkedMetrics = linkedMetricsByTarget[targetEntryId];
                 auto &linkedFlexibleMetrics =
-                    linkedTargetFlexibleMetrics[targetEntryId];
-                auto nodeEntry = DataEntry(
-                    baseEntry.id, baseEntry.phase, baseEntry.data,
-                    linkedMetrics, linkedFlexibleMetrics, linkedTargetMetrics,
-                    linkedTargetFlexibleMetrics, baseEntry.nodeMutex.get());
+                    linkedFlexibleMetricsByTarget[targetEntryId];
+                auto nodeEntry = DataEntry(baseEntry.id, baseEntry.phase,
+                                           baseEntry.data,
+                                           baseEntry.metricSet.get(),
+                                           linkedMetrics,
+                                           linkedFlexibleMetrics);
                 for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
                   auto &graphNodeState =
                       graphNodeIdToState.emplace(targetNodeId);
-                  graphNodeState.status = nodeState;
+                  graphNodeState.state = nodeState;
                   graphNodeState.addEntry(nodeEntry);
                 }
               }

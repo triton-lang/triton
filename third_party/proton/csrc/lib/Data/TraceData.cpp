@@ -50,13 +50,7 @@ public:
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
-    std::map<MetricKind, std::unique_ptr<Metric>> metrics = {};
-    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
-    std::map<size_t, std::map<MetricKind, std::unique_ptr<Metric>>>
-        linkedTargetMetrics = {};
-    std::map<size_t, std::map<std::string, FlexibleMetric>>
-        linkedTargetFlexibleMetrics = {};
-    std::mutex nodeMutex;
+    DataEntry::MetricSet metricSet{};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
   };
@@ -167,9 +161,7 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, phase, this, newEvent.metrics,
-                   newEvent.flexibleMetrics, newEvent.linkedTargetMetrics,
-                   newEvent.linkedTargetFlexibleMetrics, newEvent.nodeMutex);
+  return DataEntry(newEventId, phase, this, newEvent.metricSet);
 }
 
 void TraceData::addMetrics(
@@ -178,12 +170,13 @@ void TraceData::addMetrics(
   auto *currentTrace = currentPhasePtrAs<Trace>();
   auto eventId = scopeIdToEventId.at(scopeId);
   auto &event = currentTrace->getEvent(eventId);
+  auto &flexibleMetrics = event.metricSet.flexibleMetrics;
   for (auto [metricName, metricValue] : metrics) {
-    if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
-      event.flexibleMetrics.emplace(metricName,
-                                    FlexibleMetric(metricName, metricValue));
+    if (flexibleMetrics.find(metricName) == flexibleMetrics.end()) {
+      flexibleMetrics.emplace(metricName,
+                              FlexibleMetric(metricName, metricValue));
     } else {
-      event.flexibleMetrics.at(metricName).updateValue(metricValue);
+      flexibleMetrics.at(metricName).updateValue(metricValue);
     }
   }
 }
@@ -440,10 +433,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   std::set<size_t> staticTargetEntryIds;
   tracePhases.withPtr(phase, [&](Trace *trace) {
     for (const auto &[_, event] : trace->getEvents()) {
-      for (const auto &[targetEntryId, _] : event.linkedTargetMetrics) {
+      for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedMetrics) {
         staticTargetEntryIds.insert(targetEntryId);
       }
-      for (const auto &[targetEntryId, _] : event.linkedTargetFlexibleMetrics) {
+      for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedFlexibleMetrics) {
         staticTargetEntryIds.insert(targetEntryId);
       }
     }
@@ -502,9 +497,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
 
     for (const auto &[_, event] : events) {
       auto baseContexts = trace->getContexts(event.contextId);
-      processMetricMaps(event.metrics, baseContexts);
+      processMetricMaps(event.metricSet.metrics, baseContexts);
       for (const auto &[targetEntryId, linkedMetrics] :
-           event.linkedTargetMetrics) {
+           event.metricSet.linkedMetrics) {
         auto staticContextsIt = targetIdToStaticContexts.find(targetEntryId);
         if (staticContextsIt == targetIdToStaticContexts.end()) {
           continue;

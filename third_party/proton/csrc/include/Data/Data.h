@@ -32,6 +32,13 @@ struct DataEntry {
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
   using LinkedMetricMap = std::map<size_t, MetricMap>;
   using LinkedFlexibleMetricMap = std::map<size_t, FlexibleMetricMap>;
+  struct MetricSet {
+    MetricMap metrics{};
+    FlexibleMetricMap flexibleMetrics{};
+    LinkedMetricMap linkedMetrics{};
+    LinkedFlexibleMetricMap linkedFlexibleMetrics{};
+    std::mutex nodeMutex;
+  };
 
   /// `entryId` is a unique identifier for the entry in the data.
   size_t id{Scope::DummyScopeId};
@@ -39,45 +46,33 @@ struct DataEntry {
   size_t phase{0};
   /// `data` points to the owning data object for this entry.
   Data *data{nullptr};
-  /// `metrics` is a map from metric kind to metric accumulator associated
-  /// with the entry.
-  std::reference_wrapper<MetricMap> metrics;
-  /// `flexibleMetrics` is a map from metric name to flexible metric
-  /// accumulator associated with the entry.
-  std::reference_wrapper<FlexibleMetricMap> flexibleMetrics;
-  /// `linkedTargetMetrics` stores linked metric maps keyed by target entry.
-  std::reference_wrapper<LinkedMetricMap> linkedTargetMetrics;
-  /// `linkedTargetFlexibleMetrics` stores linked flexible metric maps keyed by
-  /// target entry.
-  std::reference_wrapper<LinkedFlexibleMetricMap> linkedTargetFlexibleMetrics;
-  /// `nodeMutex` protects linked map extension on this node/event.
-  std::reference_wrapper<std::mutex> nodeMutex;
+  /// Per-node storage that owns all metric maps and the lock.
+  std::reference_wrapper<MetricSet> metricSet;
+  /// Active metric maps for this entry view.
+  MetricMap *metrics{nullptr};
+  FlexibleMetricMap *flexibleMetrics{nullptr};
 
-  explicit DataEntry(size_t id, size_t phase, Data *data, MetricMap &metrics,
-                     FlexibleMetricMap &flexibleMetrics,
-                     LinkedMetricMap &linkedTargetMetrics,
-                     LinkedFlexibleMetricMap &linkedTargetFlexibleMetrics,
-                     std::mutex &nodeMutex)
-      : id(id), phase(phase), data(data), metrics(metrics),
-        flexibleMetrics(flexibleMetrics),
-        linkedTargetMetrics(linkedTargetMetrics),
-        linkedTargetFlexibleMetrics(linkedTargetFlexibleMetrics),
-        nodeMutex(nodeMutex) {}
+  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
+      : id(id), phase(phase), data(data), metricSet(metricSet),
+        metrics(&metricSet.metrics),
+        flexibleMetrics(&metricSet.flexibleMetrics) {}
+
+  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet,
+                     MetricMap &metrics, FlexibleMetricMap &flexibleMetrics)
+      : id(id), phase(phase), data(data), metricSet(metricSet),
+        metrics(&metrics), flexibleMetrics(&flexibleMetrics) {}
 
   template <typename FnT> decltype(auto) handle(FnT &&fn) const {
-    std::lock_guard<std::mutex> lock(nodeMutex.get());
-    return std::forward<FnT>(fn)(metrics.get(), flexibleMetrics.get(),
-                                 linkedTargetMetrics.get(),
-                                 linkedTargetFlexibleMetrics.get());
+    std::lock_guard<std::mutex> lock(metricSet.get().nodeMutex);
+    return std::forward<FnT>(fn)(*metrics, *flexibleMetrics,
+                                 metricSet.get().linkedMetrics,
+                                 metricSet.get().linkedFlexibleMetrics);
   }
 
   void upsertMetric(std::unique_ptr<Metric> metric) const {
     handle(
         [metric = std::move(metric)](MetricMap &metrics, auto &, auto &,
                                      auto &) mutable {
-          if (!metric) {
-            return;
-          }
           auto it = metrics.find(metric->getKind());
           if (it == metrics.end()) {
             metrics.emplace(metric->getKind(), std::move(metric));
