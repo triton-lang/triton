@@ -103,9 +103,6 @@ jobs:
         sudo apt-get autoremove -y
         sudo apt-get clean
         df -h
-        echo "Removing large directories"
-        # deleting 15GB
-        df -h
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
