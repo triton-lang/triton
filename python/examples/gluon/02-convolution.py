@@ -433,10 +433,10 @@ def conv2d_im2col_kernel(
     )
 
     gl.warp_specialize([
+        (epilogue_partition, (p, )),
         (mma_partition, (p, )),
         (load_partition, (p, )),
-        (epilogue_partition, (p, )),
-    ], [4, 4], [384, 128])
+    ], [1, 1], [24, 24])
 
 
 # ===-----------------------------------------------------------------------===#
