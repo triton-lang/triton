@@ -258,7 +258,7 @@
 <p>Closes the current batch of async_copy_* operations
 and allows for them to be waited on with <code class="docutils literal notranslate"><span class="pre">ttg.async_wait</span></code>.
 This is required in order to ensure async copy operations can be waited on.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="operands">
 <h3>Operands:<a class="headerlink" href="#operands" title="Link to this heading">¶</a></h3>
@@ -310,7 +310,7 @@ This allows op to use <code class="docutils literal notranslate"><span class="pr
 <p>The data will only be available in local memory after <code class="docutils literal notranslate"><span class="pre">ttg.async_wait</span></code> is issued to wait on the
 completion of <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_local</span></code>. The async copy operations must be committed using
 <code class="docutils literal notranslate"><span class="pre">ttg.async_commit_group</span></code> to close the batch and allow for them to be waited on.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
@@ -374,7 +374,7 @@ It takes zero or more <code class="docutils literal notranslate"><span class="pr
 outstanding after the <code class="docutils literal notranslate"><span class="pre">async_wait</span></code> op is completed. <code class="docutils literal notranslate"><span class="pre">num</span> <span class="pre">=</span> <span class="pre">0</span></code> waits until all groups of async copies are complete.</p>
 <p>This operation does not provide any syncronisation in the CTA, if syncronisation is needed use <code class="docutils literal notranslate"><span class="pre">ttg.local_barrier</span></code>
 in addition to this operation.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">MemWaitOpTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">MemWaitOpTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id3">
 <h3>Attributes:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
@@ -440,7 +440,7 @@ specified scope in-between these accesses with a <code class="docutils literal n
 ttg.barrier local|global_read|global_write
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id6">
 <h3>Attributes:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table>
@@ -456,7 +456,7 @@ ttg.barrier local|global_read|global_write
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.convert_layout` $src attr-dict `:` type($src) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id7">
@@ -501,7 +501,7 @@ ttg.barrier local|global_read|global_write
 <p>The lower 4 bits of the i8s represent the first fp4 element, and the upper 4 bits
 the second fp4 element.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">axis</span></code> attribute specifies the axis along which the fp4 elements are packed.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id9">
@@ -553,7 +553,7 @@ the second fp4 element.</p>
 The <code class="docutils literal notranslate"><span class="pre">backend</span></code> attribute specifies the backend to use for allocation.
 The <code class="docutils literal notranslate"><span class="pre">default</span></code> backend is used by TritonGPU passes.
 Downstream Triton tools and compilers can register a different backend and use a different allocation policy.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id12">
 <h3>Attributes:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <table>
@@ -592,7 +592,7 @@ containing the address and a view of the buffer.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">src</span></code> operand is an optional initializer for the allocated buffer. It
 must have the element type as the buffer. If <code class="docutils literal notranslate"><span class="pre">src</span></code> is not specified, the
 returned buffer must be mutable.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id14">
 <h3>Attributes:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
@@ -648,7 +648,7 @@ uses of the alloc.</p>
 its uses, ops that wait for an async operation on a memdesc to complete
 (such as ttng.warp_group_dot_wait) should also take the memdesc as an
 operand.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id17">
 <h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -679,7 +679,7 @@ the gather axis is replaced by indices[I]:
 result[I] = src[I[0], …, indices[I], …, I[n]]
 where the axis dimension is replaced by the index value.</p>
 <p>This matches the behavior of tt.gather but operates on shared memory descriptors.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">LocalLoadTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">LocalLoadTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id18">
 <h3>Attributes:<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
 <table>
@@ -732,7 +732,7 @@ where the axis dimension is replaced by the index value.</p>
 </pre></div>
 </div>
 <p>Load a tensor from the local memory descriptor into a distributed tensor.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">LocalLoadTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">LocalLoadTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id21">
 <h3>Operands:<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -781,7 +781,7 @@ the scatter axis is replaced by indices[I]:
 dst[I[0], …, indices[I], …, I[n]] = values[I]
 where the axis dimension is replaced by the index value.</p>
 <p>This is the inverse of local_gather and writes to shared memory at runtime-computed indices.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id23">
 <h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
 <table>
@@ -822,7 +822,7 @@ where the axis dimension is replaced by the index value.</p>
 </pre></div>
 </div>
 <p>Store a distributed tensor into a buffer in local memory.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id25">
 <h3>Operands:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -845,7 +845,7 @@ where the axis dimension is replaced by the index value.</p>
 <section id="ttg-mask-triton-gpu-maskop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.mask</span></code> (triton::gpu::MaskOp)<a class="headerlink" href="#ttg-mask-triton-gpu-maskop" title="Link to this heading">¶</a></h2>
 <p><em>Mask op for pipelining</em></p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id26">
 <h3>Operands:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -884,7 +884,7 @@ where the axis dimension is replaced by the index value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.mask.return` $result attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;MaskOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;MaskOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id28">
@@ -920,7 +920,7 @@ input descriptor along the 0-th dimension.</p>
 <li><p>index = 1.
 Then the output descriptor is equivalent to input[1], where input is the logical tensor.</p></li>
 </ul>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id29">
@@ -968,7 +968,7 @@ Then the output descriptor is equivalent to input[1], where input is the logical
 as one with a different shape and element type. Because memory descriptors
 lack strides, this operation is only valid if the original memory descriptor
 is contiguous.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id31">
@@ -1011,7 +1011,7 @@ is contiguous.</p>
 </div>
 <p>This operation returns a new descriptor representing a reshaped view of the underlying buffer.
 This doesn’t affect the memory.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id33">
@@ -1064,7 +1064,7 @@ Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
 the logical tensor.</p></li>
 </ul>
 <p>The offsets must be larger or equal to the tile of the tensor (or zero).</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id35">
@@ -1114,7 +1114,7 @@ the logical tensor.</p></li>
 </div>
 <p>This operation returns a new descriptor
 representing a transposed view of the buffer.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpAdaptor</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpAdaptor</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">TransposeOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id38">
@@ -1162,7 +1162,7 @@ representing a transposed view of the buffer.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.predicate_stage` $iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id41">
@@ -1221,7 +1221,7 @@ representing a transposed view of the buffer.</p>
 hardware registers if there are, or just thread ID divided by warp size.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">omitUniformHint</span></code> attribute is indicating in NVIDIA backend whether to
 omit emitting nvvm.shfl.sync idx 0 for LLVM.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id44">
@@ -1258,7 +1258,7 @@ omit emitting nvvm.shfl.sync idx 0 for LLVM.</p>
 partition regions of a <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code> op. It has no operands as these
 regions cannot return anything.</p>
 <p>TODO: Support returning uniform values from partition regions.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializePartitionsOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializePartitionsOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 </section>
@@ -1292,7 +1292,7 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 } : (i32, i32) -&gt; i32
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AsyncRegions</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AsyncRegions</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchOpInterface</span></code></p>
 <section id="id46">
 <h3>Attributes:<a class="headerlink" href="#id46" title="Link to this heading">¶</a></h3>
@@ -1325,7 +1325,7 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 <p><em>Container op for <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code></em></p>
 <p>Because MLIR requires entire operations be isolated from above, this op
 contains the actual isolated from above regions of <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code>.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchOpInterface</span></code></p>
 <section id="id48">
 <h3>Operands:<a class="headerlink" href="#id48" title="Link to this heading">¶</a></h3>
@@ -1357,7 +1357,7 @@ the SSA results of the <code class="docutils literal notranslate"><span class="p
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttg.warp_yield %a, %b : i32, tensor&lt;32xbf16, #blocked&gt;
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id49">

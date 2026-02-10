@@ -14,7 +14,7 @@ Closes the current batch of async_copy_* operations
 and allows for them to be waited on with `ttg.async_wait`.
 This is required in order to ensure async copy operations can be waited on.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -55,7 +55,7 @@ The data will only be available in local memory after `ttg.async_wait` is issued
 completion of `async_copy_global_to_local`. The async copy operations must be committed using
 `ttg.async_commit_group` to close the batch and allow for them to be waited on.
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -102,7 +102,7 @@ outstanding after the `async_wait` op is completed. `num = 0` waits until all gr
 This operation does not provide any syncronisation in the CTA, if syncronisation is needed use `ttg.local_barrier`
 in addition to this operation.
 
-Traits: `MemWaitOpTrait`, `VerifyTensorLayoutsTrait`
+Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -160,7 +160,7 @@ ttg.barrier local
 ttg.barrier local|global_read|global_write
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -180,7 +180,7 @@ Syntax:
 operation ::= `ttg.convert_layout` $src attr-dict `:` type($src) `->` type($result)
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultShape`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultShape`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -216,7 +216,7 @@ the second fp4 element.
 
 The `axis` attribute specifies the axis along which the fp4 elements are packed.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -257,7 +257,7 @@ The `backend` attribute specifies the backend to use for allocation.
 The `default` backend is used by TritonGPU passes.
 Downstream Triton tools and compilers can register a different backend and use a different allocation policy.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -294,7 +294,7 @@ The `src` operand is an optional initializer for the allocated buffer. It
 must have the element type as the buffer. If `src` is not specified, the
 returned buffer must be mutable.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface`
 
@@ -340,7 +340,7 @@ its uses, ops that wait for an async operation on a memdesc to complete
 (such as ttng.warp_group_dot_wait) should also take the memdesc as an
 operand.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -369,7 +369,7 @@ where the axis dimension is replaced by the index value.
 
 This matches the behavior of tt.gather but operates on shared memory descriptors.
 
-Traits: `LocalLoadTrait`, `VerifyTensorLayoutsTrait`
+Traits: `LocalLoadTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -405,7 +405,7 @@ operation ::= `ttg.local_load` $src (`token` $token^)? attr-dict `:` qualified(t
 
 Load a tensor from the local memory descriptor into a distributed tensor.
 
-Traits: `LocalLoadTrait`, `VerifyTensorLayoutsTrait`
+Traits: `LocalLoadTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -441,7 +441,7 @@ where the axis dimension is replaced by the index value.
 
 This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -472,7 +472,7 @@ operation ::= `ttg.local_store` $src `,` $dst attr-dict `:` type($src) `->` qual
 
 Store a distributed tensor into a buffer in local memory.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -486,7 +486,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 _Mask op for pipelining_
 
-Traits: `SingleBlock`, `VerifyTensorLayoutsTrait`
+Traits: `SingleBlock`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -511,7 +511,7 @@ Syntax:
 operation ::= `ttg.mask.return` $result attr-dict `:` type($result)
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `HasParent<MaskOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<MaskOp>`, `ReturnLike`, `Terminator`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
@@ -545,7 +545,7 @@ For example, suppose that
  - index = 1.
 Then the output descriptor is equivalent to input[1], where input is the logical tensor.
 
-Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -580,7 +580,7 @@ as one with a different shape and element type. Because memory descriptors
 lack strides, this operation is only valid if the original memory descriptor
 is contiguous.
 
-Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -612,7 +612,7 @@ operation ::= `ttg.memdesc_reshape` $src attr-dict `:` qualified(type($src)) `->
 This operation returns a new descriptor representing a reshaped view of the underlying buffer.
 This doesn't affect the memory.
 
-Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `SameOperandsAndResultElementType`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `SameOperandsAndResultElementType`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -654,7 +654,7 @@ the logical tensor.
 
 The offsets must be larger or equal to the tile of the tensor (or zero).
 
-Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -693,7 +693,7 @@ operation ::= `ttg.memdesc_trans` $src attr-dict `:` qualified(type($src)) `->` 
 This operation returns a new descriptor
 representing a transposed view of the buffer.
 
-Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `MemDescViewTrait`, `SameOperandsAndResultElementType`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `MemDescViewTrait`, `SameOperandsAndResultElementType`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`, `TransposeOpInterface`
 
@@ -729,7 +729,7 @@ Syntax:
 operation ::= `ttg.predicate_stage` $iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -774,7 +774,7 @@ hardware registers if there are, or just thread ID divided by warp size.
 The `omitUniformHint` attribute is indicating in NVIDIA backend whether to
 omit emitting nvvm.shfl.sync idx 0 for LLVM.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -810,7 +810,7 @@ regions cannot return anything.
 
 TODO: Support returning uniform values from partition regions.
 
-Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializePartitionsOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializePartitionsOp>`, `ReturnLike`, `Terminator`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
@@ -853,7 +853,7 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 } : (i32, i32) -> i32
 ```
 
-Traits: `AsyncRegions`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AsyncRegions`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
@@ -881,7 +881,7 @@ _Container op for `ttg.warp_specialize`_
 Because MLIR requires entire operations be isolated from above, this op
 contains the actual isolated from above regions of `ttg.warp_specialize`.
 
-Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `Terminator`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
@@ -912,7 +912,7 @@ Example:
 ttg.warp_yield %a, %b : i32, tensor<32xbf16, #blocked>
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializeOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializeOp>`, `ReturnLike`, `Terminator`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 

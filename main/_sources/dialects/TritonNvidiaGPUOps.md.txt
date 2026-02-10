@@ -24,7 +24,7 @@ ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
 ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -51,7 +51,7 @@ Syntax:
 operation ::= `ttng.async_copy_mbarrier_arrive` $barrier attr-dict `:` qualified(type($barrier))
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -99,7 +99,7 @@ The tensor mode is determined by the descriptor type:
   - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -140,7 +140,7 @@ local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by `desc`.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -166,7 +166,7 @@ This operation gathers multiple rows of data from global memory matrix to
 local memory asynchronously.  This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -196,7 +196,7 @@ asynchronously, and atomically performs the specified reduction kind.
 Atomicity is at the granularity of individual elements, and only relaxed
 semantics are implied.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -235,7 +235,7 @@ operation scatters a 2D tensor in shared memory, laid out by core tensor
 tiles nvmma_shared layout into separately indexed rows in global
 memory at a given `y` offset.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -260,7 +260,7 @@ operation ::= `ttng.barrier_expect` $alloc `,` $size attr-dict `,` $pred `:` qua
 This signal the barrier that `size` bytes are expected to be copied. The
 associated barrier wait will block until the expected number of bytes are copied.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -290,7 +290,7 @@ operation ::= `ttng.clc_get_program_id` $clcResult `,` $dim attr-dict `:` type($
 Decodes the CLC response to get the first CTA ID coordinate of the
 canceled cluster. The dim attribute specifies which dimension (0=x, 1=y, 2=z).
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -329,7 +329,7 @@ operation ::= `ttng.clc_is_canceled` $clcResult attr-dict `:` type($clcResult) `
 Decodes the CLC response to check if a cluster was successfully
 canceled. Returns true if canceled, false otherwise.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -362,7 +362,7 @@ Loads the 128-bit CLC response from shared memory into two i64 registers.
 This allows subsequent is_canceled and get_first_ctaid operations to
 operate on registers without re-reading shared memory.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -398,7 +398,7 @@ This is used for dynamic persistent kernels on Blackwell (SM100+).
 The result buffer must be 16-byte aligned shared memory.
 The mbarrier must be 8-byte aligned shared memory.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -423,7 +423,7 @@ Syntax:
 operation ::= `ttng.cluster_arrive` attr-dict
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -441,7 +441,7 @@ Syntax:
 operation ::= `ttng.cluster_wait` attr-dict
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 
 ### `ttng.fence_async_shared` (triton::nvidia_gpu::FenceAsyncSharedOp)
@@ -454,7 +454,7 @@ Syntax:
 operation ::= `ttng.fence_async_shared` attr-dict
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -474,7 +474,7 @@ Syntax:
 operation ::= `ttng.fence_mbarrier_init_release_cluster` attr-dict
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 
 ### `ttng.init_barrier` (triton::nvidia_gpu::InitBarrierOp)
@@ -493,7 +493,7 @@ number of arrives expected by the barrier.
 
 This lowers to PTX mbarrier.init.shared::cta.b64.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -524,7 +524,7 @@ spec this has to be done before any reuse of the memory used by mbarrier.
 
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -546,7 +546,7 @@ operation ::= `ttng.reinterpret_tensor_descriptor` $rawDesc attr-dict `:` qualif
 This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
 Ideally, we can remove this once the APIs are fully fleshed out.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -600,7 +600,7 @@ operations, but since the commit groups are sequential, the arrive-on
 operation on `%barrierA` is guaranteed to be performed before the arrive-on
 operation on `%barrierB`, even though its commit group is empty.
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -634,7 +634,7 @@ This operation takes and produces an optional token to indicate TMEM read
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
@@ -691,7 +691,7 @@ This operation takes and produces an optional token to indicate TMEM read
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
@@ -739,7 +739,7 @@ operation ::= `ttng.async_tma_store_wait` attr-dict
 Wait until all the read operations are done from the associated store operations.
 This is needed before the shared memory can be written to.
 
-Traits: `MemWaitOpTrait`, `VerifyTensorLayoutsTrait`
+Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -765,7 +765,7 @@ This is similar to ttg.local_alloc except the buffer is allocated in tensor memo
 
 Explicitly deallocating a buffer is optional; see local_dealloc.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface`
 
@@ -838,7 +838,7 @@ the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_M
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.
 
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -901,7 +901,7 @@ Example:
 This operation lowers to hardware-accelerated reduction via the PTX
 tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.
 
-Traits: `AttrSizedResultSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedResultSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -945,7 +945,7 @@ This operation takes and produces an optional token to indicate TMEM write
 on its source operand. When the tokens are present, they can
 be used to check aliasing and modref on the TMEM buffer.
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -978,7 +978,7 @@ containing the address and a view of the subslice.
 This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
 of a 2D memdesc as this is the only one we can do for TMem.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -1019,7 +1019,7 @@ operation ::= `ttng.tensormap_create` $desc_ptr `,` $global_address `,`
               attr-dict `:` functional-type(operands, results)
 ```
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -1057,7 +1057,7 @@ Syntax:
 operation ::= `ttng.tensormap_fenceproxy_acquire` $desc_ptr attr-dict `:` qualified(type($desc_ptr))
 ```
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -1093,7 +1093,7 @@ dependencies may be accessed until the barrier completes.
 The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
 
-Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -1118,7 +1118,7 @@ operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict
 
 $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
 
-Traits: `VerifyTensorLayoutsTrait`
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `DotOpInterface`, `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
@@ -1163,7 +1163,11 @@ $inputs must be the tensors corresponding to the async dot ops that we're
 waiting on.  For example, if there are N pending async dot ops and we call
 `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
 
-Traits: `VerifyTensorLayoutsTrait`
+The `warpGroupLocal` attribute specifies that we only wait for the local
+warp group, and if num_warps > 4 then shared memory inputs may still be in
+use by other warp groups.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -1172,6 +1176,7 @@ Interfaces: `InferTypeOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>warpGroupLocal</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 #### Operands:
