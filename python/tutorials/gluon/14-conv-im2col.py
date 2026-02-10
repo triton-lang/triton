@@ -26,6 +26,8 @@ Data layout convention:
   - Output: NHWC  ``[N, out_h, out_w, Co]``
 """
 
+import importlib
+
 import pytest
 import torch
 import triton
@@ -69,47 +71,8 @@ def is_hopper_or_newer():
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
 
 
-# ── WGMMA layout helpers (used by the Hopper kernel) ────────────────────
-# These determine the distributed register layout for the WGMMA accumulator.
-# See ``05-wgmma.py`` for a detailed explanation.
-
-
-@gluon.constexpr_function
-def get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps):
-    warps_per_cta = [4, 1]
-    m = 16
-    while warps_per_cta[0] * warps_per_cta[1] != num_warps:
-        if BLOCK_M > m * warps_per_cta[0]:
-            warps_per_cta[0] *= 2
-        else:
-            warps_per_cta[1] *= 2
-    return warps_per_cta
-
-
-@gluon.constexpr_function
-def get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps):
-    m = 16
-    mReps = triton.cdiv(BLOCK_M, m)
-    nReps = triton.cdiv(num_warps, mReps)
-    maxN = max(BLOCK_N // nReps, 8)
-    n = 256
-    while n > maxN or BLOCK_N % n != 0:
-        n -= 8
-    assert n >= 8, "expected to find a valid n"
-    return n
-
-
-@gluon.constexpr_function
-def pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps):
-    m = 16
-    k = 256 // dtype.primitive_bitwidth
-    n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps)
-    warps_per_cta = get_warps_per_cta(BLOCK_M, BLOCK_N, num_warps)
-    return gl.NVMMADistributedLayout(
-        version=[3, 0],
-        warps_per_cta=warps_per_cta,
-        instr_shape=[m, n, k],
-    )
+# Re-use WGMMA layout utilities from the previous tutorial.
+t5 = importlib.import_module("05-wgmma")
 
 
 if __name__ == "__main__" and not is_hopper_or_newer():
@@ -121,29 +84,27 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # A 2D convolution slides a small filter (kernel) across an input image and
 # computes a weighted sum at every position. For a single-channel example
-# with a 4x4 input and a 3x3 filter (stride=1, no padding), the output is 2x2:
+# with a 3x3 input and a 2x2 filter (stride=1, no padding), the output is 2x2:
 #
 # .. code-block:: text
 #
-#     Input (4x4):            Filter (3x3):           Output (2x2):
-#     +---+---+---+---+       +----+----+----+         +----+----+
-#     | a | b | c | d |       | w0 | w1 | w2 |         | y0 | y1 |
-#     +---+---+---+---+       +----+----+----+         +----+----+
-#     | e | f | g | h |       | w3 | w4 | w5 |         | y2 | y3 |
-#     +---+---+---+---+       +----+----+----+         +----+----+
-#     | i | j | k | l |       | w6 | w7 | w8 |
-#     +---+---+---+---+
-#     | m | n | o | p |
-#     +---+---+---+---+
+#     Input (3x3):        Filter (2x2):       Output (2x2):
+#     +---+---+---+       +----+----+          +----+----+
+#     | a | b | c |       | w0 | w1 |          | y0 | y1 |
+#     +---+---+---+       +----+----+          +----+----+
+#     | d | e | f |       | w2 | w3 |          | y2 | y3 |
+#     +---+---+---+                            +----+----+
+#     | g | h | i |
+#     +---+---+---+
 #
 # Each output element is the dot product of the filter with a region of the input:
 #
 # .. code-block:: text
 #
-#     y0 = a*w0 + b*w1 + c*w2 + e*w3 + f*w4 + g*w5 + i*w6 + j*w7 + k*w8
-#     y1 = b*w0 + c*w1 + d*w2 + f*w3 + g*w4 + h*w5 + j*w6 + k*w7 + l*w8
-#     y2 = e*w0 + f*w1 + g*w2 + i*w3 + j*w4 + k*w5 + m*w6 + n*w7 + o*w8
-#     y3 = f*w0 + g*w1 + h*w2 + j*w3 + k*w4 + l*w5 + n*w6 + o*w7 + p*w8
+#     y0 = a*w0 + b*w1 + d*w2 + e*w3
+#     y1 = b*w0 + c*w1 + e*w2 + f*w3
+#     y2 = d*w0 + e*w1 + g*w2 + h*w3
+#     y3 = e*w0 + f*w1 + h*w2 + i*w3
 #
 # With **multiple input channels** (Ci) and **multiple output channels** (Co):
 #
@@ -173,41 +134,38 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # .. code-block:: text
 #
-#     Example: 4x4 input, 3x3 filter, stride=1, no padding => 2x2 output
+#     Example: 3x3 input, 2x2 filter, stride=1, no padding => 2x2 output
 #
 #     Step 1: Extract patches for each output position
 #     -------------------------------------------------
-#     y0 at (0,0): patch = [a, b, c, e, f, g, i, j, k]
-#     y1 at (0,1): patch = [b, c, d, f, g, h, j, k, l]
-#     y2 at (1,0): patch = [e, f, g, i, j, k, m, n, o]
-#     y3 at (1,1): patch = [f, g, h, j, k, l, n, o, p]
+#     y0 at (0,0): patch = [a, b, d, e]
+#     y1 at (0,1): patch = [b, c, e, f]
+#     y2 at (1,0): patch = [d, e, g, h]
+#     y3 at (1,1): patch = [e, f, h, i]
 #
-#     Step 2: Stack patches into im2col matrix A (M=4, K=9)
+#     Step 2: Stack patches into im2col matrix A (M=4, K=4)
 #     -----------------------------------------------------
-#                   K = R*S*Ci = 9
-#              <-------------------------->
-#          A = | a  b  c  e  f  g  i  j  k |  <- y0     ^
-#              | b  c  d  f  g  h  j  k  l |  <- y1     | M = 4
-#              | e  f  g  i  j  k  m  n  o |  <- y2     |
-#              | f  g  h  j  k  l  n  o  p |  <- y3     v
+#              K = R*S*Ci = 4
+#              <------------->
+#          A = | a  b  d  e |  <- y0     ^
+#              | b  c  e  f |  <- y1     | M = 4
+#              | d  e  g  h |  <- y2     |
+#              | e  f  h  i |  <- y3     v
 #
-#     Note: overlapping patches share input elements (e.g., 'f' appears in all 4 rows).
+#     Note: overlapping patches share input elements (e.g., 'e' appears in all 4 rows).
 #
-#     Step 3: Reshape filter into weight matrix W (Co=1, K=9)
+#     Step 3: Reshape filter into weight matrix W (Co=1, K=4)
 #     -------------------------------------------------------
-#          W = | w0 w1 w2 w3 w4 w5 w6 w7 w8 |
+#          W = | w0 w1 w2 w3 |
 #
 #     Step 4: Output = A @ W^T
 #     ------------------------
 #                        | w0 |
-#                        | w1 |
-#              Output =  | w2 |
-#          A  @  W^T  =  | w3 |  =  | y0 |
-#          (4x9)(9x1)    | w4 |     | y1 |
-#                        | w5 |     | y2 |
-#                        | w6 |     | y3 |
-#                        | w7 |     (4x1)
-#                        | w8 |
+#          A  @  W^T  =  | w1 |  =  | y0 |
+#          (4x4)(4x1)    | w2 |     | y1 |
+#                        | w3 |     | y2 |
+#                                   | y3 |
+#                                   (4x1)
 #
 #     With Co output channels, W is (Co x K) and Output is (M x Co).
 
@@ -217,7 +175,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # **Explicit im2col** physically constructs the matrix A in memory. This is
 # simple but wastes memory because overlapping patches duplicate input data.
-# For a 3x3 filter, each input element may be copied up to 9 times!
+# For an R x S filter, each input element may be copied up to R * S times!
 #
 # **Implicit im2col** (also called **Implicit GEMM**) avoids materializing A.
 # Instead, during the GEMM computation, we compute the correct input address
@@ -321,94 +279,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #     ─────────────────────────────────────────────────────────
 #     A (input)         [M, K]               TMA im2col (implicit)
 #     B (weight)        [N_gemm, K]          TMA tiled load (explicit [Co, R*S*Ci])
-#     C (output)        [M, N_gemm]          tcgen05 accumulator (in tensor memory)
-#
-#     K-loop iteration order:
-#       for each (r, s) in filter:        # R*S iterations
-#           for each ci_block:            # Ci // BLOCK_K iterations
-#               load A tile via TMA im2col with offset=[r, s]
-#               load B tile via TMA at weight[co_start, r*S*Ci + s*Ci + ci_block*BLOCK_K]
-#               acc += A_tile @ B_tile^T  (tcgen05_mma)
-
-# %%
-# Reference: Explicit im2col in Python
-# =====================================
-#
-# Before implementing the GPU kernel, let's verify our understanding with a
-# simple Python reference that performs explicit im2col + matmul.
-
-
-def conv2d_reference_im2col(input_nhwc, weight, stride=1, padding=0):
-    """
-    Reference convolution using explicit im2col + matmul.
-
-    Args:
-        input_nhwc: [N, H, W, Ci] input tensor in NHWC format
-        weight: [Co, R, S, Ci] filter tensor
-        stride: convolution stride
-        padding: convolution padding
-
-    Returns:
-        output: [N, out_h, out_w, Co] in NHWC format
-    """
-    N, H, W, Ci = input_nhwc.shape
-    Co, R, S, Ci_w = weight.shape
-    assert Ci == Ci_w
-
-    out_h = (H + 2 * padding - R) // stride + 1
-    out_w = (W + 2 * padding - S) // stride + 1
-
-    # Pad the input if needed: pad only H and W dimensions
-    if padding > 0:
-        padded = torch.nn.functional.pad(input_nhwc, (0, 0, padding, padding, padding, padding, 0, 0))
-    else:
-        padded = input_nhwc
-
-    # Build the im2col matrix A of shape [M, K]
-    # M = N * out_h * out_w, K = R * S * Ci
-    M = N * out_h * out_w
-    K = R * S * Ci
-    A = torch.zeros(M, K, device=input_nhwc.device, dtype=input_nhwc.dtype)
-
-    for n in range(N):
-        for oh in range(out_h):
-            for ow in range(out_w):
-                # Row index in A
-                m = n * out_h * out_w + oh * out_w + ow
-                # Extract the R x S x Ci patch and flatten
-                patch = padded[n, oh * stride:oh * stride + R, ow * stride:ow * stride + S, :]
-                A[m, :] = patch.reshape(-1)
-
-    # Weight matrix W of shape [Co, K]
-    W_mat = weight.reshape(Co, K)
-
-    # Output = A @ W^T -> [M, Co]
-    output_flat = A @ W_mat.T
-
-    return output_flat.reshape(N, out_h, out_w, Co)
-
-
-# Quick verification against PyTorch:
-def _verify_reference():
-    torch.manual_seed(42)
-    N, H, W, Ci, Co, R, S = 1, 6, 6, 3, 2, 3, 3
-    x_nhwc = torch.randn(N, H, W, Ci)
-    w_nhwc = torch.randn(Co, R, S, Ci)
-
-    our_out = conv2d_reference_im2col(x_nhwc, w_nhwc, stride=1, padding=1)
-
-    # Compare with PyTorch conv2d (NCHW format)
-    x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
-    w_nchw = w_nhwc.permute(0, 3, 1, 2).contiguous()
-    torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=1, padding=1)
-    torch_out_nhwc = torch_out.permute(0, 2, 3, 1)
-
-    torch.testing.assert_close(our_out, torch_out_nhwc, atol=1e-5, rtol=1e-5)
-    print("Reference im2col matches PyTorch conv2d!")
-
-
-if __name__ == "__main__":
-    _verify_reference()
+#     C (output)        [M, N_gemm]          MMA accumulator
 
 # %%
 # Gluon Kernel: Convolution with TMA im2col + tcgen05 MMA
@@ -759,9 +630,10 @@ def conv2d_im2col_wgmma_kernel(
 
     # ── Accumulator in registers ──────────────────────────────────────────
     # On Hopper, WGMMA accumulates into distributed registers rather than
-    # tensor memory.  pick_wgmma_layout determines the register layout
-    # based on the MMA instruction shape and warp configuration.
-    mma_layout: gl.constexpr = pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
+    # tensor memory.  t5.pick_wgmma_layout (from ``05-wgmma.py``) determines
+    # the register layout based on the MMA instruction shape and warp
+    # configuration.
+    mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
     acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
 
     # ── Barrier ───────────────────────────────────────────────────────────
