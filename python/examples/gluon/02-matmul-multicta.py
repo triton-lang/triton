@@ -668,7 +668,7 @@ def benchmark():
     collective = True
     epilogue_tile_n = 32
 
-    def run_triton():
+    def run_gluon():
         return matmul_with_config(
             a,
             b,
@@ -683,7 +683,7 @@ def benchmark():
             epilogue_size_n=epilogue_tile_n,
         )
 
-    torch.testing.assert_close(run_triton(), expected, atol=1e-1, rtol=1e-2)
+    torch.testing.assert_close(run_gluon(), expected, atol=1e-1, rtol=1e-2)
 
     pallas_available = False
     try:
@@ -743,12 +743,12 @@ def benchmark():
         with proton.scope(f"torch [M={M}, N={N}, K={K}]", scope_metrics):
             torch.matmul(a, b, out=c_torch)
 
-    def triton_profiled():
-        with proton.scope(f"triton [M={M}, N={N}, K={K}]", scope_metrics):
-            run_triton()
+    def gluon_profiled():
+        with proton.scope(f"gluon [M={M}, N={N}, K={K}]", scope_metrics):
+            run_gluon()
 
     bench_fn("torch", reps=100, fn=torch_profiled)
-    bench_fn("gluon", reps=100, fn=triton_profiled)
+    bench_fn("gluon", reps=100, fn=gluon_profiled)
     if pallas_available and run_pallas is not None:
 
         def pallas_profiled():
