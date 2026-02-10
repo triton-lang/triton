@@ -21,12 +21,25 @@ class Data;
 class Runtime;
 
 struct GraphState {
-  struct NodeState {
-    // Whether the node is missing name
-    bool isMissingName{};
-    // Whether the node is a metric kernel node
-    bool isMetricNode{};
-  };
+  using NodeState = uint8_t;
+
+  static constexpr NodeState kNodeStateMissingName = 1u << 0;
+  static constexpr NodeState kNodeStateMetric = 1u << 1;
+
+  static constexpr NodeState makeNodeState(bool isMissingName,
+                                           bool isMetricNode) {
+    return static_cast<NodeState>(
+        (isMissingName ? kNodeStateMissingName : 0) |
+        (isMetricNode ? kNodeStateMetric : 0));
+  }
+
+  static constexpr bool isMissingName(NodeState state) {
+    return (state & kNodeStateMissingName) != 0;
+  }
+
+  static constexpr bool isMetricNode(NodeState state) {
+    return (state & kNodeStateMetric) != 0;
+  }
 
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
