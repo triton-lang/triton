@@ -83,13 +83,14 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.amd.gfx1250.tdm.async_wait(1 * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         with ttgl.amd.warp_pipeline_stage("stage0", priority=1):
-            consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
-                                      TRANSPOSE_B)
-        # Wait for the last one, either before the loop or a load below.
-        ttgl.amd.gfx1250.tdm.async_wait(0)
-        with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
                                    TRANSPOSE_B)
+            consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                                      TRANSPOSE_B)
+
+        # Wait for the last but one set of loads.
+        ttgl.amd.gfx1250.tdm.async_wait(2)
+        with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             accumulator = issue_wmma_compute(a, b, accumulator)
 
     for i in ttgl.static_range(NUM_BUFFERS - 1):

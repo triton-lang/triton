@@ -485,6 +485,13 @@ class HIPBackend(BaseBackend):
         else:
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
                                            options.enable_fp_fusion, False)
+        # Insert wave scheduling mode after wave mode setup in the prologue.
+        lines = amdgcn.split('\n')
+        for i, line in enumerate(lines[:50]):
+            if 's_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1' in line:
+                lines.insert(i + 1, '\ts_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 0, 2), 2')
+                break
+        amdgcn = '\n'.join(lines)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

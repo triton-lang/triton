@@ -44,6 +44,11 @@ class MemWaitOpTrait
   // Optional: Add methods or verification logic here
 };
 
+// Async DMA write to shared memory, visible only after an explicit wait.
+template <typename ConcreteType>
+class MemAsyncWriteOpTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncWriteOpTrait> {};
+
 } // namespace OpTrait
 } // namespace mlir
 
