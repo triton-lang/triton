@@ -15,8 +15,9 @@ bool isLocalLoadSyncedViaWait(Operation *op) {
   return localLoad && isSyncedViaAsyncWait(localLoad);
 }
 
-// s_barrier synchronizes threads but not the DMA engine; only an explicit
-// async wait can make in-flight DMA writes visible.  Filter such pairs.
+// Only an explicit async_wait can make in-flight async writes visible, and
+// currently async_wait clears the dependency by emitting a barrier.  Filter
+// unwanted dependency from async_write.
 bool filterAsyncWriteDependencies(Operation *op1, Operation *op2) {
   bool op1Async = isAsyncWrite(op1);
   bool op2Async = isAsyncWrite(op2);
