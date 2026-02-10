@@ -53,11 +53,6 @@ async_copy_global_to_shared_im2col:
     - offsets: [h_offset, w_offset] spatial offsets (i16)
 
     Starting position (the first pixel): (batch_idx, start_h + h_offset, start_w + w_offset, channel_start)
-
-Data layout convention:
-  - Input:  NHWC  ``[N, H, W, Ci]``
-  - Weight: NHWC  ``[Co, R, S, Ci]``  (output-channels first)
-  - Output: NHWC  ``[N, out_h, out_w, Co]``
 """
 
 import importlib
@@ -656,11 +651,10 @@ if __name__ == "__main__":
 #
 #     Step 4: Output = A @ W^T
 #     ------------------------
-#                        | w0 |
-#          A  @  W^T  =  | w1 |  =  | y0 |
-#          (4x4)(4x1)    | w2 |     | y1 |
-#                        | w3 |     | y2 |
-#                                   | y3 |
+#                        | w0 |     | y0 |
+#          A  @  W^T  =  | w1 |  =  | y1 |
+#          (4x4)(4x1)    | w2 |     | y2 |
+#                        | w3 |     | y3 |
 #                                   (4x1)
 #
 #     With Co output channels, W is (Co x K) and Output is (M x Co).
@@ -696,7 +690,7 @@ if __name__ == "__main__":
 # (WGMMA, accumulator in registers) and Blackwell (tcgen05, accumulator in
 # tensor memory) without any code changes.
 #
-# Data layout convention for this section:
+# Convolution data layout convention for this section:
 #   - Input:  NHWC  ``[N, H, W, Ci]``
 #   - Weight: ``[Co, R, S, Ci]``  (output-channels first)
 #   - Output: NHWC  ``[N, out_h, out_w, Co]``
@@ -811,6 +805,11 @@ def conv2d_im2col_kernel(
         s = rs_idx % S
 
         # │   A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
+        # │   Equivalent TMA-im2col mapping:
+        # │     coord   = [batch_id, out_y*stride_h-pad_h, out_x*stride_w-pad_w, ci_block*BLOCK_K]
+        # │     offsets = [r, s]
+        # │   TMA applies offsets to the spatial coords, so start is:
+        # │     [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
         k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
         tma.async_copy_global_to_shared_im2col(
