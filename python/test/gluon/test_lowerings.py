@@ -1350,6 +1350,7 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(is_cuda(), reason="PartitionedSharedLayout is not supported in NV backend")
 @pytest.mark.parametrize("M, K", [(64, 32), (128, 64)])
 @pytest.mark.parametrize("num_partitions", [2, 4])
 @pytest.mark.parametrize("num_groups", [1, 2])
