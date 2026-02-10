@@ -672,6 +672,41 @@ if __name__ == "__main__":
 # out-of-bounds accesses, and wrapping across batch boundaries — all
 # without any register-level index arithmetic.
 #
+# Pseudocode:
+#
+# ```
+# # GEMM dimensions
+# M = N * out_h * out_w        # output spatial positions
+# N_gemm = Co                  # output channels
+# K = R * S * Ci               # reduction dimension
+#
+# for each M-tile (output positions):
+#     for each N-tile (output channels):
+#         acc = zeros(BLOCK_M, BLOCK_N)
+#
+#         for r in range(R):                  # filter height
+#             for s in range(S):              # filter width
+#                 for ci_block in range(Ci // BLOCK_K):
+#                     # Input tile via TMA im2col:
+#                     # input[batch, out_y*stride+r-pad, out_x*stride+s-pad, ci_block*BLOCK_K:...]
+#                     tma.async_copy_global_to_shared_im2col(...)
+#                     A_tile = a_smem         # [BLOCK_M, BLOCK_K]
+#
+#                     # Weight tile via standard TMA:
+#                     # weight[co_start:..., r, s, ci_block*BLOCK_K:...]
+#                     tma.async_copy_global_to_shared(...)
+#                     B_tile = b_smem         # [BLOCK_N, BLOCK_K]
+#
+#                     # Matrix multiply-accumulate (details omitted here)
+#                     acc += A_tile @ B_tile^T
+#
+#         # Store output tile via TMA
+#         tma.async_copy_shared_to_global(...)
+# ```
+#
+# Key insight: we never materialize the full im2col matrix; address generation
+# happens inside the K-loop via TMA im2col.
+#
 # %%
 # Gluon Kernel
 # ============
@@ -750,35 +785,6 @@ def conv2d_im2col_kernel(
     Works on both Hopper (WGMMA) and Blackwell (tcgen05) via MMAImpl.
     """
     dtype: ttgl.constexpr = in_desc.dtype
-
-    # ── Implicit GEMM algorithm ──────────────────────────────────────────
-    #
-    #   Recall:  y[n, oh, ow, co] = SUM over (r, s, ci) of
-    #       input[n, oh*stride+r-pad, ow*stride+s-pad, ci] * weight[co, r, s, ci]
-    #   where:
-    #     oh = output height index (output row), mapped to out_y below
-    #     ow = output width index  (output col), mapped to out_x below
-    #
-    #   We tile this as a GEMM with dimensions:
-    #     M      = N * out_h * out_w   (output spatial positions)
-    #     N_gemm = Co                  (output channels)
-    #     K      = R * S * Ci          (reduction dimension)
-    #
-    #   for each M-tile:                          ← pid_m
-    #       for each N-tile:                      ← pid_n
-    #           acc = zeros(BLOCK_M, BLOCK_N)
-    #           for r in range(R):
-    #               for s in range(S):
-    #                   for ci_blk in range(Ci // BLOCK_K):
-    #                       # BLOCK_M output positions × BLOCK_K input channels
-    #                       A[BLOCK_M, BLOCK_K] = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
-    #                       # BLOCK_N output channels × BLOCK_K input channels
-    #                       B[BLOCK_N, BLOCK_K] = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
-    #                       acc += A @ B^T                  # [BLOCK_M, BLOCK_N]
-    #           store output[…] = acc
-    #
-    # ─────────────────────────────────────────────────────────────────────
-    # Gluon implementation (follows the pseudocode above line-by-line):
 
     # ┌ for each M-tile / N-tile:
     pid_m, pid_n = ttgl.program_id(0), ttgl.program_id(1)
