@@ -584,6 +584,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
         stride:     convolution stride (default: 1)
         padding:    convolution padding (default: 0)
     """
+    assert is_blackwell(), "conv2d_tma_im2col requires a Blackwell GPU (tcgen05 MMA)"
     N, H, W, Ci = input_nhwc.shape
     Co, R, S, Ci_w = weight.shape
     assert Ci == Ci_w, "Channel mismatch"
@@ -839,6 +840,7 @@ def conv2d_tma_im2col_wgmma(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64,
         stride:     convolution stride (default: 1)
         padding:    convolution padding (default: 0)
     """
+    assert is_hopper(), "conv2d_tma_im2col_wgmma requires a Hopper GPU (WGMMA)"
     N, H, W, Ci = input_nhwc.shape
     Co, R, S, Ci_w = weight.shape
     assert Ci == Ci_w, "Channel mismatch"
