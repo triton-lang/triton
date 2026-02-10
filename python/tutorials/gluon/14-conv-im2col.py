@@ -641,10 +641,15 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
         in_desc,
         weight_desc,
         out_desc,
-        R, S, Ci,
-        out_h, out_w,
-        stride, stride,
-        padding, padding,
+        R,
+        S,
+        Ci,
+        out_h,
+        out_w,
+        stride,
+        stride,
+        padding,
+        padding,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
@@ -801,7 +806,7 @@ def conv2d_im2col_wgmma_kernel(
         # 5. WGMMA: acc += A_tile @ B_tile^T
         #    Transpose B via permute, then issue async WGMMA and wait.
         acc = warpgroup_mma(a_smem, b_smem.permute((1, 0)), acc, is_async=True)
-        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))
+        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
 
         phase ^= 1
 
@@ -882,10 +887,15 @@ def conv2d_tma_im2col_wgmma(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64,
         in_desc,
         weight_desc,
         out_desc,
-        R, S, Ci,
-        out_h, out_w,
-        stride, stride,
-        padding, padding,
+        R,
+        S,
+        Ci,
+        out_h,
+        out_w,
+        stride,
+        stride,
+        padding,
+        padding,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
