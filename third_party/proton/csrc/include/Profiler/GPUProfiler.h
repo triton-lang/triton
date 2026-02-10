@@ -75,27 +75,14 @@ public:
       bool isMetricNode{false};
       bool isMissingName{true};
 
-      void setEntry(const DataEntry &entry) {
-        for (auto &existingEntry : dataEntries) {
-          if (existingEntry.data == entry.data) {
-            existingEntry = entry;
-            return;
-          }
-        }
+      void addEntry(const DataEntry &entry) {
         dataEntries.push_back(entry);
       }
 
-      const DataEntry *findEntry(Data *data) const {
-        for (const auto &entry : dataEntries) {
-          if (entry.data == data)
-            return &entry;
-        }
-        return nullptr;
-      }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
         for (auto &entry : dataEntries)
-          fn(entry.data, entry);
+          fn(entry);
       }
 
       std::vector<DataEntry> dataEntries;
@@ -115,8 +102,6 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
-    threadState.dataEntries.clear();
-    threadState.dataEntries.reserve(dataSet.size());
     for (auto *data : dataSet) {
       threadState.dataEntries.push_back(data->addOp(scope.name));
     }

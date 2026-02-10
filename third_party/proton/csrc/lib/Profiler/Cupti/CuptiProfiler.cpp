@@ -129,23 +129,21 @@ uint32_t processActivityKernel(
     if (nodeState && !nodeState->isMetricNode) {
       const bool isMissingName = nodeState->isMissingName;
       if (!isMissingName) {
-        nodeState->forEachEntry(
-            [activity, &dataPhases](Data *data, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertMetric(std::move(kernelMetric));
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            });
+        nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            entry.upsertMetric(std::move(kernelMetric));
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          }
+        });
       } else {
-        nodeState->forEachEntry(
-            [kernel, activity, &dataPhases](Data *data, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry =
-                    data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-                childEntry.upsertMetric(std::move(kernelMetric));
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            });
+        nodeState->forEachEntry([kernel, activity, &dataPhases](DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry =
+                entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+            childEntry.upsertMetric(std::move(kernelMetric));
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          }
+        });
       }
     }
     // Decrease the expected kernel count
@@ -414,7 +412,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       auto &graphState = graphStates[graphId];
       bool isMissingName = false;
       bool isMetricNode = false;
-      size_t metricNumWords = 0;
+      size_t numMetricWords = 0;
       if (profiler.isOpInProgress()) {
         const auto &name = threadState.scopeStack.back().name;
         if (name.empty() || (threadState.isApiExternOp &&
@@ -423,11 +421,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         }
         if (threadState.isMetricKernelLaunching) {
           isMetricNode = true;
-          metricNumWords = threadState.metricKernelNumWordsQueue.front();
+          numMetricWords = threadState.metricKernelNumWordsQueue.front();
           threadState.metricKernelNumWordsQueue.pop_front();
           graphState.metricKernelNodeIdToNumWords.insert_or_assign(
-              nodeId, metricNumWords);
-          graphState.metricNumWords += metricNumWords;
+              nodeId, numMetricWords);
+          graphState.numMetricWords += numMetricWords;
         }
         bool hasLaunchState = false;
         for (auto *data : profiler.dataSet) {
@@ -457,10 +455,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           originalGraphState.metricKernelNodeIdToNumWords.find(originalNodeId);
       if (originalMetricNodeIt !=
           originalGraphState.metricKernelNodeIdToNumWords.end()) {
-        const auto metricNumWords = originalMetricNodeIt->second;
+        const auto numMetricWords = originalMetricNodeIt->second;
         graphState.metricKernelNodeIdToNumWords.insert_or_assign(nodeId,
-                                                                 metricNumWords);
-        graphState.metricNumWords += metricNumWords;
+                                                                 numMetricWords);
+        graphState.numMetricWords += numMetricWords;
       }
       bool hasLaunchState = false;
       for (const auto &[dataPtr, originalLaunchState] :
@@ -489,7 +487,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     auto metricNodeIt = graphState.metricKernelNodeIdToNumWords.find(nodeId);
     if (metricNodeIt != graphState.metricKernelNodeIdToNumWords.end()) {
-      graphState.metricNumWords -= metricNodeIt->second;
+      graphState.numMetricWords -= metricNodeIt->second;
       graphState.metricKernelNodeIdToNumWords.erase(metricNodeIt);
     }
     for (auto it = graphState.dataToLaunchState.begin();
@@ -658,7 +656,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                            nodeLaunchState.isMissingName;
                        graphNodeState.isMetricNode =
                            nodeLaunchState.isMetricNode;
-                       graphNodeState.setEntry(std::move(nodeEntry));
+                       graphNodeState.addEntry(std::move(nodeEntry));
                      });
       }
       if (timingEnabled) {
@@ -673,18 +671,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
       if (!graphStates[graphExecId].metricKernelNodeIdToNumWords.empty()) {
         auto &graphExecState = graphStates[graphExecId];
-        std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
+        std::vector<DataEntry> metricNodeEntries;
         auto phase = Data::kNoCompletePhase;
         for (const auto &metricNode :
              graphExecState.metricKernelNodeIdToNumWords) {
           auto nodeId = metricNode.first;
           auto *nodeState = graphNodeIdToState.find(nodeId);
-          if (!nodeState) {
-            throw std::runtime_error(
-                "[PROTON] Missing graph node state for metric node.");
-          }
-          nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
-            metricNodeEntries[data].push_back(entry);
+          nodeState->forEachEntry([&](const DataEntry &entry) {
+            metricNodeEntries.push_back(entry);
             if (phase == Data::kNoCompletePhase) {
               phase = entry.phase;
             } else if (phase != entry.phase) {
@@ -693,20 +687,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             }
           });
         }
-        // Check if all data contains the same number of metric nodes
         const auto numMetricNodes =
             graphExecState.metricKernelNodeIdToNumWords.size();
-        for (const auto &[data, entries] : metricNodeEntries) {
-          if (entries.size() != numMetricNodes) {
-            throw std::runtime_error(
-                "[PROTON] Inconsistent number of metric nodes in graph.");
-          }
-        }
-        size_t metricNumWords = graphExecState.metricNumWords;
+        const auto numMetricWords = graphExecState.numMetricWords;
         if (callbackData->context != nullptr)
-          profiler.pendingGraphPool->flushIfNeeded(metricNumWords);
+          profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
         profiler.pendingGraphPool->push(phase, metricNodeEntries,
-                                        numMetricNodes, metricNumWords);
+                                        numMetricNodes, numMetricWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

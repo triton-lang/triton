@@ -56,14 +56,14 @@ struct GraphState {
   // Total number of GPU kernels launched by this graph
   size_t numNodes{1};
   // Total number of uint64 words written by all metric nodes in this graph.
-  size_t metricNumWords{};
+  size_t numMetricWords{};
 };
 
 struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    std::map<Data *, std::vector<DataEntry>> dataToEntries;
+    std::vector<DataEntry> dataEntries;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -83,8 +83,8 @@ struct PendingGraphQueue {
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
   void push(size_t numNodes, size_t numWords,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataToEntries});
+            const std::vector<DataEntry> &dataEntries) {
+    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataEntries});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -95,8 +95,7 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
+  void push(size_t phase, const std::vector<DataEntry> &dataEntries,
             size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
