@@ -1,5 +1,4 @@
 import importlib
-from contextlib import contextmanager
 
 import pytest
 import torch
@@ -718,21 +717,18 @@ def benchmark():
 
     import triton.profiler as proton
 
-    @contextmanager
-    def proton_context():
-        proton.activate(0)
-        try:
-            yield
-        finally:
-            proton.deactivate(0)
-
     def bench_fn(label, reps, warmup_reps, fn):
         print(f"Benchmarking {label}: ...", end="")
         for _ in range(warmup_reps):
             fn()
-        with proton_context():
+        try:
             for _ in range(reps):
+                proton.deactivate(0)
+                triton.runtime.driver.active.clear_cache(l2_cache)
+                proton.activate(0)
                 fn()
+        finally:
+            proton.deactivate(0)
         print(f"\rBenchmarking {label}: done")
 
     bytes_per_elem = a.element_size()
@@ -743,6 +739,7 @@ def benchmark():
 
     proton.start("matmul", hook="triton")
     proton.deactivate(0)
+    l2_cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
     def torch_profiled():
         with proton.scope(f"torch [M={M}, N={N}, K={K}]", scope_metrics):
