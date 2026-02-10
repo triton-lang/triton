@@ -35,6 +35,17 @@ def test_act_scale_roundtrip_batched(shape):
     torch.testing.assert_close(res, x)
 
 
+@pytest.mark.parametrize("shape", [(256, 192), (128, 64), (130, 65)])
+def test_act_scale_roundtrip_2d_without_ragged_metadata(shape):
+    x = torch.randn(shape, device="cuda", dtype=torch.float32)
+    layout = BlackwellActMXScaleLayout(ragged_metadata=None)
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    assert transformation.mode == "batched"
+    res = transformation.unswizzle_data(transformation.swizzle_data(x))
+    assert res.shape == (1, *shape)
+    torch.testing.assert_close(res, x.unsqueeze(0))
+
+
 @pytest.mark.parametrize(
     "slice_sizes, m, k, align_m",
     [
