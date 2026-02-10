@@ -11,13 +11,16 @@ We cover:
 2. The im2col algorithm that reshapes convolution into GEMM
 3. Explicit vs implicit im2col (the "Implicit GEMM" approach)
 4. How TMA im2col hardware accelerates implicit GEMM
-5. A complete Blackwell convolution kernel using TMA im2col + tcgen05 MMA
-6. A Hopper convolution kernel using TMA im2col + WGMMA
+5. A convolution kernel using TMA im2col + MMA (works on both Hopper and Blackwell)
+
+We re-use the MMA abstraction from ``07-persistence.py`` so that the same kernel
+runs on Hopper (WGMMA) and Blackwell (tcgen05 MMA) without code duplication.
 
 Prerequisites:
   - ``04-tma.py``: TMA basics (tensor descriptors, async copies)
   - ``05-wgmma.py``: Hopper warp-group MMA (WGMMA) basics
   - ``06-tcgen05.py``: tcgen05 MMA for matrix multiplication on Blackwell
+  - ``07-persistence.py``: MMA abstraction (WGMMA / MMAv5) and persistent kernels
   - ``13-tma-im2col.py``: TMA im2col mode basics
 
 Data layout convention:
@@ -37,42 +40,21 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor, TensorDescriptorIm2Col
-# TMA im2col, mbarrier, and fence live in the hopper module (shared by both architectures).
-# The blackwell module's TMA does not expose async_copy_global_to_shared_im2col.
 from triton.experimental.gluon.language.nvidia.hopper import (
     fence_async_shared,
     mbarrier,
     tma,
-    warpgroup_mma,
-    warpgroup_mma_wait,
-)
-# tcgen05 MMA and tensor memory APIs are blackwell-specific.
-from triton.experimental.gluon.language.nvidia.blackwell import (
-    TensorMemoryLayout,
-    allocate_tensor_memory,
-    get_tmem_reg_layout,
-    tcgen05_mma,
-    tcgen05_commit,
 )
 
-
-def is_blackwell():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
-
-
-def is_hopper():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 9
+# Re-use MMA abstractions from the previous tutorial.
+# t7.select_mma_impl() returns the correct MMA class (WGMMA on Hopper,
+# MMAv5 on Blackwell) so we can write a single kernel for both architectures.
+t7 = importlib.import_module("07-persistence")
 
 
 def is_hopper_or_newer():
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
-
-
-# Re-use WGMMA layout utilities from the previous tutorial.
-t5 = importlib.import_module("05-wgmma")
 
 
 if __name__ == "__main__" and not is_hopper_or_newer():
@@ -282,23 +264,24 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #     C (output)        [M, N_gemm]          MMA accumulator
 
 # %%
-# Gluon Kernel: Convolution with TMA im2col + tcgen05 MMA
-# ========================================================
+# Gluon Kernel: Convolution with TMA im2col
+# ==========================================
 #
 # Now we implement a real GPU kernel. This kernel:
 #
 # - Loads **input tiles** using TMA im2col (hardware-accelerated implicit GEMM)
 # - Loads **weight tiles** using standard TMA
-# - Computes the matmul using **tcgen05 MMA** (Blackwell 5th-gen Tensor Core)
+# - Computes the matmul using the **MMA abstraction** from ``07-persistence.py``
 # - Stores the output using **TMA**
 #
-# The accumulator lives in **tensor memory** (TMEM), a fast on-chip memory
-# space introduced on Blackwell that is directly accessed by the tensor cores.
-# The structure follows a standard blocked GEMM with a K-loop over
-# ``(r, s, ci_block)`` iterations.
+# By accepting ``MMAImpl`` as a compile-time parameter, the same kernel works on
+# both Hopper (WGMMA, accumulator in registers) and Blackwell (tcgen05 MMA,
+# accumulator in tensor memory). The MMA abstraction handles all the differences:
+# accumulator allocation, barrier management, and the async MMA issue/wait API.
 #
-# See ``06-tcgen05.py`` for a detailed explanation of tensor memory, tcgen05_mma,
-# and tcgen05_commit.
+# See ``07-persistence.py`` for the full ``WGMMA`` and ``MMAv5`` class
+# definitions, and ``06-tcgen05.py`` / ``05-wgmma.py`` for the underlying
+# tensor core operations.
 
 # %%
 # The kernel below implements a single-buffered implicit GEMM convolution.
@@ -319,13 +302,16 @@ def conv2d_im2col_kernel(
     stride_w: gl.constexpr,
     pad_h: gl.constexpr,
     pad_w: gl.constexpr,
+    MMAImpl: gl.constexpr,
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
     num_warps: gl.constexpr,
 ):
     """
-    Implicit GEMM convolution kernel using TMA im2col + tcgen05 MMA.
+    Implicit GEMM convolution kernel using TMA im2col + MMA.
+
+    Works on both Hopper (WGMMA) and Blackwell (tcgen05) via MMAImpl.
 
     GEMM: Output[M, N_gemm] = A[M, K] @ B[N_gemm, K]^T
       where M = N_batch * out_h * out_w, N_gemm = Co, K = R * S * Ci
@@ -347,18 +333,15 @@ def conv2d_im2col_kernel(
     a_smem = gl.allocate_shared_memory(dtype, in_desc.block_shape, in_desc.layout)
     b_smem = gl.allocate_shared_memory(dtype, weight_desc.block_shape, weight_desc.layout)
 
-    # ── Accumulator in tensor memory (TMEM) ──────────────────────────────
-    # Tensor memory is a fast on-chip memory directly accessed by Blackwell
-    # tensor cores.  tcgen05_mma reads/writes the accumulator from TMEM.
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
-    acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
+    # ── Initialize MMA (handles accumulator setup for both architectures) ─
+    # On Hopper: accumulator in distributed registers (WGMMA)
+    # On Blackwell: accumulator in tensor memory (tcgen05 MMA)
+    mma = MMAImpl.initialize(dtype, BLOCK_M, BLOCK_N, num_warps)
 
-    # ── Barriers ─────────────────────────────────────────────────────────
-    # Two barriers: one for TMA loads, one for tcgen05 MMA completion.
+    # ── TMA barrier ──────────────────────────────────────────────────────
+    # MMA barriers are managed internally by MMAImpl.
     tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(tma_bar, count=1)
-    mbarrier.init(mma_bar, count=1)
     phase = 0
 
     # ── K-loop: iterate over (r, s, ci_block) ────────────────────────────
@@ -367,8 +350,6 @@ def conv2d_im2col_kernel(
     ci_num_blocks = Ci // BLOCK_K
     total_k_iters = R * S * ci_num_blocks
 
-    # use_acc=False on the first iteration zero-initializes the accumulator.
-    use_acc = False
     for k_iter in range(total_k_iters):
         # Decompose k_iter into (r, s, ci_block)
         ci_block = k_iter % ci_num_blocks
@@ -403,29 +384,19 @@ def conv2d_im2col_kernel(
         # 4. Wait for both TMA loads to complete
         mbarrier.wait(tma_bar, phase=phase)
 
-        # 5. tcgen05 MMA: acc += A_tile @ B_tile^T
-        #    A_tile is [BLOCK_M, BLOCK_K] (input pixels x channels)
-        #    B_tile is [BLOCK_N, BLOCK_K] (output channels x channels)
-        #    Transpose B to get [BLOCK_K, BLOCK_N]
-        #    use_acc=False on first iteration zeros the accumulator.
-        tcgen05_mma(a_smem, b_smem.permute((1, 0)), acc_tmem, use_acc=use_acc)
-        tcgen05_commit(mma_bar)
-        mbarrier.wait(mma_bar, phase=phase)
-        use_acc = True
+        # 5. MMA: acc += A_tile @ B_tile^T
+        #    The MMA abstraction handles async issue and barrier management
+        #    for both WGMMA (Hopper) and tcgen05 (Blackwell).
+        mma = mma.wait_num_outstanding(0)
+        mma = mma.issue_async_mma(a_smem, b_smem.permute((1, 0)))
 
         phase ^= 1
 
     mbarrier.invalidate(tma_bar)
-    mbarrier.invalidate(mma_bar)
 
-    # ── Load accumulator from TMEM to registers ──────────────────────────
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (BLOCK_M, BLOCK_N),
-        tmem_layout,
-        num_warps,
-    )
-    acc = acc_tmem.load(acc_reg_layout)
+    # ── Wait for last MMA and extract accumulator ─────────────────────────
+    mma = mma.wait_num_outstanding(0)
+    acc, mma = mma.take_result()
 
     # ── Downcast and store output tile via TMA ────────────────────────────
     c_smem = gl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
@@ -443,11 +414,14 @@ def conv2d_im2col_kernel(
 # The critical part is configuring the ``TensorDescriptorIm2Col`` with the
 # correct ``pixel_box``, ``element_strides``, and ``padding`` to match
 # the convolution parameters.
+#
+# ``t7.select_mma_impl()`` automatically picks the right MMA backend:
+# ``WGMMA`` on Hopper (SM 9.x) or ``MMAv5`` on Blackwell (SM 10.x).
 
 
 def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_warps=4):
     """
-    2D convolution using TMA im2col + tcgen05 MMA.
+    2D convolution using TMA im2col + MMA (Hopper / Blackwell).
 
     Args:
         input_nhwc: [N, H, W, Ci] in NHWC format, float16
@@ -455,7 +429,9 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
         stride:     convolution stride (default: 1)
         padding:    convolution padding (default: 0)
     """
-    assert is_blackwell(), "conv2d_tma_im2col requires a Blackwell GPU (tcgen05 MMA)"
+    MMAImpl = t7.select_mma_impl()
+    assert MMAImpl is not None, "conv2d_tma_im2col requires a Hopper or Blackwell GPU"
+
     N, H, W, Ci = input_nhwc.shape
     Co, R, S, Ci_w = weight.shape
     assert Ci == Ci_w, "Channel mismatch"
@@ -522,6 +498,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
         stride,
         padding,
         padding,
+        MMAImpl=MMAImpl,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
@@ -544,7 +521,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 @pytest.mark.parametrize("R,S", [(3, 3), (1, 1)])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer GPU (SM 9.x+)")
 def test_conv2d_im2col(N, H, W, Ci, Co, R, S, stride, padding):
     torch.manual_seed(0)
 
@@ -553,252 +530,6 @@ def test_conv2d_im2col(N, H, W, Ci, Co, R, S, stride, padding):
 
     # Our kernel
     triton_out = conv2d_tma_im2col(x_nhwc, w_nhwc, stride=stride, padding=padding)
-
-    # PyTorch reference (uses NCHW internally)
-    x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
-    w_nchw = w_nhwc.permute(0, 3, 1, 2).contiguous()
-    torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride, padding=padding)
-    torch_out_nhwc = torch_out.permute(0, 2, 3, 1)
-
-    torch.testing.assert_close(triton_out, torch_out_nhwc, atol=1e-2, rtol=1e-2)
-
-
-# %%
-# Gluon Kernel: Convolution with TMA im2col + WGMMA (Hopper)
-# ===========================================================
-#
-# Hopper GPUs also support TMA im2col mode, so we can use the same
-# hardware-accelerated implicit GEMM approach with WGMMA (warp-group MMA)
-# instead of tcgen05 MMA.
-#
-# Key differences from the Blackwell kernel above:
-#
-# - **Accumulator in registers**: WGMMA accumulates into distributed
-#   registers (``NVMMADistributedLayout``) rather than tensor memory (TMEM).
-#   This means no ``allocate_tensor_memory`` or ``get_tmem_reg_layout``.
-# - **WGMMA API**: We use ``warpgroup_mma`` / ``warpgroup_mma_wait`` instead
-#   of ``tcgen05_mma`` / ``tcgen05_commit``. WGMMA is asynchronous and the
-#   accumulator is threaded through the API as a dependency.
-# - **Same TMA im2col**: The input loading path is identical -- TMA im2col
-#   hardware handles the address computation for both architectures.
-#
-# See ``05-wgmma.py`` for a detailed explanation of WGMMA layouts and
-# the accumulator threading pattern.
-
-
-@gluon.jit
-def conv2d_im2col_wgmma_kernel(
-    in_desc,
-    weight_desc,
-    out_desc,
-    R: gl.constexpr,
-    S: gl.constexpr,
-    Ci: gl.constexpr,
-    out_h: gl.constexpr,
-    out_w: gl.constexpr,
-    stride_h: gl.constexpr,
-    stride_w: gl.constexpr,
-    pad_h: gl.constexpr,
-    pad_w: gl.constexpr,
-    BLOCK_M: gl.constexpr,
-    BLOCK_N: gl.constexpr,
-    BLOCK_K: gl.constexpr,
-    num_warps: gl.constexpr,
-):
-    """
-    Implicit GEMM convolution kernel using TMA im2col + WGMMA (Hopper).
-
-    GEMM: Output[M, N_gemm] = A[M, K] @ B[N_gemm, K]^T
-      where M = N_batch * out_h * out_w, N_gemm = Co, K = R * S * Ci
-    """
-    dtype: gl.constexpr = in_desc.dtype
-
-    # ── Tile indices ──────────────────────────────────────────────────────
-    pid_m = gl.program_id(0)
-    pid_n = gl.program_id(1)
-
-    # Decompose M-offset into (batch, out_y, out_x) for TMA im2col coords
-    offs_m = pid_m * BLOCK_M
-    batch_id = offs_m // (out_h * out_w)
-    m_residual = offs_m % (out_h * out_w)
-    out_y = m_residual // out_w
-    out_x = m_residual % out_w
-
-    # ── Allocate shared memory for A (input) and B (weight) tiles ─────────
-    a_smem = gl.allocate_shared_memory(dtype, in_desc.block_shape, in_desc.layout)
-    b_smem = gl.allocate_shared_memory(dtype, weight_desc.block_shape, weight_desc.layout)
-
-    # ── Accumulator in registers ──────────────────────────────────────────
-    # On Hopper, WGMMA accumulates into distributed registers rather than
-    # tensor memory.  t5.pick_wgmma_layout (from ``05-wgmma.py``) determines
-    # the register layout based on the MMA instruction shape and warp
-    # configuration.
-    mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
-    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
-
-    # ── Barrier ───────────────────────────────────────────────────────────
-    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(bar, count=1)
-    phase = 0
-
-    # ── K-loop: iterate over (r, s, ci_block) ────────────────────────────
-    ci_num_blocks = Ci // BLOCK_K
-    total_k_iters = R * S * ci_num_blocks
-
-    for k_iter in range(total_k_iters):
-        # Decompose k_iter into (r, s, ci_block)
-        ci_block = k_iter % ci_num_blocks
-        rs_idx = k_iter // ci_num_blocks
-        r = rs_idx // S
-        s = rs_idx % S
-
-        # 1. Set up TMA barrier and expect bytes from both loads
-        mbarrier.expect(bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
-
-        # 2. Load input tile via TMA im2col (same as Blackwell kernel)
-        tma.async_copy_global_to_shared_im2col(
-            in_desc,
-            [batch_id, out_y * stride_h - pad_h, out_x * stride_w - pad_w, ci_block * BLOCK_K],
-            [r.to(tl.int16), s.to(tl.int16)],
-            bar,
-            a_smem,
-        )
-
-        # 3. Load weight tile via standard TMA
-        k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
-        tma.async_copy_global_to_shared(
-            weight_desc,
-            [pid_n * BLOCK_N, k_offset],
-            bar,
-            b_smem,
-        )
-
-        # 4. Wait for both TMA loads to complete
-        mbarrier.wait(bar, phase=phase)
-
-        # 5. WGMMA: acc += A_tile @ B_tile^T
-        #    Transpose B via permute, then issue async WGMMA and wait.
-        acc = warpgroup_mma(a_smem, b_smem.permute((1, 0)), acc, is_async=True)
-        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
-
-        phase ^= 1
-
-    mbarrier.invalidate(bar)
-
-    # ── Downcast and store output tile via TMA ────────────────────────────
-    c_smem = gl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
-    c_smem.store(acc.to(dtype))
-    fence_async_shared()
-    tma.async_copy_shared_to_global(out_desc, [offs_m, pid_n * BLOCK_N], c_smem)
-    tma.store_wait(pendings=0)
-
-
-# %%
-# Host-Side Launcher (WGMMA)
-# ===========================
-#
-# The host side is nearly identical to the Blackwell launcher.  The only
-# difference is that we call the WGMMA kernel instead of the tcgen05 kernel.
-# TMA descriptor setup (including im2col) is the same for both architectures.
-
-
-def conv2d_tma_im2col_wgmma(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK_N=64, BLOCK_K=64, num_warps=4):
-    """
-    2D convolution using TMA im2col + WGMMA (Hopper).
-
-    Args:
-        input_nhwc: [N, H, W, Ci] in NHWC format, float16
-        weight:     [Co, R, S, Ci] filter tensor, float16
-        stride:     convolution stride (default: 1)
-        padding:    convolution padding (default: 0)
-    """
-    assert is_hopper(), "conv2d_tma_im2col_wgmma requires a Hopper GPU (WGMMA)"
-    N, H, W, Ci = input_nhwc.shape
-    Co, R, S, Ci_w = weight.shape
-    assert Ci == Ci_w, "Channel mismatch"
-    assert Ci % BLOCK_K == 0, f"Ci={Ci} must be divisible by BLOCK_K={BLOCK_K}"
-
-    out_h = (H + 2 * padding - R) // stride + 1
-    out_w = (W + 2 * padding - S) // stride + 1
-    M_GEMM = N * out_h * out_w
-    N_GEMM = Co
-
-    output = torch.empty(M_GEMM, Co, device=input_nhwc.device, dtype=input_nhwc.dtype)
-
-    # ── TMA im2col descriptor for input (same as Blackwell) ───────────────
-    upper_h = (out_h - 1) * stride + 1 - H - padding
-    upper_w = (out_w - 1) * stride + 1 - W - padding
-
-    input_block_shape = [BLOCK_M, BLOCK_K]
-    input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, gl.float16)
-    in_desc = TensorDescriptorIm2Col(
-        base=input_nhwc,
-        shape=list(input_nhwc.shape),
-        strides=list(input_nhwc.stride()),
-        block_shape=input_block_shape,
-        layout=input_layout,
-        padding="zero",
-        element_strides=[1, stride, stride, 1],
-        pixel_box_lower_corner=[-padding, -padding],
-        pixel_box_upper_corner=[upper_h, upper_w],
-    )
-
-    # ── TMA descriptor for weight ────────────────────────────────────────
-    weight_2d = weight.reshape(Co, R * S * Ci)
-    weight_block_shape = [BLOCK_N, BLOCK_K]
-    weight_layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, gl.float16)
-    weight_desc = TensorDescriptor.from_tensor(weight_2d, weight_block_shape, weight_layout)
-
-    # ── TMA descriptor for output ────────────────────────────────────────
-    out_block_shape = [BLOCK_M, BLOCK_N]
-    out_layout = gl.NVMMASharedLayout.get_default_for(out_block_shape, gl.float16)
-    out_desc = TensorDescriptor.from_tensor(output, out_block_shape, out_layout)
-
-    # ── Launch kernel ────────────────────────────────────────────────────
-    grid = (triton.cdiv(M_GEMM, BLOCK_M), triton.cdiv(N_GEMM, BLOCK_N))
-
-    conv2d_im2col_wgmma_kernel[grid](
-        in_desc,
-        weight_desc,
-        out_desc,
-        R,
-        S,
-        Ci,
-        out_h,
-        out_w,
-        stride,
-        stride,
-        padding,
-        padding,
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
-        num_warps=num_warps,
-    )
-
-    return output.reshape(N, out_h, out_w, Co)
-
-
-# %%
-# Testing (WGMMA / Hopper)
-# =========================
-
-
-@pytest.mark.parametrize("N", [1, 4])
-@pytest.mark.parametrize("H,W", [(16, 16)])
-@pytest.mark.parametrize("Ci,Co", [(64, 64)])
-@pytest.mark.parametrize("R,S", [(3, 3), (1, 1)])
-@pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("padding", [0, 1])
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper GPU (SM 9.x)")
-def test_conv2d_im2col_wgmma(N, H, W, Ci, Co, R, S, stride, padding):
-    torch.manual_seed(0)
-
-    x_nhwc = torch.randn(N, H, W, Ci, device="cuda", dtype=torch.float16)
-    w_nhwc = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
-
-    # Our WGMMA kernel
-    triton_out = conv2d_tma_im2col_wgmma(x_nhwc, w_nhwc, stride=stride, padding=padding)
 
     # PyTorch reference (uses NCHW internally)
     x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
@@ -828,22 +559,16 @@ def test_conv2d_im2col_wgmma(N, H, W, Ci, Co, R, S, stride, padding):
 #    (strides, padding, pixel box), and TMA handles the rest. This feature
 #    is available on both Hopper and Blackwell GPUs.
 #
-# 4. **Blackwell kernel (tcgen05)**: The kernel follows a standard blocked
-#    GEMM pattern with the accumulator in tensor memory (TMEM):
+# 4. **Unified kernel via MMA abstraction**: By using the ``WGMMA`` / ``MMAv5``
+#    abstraction from ``07-persistence.py``, a single kernel implementation
+#    works on both Hopper and Blackwell. The abstraction handles:
 #
-#    - Each program computes one (BLOCK_M x BLOCK_N) output tile
-#    - The K-loop iterates over filter positions (r, s) and channel blocks
-#    - TMA im2col loads input, standard TMA loads weights
-#    - tcgen05_mma accumulates into tensor memory (TMEM)
-#    - After the K-loop, results are loaded from TMEM and stored via TMA
+#    - Accumulator allocation (registers on Hopper, tensor memory on Blackwell)
+#    - MMA barrier management
+#    - Async MMA issue and wait
 #
-# 5. **Hopper kernel (WGMMA)**: The same TMA im2col approach works on Hopper
-#    with WGMMA as the compute engine:
-#
-#    - The accumulator lives in distributed registers (not TMEM)
-#    - ``warpgroup_mma`` / ``warpgroup_mma_wait`` replace tcgen05 APIs
-#    - TMA im2col input loading is identical to the Blackwell kernel
-#    - No tensor memory allocation is needed
+#    The kernel itself only deals with TMA loads and the unified MMA API:
+#    ``initialize``, ``issue_async_mma``, ``wait_num_outstanding``, ``take_result``.
 #
 # For a production-quality implementation with warp specialization and
 # pipelining, see ``examples/gluon/02-convolution.py``.
@@ -856,30 +581,17 @@ if __name__ == "__main__":
     x_nhwc = torch.randn(N, H, W, Ci, device="cuda", dtype=torch.float16)
     w_nhwc = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
 
-    # PyTorch reference
+    triton_out = conv2d_tma_im2col(x_nhwc, w_nhwc, stride=stride, padding=padding)
+
+    # Compare with PyTorch
     x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
     w_nchw = w_nhwc.permute(0, 3, 1, 2).contiguous()
     torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride, padding=padding)
     torch_out_nhwc = torch_out.permute(0, 2, 3, 1)
 
-    if is_blackwell():
-        print("\nRunning TMA im2col + tcgen05 convolution (Blackwell)...")
-        triton_out = conv2d_tma_im2col(x_nhwc, w_nhwc, stride=stride, padding=padding)
-
-        max_err = (triton_out - torch_out_nhwc).abs().max().item()
-        print(f"Conv2d: N={N}, H={H}, W={W}, Ci={Ci}, Co={Co}, R={R}, S={S}, "
-              f"stride={stride}, pad={padding}")
-        print(f"Output shape: {list(triton_out.shape)}")
-        print(f"Max absolute error vs PyTorch: {max_err:.6f}")
-        print("PASSED!" if max_err < 0.02 else "FAILED!")
-
-    if is_hopper():
-        print("\nRunning TMA im2col + WGMMA convolution (Hopper)...")
-        triton_out_wgmma = conv2d_tma_im2col_wgmma(x_nhwc, w_nhwc, stride=stride, padding=padding)
-
-        max_err = (triton_out_wgmma - torch_out_nhwc).abs().max().item()
-        print(f"Conv2d: N={N}, H={H}, W={W}, Ci={Ci}, Co={Co}, R={R}, S={S}, "
-              f"stride={stride}, pad={padding}")
-        print(f"Output shape: {list(triton_out_wgmma.shape)}")
-        print(f"Max absolute error vs PyTorch: {max_err:.6f}")
-        print("PASSED!" if max_err < 0.02 else "FAILED!")
+    max_err = (triton_out - torch_out_nhwc).abs().max().item()
+    print(f"Conv2d: N={N}, H={H}, W={W}, Ci={Ci}, Co={Co}, R={R}, S={S}, "
+          f"stride={stride}, pad={padding}")
+    print(f"Output shape: {list(triton_out.shape)}")
+    print(f"Max absolute error vs PyTorch: {max_err:.6f}")
+    print("PASSED!" if max_err < 0.02 else "FAILED!")
