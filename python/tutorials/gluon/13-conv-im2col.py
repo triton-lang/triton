@@ -132,12 +132,10 @@ def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord,
     block_shape = [16, 32]
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
-    in_desc = TensorDescriptorIm2Col(
-        base=inp,
-        shape=list(inp.shape),
-        strides=list(inp.stride()),
-        block_shape=block_shape,
-        layout=layout,
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        inp,
+        block_shape,
+        layout,
         padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=pixel_box_lower_corner,
@@ -355,12 +353,10 @@ def run_tma_im2col_multi_batch():
     block_shape = [16, 32]  # load 16 pixels
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
-    in_desc = TensorDescriptorIm2Col(
-        base=inp,
-        shape=list(inp.shape),
-        strides=list(inp.stride()),
-        block_shape=block_shape,
-        layout=layout,
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        inp,
+        block_shape,
+        layout,
         padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=[0, 0],
@@ -456,12 +452,10 @@ def run_tma_im2col_multi_batch_padded():
     block_shape = [16, 32]
     layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
 
-    in_desc = TensorDescriptorIm2Col(
-        base=inp,
-        shape=list(inp.shape),
-        strides=list(inp.stride()),
-        block_shape=block_shape,
-        layout=layout,
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        inp,
+        block_shape,
+        layout,
         padding="zero",
         element_strides=[1, 1, 1, 1],
         pixel_box_lower_corner=[-1, -1],
@@ -965,15 +959,15 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 def test_conv2d_tma_im2col(N, H, W, Ci, Co, R, S, stride, padding):
     torch.manual_seed(0)
     x_nhwc = torch.randn(N, H, W, Ci, device="cuda", dtype=torch.float16)
-    w_nhwc = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
+    w_co_r_s_ci = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
 
     # Our kernel
-    triton_out = conv2d_tma_im2col(x_nhwc, w_nhwc, stride=stride, padding=padding)
+    triton_out = conv2d_tma_im2col(x_nhwc, w_co_r_s_ci, stride=stride, padding=padding)
 
-    # PyTorch reference (uses NCHW internally)
+    # PyTorch reference (input NCHW, weight OIHW)
     x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
-    w_nchw = w_nhwc.permute(0, 3, 1, 2).contiguous()
-    torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride, padding=padding)
+    w_oihw = w_co_r_s_ci.permute(0, 3, 1, 2).contiguous()
+    torch_out = torch.nn.functional.conv2d(x_nchw, w_oihw, stride=stride, padding=padding)
     torch_out_nhwc = torch_out.permute(0, 2, 3, 1)
     torch.testing.assert_close(triton_out, torch_out_nhwc, atol=1e-2, rtol=1e-2)
 
@@ -1022,14 +1016,14 @@ if __name__ == "__main__":
     stride, padding = 1, 1
 
     x_nhwc = torch.randn(N, H, W, Ci, device="cuda", dtype=torch.float16)
-    w_nhwc = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
+    w_co_r_s_ci = torch.randn(Co, R, S, Ci, device="cuda", dtype=torch.float16)
 
-    triton_out = conv2d_tma_im2col(x_nhwc, w_nhwc, stride=stride, padding=padding)
+    triton_out = conv2d_tma_im2col(x_nhwc, w_co_r_s_ci, stride=stride, padding=padding)
 
-    # Compare with PyTorch
+    # Compare with PyTorch (input NCHW, weight OIHW)
     x_nchw = x_nhwc.permute(0, 3, 1, 2).contiguous()
-    w_nchw = w_nhwc.permute(0, 3, 1, 2).contiguous()
-    torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride, padding=padding)
+    w_oihw = w_co_r_s_ci.permute(0, 3, 1, 2).contiguous()
+    torch_out = torch.nn.functional.conv2d(x_nchw, w_oihw, stride=stride, padding=padding)
     torch_out_nhwc = torch_out.permute(0, 2, 3, 1)
 
     max_err = (triton_out - torch_out_nhwc).abs().max().item()
