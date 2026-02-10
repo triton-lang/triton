@@ -574,7 +574,6 @@ if __name__ == "__main__":
     run_tma_im2col_multi_batch_padded()
     print("\n" + "=" * 50 + "\n")
 
-
 # %%
 # What is 2D Convolution?
 # =======================
@@ -799,8 +798,7 @@ def conv2d_im2col_kernel(
     offs_m, batch_id, out_y, out_x = decompose_m_offset(pid_m, BLOCK_M, out_h, out_w)
 
     # │ acc = zeros(BLOCK_M, BLOCK_N)
-    a_smem, b_smem, mma, tma_bar = init_accumulator(
-        in_desc, weight_desc, MMAImpl, dtype, BLOCK_M, BLOCK_N, num_warps)
+    a_smem, b_smem, mma, tma_bar = init_accumulator(in_desc, weight_desc, MMAImpl, dtype, BLOCK_M, BLOCK_N, num_warps)
     phase = 0
 
     # │ for r in range(R): for s in range(S): for ci_blk in range(Ci//BLOCK_K):
@@ -819,11 +817,11 @@ def conv2d_im2col_kernel(
             in_desc,
             [batch_id, out_y * stride_h - pad_h, out_x * stride_w - pad_w, ci_block * BLOCK_K],
             [r.to(tl.int16), s.to(tl.int16)],
-            tma_bar, a_smem,
+            tma_bar,
+            a_smem,
         )
         # │   B = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
-        tma.async_copy_global_to_shared(
-            weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
+        tma.async_copy_global_to_shared(weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
         # │   acc += A @ B^T
@@ -836,6 +834,7 @@ def conv2d_im2col_kernel(
 
     # └ store output[…] = acc
     store_output_tile(mma, dtype, out_desc, offs_m, pid_n * BLOCK_N)
+
 
 # %%
 # Host-Side Launcher
@@ -870,10 +869,8 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 
     out_h = (H + 2 * padding - R) // stride + 1
     out_w = (W + 2 * padding - S) // stride + 1
-    assert out_h > 0 and out_w > 0, (
-        f"Invalid convolution geometry: out_h={out_h}, out_w={out_w}, "
-        f"H={H}, W={W}, R={R}, S={S}, stride={stride}, padding={padding}"
-    )
+    assert out_h > 0 and out_w > 0, (f"Invalid convolution geometry: out_h={out_h}, out_w={out_w}, "
+                                     f"H={H}, W={W}, R={R}, S={S}, stride={stride}, padding={padding}")
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
 
@@ -905,12 +902,10 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 
     input_block_shape = [BLOCK_M, BLOCK_K]
     input_layout = ttgl.NVMMASharedLayout.get_default_for(input_block_shape, ttgl.float16)
-    in_desc = TensorDescriptorIm2Col(
-        base=input_nhwc,
-        shape=list(input_nhwc.shape),
-        strides=list(input_nhwc.stride()),
-        block_shape=input_block_shape,
-        layout=input_layout,
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        input_nhwc,
+        input_block_shape,
+        input_layout,
         padding="zero",
         element_strides=[1, stride, stride, 1],
         pixel_box_lower_corner=[-padding, -padding],
