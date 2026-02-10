@@ -170,9 +170,9 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
                    newEvent.flexibleMetrics);
 }
 
-void TraceData::linkOp(
-    size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-    const std::function<void(DataEntry &&)> &onLinked) {
+void TraceData::linkOp(size_t baseEntryId,
+                       const std::vector<size_t> &targetEntryIds,
+                       const std::function<void(DataEntry &&)> &onLinked) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   const auto phase = currentPhase.load(std::memory_order_relaxed);
   auto *trace = currentPhasePtrAs<Trace>();
@@ -182,8 +182,8 @@ void TraceData::linkOp(
     auto &linkedFlexibleMetrics =
         baseEvent.linkedTargetFlexibleMetrics[targetEntryId];
     if (onLinked) {
-      onLinked(DataEntry(baseEntryId, phase, linkedMetrics,
-                         linkedFlexibleMetrics));
+      onLinked(
+          DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics));
     }
   }
 }

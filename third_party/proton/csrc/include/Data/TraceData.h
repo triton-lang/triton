@@ -20,9 +20,8 @@ public:
   DataEntry addOp(size_t phase, size_t eventId,
                   const std::vector<Context> &contexts) override;
 
-  void linkOp(
-      size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-      const std::function<void(DataEntry &&)> &onLinked) override;
+  void linkOp(size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
+              const std::function<void(DataEntry &&)> &onLinked) override;
 
   void
   addMetrics(size_t scopeId,

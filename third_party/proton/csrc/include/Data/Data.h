@@ -141,9 +141,9 @@ public:
   /// whose metrics can be updated.
   ///
   /// The callback is invoked while Data::mutex is held.
-  virtual void
-  linkOp(size_t baseEntryId, const std::vector<size_t> &targetEntryIds,
-         const std::function<void(DataEntry &&)> &onLinked) = 0;
+  virtual void linkOp(size_t baseEntryId,
+                      const std::vector<size_t> &targetEntryIds,
+                      const std::function<void(DataEntry &&)> &onLinked) = 0;
 
   /// Record a batch of named metrics for a scope to the data of the current
   /// phase.
