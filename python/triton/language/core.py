@@ -1546,8 +1546,10 @@ class _aggregate_type(base_type):
 def _aggregate(cls):
     init = cls.__dict__.get("__init__", None)
     if init is None:
+        from triton.runtime.jit import constexpr_function
         field_names = builtins.tuple(cls.__annotations__.keys())
 
+        @constexpr_function
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
                 raise TypeError(f"{cls.__name__}.__init__() takes {len(field_names) + 1} positional arguments "
@@ -1575,6 +1577,7 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
+        __annotations__ = cls.__annotations__
 
         @classmethod
         def _get_instance(this_cls):
