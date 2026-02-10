@@ -31,18 +31,30 @@ Value getMemdescValue(Operation *op) {
       .Default([](Operation *) { return Value(); });
 }
 
-// s_barrier cannot make in-flight async writes visible; lgkmcnt is emitted
-// in lowering of wait/barrier ops.  Filter async write hazard pairs when
-// both ops access the same buffer and the local_load is synced via wait.
+// Suppress the barrier that membar analysis would insert between an async DMA
+// write (MemAsyncWriteOpTrait) and a local_load on the same shared buffer.
+//
+// Async DMA writes are not visible until an explicit wait completes.  A plain
+// thread barrier does not provide this guarantee.  When the local_load is
+// already guarded by an async wait, the barrier is redundant.
+//
+// Returns true (suppress barrier) when all three conditions hold:
+//   1. Exactly one op is an async write and the other is not.
+//   2. Both ops access the same shared-memory buffer.
+//   3. The non-async op is a local_load that is synced via an async wait.
 bool filterAsyncWriteDependencies(Operation *op1, Operation *op2,
                                   Allocation *allocation) {
+  // Not relevant if neither op is an async write.
   if (!isAsyncWrite(op1) && !isAsyncWrite(op2))
     return false;
 
-  // One async, one not: require same-buffer and synced-via-wait.
+  // Two async writes (WAW) — keep the barrier; DMA ordering between
+  // different async ops is not guaranteed by a wait alone.
   if (isAsyncWrite(op1) == isAsyncWrite(op2))
     return false;
 
+  // Require that both ops touch the same buffer; unrelated allocations
+  // should go through the normal hazard path.
   Value op1Memdesc = getMemdescValue(op1);
   Value op2Memdesc = getMemdescValue(op2);
   if (!op1Memdesc || !op2Memdesc)
@@ -54,6 +66,7 @@ bool filterAsyncWriteDependencies(Operation *op1, Operation *op2,
   if (!sameBuffer)
     return false;
 
+  // The local_load must already be synchronized by a wait.
   return isLocalLoadSyncedViaWait(op1) || isLocalLoadSyncedViaWait(op2);
 }
 
