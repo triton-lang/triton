@@ -81,7 +81,7 @@ uint32_t processActivityKernel(
         if (!data)
           continue;
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          entry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
+          entry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
@@ -93,7 +93,7 @@ uint32_t processActivityKernel(
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
+          childEntry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
@@ -131,7 +131,7 @@ uint32_t processActivityKernel(
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
+            entry.upsertMetric(std::move(kernelMetric));
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
@@ -141,8 +141,7 @@ uint32_t processActivityKernel(
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                                     {Context(kernel->name)});
-                childEntry.upsertMetric(std::move(kernelMetric),
-                                        /*withLock=*/false);
+                childEntry.upsertMetric(std::move(kernelMetric));
                 detail::updateDataPhases(dataPhases, entry.data, entry.phase);
               }
             });
@@ -642,8 +641,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                   graphNodeState.addEntry(nodeEntry);
                 }
               }
-            },
-            /*withLock=*/false);
+            });
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

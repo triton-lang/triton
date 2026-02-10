@@ -64,21 +64,14 @@ struct DataEntry {
         linkedTargetFlexibleMetrics(linkedTargetFlexibleMetrics),
         nodeMutex(nodeMutex) {}
 
-  template <typename FnT>
-  decltype(auto) handle(FnT &&fn, bool withLock = true) const {
-    if (withLock) {
-      std::lock_guard<std::mutex> lock(nodeMutex.get());
-      return std::forward<FnT>(fn)(metrics.get(), flexibleMetrics.get(),
-                                   linkedTargetMetrics.get(),
-                                   linkedTargetFlexibleMetrics.get());
-    }
+  template <typename FnT> decltype(auto) handle(FnT &&fn) const {
+    std::lock_guard<std::mutex> lock(nodeMutex.get());
     return std::forward<FnT>(fn)(metrics.get(), flexibleMetrics.get(),
                                  linkedTargetMetrics.get(),
                                  linkedTargetFlexibleMetrics.get());
   }
 
-  void upsertMetric(std::unique_ptr<Metric> metric,
-                    bool withLock = true) const {
+  void upsertMetric(std::unique_ptr<Metric> metric) const {
     handle(
         [metric = std::move(metric)](MetricMap &metrics, auto &, auto &,
                                      auto &) mutable {
@@ -91,13 +84,12 @@ struct DataEntry {
           } else {
             it->second->updateMetric(*metric);
           }
-        },
-        withLock);
+        });
   }
 
   void
-  upsertFlexibleMetrics(const std::map<std::string, MetricValueType> &metrics,
-                        bool withLock = true) const {
+  upsertFlexibleMetrics(const std::map<std::string, MetricValueType> &metrics)
+      const {
     handle(
         [&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
           for (const auto &[metricName, metricValue] : metrics) {
@@ -109,8 +101,7 @@ struct DataEntry {
               it->second.updateValue(metricValue);
             }
           }
-        },
-        withLock);
+        });
   }
 };
 

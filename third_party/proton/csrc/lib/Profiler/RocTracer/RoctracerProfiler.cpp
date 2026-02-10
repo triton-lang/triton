@@ -108,9 +108,9 @@ void processActivityKernel(
         if (state.isMissingName) {
           auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                               {Context(activity->kernel_name)});
-          childEntry.upsertMetric(std::move(metric), /*withLock=*/false);
+          childEntry.upsertMetric(std::move(metric));
         } else {
-          entry.upsertMetric(std::move(metric), /*withLock=*/false);
+          entry.upsertMetric(std::move(metric));
         }
         detail::updateDataPhases(dataPhases, entry.data, entry.phase);
       }
@@ -128,7 +128,7 @@ void processActivityKernel(
       if (auto metric = convertActivityToMetric(activity)) {
         auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                             {Context(activity->kernel_name)});
-        childEntry.upsertMetric(std::move(metric), /*withLock=*/false);
+        childEntry.upsertMetric(std::move(metric));
         detail::updateDataPhases(dataPhases, entry.data, entry.phase);
       }
     }
