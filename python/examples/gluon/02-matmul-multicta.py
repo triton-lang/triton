@@ -1,6 +1,5 @@
 import importlib
-import itertools
-import statistics
+from contextlib import contextmanager
 
 import pytest
 import torch
@@ -634,51 +633,12 @@ def test_matmul_with_config_rejects_invalid_collective_config():
         _ = matmul_with_config(a, b, two_ctas=True, block_size_n=256)
 
 
-def _tflops(ms, M, N, K):
-    return 2 * M * N * K * 1e-12 / (ms * 1e-3)
-
-
-def _find_best_config(label, tuning_configs, run_config, to_torch, expected, M, N, K, optimal_time_us, bench_fn,
-                      report_each=False):
-    best_cfg = None
-    best_ms = None
-    best_tflops = -float("inf")
-    best_util = -float("inf")
-
-    if report_each:
-        print(f"\n{label} search:")
-
-    for cfg in tuning_configs:
-        tile_m, tile_n, tile_k, grid_minor_dim, grid_tile_width, max_concurrent_steps, collective, epilogue_tile_n = cfg
-        if collective and tile_n > 128:
-            continue
-        try:
-            ms = bench_fn(run_config, cfg)
-        except Exception:
-            continue
-
-        runtime_us = ms * 1e3
-        util = optimal_time_us / runtime_us * 100
-        tflops = _tflops(ms, M, N, K)
-        if util > best_util:
-            out_torch = to_torch(run_config(cfg))
-            torch.testing.assert_close(out_torch, expected, atol=1e-1, rtol=1e-2)
-            best_cfg = cfg
-            best_ms = ms
-            best_tflops = tflops
-            best_util = util
-
-        if report_each:
-            eff_tile_m = tile_m * (2 if collective else 1)
-            eff_tile_n = tile_n * (2 if collective else 1)
-            print(f"tile_m={eff_tile_m} tile_n={eff_tile_n} tile_k={tile_k} "
-                  f"max_concurrent_steps={max_concurrent_steps} "
-                  f"grid_minor_dim={grid_minor_dim} grid_tile_width={grid_tile_width} "
-                  f"epilogue_tile_n={epilogue_tile_n} collective={collective} : "
-                  f"{runtime_us:<7.1f}us = {util:4.1f}% TC utilization ({tflops:7.2f} TFLOPS)")
-
-    assert best_cfg is not None
-    return best_cfg, best_ms, best_tflops, best_util
+def show_profile(profile_name):
+    import triton.profiler.viewer as proton_viewer
+    metric_names = ["tflop16/s", "time/ms"]
+    file_name = f"{profile_name}.hatchet"
+    tree, metrics = proton_viewer.parse(metric_names, file_name)
+    proton_viewer.print_tree(tree, metrics)
 
 
 def benchmark():
@@ -693,8 +653,6 @@ def benchmark():
 
     M, N, K = 4096, 8192, 4096
     print(f"Matrix: M={M}, N={N}, K={K}")
-    peak_flops = 2.25e15  # f16 TensorCore peak = 2250 TFLOPS
-    optimal_time_us = (2 * M * N * K) / peak_flops * 1e6
 
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
@@ -702,19 +660,16 @@ def benchmark():
     c_torch = torch.empty((M, N), device="cuda", dtype=torch.float16)
     expected = torch.matmul(a, b)
 
-    tuning_configs = list(
-        itertools.product((128, ),  # tile_m
-                          (128, 256),  # tile_n
-                          (64, ),  # tile_k
-                          (0, 1),  # grid_minor_dim
-                          (1, 4, 8, 12, 16),  # grid_tile_width
-                          (2, 4, 6),  # max_concurrent_steps
-                          (False, True),  # collective
-                          (32, ),  # epilogue_tile_n
-                          ))
+    tile_m = 128
+    tile_n = 128
+    tile_k = 64
+    grid_minor_dim = 0
+    grid_tile_width = 16
+    max_concurrent_steps = 6
+    collective = True
+    epilogue_tile_n = 32
 
-    def run_triton(cfg):
-        tile_m, tile_n, tile_k, grid_minor_dim, grid_tile_width, max_concurrent_steps, collective, epilogue_tile_n = cfg
+    def run_triton():
         return matmul_with_config(
             a,
             b,
@@ -729,85 +684,87 @@ def benchmark():
             epilogue_size_n=epilogue_tile_n,
         )
 
-    best_triton_cfg, best_triton_ms, best_triton_tflops, best_triton_util = _find_best_config(
-        "Triton",
-        tuning_configs,
-        run_triton,
-        to_torch=lambda out: out,
-        expected=expected,
-        M=M,
-        N=N,
-        K=K,
-        optimal_time_us=optimal_time_us,
-        bench_fn=lambda run_config, cfg: triton.testing.do_bench_cudagraph(lambda: run_config(cfg)),
-    )
+    torch.testing.assert_close(run_triton(), expected, atol=1e-1, rtol=1e-2)
 
-    torch_ms = triton.testing.do_bench(lambda: torch.matmul(a, b, out=c_torch))
-    torch_tflops = _tflops(torch_ms, M, N, K)
-    torch_util = optimal_time_us / (torch_ms * 1e3) * 100
-
-    best_pallas_cfg = None
-    best_pallas_ms = None
-    best_pallas_tflops = None
-    best_pallas_util = None
-    pallas_error = None
+    pallas_available = False
     try:
-        import functools
         import jax
         import jax.numpy as jnp
-        from jax.experimental.mosaic.gpu import profiler
         pallas_mod = importlib.import_module("jax.experimental.pallas.ops.gpu.blackwell_matmul_mgpu")
+        pallas_device = jax.devices("gpu")[0]
+        a_jax = jax.device_put(jnp.asarray(a.detach().cpu().numpy()), pallas_device)
+        b_jax = jax.device_put(jnp.asarray(b.detach().cpu().numpy()), pallas_device)
+
+        def run_pallas():
+            pallas_cfg = pallas_mod.TuningConfig(
+                tile_m=tile_m,
+                tile_n=tile_n,
+                tile_k=tile_k,
+                max_concurrent_steps=max_concurrent_steps,
+                collective=collective,
+                epilogue_tile_n=epilogue_tile_n,
+                grid_minor_dim=pallas_mod.MatmulDimension(grid_minor_dim),
+                grid_tile_width=grid_tile_width,
+            )
+            return pallas_mod.matmul_kernel(a_jax, b_jax, config=pallas_cfg)
+
+        pallas_out = torch.from_numpy(jax.device_get(run_pallas()).copy()).to(device=expected.device,
+                                                                              dtype=expected.dtype)
+        torch.testing.assert_close(pallas_out, expected, atol=1e-1, rtol=1e-2)
+        pallas_available = True
     except Exception as exc:
-        pallas_error = exc
+        run_pallas = None
+        print(f"Skipping Pallas benchmark: {exc}")
 
-    pallas_device = jax.devices("gpu")[0]
-    a_jax = jax.device_put(jnp.asarray(a.detach().cpu().numpy()), pallas_device)
-    b_jax = jax.device_put(jnp.asarray(b.detach().cpu().numpy()), pallas_device)
+    import triton.profiler as proton
 
-    def run_pallas(cfg):
-        tile_m, tile_n, tile_k, grid_minor_dim, grid_tile_width, max_concurrent_steps, collective, epilogue_tile_n = cfg
-        pallas_cfg = pallas_mod.TuningConfig(
-            tile_m=tile_m,
-            tile_n=tile_n,
-            tile_k=tile_k,
-            max_concurrent_steps=max_concurrent_steps,
-            collective=collective,
-            epilogue_tile_n=epilogue_tile_n,
-            grid_minor_dim=pallas_mod.MatmulDimension(grid_minor_dim),
-            grid_tile_width=grid_tile_width,
-        )
-        return pallas_mod.matmul_kernel(a_jax, b_jax, config=pallas_cfg)
+    @contextmanager
+    def proton_context():
+        proton.activate(0)
+        try:
+            yield
+        finally:
+            proton.deactivate(0)
 
-    def pallas_bench(run_config, cfg):
-        _, runtimes_ms = profiler.measure(functools.partial(run_config, cfg), iterations=10)()
-        return statistics.median(runtimes_ms)
+    def bench_fn(label, reps, warmup_reps, fn):
+        print(f"Benchmarking {label}: ...", end="")
+        for _ in range(warmup_reps):
+            fn()
+        with proton_context():
+            for _ in range(reps):
+                fn()
+        print(f"\rBenchmarking {label}: done")
 
-    best_pallas_cfg, best_pallas_ms, best_pallas_tflops, best_pallas_util = _find_best_config(
-        "Pallas",
-        tuning_configs,
-        run_pallas,
-        to_torch=lambda out: torch.from_numpy(jax.device_get(out).copy()).to(device=expected.device, dtype=expected.
-                                                                             dtype),
-        expected=expected,
-        M=M,
-        N=N,
-        K=K,
-        optimal_time_us=optimal_time_us,
-        bench_fn=pallas_bench,
-        report_each=True,
-    )
+    bytes_per_elem = a.element_size()
+    scope_metrics = {
+        "bytes": bytes_per_elem * (M * K + N * K + M * N),
+        f"flops{bytes_per_elem * 8}": 2.0 * M * N * K,
+    }
 
-    print("\nSummary:")
-    print("Backend                     TFLOPS    util(%)     ms")
-    if best_triton_ms is not None:
-        print(f"Triton (best)          {best_triton_tflops:8.2f}   {best_triton_util:7.2f} {best_triton_ms:7.3f}")
-        print(f"  config: {best_triton_cfg}")
-    print(f"PyTorch/cuBLAS         {torch_tflops:8.2f}   {torch_util:7.2f} {torch_ms:7.3f}")
-    if best_pallas_ms is not None:
-        print(f"Pallas (best)          {best_pallas_tflops:8.2f}   {best_pallas_util:7.2f} {best_pallas_ms:7.3f}")
-        print(f"  config: {best_pallas_cfg}")
-    if pallas_error is not None:
-        print(f"Skipping Pallas benchmark: {pallas_error}")
+    proton.start("matmul", hook="triton")
+    proton.deactivate(0)
+
+    def torch_profiled():
+        with proton.scope(f"torch [M={M}, N={N}, K={K}]", scope_metrics):
+            torch.matmul(a, b, out=c_torch)
+
+    def triton_profiled():
+        with proton.scope(f"triton [M={M}, N={N}, K={K}]", scope_metrics):
+            run_triton()
+
+    bench_fn("torch", reps=100, warmup_reps=20, fn=torch_profiled)
+    bench_fn("gluon", reps=100, warmup_reps=20, fn=triton_profiled)
+    if pallas_available and run_pallas is not None:
+
+        def pallas_profiled():
+            with proton.scope(f"pallas [M={M}, N={N}, K={K}]", scope_metrics):
+                run_pallas()
+
+        bench_fn("pallas", reps=100, warmup_reps=20, fn=pallas_profiled)
+
+    proton.finalize()
+    print("Proton profile written to `matmul.hatchet`")
+    show_profile("matmul")
 
 
 if __name__ == "__main__":
