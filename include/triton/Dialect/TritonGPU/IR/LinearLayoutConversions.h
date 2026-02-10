@@ -18,6 +18,7 @@ class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
 class CGAEncodingAttr;
+enum class TMAMode;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -61,6 +62,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 // swizzling.
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
+                                       TMAMode mode,
                                        bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
@@ -130,7 +132,8 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
-                                         LinearLayout ctaLayout);
+                                         LinearLayout ctaLayout,
+                                         CGAEncodingAttr cgaLayout);
 
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,

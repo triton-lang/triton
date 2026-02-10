@@ -3486,6 +3486,58 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
   EXPECT_EQ(ll, layout);
 }
 
+//===----------------------------------------------------------------------===//
+// nvmmaSharedToLinearLayout TMA Mode Independence Tests
+//
+// Verify that nvmmaSharedToLinearLayout produces the same result regardless
+// of TMA mode. This is critical because MMA lowering uses toLinearLayout()
+// to read from shared memory, and it doesn't know which TMA mode was used
+// to load the data. If the layouts differ, MMA would compute wrong addresses.
+//
+// Note: We only test non-transposed encodings because TMA descriptors cannot
+// be transposed (see AsyncTMACopyGlobalToLocalOp verification which emits
+// "TMA descriptor layout must not be transposed"). Transposed layouts are
+// created after TMA load or used for conceptual access patterns, not for
+// TMA descriptor configuration.
+//===----------------------------------------------------------------------===//
+
+TEST_F(LinearLayoutConversionsTest,
+       NvmmaSharedToLinearLayout_TMAModeIndependence) {
+  // Test various non-transposed shapes and configurations to ensure the shared
+  // memory layout is independent of TMA mode.
+  //
+  // Test matrix:
+  // - swizzleSizeInBytes: 0, 32, 64, 128
+  // - non-contiguous dim (dim0): 512, 1024 (exceeds Tiled mode limit of 256)
+  // - contiguous dim (dim1): large enough for multiple messages
+
+  constexpr int elementBitWidth = 16; // f16
+  constexpr int elementBytes = elementBitWidth / 8;
+
+  for (int swizzleBytes : {0, 32, 64, 128}) {
+    for (int64_t dim0 : {512, 1024}) {
+      // For contiguous dim, use a size that requires multiple messages.
+      // With swizzle, the contiguous dim block size = swizzleBytes / elemBytes.
+      // Use 2x the max swizzle size to ensure multiple messages in dim1.
+      int64_t dim1 = (swizzleBytes == 0) ? 64 : (128 / elementBytes) * 2;
+
+      auto encoding =
+          nvmmaShared(swizzleBytes, /*transposed=*/false, elementBitWidth,
+                      {1, 1}, {1, 1}, {1, 0}, {1, 0});
+      llvm::SmallVector<int64_t> shape = {dim0, dim1};
+
+      auto tiledLayout =
+          nvmmaSharedToLinearLayout(shape, encoding, TMAMode::Tiled);
+      auto im2colLayout =
+          nvmmaSharedToLinearLayout(shape, encoding, TMAMode::Im2Col);
+
+      EXPECT_EQ(tiledLayout, im2colLayout)
+          << "Shared memory layout must be independent of TMA mode for shape ["
+          << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
+    }
+  }
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 

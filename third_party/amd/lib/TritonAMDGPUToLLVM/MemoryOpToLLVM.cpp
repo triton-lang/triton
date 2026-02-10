@@ -356,6 +356,7 @@ private:
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
     auto kOffset = str_attr("offset");
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
@@ -409,10 +410,12 @@ private:
     if (elemsPerVec != ldsTransLoadParams->tileSize)
       return failure();
 
-    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+    assert(cvt.isTrivialOver({kBlock}) && "NYI");
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy) -> SmallVector<Value> {
+                         VectorType vTy,
+                         std::optional<Value> ctaId) -> SmallVector<Value> {
+      assert(!ctaId.has_value() && "NYI");
       auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       Value dsReadTr =
@@ -453,8 +456,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isCDNA(targetInfo.getISAFamily()) ||
-        targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250)
+    if (targetInfo.getIsaVersion().Major < 9)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
@@ -554,9 +556,10 @@ struct MemoryCounterWaitOpConversion
   LogicalResult
   matchAndRewrite(amdgpu::MemoryCounterWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // amdgpu::MemoryCounterWaitOp supports gfx9 onwards
     auto isaVersion = targetInfo.getIsaVersion();
 
-    /// If major version >= fgx12, lower  to
+    /// If major version >= gfx12, lower to
     ///   * ROCDL::WaitDscntOp if ds is present
     ///   * ROCDL::WaitLoadcntOp if load is present
     ///   * ROCDL::WaitStorecntOp if store is present

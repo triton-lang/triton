@@ -7,11 +7,15 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
+namespace ttg = ::mlir::triton::gpu;
+namespace ttng = ::mlir::triton::nvidia_gpu;
+
 namespace mlir {
 
 AllocationSlice::AllocationSlice(Value value,
-                                 Interval<size_t> allocationInterval)
-    : allocationInterval(allocationInterval) {
+                                 Interval<size_t> allocationInterval,
+                                 Allocation::BufferId bufferId)
+    : allocationInterval(allocationInterval), bufferId(bufferId) {
   auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
   this->accessTy = accessTy;
 
@@ -68,6 +72,9 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 void AllocationSlice::print(raw_ostream &os) const {
   os << "interval=[" << allocationInterval.start() << ","
      << allocationInterval.end() << ")";
+
+  if (bufferId != Allocation::InvalidBufferId)
+    os << " buffer=" << bufferId;
 
   os << " offsets=[";
   if (!subsliceOffsets.empty()) {
@@ -238,19 +245,25 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
+static bool containsLocalBarrier(Operation *op) {
+  if (isa<mlir::gpu::BarrierOp>(op))
+    return true;
+  if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
+    return true;
+  if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
+    return true;
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
+    return barrier.hasLocal();
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
+    return !wgWait.getWarpGroupLocal() && ttg::lookupNumWarps(op) > 4;
+  if (isa<ttng::ArriveBarrierOp>(op))
+    return true;
+  return false;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  auto containsLocalBarrier = [](Operation *op) {
-    if (isa<gpu::BarrierOp>(op))
-      return true;
-    if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
-      return true;
-    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
-      return barrier.hasLocal();
-    return false;
-  };
-
   if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -273,8 +286,14 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
-      curBlockInfo = funcBlockInfoMap->lookup(callee);
+            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
+      auto calleeBlockInfo = funcBlockInfoMap->lookup(callee);
+      auto callBufferId = allocation->getBufferId(op);
+      size_t callOffset = 0;
+      if (callBufferId != Allocation::InvalidBufferId)
+        callOffset = allocation->getAllocatedInterval(callBufferId).start();
+      curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
+    }
   } else {
     // Intra-function dependencies
     if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
@@ -287,7 +306,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
+              auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);
@@ -324,7 +343,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       auto dstTy = cast<RankedTensorType>(cvt.getType());
       auto srcLayout = triton::gpu::toLinearLayout(srcTy);
       auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-      isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
+      auto kWarp = StringAttr::get(op->getContext(), "warp");
+      isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
     }
 
     if (!curBlockInfo.syncReadSlices.empty() ||

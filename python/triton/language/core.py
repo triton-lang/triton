@@ -2624,6 +2624,8 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
+    The reduction operation should be associative and commutative.
+
     :param input: the input values
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions

@@ -578,14 +578,12 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
   int padding;
   PyObject *pixelBoxLower;
   PyObject *pixelBoxUpper;
-  int channelsPerPixel;
-  int pixelsPerColumn;
   PyObject *elementStrides;
 
-  if (!PyArg_ParseTuple(args, "KiiiOOOiOOiiO", &global_address, &swizzle,
+  if (!PyArg_ParseTuple(args, "KiiiOOOiOOO", &global_address, &swizzle,
                         &elemSize, &elemType, &blockSize, &shape, &strides,
                         &padding, &pixelBoxLower, &pixelBoxUpper,
-                        &channelsPerPixel, &pixelsPerColumn, &elementStrides)) {
+                        &elementStrides)) {
     return NULL;
   }
 
@@ -630,6 +628,11 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
   if (!blockSizeFast)
     goto cleanup;
   int blockRank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  if (blockRank != 2) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "blockSize must have exactly 2 dimensions for im2col");
+    goto cleanup;
+  }
 
   for (int i = 0; i < blockRank; ++i) {
     PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
@@ -746,6 +749,9 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
   static cuTensorMapEncodeIm2col_t cuTensorMapEncodeIm2col = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeIm2col,
                                       getCuTensorMapEncodeIm2colHandle);
+
+  int channelsPerPixel = blockSizeInt[0];
+  int pixelsPerColumn = blockSizeInt[1];
 
   CUresult res = cuTensorMapEncodeIm2col(
       &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,

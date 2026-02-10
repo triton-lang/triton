@@ -32,9 +32,6 @@ struct ConvertLayoutOpSwizzlingConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -42,23 +39,10 @@ struct ConvertLayoutOpSwizzlingConversion
     LinearLayout srcLayout = toLinearLayout(srcTy);
     LinearLayout dstLayout = toLinearLayout(dstTy);
 
-    StringAttr kBlock = str_attr("block");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kReg = str_attr("register");
-
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    auto dims = conversion.getInDimNames();
-    if (!llvm::is_contained(dims, kBlock) && !cvtAlwaysUseWarpShuffle(op) &&
-        cvtNeedsSharedMemory(srcTy, dstTy)) {
+    if (!cvtAlwaysUseWarpShuffle(op) && cvtNeedsSharedMemory(srcTy, dstTy)) {
       auto loc = op.getLoc();
-      // Remove the kBlock dimension from the layout as it's the identity in the
-      // cvt
-      srcLayout = srcLayout.sublayout({kReg, kLane, kWarp},
-                                      to_vector(srcLayout.getOutDimNames()));
-      dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
-                                      to_vector(dstLayout.getOutDimNames()));
 
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
       auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
@@ -134,13 +118,18 @@ struct ConvertLayoutOpSwizzlingConversion
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto [srcTiles, dstTiles] = getSrcDstTiles(targetInfo, bitwidth);
+    auto kBlock = str_attr("block");
+    bool crossCTA =
+        !dstLayout.invertAndCompose(srcLayout).isTrivialOver({kBlock});
+    auto [srcTiles, dstTiles] = getSrcDstTiles(targetInfo, bitwidth, crossCTA);
     auto [smem, instr] =
         optimalSwizzling(srcLayout, dstLayout, srcTiles, dstTiles, bitwidth);
     auto [idxSrc, idxDst] = instr;
 
     // Extract reps from smem
     auto kReg = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
     auto kReps = str_attr("reps");
     auto nReps = smem.getInDimSize(kReps);
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
@@ -162,8 +151,16 @@ struct ConvertLayoutOpSwizzlingConversion
     auto storeCvt = *divideRight(totalStoreCvt, reps);
     auto loadCvt = *divideRight(totalLoadCvt, reps);
     auto kOffset = str_attr("offset");
-    storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
-    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
+    auto nBlock = storeCvt.getInDimSize(kBlock);
+    storeCvt = storeCvt.reshapeOuts(
+        {{kOffset, storeCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
+    loadCvt = loadCvt.reshapeOuts(
+        {{kOffset, loadCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
+
+    // We never do cross-CTA writes by construction. We may do cross-CTA reads,
+    // but in that case we lower to ld.shared/st.shared
+    assert(storeCvt.isTrivialOver({kBlock}));
+    assert(loadCvt.isTrivialOver({kBlock}) || idxDst == 0);
 
     auto tileSize = storeCvt.getInDimSize(kReg);
 
@@ -171,16 +168,25 @@ struct ConvertLayoutOpSwizzlingConversion
     SmallVector<Value> outVals;
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
-    bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
-    for (int i = 0; i < nReps; ++i) {
-      if (i > 0) {
-        if (isWarpSync) {
-          targetInfo.warpSync(loc, rewriter);
-        } else {
-          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-        }
+    bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
+    bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
+    auto emitBarrier = [&]() {
+      if (isWarpSync) {
+        targetInfo.warpSync(loc, rewriter);
+      } else if (isBlockSync) {
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      } else {
+        targetInfo.clusterBarrier(loc, rewriter);
       }
-
+    };
+    auto dropBlock = [&](const LinearLayout &cvt) {
+      SmallVector<StringAttr> inDims = {kReg, kLane, kWarp};
+      SmallVector<StringAttr> outDims = {kOffset};
+      return cvt.sublayout(inDims, outDims);
+    };
+    for (int i = 0; i < nReps; ++i) {
+      if (i > 0)
+        emitBarrier();
       auto tileInVals =
           to_vector(ArrayRef(permutedInVals).slice(i * tileSize, tileSize));
       // Store
@@ -192,16 +198,13 @@ struct ConvertLayoutOpSwizzlingConversion
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
+        auto storeCvtNoBlock = dropBlock(storeCvt);
         auto result = lowerLdStMatrix(
-            loc, storeCvt, transpose, tileInVals, smemBase, affineOffset,
+            loc, storeCvtNoBlock, transpose, tileInVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
-      if (isWarpSync) {
-        targetInfo.warpSync(loc, rewriter);
-      } else {
-        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-      }
+      emitBarrier();
       // Load
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans
@@ -212,8 +215,9 @@ struct ConvertLayoutOpSwizzlingConversion
       } else {
         assert(idxDst == 1 || idxDst == 2);
         bool transpose = idxDst == 2;
+        auto loadCvtNoBlock = dropBlock(loadCvt);
         auto result = lowerLdStMatrix(
-            loc, loadCvt, transpose, tileOutVals, smemBase, affineOffset,
+            loc, loadCvtNoBlock, transpose, tileOutVals, smemBase, affineOffset,
             maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
@@ -229,21 +233,11 @@ struct ConvertLayoutOpSwizzlingConversion
   transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
                                ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // Remove the kBlock dimension from the layout as it's the identity in the
-    // cvt
     auto srcLayout = toLinearLayout(srcTy);
     auto dstLayout = toLinearLayout(dstTy);
-    auto kReg = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
-    srcLayout = srcLayout.sublayout({kReg, kLane, kWarp},
-                                    to_vector(srcLayout.getOutDimNames()));
-    dstLayout = dstLayout.sublayout({kReg, kLane, kWarp},
-                                    to_vector(dstLayout.getOutDimNames()));
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto smemBase =
@@ -259,136 +253,15 @@ struct ConvertLayoutOpSwizzlingConversion
   }
 };
 
-struct ConvertLayoutOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
-public:
-  ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
-                            const NVIDIA::TargetInfo &targetInfo,
-                            PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
-    if (isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
-            srcLayout) &&
-        isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
-            dstLayout)) {
-      if (shouldUseDistSmem(srcLayout, dstLayout))
-        return lowerDistToDistWithDistSmem(op, adaptor, rewriter, targetInfo);
-    }
-
-    return failure();
-  }
-
-private:
-  LogicalResult
-  lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter,
-                              const NVIDIA::TargetInfo &targetInfo) const {
-    MLIRContext *ctx = rewriter.getContext();
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto typeConverter = getTypeConverter();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-    auto srcLayout = srcTy.getEncoding();
-    auto dstLayout = dstTy.getEncoding();
-    auto srcShapePerCTA = getShapePerCTA(srcTy);
-    auto srcCTAsPerCGA = triton::gpu::getCTAsPerCGA(srcLayout);
-    auto srcCTAOrder = triton::gpu::getCTAOrder(srcLayout);
-    unsigned rank = srcShapePerCTA.size();
-
-    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    smemBase = b.bitcast(smemBase, elemPtrTy);
-    auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
-
-    // Store to local shared memory
-    {
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices = emitIndices(loc, rewriter, targetInfo, srcLayout, srcTy,
-                                   /*withCTAOffset*/ false);
-
-      assert(inIndices.size() == inVals.size() &&
-             "Unexpected number of indices emitted");
-
-      for (unsigned i = 0; i < inIndices.size(); ++i) {
-        Value offset = LLVM::linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = b.gep(elemPtrTy, llvmElemTy, smemBase, offset);
-        b.store(inVals[i], ptr);
-      }
-    }
-
-    // Cluster barrier
-    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
-    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
-
-    // Load from remote shared memory
-    {
-      SmallVector<Value> srcShapePerCTACache;
-      for (unsigned i = 0; i < rank; ++i)
-        srcShapePerCTACache.push_back(b.i32_val(srcShapePerCTA[i]));
-
-      SmallVector<Value> outVals;
-      auto outIndices = emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy,
-                                    /*withCTAOffset*/ true);
-
-      for (unsigned i = 0; i < outIndices.size(); ++i) {
-        auto coord = outIndices[i];
-        assert(coord.size() == rank && "Unexpected rank of index emitted");
-
-        SmallVector<Value> multiDimCTAId, localCoord;
-        for (unsigned d = 0; d < rank; ++d) {
-          multiDimCTAId.push_back(b.udiv(coord[d], srcShapePerCTACache[d]));
-          localCoord.push_back(b.urem(coord[d], srcShapePerCTACache[d]));
-        }
-
-        Value remoteCTAId = LLVM::linearize(rewriter, loc, multiDimCTAId,
-                                            srcCTAsPerCGA, srcCTAOrder);
-        Value localOffset =
-            LLVM::linearize(rewriter, loc, localCoord, smemShape);
-
-        Value ptr = b.gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(targetInfo.loadDShared(rewriter, loc, ptr,
-                                                 remoteCTAId, llvmElemTy,
-                                                 /*pred=*/b.true_val()));
-      }
-
-      Value result =
-          packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
-      rewriter.replaceOp(op, result);
-    }
-
-    // Cluster barrier
-    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
-    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
-
-    return success();
-  }
-
-private:
-  const NVIDIA::TargetInfo &targetInfo;
-};
-
 } // namespace
 
 void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // Give this convertLayoutOpConversion a higher benefit as it only matches
-  // optimized or cross CTA cases
-  patterns.add<ConvertLayoutOpConversion, ConvertLayoutOpSwizzlingConversion>(
-      typeConverter, targetInfo, benefit.getBenefit() + 1);
+  // Give this convertLayoutOpSwizzlingConversion a higher benefit as it
+  // matches optimized ldmatrix/stmatrix cases
+  patterns.add<ConvertLayoutOpSwizzlingConversion>(typeConverter, targetInfo,
+                                                   benefit.getBenefit() + 1);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
 }

@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
 #include "triton/Conversion/MLIRTypes.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -19,6 +20,8 @@ public:
   // target address space
   virtual void barrier(Location loc, RewriterBase &rewriter,
                        triton::gpu::AddrSpace targets) const = 0;
+  // Emit a cluster-level barrier when supported. Defaults to CTA barrier.
+  virtual void clusterBarrier(Location loc, RewriterBase &rewriter) const = 0;
   // Insert a warp syncronization barrier that also guarantees local address
   // space visibility at warp level when supported by the backend.
   // Backends that do not support warp-level barriers should conservatively
@@ -66,8 +69,7 @@ public:
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          unsigned numLaneToReduce,
-                          unsigned interleave) const = 0;
+                          unsigned reduceLaneIdMask) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
@@ -102,6 +104,8 @@ public:
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
   virtual bool supportLdStMatrixB8() const { return false; }
+  virtual bool supportBitwidth16Elementwise() const { return false; }
+  virtual bool supportBitwidth32Elementwise() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means
