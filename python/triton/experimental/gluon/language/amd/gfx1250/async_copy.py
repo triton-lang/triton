@@ -4,8 +4,7 @@ from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group, load_shared_relaxed
 
 __all__ = [
-    "global_to_shared", "shared_to_global", "commit_group", "wait_group", "mbarrier_arrive",
-    "load_shared_relaxed"
+    "global_to_shared", "shared_to_global", "commit_group", "wait_group", "mbarrier_arrive", "load_shared_relaxed"
 ]
 
 
