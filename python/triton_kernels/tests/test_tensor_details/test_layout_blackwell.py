@@ -1,7 +1,7 @@
 import pytest
 import torch
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, BlackwellActMXScaleLayout
-from triton_kernels.tensor import make_ragged_tensor_metadata
+from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, BlackwellActMXScaleLayout, StridedLayout
+from triton_kernels.tensor import make_ragged_tensor_metadata, wrap_torch_tensor, convert_layout
 
 # ------------------------------------------------------------
 # Torch tests
@@ -42,8 +42,18 @@ def test_act_scale_roundtrip_2d_without_ragged_metadata(shape):
     transformation = layout.make_transformation(x.shape, is_fp4=False)
     assert transformation.mode == "batched"
     res = transformation.unswizzle_data(transformation.swizzle_data(x))
-    assert res.shape == (1, *shape)
-    torch.testing.assert_close(res, x.unsqueeze(0))
+    assert res.shape == shape
+    assert torch.equal(res, x)
+
+
+@pytest.mark.parametrize("shape", [(256, 192), (128, 64), (130, 65)])
+def test_act_scale_convert_layout_roundtrip_2d_without_ragged_metadata(shape):
+    x = torch.randn(shape, device="cuda", dtype=torch.float32)
+    x_tri = wrap_torch_tensor(x)
+    scale_layout = BlackwellActMXScaleLayout(ragged_metadata=None)
+    x_tri_scale = convert_layout(x_tri, scale_layout)
+    x_tri_roundtrip = convert_layout(x_tri_scale, StridedLayout(-1))
+    assert torch.equal(x_tri_roundtrip.data, x)
 
 
 @pytest.mark.parametrize(

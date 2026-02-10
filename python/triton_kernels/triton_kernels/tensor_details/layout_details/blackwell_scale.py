@@ -52,14 +52,17 @@ class BlackwellActMXScaleLayout(Layout):
 class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
     ragged_metadata: RaggedTensorMetadata | None
+    added_leading_batch_dim: bool = False
     ALIGN_K: int = 8
     ALIGN_M: int = 128
     SWIZZLE_K: int = 4
 
     def __post_init__(self):
         assert len(self.shape) in [2, 3]
+        added_leading_batch_dim = False
         if len(self.shape) == 2:
             B, M, K = 1, *self.shape
+            added_leading_batch_dim = True
             if self.ragged_metadata is None:
                 M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
                 mode = "batched"
@@ -85,6 +88,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "M_pad", M_pad)
         object.__setattr__(self, "K_pad", K_pad)
         object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
     def swizzle_data(self, data):
         if self.mode == "batched":
@@ -116,7 +120,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(self.B, self.M_pad, self.K_pad)
 
         if self.mode == "batched":
-            return data[..., :self.M, :self.K]
+            data = data[..., :self.M, :self.K]
+            if self.added_leading_batch_dim:
+                return data.squeeze(0)
+            return data
 
         # ragged path: map padded blocks back into the original ragged rows
         assert self.B == 1, "ragged scale layout only supports 2D input"
