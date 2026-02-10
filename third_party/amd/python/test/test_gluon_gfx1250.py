@@ -17,8 +17,7 @@ from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
-from triton.experimental.gluon.language.amd import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout
 
 
 @gluon.jit

@@ -167,8 +167,10 @@ struct GluonLayouts {
     AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
+    auto gfx1250Layouts = py::module::import(
+        "triton.experimental.gluon.language.amd.gfx1250._layouts");
     PartitionedSharedLayout =
-        py::object(amdLayouts.attr("PartitionedSharedLayout")).release();
+        py::object(gfx1250Layouts.attr("PartitionedSharedLayout")).release();
 
     auto core = py::module::import("triton.language.core");
   }
