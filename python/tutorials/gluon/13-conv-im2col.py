@@ -25,6 +25,10 @@ Prerequisites:
 Reference:
 https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
+TMA im2col Mode Parameters:
+    The following descriptor fields and boundary rules are specific to
+    TensorDescriptorIm2Col in im2col mode.
+
 Block Shape:
     block_shape = [pixelsPerColumn, channelsPerPixel]
     - pixelsPerColumn: number of pixels from spatial dims [N, H, W]
@@ -33,7 +37,7 @@ Block Shape:
 TensorDescriptor Parameters:
     - Input tensor: [N, H, W, C] in NHWC format
     - pixel_box_lower_corner: [H_lo, W_lo] offset from (0, 0)
-    - pixel_box_upper_corner: [H_hi, W_hi] offset from (H, W)
+    - pixel_box_upper_corner: [H_hi, W_hi] offset from [H - 1, W - 1]
     - element_strides: [1, 1, 1, 1] for contiguous element access
     - padding: "zero" or "nan" for out-of-bounds fills
 
@@ -41,8 +45,8 @@ Access Boundary:
     pixel_box_lower_corner, pixel_box_upper_corner, and offsets define the
     spatial access window:
     - Lower bound = pixel_box_lower_corner + offsets
-    - Upper bound = [H, W] + pixel_box_upper_corner + offsets
-    - Bounds are interpreted as half-open: [lower, upper)
+    - Upper bound = [H - 1, W - 1] + pixel_box_upper_corner + offsets
+    - Bounds are interpreted as closed (inclusive): [lower, upper]
 
     The input tensor in global memory is NOT padded. When accessing outside
     [0, 0] to [H-1, W-1], TMA fills with the padding value.
