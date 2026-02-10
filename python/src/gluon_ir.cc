@@ -168,7 +168,7 @@ struct GluonLayouts {
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
     PartitionedSharedLayout =
-        py::object(layouts.attr("PartitionedSharedLayout")).release();
+        py::object(amdLayouts.attr("PartitionedSharedLayout")).release();
 
     auto core = py::module::import("triton.language.core");
   }
