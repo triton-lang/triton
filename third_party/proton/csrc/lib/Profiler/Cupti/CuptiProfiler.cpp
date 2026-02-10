@@ -126,8 +126,8 @@ uint32_t processActivityKernel(
     // We have a graph creation captured
     auto &graphNodeIdToState = externState.graphNodeIdToState;
     auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
-    if (nodeState && !nodeState->isMetricNode) {
-      const bool isMissingName = nodeState->isMissingName;
+    if (nodeState && !nodeState->isMetricNode()) {
+      const bool isMissingName = nodeState->isMissingName();
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
@@ -436,7 +436,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           auto staticEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           graphState.dataToNodeStates[data][staticEntry.id].insert_or_assign(
-              nodeId, GraphState::makeNodeState(isMissingName, isMetricNode));
+              nodeId, NodeState(isMissingName, isMetricNode));
           graphState.launchNodeIds.insert_or_assign(nodeId, staticEntry.id);
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
@@ -627,8 +627,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           auto nodeEntry = data->linkOp(baseEntry.id, targetEntryId);
           for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
             auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
-            graphNodeState.isMissingName = GraphState::isMissingName(nodeState);
-            graphNodeState.isMetricNode = GraphState::isMetricNode(nodeState);
+            graphNodeState.status = nodeState;
             graphNodeState.addEntry(nodeEntry);
           }
         }

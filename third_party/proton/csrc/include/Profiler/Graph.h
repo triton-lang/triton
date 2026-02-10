@@ -20,27 +20,26 @@ namespace proton {
 class Data;
 class Runtime;
 
+struct NodeState {
+  using Status = uint8_t;
+
+  static constexpr Status kMissingName = 1u << 0;
+  static constexpr Status kMetric = 1u << 1;
+
+  Status status{};
+
+  constexpr NodeState() = default;
+  constexpr explicit NodeState(Status status) : status(status) {}
+
+  constexpr NodeState(bool isMissingName, bool isMetricNode)
+      : status(static_cast<Status>((isMissingName ? kMissingName : 0) |
+                                   (isMetricNode ? kMetric : 0))) {}
+
+  constexpr bool isMissingName() const { return (status & kMissingName) != 0; }
+  constexpr bool isMetricNode() const { return (status & kMetric) != 0; }
+};
+
 struct GraphState {
-  using NodeState = uint8_t;
-
-  static constexpr NodeState kNodeStateMissingName = 1u << 0;
-  static constexpr NodeState kNodeStateMetric = 1u << 1;
-
-  static constexpr NodeState makeNodeState(bool isMissingName,
-                                           bool isMetricNode) {
-    return static_cast<NodeState>(
-        (isMissingName ? kNodeStateMissingName : 0) |
-        (isMetricNode ? kNodeStateMetric : 0));
-  }
-
-  static constexpr bool isMissingName(NodeState state) {
-    return (state & kNodeStateMissingName) != 0;
-  }
-
-  static constexpr bool isMetricNode(NodeState state) {
-    return (state & kNodeStateMetric) != 0;
-  }
-
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   // Precomputed per-Data launch links maintained on graph node
