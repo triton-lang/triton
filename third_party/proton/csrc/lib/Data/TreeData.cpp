@@ -849,6 +849,8 @@ void TreeData::linkOp(
   const auto phase = currentPhase.load(std::memory_order_relaxed);
   auto *tree = currentPhasePtrAs<Tree>();
   auto &baseNode = tree->getNode(baseEntryId);
+  baseNode.linkedTargetFlexibleMetrics.reserve(targetEntryIds.size());
+  baseNode.linkedTargetMetrics.reserve(targetEntryIds.size());
   for (const auto targetEntryId : targetEntryIds) {
     auto &linkedMetrics = baseNode.linkedTargetMetrics[targetEntryId];
     auto &linkedFlexibleMetrics =
