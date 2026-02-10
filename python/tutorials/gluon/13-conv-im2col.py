@@ -786,27 +786,27 @@ def conv2d_im2col_kernel(
     """
     dtype: ttgl.constexpr = in_desc.dtype
 
-    # ┌ for each M-tile / N-tile:
+    # for each M-tile / N-tile:
     pid_m, pid_n = ttgl.program_id(0), ttgl.program_id(1)
     offs_m, batch_id, out_y, out_x = decompose_m_offset(pid_m, BLOCK_M, out_h, out_w)
 
-    # │ acc = zeros(BLOCK_M, BLOCK_N)
+    # acc = zeros(BLOCK_M, BLOCK_N)
     a_smem, b_smem, mma, tma_bar = init_accumulator(in_desc, weight_desc, MMAImpl, dtype, BLOCK_M, BLOCK_N, num_warps)
     phase = 0
 
-    # │ for r in range(R): for s in range(S): for ci_blk in range(Ci//BLOCK_K):
+    # for r in range(R): for s in range(S): for ci_blk in range(Ci//BLOCK_K):
     ci_num_blocks = Ci // BLOCK_K
     total_k_iters = R * S * ci_num_blocks
     for k_iter in range(total_k_iters):
         ci_block, rs_idx = k_iter % ci_num_blocks, k_iter // ci_num_blocks
         r, s = rs_idx // S, rs_idx % S
 
-        # │   A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
-        # │   Equivalent TMA-im2col mapping:
-        # │     coord   = [batch_id, out_y*stride_h-pad_h, out_x*stride_w-pad_w, ci_block*BLOCK_K]
-        # │     offsets = [r, s]
-        # │   TMA applies offsets to the spatial coords, so start is:
-        # │     [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
+        # A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
+        # Equivalent TMA-im2col mapping:
+        #   coord   = [batch_id, out_y*stride_h-pad_h, out_x*stride_w-pad_w, ci_block*BLOCK_K]
+        #   offsets = [r, s]
+        # TMA applies offsets to the spatial coords, so start is:
+        #   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
         k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
         tma.async_copy_global_to_shared_im2col(
@@ -816,11 +816,11 @@ def conv2d_im2col_kernel(
             tma_bar,
             a_smem,
         )
-        # │   B = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
+        # B = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
         tma.async_copy_global_to_shared(weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
-        # │   acc += A @ B^T
+        # acc += A @ B^T
         mma = mma.wait_num_outstanding(0)
         mma = mma.issue_async_mma(a_smem, b_smem.permute((1, 0)))
 
@@ -828,7 +828,7 @@ def conv2d_im2col_kernel(
 
     mbarrier.invalidate(tma_bar)
 
-    # └ store output[…] = acc
+    # store output[...] = acc
     store_output_tile(mma, dtype, out_desc, offs_m, pid_n * BLOCK_N)
 
 
