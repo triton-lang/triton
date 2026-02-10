@@ -469,7 +469,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   if (!staticTargetEntryIds.empty()) {
     tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *staticTrace) {
       for (auto targetEntryId : staticTargetEntryIds) {
-        auto contexts = staticTrace->getContexts(targetEntryId);
+        if (!staticTrace->hasEvent(targetEntryId)) {
+          continue;
+        }
+        // Linked target ids are event ids, so resolve through the event first.
+        auto &targetEvent = staticTrace->getEvent(targetEntryId);
+        auto contexts = staticTrace->getContexts(targetEvent.contextId);
         if (!contexts.empty() && contexts.front().name == "ROOT") {
           contexts.erase(contexts.begin());
         }
@@ -516,8 +521,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       processMetricMaps(event.metrics, baseContexts);
       for (const auto &[targetEntryId, linkedMetrics] :
            event.linkedTargetMetrics) {
+        auto staticContextsIt = targetIdToStaticContexts.find(targetEntryId);
+        if (staticContextsIt == targetIdToStaticContexts.end()) {
+          continue;
+        }
         auto contexts = baseContexts;
-        auto &staticContexts = targetIdToStaticContexts[targetEntryId];
+        auto &staticContexts = staticContextsIt->second;
         contexts.insert(contexts.end(), staticContexts.begin(),
                         staticContexts.end());
         processMetricMaps(linkedMetrics, contexts);

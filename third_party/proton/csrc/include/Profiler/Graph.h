@@ -46,11 +46,8 @@ struct GraphState {
   std::map<Data *, DataLaunchState> dataToLaunchState;
   // Node ids that have launch-state entries, ordered by node creation order.
   std::set<uint64_t> launchNodeIds;
-  // Per-node metric words for accounting during destroy callbacks.
-  std::map<uint64_t, size_t> nodeIdToMetricNumWords;
-  // Identify whether a node is a metric kernel node.
-  // NOTE: This set has to be ordered to match the node creation order.
-  std::set<uint64_t> metricKernelNodeIds;
+  // Metric nodes and their per-node metric words, ordered by node id.
+  std::map<uint64_t, size_t> metricKernelNodeIdToNumWords;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};

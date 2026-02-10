@@ -419,7 +419,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           isMetricNode = true;
           metricNumWords = threadState.metricKernelNumWordsQueue.front();
           threadState.metricKernelNumWordsQueue.pop_front();
-          graphState.metricKernelNodeIds.insert(nodeId);
+          graphState.metricKernelNodeIdToNumWords.insert_or_assign(
+              nodeId, metricNumWords);
           graphState.metricNumWords += metricNumWords;
         }
         bool hasLaunchState = false;
@@ -439,8 +440,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         if (hasLaunchState)
           graphState.launchNodeIds.insert(nodeId);
       } // else no op in progress; creation triggered by graph clone/instantiate
-      graphState.nodeIdToMetricNumWords.insert_or_assign(nodeId,
-                                                         metricNumWords);
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
       uint32_t originalGraphId = 0;
       uint64_t originalNodeId = 0;
@@ -448,13 +447,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
       auto &originalGraphState = graphStates[originalGraphId];
       auto &graphState = graphStates[graphId];
-      const auto metricNumWords =
-          originalGraphState.nodeIdToMetricNumWords.at(originalNodeId);
-      graphState.nodeIdToMetricNumWords.insert_or_assign(nodeId,
-                                                         metricNumWords);
-      if (originalGraphState.metricKernelNodeIds.find(originalNodeId) !=
-          originalGraphState.metricKernelNodeIds.end()) {
-        graphState.metricKernelNodeIds.insert(nodeId);
+      auto originalMetricNodeIt =
+          originalGraphState.metricKernelNodeIdToNumWords.find(originalNodeId);
+      if (originalMetricNodeIt !=
+          originalGraphState.metricKernelNodeIdToNumWords.end()) {
+        const auto metricNumWords = originalMetricNodeIt->second;
+        graphState.metricKernelNodeIdToNumWords.insert_or_assign(nodeId,
+                                                                 metricNumWords);
         graphState.metricNumWords += metricNumWords;
       }
       bool hasLaunchState = false;
@@ -482,8 +481,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.numNodes--;
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-    graphState.metricNumWords -= graphState.nodeIdToMetricNumWords.at(nodeId);
-    graphState.metricKernelNodeIds.erase(nodeId);
+    auto metricNodeIt = graphState.metricKernelNodeIdToNumWords.find(nodeId);
+    if (metricNodeIt != graphState.metricKernelNodeIdToNumWords.end()) {
+      graphState.metricNumWords -= metricNodeIt->second;
+      graphState.metricKernelNodeIdToNumWords.erase(metricNodeIt);
+    }
     for (auto it = graphState.dataToLaunchState.begin();
          it != graphState.dataToLaunchState.end();) {
       auto &launchState = it->second;
@@ -503,7 +505,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
                : ++it;
     }
     graphState.launchNodeIds.erase(nodeId);
-    graphState.nodeIdToMetricNumWords.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
@@ -661,11 +662,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
-      if (!graphStates[graphExecId].metricKernelNodeIds.empty()) {
+      if (!graphStates[graphExecId].metricKernelNodeIdToNumWords.empty()) {
         auto &graphExecState = graphStates[graphExecId];
         std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
         auto phase = Data::kNoCompletePhase;
-        for (auto nodeId : graphExecState.metricKernelNodeIds) {
+        for (const auto &metricNode :
+             graphExecState.metricKernelNodeIdToNumWords) {
+          auto nodeId = metricNode.first;
           auto *nodeState = graphNodeIdToState.find(nodeId);
           if (!nodeState) {
             throw std::runtime_error(
@@ -682,7 +685,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
           });
         }
         // Check if all data contains the same number of metric nodes
-        const auto numMetricNodes = graphExecState.metricKernelNodeIds.size();
+        const auto numMetricNodes =
+            graphExecState.metricKernelNodeIdToNumWords.size();
         for (const auto &[data, entries] : metricNodeEntries) {
           if (entries.size() != numMetricNodes) {
             throw std::runtime_error(
