@@ -1543,13 +1543,25 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
+def _wrap_init_args(x):
+    if isinstance(x, tuple):
+        from triton.compiler.code_generator import _apply_to_tuple_values
+        return _apply_to_tuple_values(x, _wrap_init_args)
+    if isinstance(x, builtins.tuple):
+        wrapped = builtins.tuple(_wrap_init_args(i) for i in x)
+        fields = getattr(x, "_fields", None)
+        ty = tuple_type([v.type for v in wrapped], fields)
+        return tuple(wrapped, ty)
+    if isinstance(x, base_value):
+        return x
+    return constexpr(x)
+
+
 def _aggregate(cls):
     init = cls.__dict__.get("__init__", None)
     if init is None:
-        from triton.runtime.jit import constexpr_function
         field_names = builtins.tuple(cls.__annotations__.keys())
 
-        @constexpr_function
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
                 raise TypeError(f"{cls.__name__}.__init__() takes {len(field_names) + 1} positional arguments "
@@ -1565,13 +1577,14 @@ def _aggregate(cls):
                 else:
                     raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
 
-                if cls.__annotations__[name] is constexpr and not isinstance(value, constexpr):
-                    value = constexpr(value)
+                value = _wrap_init_args(value)
                 setattr(self, name, value)
 
             if kwargs:
                 unexpected = next(iter(kwargs))
                 raise TypeError(f"{cls.__name__}.__init__() got an unexpected keyword argument '{unexpected}'")
+
+        init.__triton_builtin__ = True
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):

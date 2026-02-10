@@ -170,6 +170,31 @@ def test_aggregate_auto_init_assigns_members():
     assert state.y.value == 7
 
 
+def test_aggregate_auto_init_with_tuples():
+
+    class Shape(NamedTuple):
+        x: tl.constexpr
+        y: tl.constexpr
+
+    @tl.core._aggregate
+    class State:
+        shape: tl.tuple
+        strides: tl.tuple
+
+    state = State(Shape(3, tl.constexpr(7)), (7, tl.constexpr(1)))
+    assert isinstance(state.shape, tl.tuple)
+    assert isinstance(state.shape.x, tl.constexpr)
+    assert isinstance(state.shape.y, tl.constexpr)
+    assert state.shape[0].value == 3
+    assert state.shape[1].value == 7
+
+    assert isinstance(state.strides, tl.tuple)
+    assert isinstance(state.strides[0], tl.constexpr)
+    assert isinstance(state.strides[1], tl.constexpr)
+    assert state.strides[0].value == 7
+    assert state.strides[1].value == 1
+
+
 def test_aggregate_auto_init_respects_user_defined_init():
 
     @tl.core._aggregate
@@ -251,10 +276,6 @@ class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
 
-    def __init__(self, a, b):
-        self.a = a
-        self.b = b
-
     @staticmethod
     def create(a):
         return AggregateWithConstexpr(a, tl.constexpr(42))
@@ -287,14 +308,10 @@ def test_aggregate_with_constexpr():
 class AggregateWithTuple:
     a: tl.tuple
 
-    @triton.constexpr_function
-    def __init__(self, a):
-        self.a = tl.tuple((a, ))
-
     @staticmethod
     @triton.jit
     def create(a):
-        return AggregateWithTuple(a)
+        return AggregateWithTuple((a, ))
 
 
 @triton.jit
@@ -379,9 +396,6 @@ def Box(T):
         @triton.jit
         def create(value):
             return BoxImpl(value)
-
-        def __init__(self, value):
-            self.value = value
 
     return BoxImpl
 
