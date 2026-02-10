@@ -97,6 +97,18 @@ struct DataEntry {
           }
         });
   }
+
+  void upsertFlexibleMetric(const std::string &metricName,
+                            const MetricValueType &metricValue) const {
+    auto &flexibleMetricsRef = *flexibleMetrics;
+    auto it = flexibleMetricsRef.find(metricName);
+    if (it == flexibleMetricsRef.end()) {
+      flexibleMetricsRef.emplace(metricName,
+                                 FlexibleMetric(metricName, metricValue));
+    } else {
+      it->second.updateValue(metricValue);
+    }
+  }
 };
 
 class Data : public ScopeInterface {

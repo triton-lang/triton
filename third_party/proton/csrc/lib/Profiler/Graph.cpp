@@ -89,7 +89,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
       for (const auto &entry : pendingGraph.dataEntries) {
-        entry.upsertFlexibleMetrics({{metricName, metricValueVariant}});
+        entry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
   }
