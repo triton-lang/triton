@@ -281,8 +281,8 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #                               BLOCK_K = channels per load
 #       - element_strides:      [1, stride_h, stride_w, 1]
 #                               TMA steps by stride between output positions
-#       - pixel_box_lower:      [-pad_h, -pad_w]
-#       - pixel_box_upper:      [upper_h, upper_w]  (computed to give out_h * out_w pixels/batch)
+#       - pixel_box_lower:      [-pad_h_left, -pad_w_left]
+#       - pixel_box_upper:      [H + pad_h_right, W + pad_w_right]
 #       - padding:              "zero" (out-of-bounds reads return 0)
 #
 #     At each K-iteration for filter position (r, s):
