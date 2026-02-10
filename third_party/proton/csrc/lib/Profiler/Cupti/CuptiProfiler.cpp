@@ -618,18 +618,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
       for (const auto &launchEntry : dataEntries) {
         auto *data = launchEntry.data;
-        if (!data) {
-          continue;
-        }
         auto nodeStateIt = graphState.dataToNodeStates.find(data);
         if (nodeStateIt == graphState.dataToNodeStates.end()) {
           continue;
         }
-        const auto &entryIdToNodeStates = nodeStateIt->second;
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
         for (const auto &[targetEntryId, nodeIdToStates] :
-             entryIdToNodeStates) {
+             nodeStateIt->second) {
           auto nodeEntry = data->linkOp(baseEntry.id, targetEntryId);
           for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
             auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
