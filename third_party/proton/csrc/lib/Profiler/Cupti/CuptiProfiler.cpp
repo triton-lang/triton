@@ -424,8 +424,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           isMetricNode = true;
           numMetricWords = threadState.metricKernelNumWordsQueue.front();
           threadState.metricKernelNumWordsQueue.pop_front();
-          graphState.metricNodeIdToNumWords.insert_or_assign(
-              nodeId, numMetricWords);
+          graphState.metricNodeIdToNumWords.insert_or_assign(nodeId,
+                                                             numMetricWords);
           graphState.numMetricWords += numMetricWords;
         }
         for (auto *data : profiler.dataSet) {
@@ -453,11 +453,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       if (originalMetricNodeIt !=
           originalGraphState.metricNodeIdToNumWords.end()) {
         const auto numMetricWords = originalMetricNodeIt->second;
-        graphState.metricNodeIdToNumWords.insert_or_assign(
-            nodeId, numMetricWords);
+        graphState.metricNodeIdToNumWords.insert_or_assign(nodeId,
+                                                           numMetricWords);
         graphState.numMetricWords += numMetricWords;
       }
-      const auto launchEntryId = originalGraphState.launchNodeIds.at(originalNodeId);
+      const auto launchEntryId =
+          originalGraphState.launchNodeIds.at(originalNodeId);
       for (const auto &[dataPtr, originalEntryIdToNodeStates] :
            originalGraphState.dataToNodeStates) {
         auto clonedNodeState =
@@ -627,7 +628,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         const auto &entryIdToNodeStates = nodeStateIt->second;
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
-        for (const auto &[targetEntryId, nodeIdToStates] : entryIdToNodeStates) {
+        for (const auto &[targetEntryId, nodeIdToStates] :
+             entryIdToNodeStates) {
           auto nodeEntry = data->linkOp(baseEntry.id, targetEntryId);
           for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
             auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
@@ -651,8 +653,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         auto &graphExecState = graphStates[graphExecId];
         std::vector<DataEntry> metricNodeEntries;
         auto phase = Data::kNoCompletePhase;
-        for (const auto &metricNode :
-             graphExecState.metricNodeIdToNumWords) {
+        for (const auto &metricNode : graphExecState.metricNodeIdToNumWords) {
           auto nodeId = metricNode.first;
           auto *nodeState = graphNodeIdToState.find(nodeId);
           nodeState->forEachEntry([&](const DataEntry &entry) {
