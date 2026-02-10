@@ -31,7 +31,7 @@ class BlackwellMXScaleLayout(Layout):
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayout(Layout):
 
-    ragged_metadata: RaggedTensorMetadata
+    ragged_metadata: RaggedTensorMetadata | None
 
     @property
     def name(self):
@@ -51,7 +51,7 @@ class BlackwellActMXScaleLayout(Layout):
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
-    ragged_metadata: RaggedTensorMetadata
+    ragged_metadata: RaggedTensorMetadata | None
     ALIGN_K: int = 8
     ALIGN_M: int = 128
     SWIZZLE_K: int = 4
@@ -60,15 +60,19 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         assert len(self.shape) in [2, 3]
         if len(self.shape) == 2:
             B, M, K = 1, *self.shape
-            # In ragged mode, input often include padded tokens
-            # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
-            # And the rest of rows are padded tokens
-            n_slices = self.ragged_metadata.slice_sizes.shape[0]
-            # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
-            max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
-            # create a static size scratchpad for output
-            M_pad = self.ALIGN_M * max_n_blocks
-            mode = "ragged"
+            if self.ragged_metadata is None:
+                M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+                mode = "batched"
+            else:
+                # In ragged mode, input often include padded tokens
+                # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
+                # And the rest of rows are padded tokens
+                n_slices = self.ragged_metadata.slice_sizes.shape[0]
+                # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
+                max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
+                # create a static size scratchpad for output
+                M_pad = self.ALIGN_M * max_n_blocks
+                mode = "ragged"
         else:
             B, M, K = self.shape
             M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
