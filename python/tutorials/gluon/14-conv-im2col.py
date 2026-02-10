@@ -9,9 +9,7 @@ Accelerator) im2col hardware mode makes this highly efficient on Hopper+ GPUs.
 We cover:
 1. How 2D convolution works (the sliding window)
 2. The im2col algorithm that reshapes convolution into GEMM
-3. Explicit vs implicit im2col (the "Implicit GEMM" approach)
-4. How TMA im2col hardware accelerates implicit GEMM
-5. A convolution kernel using TMA im2col + MMA (works on both Hopper and Blackwell)
+3. A convolution kernel using TMA im2col + MMA (works on both Hopper and Blackwell)
 
 We re-use the MMA abstraction from ``07-persistence.py`` so that the same kernel
 runs on Hopper (WGMMA) and Blackwell (tcgen05 MMA) without code duplication.
@@ -152,140 +150,69 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #     With Co output channels, W is (Co x K) and Output is (M x Co).
 
 # %%
-# Explicit vs Implicit im2col
-# ============================
+# Implicit GEMM with TMA im2col
+# ==============================
 #
 # **Explicit im2col** physically constructs the matrix A in memory. This is
 # simple but wastes memory because overlapping patches duplicate input data.
 # For an R x S filter, each input element may be copied up to R * S times!
 #
-# **Implicit im2col** (also called **Implicit GEMM**) avoids materializing A.
-# Instead, during the GEMM computation, we compute the correct input address
-# on-the-fly for each element of A. The GEMM loop becomes:
-#
-# .. code-block:: text
-#
-#     Pseudocode: Implicit GEMM Convolution
-#     ======================================
-#
-#     # GEMM dimensions
-#     M = N * out_h * out_w        # output spatial positions
-#     N_gemm = Co                  # output channels
-#     K = R * S * Ci               # reduction dimension
-#
-#     for each M-tile (block of output positions):
-#         for each N-tile (block of output channels):
-#             acc = zeros(BLOCK_M, BLOCK_N)
-#
-#             for r in range(R):          # filter height
-#                 for s in range(S):      # filter width
-#                     for ci_block in range(Ci // BLOCK_K):  # input channel blocks
-#
-#                         # Load input tile: for each output position in M-tile,
-#                         # compute the input address:
-#                         #   input[batch, out_y*stride + r - pad, out_x*stride + s - pad, ci_block*BLOCK_K : ...]
-#                         A_tile = load_input_tile(...)   # shape: [BLOCK_M, BLOCK_K]
-#
-#                         # Load weight tile:
-#                         #   weight[co_start:..., r, s, ci_block*BLOCK_K : ...]
-#                         B_tile = load_weight_tile(...)  # shape: [BLOCK_N, BLOCK_K]
-#
-#                         # Matrix multiply-accumulate
-#                         acc += A_tile @ B_tile^T        # [BLOCK_M, BLOCK_N]
-#
-#             store output tile: output[...] = acc
-#
-#     The key insight: we never build the full im2col matrix.
-#     Instead, the address computation happens inside the K-loop.
+# **Implicit GEMM** avoids materializing A.  Instead, during the GEMM
+# K-loop we compute input addresses on-the-fly for each filter position
+# ``(r, s)`` and channel block.  On Hopper+ GPUs, TMA has a dedicated
+# **im2col mode** that performs this address computation entirely in
+# hardware.  We configure a ``TensorDescriptorIm2Col`` once (see the
+# launcher), and each TMA load takes a filter offset ``[r, s]`` that
+# tells the hardware which spatial tap to gather from.  TMA automatically
+# handles striding between output positions, zero-padding for
+# out-of-bounds accesses, and wrapping across batch boundaries — all
+# without any register-level index arithmetic.
 
 # %%
-# TMA im2col: Hardware-Accelerated Implicit GEMM
-# ===============================================
+# Gluon Kernel
+# ============
 #
-# On Hopper and newer GPUs, NVIDIA's TMA (Tensor Memory Accelerator) has a special
-# **im2col mode** that performs the address computation in hardware!
-#
-# Instead of manually computing input addresses for each output position
-# (which requires expensive index arithmetic in registers), we configure a
-# ``TensorDescriptorIm2Col`` once, and TMA handles the rest:
-#
-# .. code-block:: text
-#
-#     TMA im2col for Convolution
-#     ==========================
-#
-#     TensorDescriptorIm2Col parameters:
-#       - Input tensor:         [N, H, W, Ci] in NHWC format
-#       - block_shape:          [BLOCK_M, BLOCK_K]
-#                               BLOCK_M = pixels (output positions)
-#                               BLOCK_K = channels per load
-#       - element_strides:      [1, stride_h, stride_w, 1]
-#                               TMA steps by stride between output positions
-#       - pixel_box_lower:      [-pad_h_left, -pad_w_left]
-#       - pixel_box_upper:      [H + pad_h_right, W + pad_w_right]
-#       - padding:              "zero" (out-of-bounds reads return 0)
-#
-#     At each K-iteration for filter position (r, s):
-#       async_copy_global_to_shared_im2col(
-#           in_desc,
-#           coord  = [batch_id, out_y*stride - pad, out_x*stride - pad, ci_start],
-#           offset = [r, s],    # <-- the filter position
-#           bar, smem
-#       )
-#
-#     TMA automatically:
-#       1. Computes the input address for each output position in the tile
-#       2. Handles padding (returns 0 for out-of-bounds)
-#       3. Handles strided access between output positions
-#       4. Wraps across batch boundaries
-#       5. Loads data directly into shared memory (async, off the main data path)
-#
-# This eliminates all the per-element address computation from the GPU cores,
-# freeing them to focus on the matrix multiply computation (WGMMA on Hopper,
-# tcgen05 on Blackwell).
-#
-# The mapping between convolution and GEMM is:
-#
-# .. code-block:: text
-#
-#     Convolution -> GEMM Mapping
-#     ===========================
-#
-#     GEMM dimension    Size                 Meaning
-#     ─────────────────────────────────────────────────────────
-#     M                 N * out_h * out_w    Output spatial positions
-#     N_gemm            Co                   Output channels
-#     K                 R * S * Ci           Filter size x input channels
-#
-#     Operand           Shape                Source
-#     ─────────────────────────────────────────────────────────
-#     A (input)         [M, K]               TMA im2col (implicit)
-#     B (weight)        [N_gemm, K]          TMA tiled load (explicit [Co, R*S*Ci])
-#     C (output)        [M, N_gemm]          MMA accumulator
-
-# %%
-# Gluon Kernel: Convolution with TMA im2col
-# ==========================================
-#
-# Now we implement a real GPU kernel. This kernel:
-#
-# - Loads **input tiles** using TMA im2col (hardware-accelerated implicit GEMM)
-# - Loads **weight tiles** using standard TMA
-# - Computes the matmul using the **MMA abstraction** from ``07-persistence.py``
-# - Stores the output using **TMA**
-#
-# By accepting ``MMAImpl`` as a compile-time parameter, the same kernel works on
-# both Hopper (WGMMA, accumulator in registers) and Blackwell (tcgen05 MMA,
-# accumulator in tensor memory). The MMA abstraction handles all the differences:
-# accumulator allocation, barrier management, and the async MMA issue/wait API.
-#
-# See ``07-persistence.py`` for the full ``WGMMA`` and ``MMAv5`` class
-# definitions, and ``06-tcgen05.py`` / ``05-wgmma.py`` for the underlying
-# tensor core operations.
-
-# %%
 # The kernel below implements a single-buffered implicit GEMM convolution.
-# Each program computes one (BLOCK_M x BLOCK_N) tile of the output.
+# ``store_output_tile`` is factored out as a helper; everything else is
+# inline so the reader can follow the im2col algorithm top-to-bottom.
+#
+# ``MMAImpl`` (from ``07-persistence.py``) lets the same kernel run on Hopper
+# (WGMMA, accumulator in registers) and Blackwell (tcgen05, accumulator in
+# tensor memory) without any code changes.
+
+
+@gluon.jit
+def decompose_m_offset(pid_m, BLOCK_M: gl.constexpr, out_h: gl.constexpr, out_w: gl.constexpr):
+    """Map M-tile index to (offs_m, batch, out_y, out_x) for TMA im2col coordinates."""
+    offs_m = pid_m * BLOCK_M
+    batch_id = offs_m // (out_h * out_w)
+    m_residual = offs_m % (out_h * out_w)
+    out_y = m_residual // out_w
+    out_x = m_residual % out_w
+    return offs_m, batch_id, out_y, out_x
+
+
+@gluon.jit
+def init_accumulator(in_desc, weight_desc, MMAImpl, dtype, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
+    """Allocate shared-memory tiles, MMA accumulator, and TMA barrier."""
+    a_smem = gl.allocate_shared_memory(dtype, in_desc.block_shape, in_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, weight_desc.block_shape, weight_desc.layout)
+    mma = MMAImpl.initialize(dtype, BLOCK_M, BLOCK_N, num_warps)
+    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(tma_bar, count=1)
+    return a_smem, b_smem, mma, tma_bar
+
+
+@gluon.jit
+def store_output_tile(mma, dtype, out_desc, offs_m, offs_n):
+    """Wait for the final MMA, downcast, and write the output tile via TMA."""
+    mma = mma.wait_num_outstanding(0)
+    acc, mma = mma.take_result()
+    c_smem = gl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
+    c_smem.store(acc.to(dtype))
+    fence_async_shared()
+    tma.async_copy_shared_to_global(out_desc, [offs_m, offs_n], c_smem)
+    tma.store_wait(pendings=0)
 
 
 @gluon.jit
@@ -310,83 +237,73 @@ def conv2d_im2col_kernel(
 ):
     """
     Implicit GEMM convolution kernel using TMA im2col + MMA.
-
     Works on both Hopper (WGMMA) and Blackwell (tcgen05) via MMAImpl.
-
-    GEMM: Output[M, N_gemm] = A[M, K] @ B[N_gemm, K]^T
-      where M = N_batch * out_h * out_w, N_gemm = Co, K = R * S * Ci
     """
     dtype: gl.constexpr = in_desc.dtype
 
-    # ── Tile indices ──────────────────────────────────────────────────────
+    # ── Implicit GEMM algorithm ──────────────────────────────────────────
+    #
+    #   Recall:  y[n, oh, ow, co] = SUM over (r, s, ci) of
+    #       input[n, oh*stride+r-pad, ow*stride+s-pad, ci] * weight[co, r, s, ci]
+    #   where:
+    #     oh = output height index (output row), mapped to out_y below
+    #     ow = output width index  (output col), mapped to out_x below
+    #
+    #   We tile this as a GEMM with dimensions:
+    #     M      = N * out_h * out_w   (output spatial positions)
+    #     N_gemm = Co                  (output channels)
+    #     K      = R * S * Ci          (reduction dimension)
+    #
+    #   for each M-tile:                          ← pid_m
+    #       for each N-tile:                      ← pid_n
+    #           acc = zeros(BLOCK_M, BLOCK_N)
+    #           for r in range(R):
+    #               for s in range(S):
+    #                   for ci_blk in range(Ci // BLOCK_K):
+    #                       # BLOCK_M output positions × BLOCK_K input channels
+    #                       A[BLOCK_M, BLOCK_K] = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
+    #                       # BLOCK_N output channels × BLOCK_K input channels
+    #                       B[BLOCK_N, BLOCK_K] = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
+    #                       acc += A @ B^T                  # [BLOCK_M, BLOCK_N]
+    #           store output[…] = acc
+    #
+    # ─────────────────────────────────────────────────────────────────────
+    # Gluon implementation (follows the pseudocode above line-by-line):
+
+    # ┌ for each M-tile / N-tile:
     pid_m = gl.program_id(0)
     pid_n = gl.program_id(1)
+    offs_m, batch_id, out_y, out_x = decompose_m_offset(pid_m, BLOCK_M, out_h, out_w)
 
-    # Decompose M-offset into (batch, out_y, out_x) for TMA im2col coords
-    offs_m = pid_m * BLOCK_M
-    batch_id = offs_m // (out_h * out_w)
-    m_residual = offs_m % (out_h * out_w)
-    out_y = m_residual // out_w
-    out_x = m_residual % out_w
-
-    # ── Allocate shared memory for A (input) and B (weight) tiles ─────────
-    a_smem = gl.allocate_shared_memory(dtype, in_desc.block_shape, in_desc.layout)
-    b_smem = gl.allocate_shared_memory(dtype, weight_desc.block_shape, weight_desc.layout)
-
-    # ── Initialize MMA (handles accumulator setup for both architectures) ─
-    # On Hopper: accumulator in distributed registers (WGMMA)
-    # On Blackwell: accumulator in tensor memory (tcgen05 MMA)
-    mma = MMAImpl.initialize(dtype, BLOCK_M, BLOCK_N, num_warps)
-
-    # ── TMA barrier ──────────────────────────────────────────────────────
-    # MMA barriers are managed internally by MMAImpl.
-    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(tma_bar, count=1)
+    # │ acc = zeros(BLOCK_M, BLOCK_N)
+    a_smem, b_smem, mma, tma_bar = init_accumulator(
+        in_desc, weight_desc, MMAImpl, dtype, BLOCK_M, BLOCK_N, num_warps)
     phase = 0
 
-    # ── K-loop: iterate over (r, s, ci_block) ────────────────────────────
-    # We iterate in the natural order: r -> s -> ci_block, so that
-    # weight loads are sequential along the K dimension.
+    # │ for r in range(R): for s in range(S): for ci_blk in range(Ci//BLOCK_K):
     ci_num_blocks = Ci // BLOCK_K
     total_k_iters = R * S * ci_num_blocks
-
     for k_iter in range(total_k_iters):
-        # Decompose k_iter into (r, s, ci_block)
         ci_block = k_iter % ci_num_blocks
         rs_idx = k_iter // ci_num_blocks
         r = rs_idx // S
         s = rs_idx % S
 
-        # 1. Set up TMA barrier and expect bytes from both loads
+        # │   A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
+        k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
-
-        # 2. Load input tile via TMA im2col
-        #    coord: starting position in [N, H, W, C]
-        #    offset: filter position [r, s] shifts the spatial access window
         tma.async_copy_global_to_shared_im2col(
             in_desc,
             [batch_id, out_y * stride_h - pad_h, out_x * stride_w - pad_w, ci_block * BLOCK_K],
             [r.to(tl.int16), s.to(tl.int16)],
-            tma_bar,
-            a_smem,
+            tma_bar, a_smem,
         )
-
-        # 3. Load weight tile via standard TMA
-        #    Weight is stored as [Co, R*S*Ci], so K-offset is sequential
-        k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
+        # │   B = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
         tma.async_copy_global_to_shared(
-            weight_desc,
-            [pid_n * BLOCK_N, k_offset],
-            tma_bar,
-            b_smem,
-        )
-
-        # 4. Wait for both TMA loads to complete
+            weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
-        # 5. MMA: acc += A_tile @ B_tile^T
-        #    The MMA abstraction handles async issue and barrier management
-        #    for both WGMMA (Hopper) and tcgen05 (Blackwell).
+        # │   acc += A @ B^T
         mma = mma.wait_num_outstanding(0)
         mma = mma.issue_async_mma(a_smem, b_smem.permute((1, 0)))
 
@@ -394,16 +311,8 @@ def conv2d_im2col_kernel(
 
     mbarrier.invalidate(tma_bar)
 
-    # ── Wait for last MMA and extract accumulator ─────────────────────────
-    mma = mma.wait_num_outstanding(0)
-    acc, mma = mma.take_result()
-
-    # ── Downcast and store output tile via TMA ────────────────────────────
-    c_smem = gl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
-    c_smem.store(acc.to(dtype))
-    fence_async_shared()
-    tma.async_copy_shared_to_global(out_desc, [offs_m, pid_n * BLOCK_N], c_smem)
-    tma.store_wait(pendings=0)
+    # └ store output[…] = acc
+    store_output_tile(mma, dtype, out_desc, offs_m, pid_n * BLOCK_N)
 
 
 # %%
@@ -445,13 +354,26 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
     output = torch.empty(M_GEMM, Co, device=input_nhwc.device, dtype=input_nhwc.dtype)
 
     # ── TMA im2col descriptor for input ──────────────────────────────────
-    # pixel_box bounds define the spatial access window per batch.
-    # With element_strides = [1, stride, stride, 1], TMA steps by `stride`
-    # in H/W between output positions. The window must contain exactly
-    # out_h * out_w pixels per batch:
-    #   pixels_h = floor((window_h - 1) / stride) + 1 = out_h
-    #   => window_h = (out_h - 1) * stride + 1
-    #   => upper_h = window_h - H - padding
+    # This configures TMA's hardware im2col mode on the [N, H, W, Ci]
+    # input tensor. Key parameters:
+    #
+    #   block_shape  = [BLOCK_M, BLOCK_K]
+    #       BLOCK_M output positions x BLOCK_K channels per async copy.
+    #
+    #   element_strides = [1, stride, stride, 1]
+    #       TMA steps by `stride` in H/W between consecutive output
+    #       positions, matching the convolution stride.
+    #
+    #   pixel_box_{lower,upper}_corner
+    #       Defines the spatial window that TMA traverses per batch.
+    #       The window must cover exactly out_h * out_w pixels:
+    #         window_h = (out_h - 1) * stride + 1
+    #         upper_h  = window_h - H - padding
+    #       Lower corner is [-padding, -padding].
+    #
+    #   padding = "zero"
+    #       Out-of-bounds reads (from conv padding) return 0 automatically.
+    #
     upper_h = (out_h - 1) * stride + 1 - H - padding
     upper_w = (out_w - 1) * stride + 1 - W - padding
 
