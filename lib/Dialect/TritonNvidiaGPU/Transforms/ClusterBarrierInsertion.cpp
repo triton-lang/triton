@@ -108,6 +108,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
       isa<FunctionOpInterface>(op->getParentOp())) {
     // In `freeTMAlloc` we emit a cluster sync during lowering for 2CTA kernels,
     // as we need to sync before the TMA deallocation
+    // Note that 2CTA kernels must have a tcgen05_mma instruction and thus must
+    // use TensorMemory
     // According to NVIDIA this is enough, so we don't need an extra
     // end-of-kernel barrier
     auto funcOp = dyn_cast<FunctionOpInterface>(op->getParentOp());
