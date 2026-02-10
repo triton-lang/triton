@@ -31,10 +31,6 @@ class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
-        self.first = first
-        self.second = second
-
     @triton.jit
     def get_first(self):
         return self.first
@@ -123,9 +119,6 @@ def test_jit_method():
 class TypeWithJitGetItem:
     value: tl.tensor
 
-    def __init__(self, value):
-        self.value = value
-
     @triton.jit
     def __getitem__(self, ind):
         return self.value
@@ -161,6 +154,33 @@ def test_aggregate_initializers():
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     anchor(value)
+
+
+def test_aggregate_auto_init_assigns_members():
+
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+        y: tl.constexpr
+
+    state = State(3, y=7)
+    assert isinstance(state.x, tl.constexpr)
+    assert isinstance(state.y, tl.constexpr)
+    assert state.x.value == 3
+    assert state.y.value == 7
+
+
+def test_aggregate_auto_init_respects_user_defined_init():
+
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+
+        def __init__(self, x):
+            self.x = tl.constexpr(x + 1)
+
+    state = State(10)
+    assert state.x.value == 11
 
 
 @triton.jit

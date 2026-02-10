@@ -1544,6 +1544,32 @@ class _aggregate_type(base_type):
 
 
 def _aggregate(cls):
+    init = cls.__dict__.get("__init__", None)
+    if init is None:
+        field_names = builtins.tuple(cls.__annotations__.keys())
+
+        def init(self, *args, **kwargs):
+            if len(args) > len(field_names):
+                raise TypeError(f"{cls.__name__}.__init__() takes {len(field_names) + 1} positional arguments "
+                                f"but {len(args) + 1} were given")
+
+            for index, name in enumerate(field_names):
+                if index < len(args):
+                    if name in kwargs:
+                        raise TypeError(f"{cls.__name__}.__init__() got multiple values for argument '{name}'")
+                    value = args[index]
+                elif name in kwargs:
+                    value = kwargs.pop(name)
+                else:
+                    raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
+
+                if cls.__annotations__[name] is constexpr and not isinstance(value, constexpr):
+                    value = constexpr(value)
+                setattr(self, name, value)
+
+            if kwargs:
+                unexpected = next(iter(kwargs))
+                raise TypeError(f"{cls.__name__}.__init__() got an unexpected keyword argument '{unexpected}'")
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
@@ -1558,15 +1584,15 @@ def _aggregate(cls):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             extra_kwargs = {}
-            if isinstance(cls.__init__, JITCallable):
+            if isinstance(init, JITCallable):
                 # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
                 pass
             else:
-                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                if "_semantic" in inspect.signature(init).parameters:
                     extra_kwargs["_semantic"] = _semantic
-                if "_generator" in inspect.signature(cls.__init__).parameters:
+                if "_generator" in inspect.signature(init).parameters:
                     extra_kwargs["_generator"] = _generator
-            cls.__init__(instance, *args, **extra_kwargs, **kwargs)
+            init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
             for name in cls.__annotations__.keys():
@@ -1592,7 +1618,7 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
-    hash_attrs = [cls.__init__]
+    hash_attrs = [init]
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
