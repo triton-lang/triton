@@ -1370,22 +1370,22 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     - partition_layout_type: Layout within each piece ("swizzled" or "padded")
     """
 
+    blocked_layout = ttgl.BlockedLayout(
+        size_per_thread=[1, 8],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[4, 1],
+        order=[1, 0],
+    )
+
     @gluon.jit
     def partitioned_copy_kernel(
         input_ptr,
         output_ptr,
         M: ttgl.constexpr,
         K: ttgl.constexpr,
+        blocked: ttgl.constexpr,
         partitioned_layout: ttgl.constexpr,
     ):
-        # Define blocked layout for register operations
-        blocked: ttgl.constexpr = ttgl.BlockedLayout(
-            size_per_thread=[1, 8],
-            threads_per_warp=[8, 4],
-            warps_per_cta=[4, 1],
-            order=[1, 0],
-        )
-
         # Create 2D indices
         row_idx = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))[:, None]
         col_idx = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, blocked))[None, :]
@@ -1438,6 +1438,7 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
         output_tensor,
         M,
         K,
+        blocked_layout,
         partitioned_layout,
         num_warps=4,
     )
