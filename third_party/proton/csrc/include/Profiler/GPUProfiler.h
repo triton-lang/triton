@@ -75,10 +75,7 @@ public:
       bool isMetricNode{false};
       bool isMissingName{true};
 
-      void addEntry(const DataEntry &entry) {
-        dataEntries.push_back(entry);
-      }
-
+      void addEntry(const DataEntry &entry) { dataEntries.push_back(entry); }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
         for (auto &entry : dataEntries)

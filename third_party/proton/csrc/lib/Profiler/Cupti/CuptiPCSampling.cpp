@@ -351,9 +351,8 @@ void CuptiPCSampling::start(CUcontext context) {
                     });
 }
 
-void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            const std::vector<DataEntry>
-                                                &dataEntries) {
+void CuptiPCSampling::processPCSamplingData(
+    ConfigureData *configureData, const std::vector<DataEntry> &dataEntries) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer

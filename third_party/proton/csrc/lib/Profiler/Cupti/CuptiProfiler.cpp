@@ -136,14 +136,15 @@ uint32_t processActivityKernel(
           }
         });
       } else {
-        nodeState->forEachEntry([kernel, activity, &dataPhases](DataEntry &entry) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry =
-                entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-            childEntry.upsertMetric(std::move(kernelMetric));
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-          }
-        });
+        nodeState->forEachEntry(
+            [kernel, activity, &dataPhases](DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                auto childEntry = entry.data->addOp(entry.phase, entry.id,
+                                                    {Context(kernel->name)});
+                childEntry.upsertMetric(std::move(kernelMetric));
+                detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+              }
+            });
       }
     }
     // Decrease the expected kernel count
@@ -456,8 +457,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       if (originalMetricNodeIt !=
           originalGraphState.metricKernelNodeIdToNumWords.end()) {
         const auto numMetricWords = originalMetricNodeIt->second;
-        graphState.metricKernelNodeIdToNumWords.insert_or_assign(nodeId,
-                                                                 numMetricWords);
+        graphState.metricKernelNodeIdToNumWords.insert_or_assign(
+            nodeId, numMetricWords);
         graphState.numMetricWords += numMetricWords;
       }
       bool hasLaunchState = false;
