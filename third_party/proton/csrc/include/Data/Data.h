@@ -53,8 +53,8 @@ struct DataEntry {
   /// `nodeMutex` protects linked map extension on this node/event.
   std::reference_wrapper<std::mutex> nodeMutex;
 
-  explicit DataEntry(size_t id, size_t phase, Data *data,
-                     MetricMap &metrics, FlexibleMetricMap &flexibleMetrics,
+  explicit DataEntry(size_t id, size_t phase, Data *data, MetricMap &metrics,
+                     FlexibleMetricMap &flexibleMetrics,
                      LinkedMetricMap &linkedTargetMetrics,
                      LinkedFlexibleMetricMap &linkedTargetFlexibleMetrics,
                      std::mutex &nodeMutex)
@@ -68,16 +68,17 @@ struct DataEntry {
   decltype(auto) handle(FnT &&fn, bool withLock = true) const {
     if (withLock) {
       std::lock_guard<std::mutex> lock(nodeMutex.get());
-      return std::forward<FnT>(fn)(
-          metrics.get(), flexibleMetrics.get(), linkedTargetMetrics.get(),
-          linkedTargetFlexibleMetrics.get());
+      return std::forward<FnT>(fn)(metrics.get(), flexibleMetrics.get(),
+                                   linkedTargetMetrics.get(),
+                                   linkedTargetFlexibleMetrics.get());
     }
-    return std::forward<FnT>(fn)(
-        metrics.get(), flexibleMetrics.get(), linkedTargetMetrics.get(),
-        linkedTargetFlexibleMetrics.get());
+    return std::forward<FnT>(fn)(metrics.get(), flexibleMetrics.get(),
+                                 linkedTargetMetrics.get(),
+                                 linkedTargetFlexibleMetrics.get());
   }
 
-  void upsertMetric(std::unique_ptr<Metric> metric, bool withLock = true) const {
+  void upsertMetric(std::unique_ptr<Metric> metric,
+                    bool withLock = true) const {
     handle(
         [metric = std::move(metric)](MetricMap &metrics, auto &, auto &,
                                      auto &) mutable {
@@ -94,9 +95,9 @@ struct DataEntry {
         withLock);
   }
 
-  void upsertFlexibleMetrics(
-      const std::map<std::string, MetricValueType> &metrics,
-      bool withLock = true) const {
+  void
+  upsertFlexibleMetrics(const std::map<std::string, MetricValueType> &metrics,
+                        bool withLock = true) const {
     handle(
         [&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
           for (const auto &[metricName, metricValue] : metrics) {

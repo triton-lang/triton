@@ -840,9 +840,9 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
   auto *tree = phasePtrAs<Tree>(phase);
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, phase, this, node.metrics, node.flexibleMetrics,
-                   node.linkedTargetMetrics, node.linkedTargetFlexibleMetrics,
-                   node.nodeMutex);
+  return DataEntry(newContextId, phase, this, node.metrics,
+                   node.flexibleMetrics, node.linkedTargetMetrics,
+                   node.linkedTargetFlexibleMetrics, node.nodeMutex);
 }
 
 void TreeData::addMetrics(

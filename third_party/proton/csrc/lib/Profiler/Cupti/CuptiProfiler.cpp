@@ -632,11 +632,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 auto &linkedFlexibleMetrics =
                     linkedTargetFlexibleMetrics[targetEntryId];
                 auto nodeEntry = DataEntry(
-                    baseEntry.id, baseEntry.phase, baseEntry.data, linkedMetrics,
-                    linkedFlexibleMetrics, linkedTargetMetrics,
+                    baseEntry.id, baseEntry.phase, baseEntry.data,
+                    linkedMetrics, linkedFlexibleMetrics, linkedTargetMetrics,
                     linkedTargetFlexibleMetrics, baseEntry.nodeMutex.get());
                 for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
-                  auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
+                  auto &graphNodeState =
+                      graphNodeIdToState.emplace(targetNodeId);
                   graphNodeState.status = nodeState;
                   graphNodeState.addEntry(nodeEntry);
                 }
