@@ -781,8 +781,7 @@ def conv2d_im2col_kernel(
     # Gluon implementation (follows the pseudocode above line-by-line):
 
     # ┌ for each M-tile / N-tile:
-    pid_m = ttgl.program_id(0)
-    pid_n = ttgl.program_id(1)
+    pid_m, pid_n = ttgl.program_id(0), ttgl.program_id(1)
     offs_m, batch_id, out_y, out_x = decompose_m_offset(pid_m, BLOCK_M, out_h, out_w)
 
     # │ acc = zeros(BLOCK_M, BLOCK_N)
@@ -793,10 +792,8 @@ def conv2d_im2col_kernel(
     ci_num_blocks = Ci // BLOCK_K
     total_k_iters = R * S * ci_num_blocks
     for k_iter in range(total_k_iters):
-        ci_block = k_iter % ci_num_blocks
-        rs_idx = k_iter // ci_num_blocks
-        r = rs_idx // S
-        s = rs_idx % S
+        ci_block, rs_idx = k_iter % ci_num_blocks, k_iter // ci_num_blocks
+        r, s = rs_idx // S, rs_idx % S
 
         # │   A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]
         # │   Equivalent TMA-im2col mapping:
