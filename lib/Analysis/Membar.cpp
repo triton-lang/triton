@@ -365,7 +365,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     insertBarrier(op, builder);
     blockInfo->sync();
   }
-
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
