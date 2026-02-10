@@ -44,8 +44,10 @@ protected:
 
   // OpInterface
   void startOp(const Scope &scope) override {
+    dataToEntryMap.clear();
+    dataToEntryMap.reserve(dataSet.size());
     for (auto data : dataSet) {
-      dataToEntryMap.insert_or_assign(data, data->addOp(scope.name));
+      dataToEntryMap.push_back(data->addOp(scope.name));
     }
   }
   void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }
@@ -69,8 +71,8 @@ private:
   std::map<uint64_t, std::string> functionNames;
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
-  // data -> scopeId
-  DataToEntryMap dataToEntryMap;
+  // Active per-data entries for the current op.
+  std::vector<DataEntry> dataToEntryMap;
 };
 
 } // namespace proton

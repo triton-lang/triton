@@ -103,7 +103,10 @@ void processActivityKernel(
   bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
   auto &state = externIdToState[externId];
   if (!isGraph) {
-    for (auto [data, entry] : state.dataToEntry) {
+    for (const auto &entry : state.dataEntries) {
+      auto *data = entry.data;
+      if (!data)
+        continue;
       if (auto metric = convertActivityToMetric(activity)) {
         if (state.isMissingName) {
           auto childEntry = data->addOp(entry.phase, entry.id,
@@ -124,7 +127,10 @@ void processActivityKernel(
     // 2. GraphExec -> Graph
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
-    for (auto [data, entry] : state.dataToEntry) {
+    for (const auto &entry : state.dataEntries) {
+      auto *data = entry.data;
+      if (!data)
+        continue;
       if (auto metric = convertActivityToMetric(activity)) {
         auto childEntry = data->addOp(entry.phase, entry.id,
                                       {Context(activity->kernel_name)});
@@ -250,7 +256,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       // Valid context and outermost level of the kernel launch
       // TODO: Get kernel name from hip_api_data_t
       threadState.enterOp(Scope(""));
-      auto &dataToEntry = threadState.dataToEntry;
+      auto &dataEntries = threadState.dataEntries;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -274,7 +280,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       auto &scope = threadState.scopeStack.back();
       auto isMissingName = scope.name.empty();
       profiler.correlation.correlate(data->correlation_id, scope.scopeId,
-                                     numInstances, isMissingName, dataToEntry);
+                                     numInstances, isMissingName, dataEntries);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       switch (cid) {
       case HIP_API_ID_hipStreamBeginCapture: {

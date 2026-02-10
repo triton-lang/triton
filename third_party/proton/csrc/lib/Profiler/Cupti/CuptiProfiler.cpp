@@ -69,21 +69,27 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isMissingName = false;
-    DataToEntryMap dataToEntry;
+    std::vector<DataEntry> dataEntries;
     externIdToState.withRead(externId,
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isMissingName = state.isMissingName;
-                               dataToEntry = state.dataToEntry;
+                               dataEntries = state.dataEntries;
                              });
     if (!isMissingName) {
-      for (auto &[data, entry] : dataToEntry) {
+      for (auto &entry : dataEntries) {
+        auto *data = entry.data;
+        if (!data)
+          continue;
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
-      for (auto &[data, entry] : dataToEntry) {
+      for (const auto &entry : dataEntries) {
+        auto *data = entry.data;
+        if (!data)
+          continue;
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->name)});
@@ -589,7 +595,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   const auto &scope = threadState.scopeStack.back();
-  auto &dataToEntry = threadState.dataToEntry;
+  auto &dataEntries = threadState.dataEntries;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -629,12 +635,15 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      for (const auto &[dataPtr, launchEntry] : dataToEntry) {
-        auto launchStateIt = graphState.dataToLaunchState.find(dataPtr);
+      for (const auto &launchEntry : dataEntries) {
+        auto *data = launchEntry.data;
+        if (!data) {
+          continue;
+        }
+        auto launchStateIt = graphState.dataToLaunchState.find(data);
         if (launchStateIt == graphState.dataToLaunchState.end()) {
           continue;
         }
-        Data *data = dataPtr;
         const auto &launchState = launchStateIt->second;
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
@@ -649,7 +658,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                            nodeLaunchState.isMissingName;
                        graphNodeState.isMetricNode =
                            nodeLaunchState.isMetricNode;
-                       graphNodeState.setEntry(data, std::move(nodeEntry));
+                       graphNodeState.setEntry(std::move(nodeEntry));
                      });
       }
       if (timingEnabled) {
@@ -711,7 +720,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                 numNodes, scope.name.empty(), dataToEntry);
+                                 numNodes, scope.name.empty(), dataEntries);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }
@@ -723,9 +732,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     return;
 
   if (profiler.pcSamplingEnabled) {
-    auto &dataToEntry = threadState.dataToEntry;
+    auto &dataEntries = threadState.dataEntries;
     // XXX: Conservatively stop every GPU kernel for now.
-    pcSampling.stop(callbackData->context, dataToEntry);
+    pcSampling.stop(callbackData->context, dataEntries);
   }
 
   threadState.exitOp();

@@ -109,7 +109,7 @@ public:
 
   void start(CUcontext context);
 
-  void stop(CUcontext context, const DataToEntryMap &dataToEntry);
+  void stop(CUcontext context, const std::vector<DataEntry> &dataEntries);
 
   void finalize(CUcontext context);
 
@@ -123,7 +123,7 @@ private:
   CubinData *getCubinData(uint64_t cubinCrc);
 
   void processPCSamplingData(ConfigureData *configureData,
-                             const DataToEntryMap &dataToEntry);
+                             const std::vector<DataEntry> &dataEntries);
 
   ThreadSafeMap<uint32_t, ConfigureData> contextIdToConfigureData;
   // In case the same cubin is loaded multiple times, we need to keep track of

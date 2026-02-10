@@ -235,7 +235,12 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               auto normalizedDuration = static_cast<double>(duration) /
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
-              for (auto [data, entry] : dataToEntryMap) {
+              for (const auto &baseEntry : dataToEntryMap) {
+                if (!baseEntry.data) {
+                  continue;
+                }
+                auto *data = baseEntry.data;
+                auto entry = baseEntry;
                 auto kernelId = entry.id;
                 entry = data->addOp(entry.phase, kernelId, contexts);
                 entry.upsertMetric(std::make_unique<CycleMetric>(
@@ -263,7 +268,7 @@ void InstrumentationProfiler::doAddMetrics(
       data->addMetrics(scopeId, scalarMetrics);
     }
   } else {
-    for (auto [_, entry] : dataToEntryMap) {
+    for (const auto &entry : dataToEntryMap) {
       entry.upsertFlexibleMetrics(scalarMetrics);
     }
   }

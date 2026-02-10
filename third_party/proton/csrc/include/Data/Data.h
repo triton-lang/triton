@@ -23,6 +23,8 @@ namespace proton {
 
 enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 
+class Data;
+
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
@@ -30,6 +32,8 @@ struct DataEntry {
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
+  /// `data` points to the owning data object for this entry.
+  Data *data{nullptr};
   /// `metrics` is a map from metric kind to metric accumulator associated
   /// with the entry.
   std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
@@ -37,10 +41,10 @@ struct DataEntry {
   /// accumulator associated with the entry.
   std::reference_wrapper<std::map<std::string, FlexibleMetric>> flexibleMetrics;
 
-  explicit DataEntry(size_t id, size_t phase,
+  explicit DataEntry(size_t id, size_t phase, Data *data,
                      std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
                      std::map<std::string, FlexibleMetric> &flexibleMetrics)
-      : id(id), phase(phase), metrics(metrics),
+      : id(id), phase(phase), data(data), metrics(metrics),
         flexibleMetrics(flexibleMetrics) {}
 
   void upsertMetric(std::unique_ptr<Metric> metric) const {
@@ -214,8 +218,6 @@ private:
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
 };
-
-typedef std::map<Data *, DataEntry> DataToEntryMap;
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
 

@@ -60,7 +60,7 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
-    DataToEntryMap dataToEntry;
+    std::vector<DataEntry> dataEntries;
     // Sometimes the kernel name cannot be retrieved in application threads
     // for reasons like uninitialize CUDA context.
     bool isMissingName{true};
@@ -75,23 +75,30 @@ public:
       bool isMetricNode{false};
       bool isMissingName{true};
 
-      void setEntry(Data *data, const DataEntry &entry) {
-        dataToEntry.insert_or_assign(data, entry);
+      void setEntry(const DataEntry &entry) {
+        for (auto &existingEntry : dataEntries) {
+          if (existingEntry.data == entry.data) {
+            existingEntry = entry;
+            return;
+          }
+        }
+        dataEntries.push_back(entry);
       }
 
       const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
-          return nullptr;
-        return &it->second;
+        for (const auto &entry : dataEntries) {
+          if (entry.data == data)
+            return &entry;
+        }
+        return nullptr;
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
-        for (auto &[data, entry] : dataToEntry)
-          fn(data, entry);
+        for (auto &entry : dataEntries)
+          fn(entry.data, entry);
       }
 
-      DataToEntryMap dataToEntry;
+      std::vector<DataEntry> dataEntries;
     };
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
@@ -108,15 +115,16 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
+    threadState.dataEntries.clear();
+    threadState.dataEntries.reserve(dataSet.size());
     for (auto *data : dataSet) {
-      auto entry = data->addOp(scope.name);
-      threadState.dataToEntry.insert_or_assign(data, entry);
+      threadState.dataEntries.push_back(data->addOp(scope.name));
     }
   }
 
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
-    threadState.dataToEntry.clear();
+    threadState.dataEntries.clear();
   }
 
   void flushDataPhases(
@@ -145,7 +153,7 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
-    DataToEntryMap dataToEntry;
+    std::vector<DataEntry> dataEntries;
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
@@ -200,11 +208,12 @@ protected:
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   bool isMissingName, const DataToEntryMap &dataToEntry) {
+                   bool isMissingName,
+                   const std::vector<DataEntry> &dataEntries) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
-        state.dataToEntry = dataToEntry;
+        state.dataEntries = dataEntries;
         state.isMissingName = isMissingName;
       });
     }
@@ -269,8 +278,8 @@ protected:
         auto tensorMetricsHost =
             collectTensorMetrics(profiler.metricBuffer->getRuntime(),
                                  tensorMetrics, profiler.metricKernelStream);
-        auto &dataToEntry = threadState.dataToEntry;
-        if (dataToEntry.empty()) {
+        auto &dataEntries = threadState.dataEntries;
+        if (dataEntries.empty()) {
           // Add metrics to a specific scope
           for (auto *data : profiler.dataSet) {
             data->addMetrics(scopeId, scalarMetrics);
@@ -278,7 +287,7 @@ protected:
           }
         } else {
           // Add metrics to the current op
-          for (auto [_, entry] : dataToEntry) {
+          for (const auto &entry : dataEntries) {
             entry.upsertFlexibleMetrics(scalarMetrics);
             entry.upsertFlexibleMetrics(tensorMetricsHost);
           }

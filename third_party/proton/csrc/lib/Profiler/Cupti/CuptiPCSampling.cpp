@@ -352,9 +352,9 @@ void CuptiPCSampling::start(CUcontext context) {
 }
 
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
-                                            const DataToEntryMap &dataToEntry) {
+                                            const std::vector<DataEntry>
+                                                &dataEntries) {
   auto *pcSamplingData = &configureData->pcSamplingData;
-  auto &profiler = CuptiProfiler::instance();
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer
   bool firstRound = true;
@@ -380,7 +380,12 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw std::runtime_error("[PROTON] Invalid stall reason index");
-        for (auto [data, entry] : dataToEntry) {
+        for (const auto &baseEntry : dataEntries) {
+          if (!baseEntry.data) {
+            continue;
+          }
+          auto *data = baseEntry.data;
+          auto entry = baseEntry;
           if (lineInfo.fileName.size())
             entry =
                 data->addOp(entry.phase, entry.id,
@@ -410,7 +415,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
 }
 
 void CuptiPCSampling::stop(CUcontext context,
-                           const DataToEntryMap &dataToEntry) {
+                           const std::vector<DataEntry> &dataEntries) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
   doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
@@ -419,7 +424,7 @@ void CuptiPCSampling::stop(CUcontext context,
                       auto *configureData = getConfigureData(contextId);
                       stopPCSampling(context);
                       pcSamplingStarted = false;
-                      processPCSamplingData(configureData, dataToEntry);
+                      processPCSamplingData(configureData, dataEntries);
                     });
 }
 

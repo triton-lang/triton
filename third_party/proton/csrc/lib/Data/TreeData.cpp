@@ -839,7 +839,8 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
   auto *tree = phasePtrAs<Tree>(phase);
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, phase, node.metrics, node.flexibleMetrics);
+  return DataEntry(newContextId, phase, this, node.metrics,
+                   node.flexibleMetrics);
 }
 
 void TreeData::linkOp(size_t baseEntryId,
@@ -849,15 +850,13 @@ void TreeData::linkOp(size_t baseEntryId,
   const auto phase = currentPhase.load(std::memory_order_relaxed);
   auto *tree = currentPhasePtrAs<Tree>();
   auto &baseNode = tree->getNode(baseEntryId);
-  baseNode.linkedTargetFlexibleMetrics.reserve(targetEntryIds.size());
-  baseNode.linkedTargetMetrics.reserve(targetEntryIds.size());
   for (const auto targetEntryId : targetEntryIds) {
     auto &linkedMetrics = baseNode.linkedTargetMetrics[targetEntryId];
     auto &linkedFlexibleMetrics =
         baseNode.linkedTargetFlexibleMetrics[targetEntryId];
     if (onLinked) {
-      onLinked(
-          DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics));
+      onLinked(DataEntry(baseEntryId, phase, this, linkedMetrics,
+                         linkedFlexibleMetrics));
     }
   }
 }

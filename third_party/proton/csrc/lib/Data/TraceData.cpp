@@ -166,7 +166,7 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, phase, newEvent.metrics,
+  return DataEntry(newEventId, phase, this, newEvent.metrics,
                    newEvent.flexibleMetrics);
 }
 
@@ -182,8 +182,8 @@ void TraceData::linkOp(size_t baseEntryId,
     auto &linkedFlexibleMetrics =
         baseEvent.linkedTargetFlexibleMetrics[targetEntryId];
     if (onLinked) {
-      onLinked(
-          DataEntry(baseEntryId, phase, linkedMetrics, linkedFlexibleMetrics));
+      onLinked(DataEntry(baseEntryId, phase, this, linkedMetrics,
+                         linkedFlexibleMetrics));
     }
   }
 }
