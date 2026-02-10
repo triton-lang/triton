@@ -717,10 +717,8 @@ def benchmark():
 
     import triton.profiler as proton
 
-    def bench_fn(label, reps, warmup_reps, fn):
+    def bench_fn(label, reps, fn):
         print(f"Benchmarking {label}: ...", end="")
-        for _ in range(warmup_reps):
-            fn()
         try:
             for _ in range(reps):
                 proton.deactivate(0)
@@ -749,15 +747,15 @@ def benchmark():
         with proton.scope(f"triton [M={M}, N={N}, K={K}]", scope_metrics):
             run_triton()
 
-    bench_fn("torch", reps=100, warmup_reps=20, fn=torch_profiled)
-    bench_fn("gluon", reps=100, warmup_reps=20, fn=triton_profiled)
+    bench_fn("torch", reps=100, fn=torch_profiled)
+    bench_fn("gluon", reps=100, fn=triton_profiled)
     if pallas_available and run_pallas is not None:
 
         def pallas_profiled():
             with proton.scope(f"pallas [M={M}, N={N}, K={K}]", scope_metrics):
                 run_pallas()
 
-        bench_fn("pallas", reps=100, warmup_reps=20, fn=pallas_profiled)
+        bench_fn("pallas", reps=100, fn=pallas_profiled)
 
     proton.finalize()
     print("Proton profile written to `matmul.hatchet`")
