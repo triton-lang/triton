@@ -56,6 +56,7 @@ public:
         linkedTargetMetrics = {};
     std::map<size_t, std::map<std::string, FlexibleMetric>>
         linkedTargetFlexibleMetrics = {};
+    std::mutex nodeMutex;
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
   };
@@ -107,7 +108,7 @@ public:
   }
 
   size_t addEvent(size_t contextId) {
-    traceEvents.emplace(nextEventId, TraceEvent(nextEventId, contextId));
+    traceEvents.try_emplace(nextEventId, nextEventId, contextId);
     return nextEventId++;
   }
 
@@ -166,20 +167,10 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, phase, this, newEvent.metrics,
-                   newEvent.flexibleMetrics);
-}
-
-DataEntry TraceData::linkOp(size_t baseEntryId, size_t targetEntryId) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  const auto phase = currentPhase.load(std::memory_order_relaxed);
-  auto *trace = currentPhasePtrAs<Trace>();
-  auto &baseEvent = trace->getEvent(baseEntryId);
-  auto &linkedMetrics = baseEvent.linkedTargetMetrics[targetEntryId];
-  auto &linkedFlexibleMetrics =
-      baseEvent.linkedTargetFlexibleMetrics[targetEntryId];
-  return DataEntry(baseEntryId, phase, this, linkedMetrics,
-                   linkedFlexibleMetrics);
+  return DataEntry(
+      newEventId, phase, this, newEvent.metrics, newEvent.flexibleMetrics,
+      newEvent.linkedTargetMetrics, newEvent.linkedTargetFlexibleMetrics,
+      newEvent.nodeMutex);
 }
 
 void TraceData::addMetrics(

@@ -28,6 +28,11 @@ class Data;
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
+  using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
+  using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
+  using LinkedMetricMap = std::map<size_t, MetricMap>;
+  using LinkedFlexibleMetricMap = std::map<size_t, FlexibleMetricMap>;
+
   /// `entryId` is a unique identifier for the entry in the data.
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
@@ -36,41 +41,75 @@ struct DataEntry {
   Data *data{nullptr};
   /// `metrics` is a map from metric kind to metric accumulator associated
   /// with the entry.
-  std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
+  std::reference_wrapper<MetricMap> metrics;
   /// `flexibleMetrics` is a map from metric name to flexible metric
   /// accumulator associated with the entry.
-  std::reference_wrapper<std::map<std::string, FlexibleMetric>> flexibleMetrics;
+  std::reference_wrapper<FlexibleMetricMap> flexibleMetrics;
+  /// `linkedTargetMetrics` stores linked metric maps keyed by target entry.
+  std::reference_wrapper<LinkedMetricMap> linkedTargetMetrics;
+  /// `linkedTargetFlexibleMetrics` stores linked flexible metric maps keyed by
+  /// target entry.
+  std::reference_wrapper<LinkedFlexibleMetricMap> linkedTargetFlexibleMetrics;
+  /// `nodeMutex` protects linked map extension on this node/event.
+  std::reference_wrapper<std::mutex> nodeMutex;
 
   explicit DataEntry(size_t id, size_t phase, Data *data,
-                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-                     std::map<std::string, FlexibleMetric> &flexibleMetrics)
+                     MetricMap &metrics, FlexibleMetricMap &flexibleMetrics,
+                     LinkedMetricMap &linkedTargetMetrics,
+                     LinkedFlexibleMetricMap &linkedTargetFlexibleMetrics,
+                     std::mutex &nodeMutex)
       : id(id), phase(phase), data(data), metrics(metrics),
-        flexibleMetrics(flexibleMetrics) {}
+        flexibleMetrics(flexibleMetrics),
+        linkedTargetMetrics(linkedTargetMetrics),
+        linkedTargetFlexibleMetrics(linkedTargetFlexibleMetrics),
+        nodeMutex(nodeMutex) {}
 
-  void upsertMetric(std::unique_ptr<Metric> metric) const {
-    if (!metric)
-      return;
-    auto &metricsMap = metrics.get();
-    auto it = metricsMap.find(metric->getKind());
-    if (it == metricsMap.end()) {
-      metricsMap.emplace(metric->getKind(), std::move(metric));
-    } else {
-      it->second->updateMetric(*metric);
+  template <typename FnT>
+  decltype(auto) handle(FnT &&fn, bool withLock = true) const {
+    if (withLock) {
+      std::lock_guard<std::mutex> lock(nodeMutex.get());
+      return std::forward<FnT>(fn)(
+          metrics.get(), flexibleMetrics.get(), linkedTargetMetrics.get(),
+          linkedTargetFlexibleMetrics.get());
     }
+    return std::forward<FnT>(fn)(
+        metrics.get(), flexibleMetrics.get(), linkedTargetMetrics.get(),
+        linkedTargetFlexibleMetrics.get());
+  }
+
+  void upsertMetric(std::unique_ptr<Metric> metric, bool withLock = true) const {
+    handle(
+        [metric = std::move(metric)](MetricMap &metrics, auto &, auto &,
+                                     auto &) mutable {
+          if (!metric) {
+            return;
+          }
+          auto it = metrics.find(metric->getKind());
+          if (it == metrics.end()) {
+            metrics.emplace(metric->getKind(), std::move(metric));
+          } else {
+            it->second->updateMetric(*metric);
+          }
+        },
+        withLock);
   }
 
   void upsertFlexibleMetrics(
-      const std::map<std::string, MetricValueType> &metrics) const {
-    auto &flexibleMetricsMap = flexibleMetrics.get();
-    for (const auto &[metricName, metricValue] : metrics) {
-      auto it = flexibleMetricsMap.find(metricName);
-      if (it == flexibleMetricsMap.end()) {
-        flexibleMetricsMap.emplace(metricName,
-                                   FlexibleMetric(metricName, metricValue));
-      } else {
-        it->second.updateValue(metricValue);
-      }
-    }
+      const std::map<std::string, MetricValueType> &metrics,
+      bool withLock = true) const {
+    handle(
+        [&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
+          for (const auto &[metricName, metricValue] : metrics) {
+            auto it = flexibleMetrics.find(metricName);
+            if (it == flexibleMetrics.end()) {
+              flexibleMetrics.emplace(metricName,
+                                      FlexibleMetric(metricName, metricValue));
+            } else {
+              it->second.updateValue(metricValue);
+            }
+          }
+        },
+        withLock);
   }
 };
 
@@ -136,12 +175,6 @@ public:
   /// time the profiler needs to attach a child op.
   virtual DataEntry addOp(size_t phase, size_t entryId,
                           const std::vector<Context> &contexts) = 0;
-
-  /// Link a base op in the current phase to a target op in the virtual phase.
-  ///
-  /// Create or retrieve the linked entry under `baseEntryId` for
-  /// `targetEntryId` and return the linked entry whose metrics can be updated.
-  virtual DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) = 0;
 
   /// Record a batch of named metrics for a scope to the data of the current
   /// phase.

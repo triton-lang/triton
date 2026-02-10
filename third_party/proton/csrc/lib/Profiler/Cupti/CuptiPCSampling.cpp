@@ -401,7 +401,8 @@ void CuptiPCSampling::processPCSamplingData(
                   ? 0
                   : samples;
           entry.upsertMetric(std::make_unique<PCSamplingMetric>(
-              metricKind, samples, stalledSamples));
+                                 metricKind, samples, stalledSamples),
+                             /*withLock=*/false);
         }
       }
     }

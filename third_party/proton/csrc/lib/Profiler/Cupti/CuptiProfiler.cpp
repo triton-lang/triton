@@ -81,7 +81,7 @@ uint32_t processActivityKernel(
         if (!data)
           continue;
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          entry.upsertMetric(std::move(kernelMetric));
+          entry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
@@ -93,7 +93,7 @@ uint32_t processActivityKernel(
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(std::move(kernelMetric));
+          childEntry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
@@ -131,7 +131,7 @@ uint32_t processActivityKernel(
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertMetric(std::move(kernelMetric));
+            entry.upsertMetric(std::move(kernelMetric), /*withLock=*/false);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
@@ -141,7 +141,8 @@ uint32_t processActivityKernel(
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                                     {Context(kernel->name)});
-                childEntry.upsertMetric(std::move(kernelMetric));
+                childEntry.upsertMetric(std::move(kernelMetric),
+                                        /*withLock=*/false);
                 detail::updateDataPhases(dataPhases, entry.data, entry.phase);
               }
             });
@@ -622,15 +623,26 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         }
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
-        for (const auto &[targetEntryId, nodeIdToStates] :
-             nodeStateIt->second) {
-          auto nodeEntry = data->linkOp(baseEntry.id, targetEntryId);
-          for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
-            auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
-            graphNodeState.status = nodeState;
-            graphNodeState.addEntry(nodeEntry);
-          }
-        }
+        baseEntry.handle(
+            [&](auto &, auto &, auto &linkedTargetMetrics,
+                auto &linkedTargetFlexibleMetrics) {
+              for (const auto &[targetEntryId, nodeIdToStates] :
+                   nodeStateIt->second) {
+                auto &linkedMetrics = linkedTargetMetrics[targetEntryId];
+                auto &linkedFlexibleMetrics =
+                    linkedTargetFlexibleMetrics[targetEntryId];
+                auto nodeEntry = DataEntry(
+                    baseEntry.id, baseEntry.phase, baseEntry.data, linkedMetrics,
+                    linkedFlexibleMetrics, linkedTargetMetrics,
+                    linkedTargetFlexibleMetrics, baseEntry.nodeMutex.get());
+                for (const auto &[targetNodeId, nodeState] : nodeIdToStates) {
+                  auto &graphNodeState = graphNodeIdToState.emplace(targetNodeId);
+                  graphNodeState.status = nodeState;
+                  graphNodeState.addEntry(nodeEntry);
+                }
+              }
+            },
+            /*withLock=*/false);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

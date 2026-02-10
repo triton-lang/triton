@@ -28,8 +28,6 @@ public:
   DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;
 
-  DataEntry linkOp(size_t baseEntryId, size_t targetEntryId) override;
-
   void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;

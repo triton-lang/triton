@@ -123,6 +123,7 @@ public:
         linkedTargetMetrics = {};
     std::map<size_t, std::map<std::string, FlexibleMetric>>
         linkedTargetFlexibleMetrics = {};
+    std::mutex nodeMutex;
     friend class Tree;
   };
 
@@ -839,20 +840,9 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
   auto *tree = phasePtrAs<Tree>(phase);
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
-  return DataEntry(newContextId, phase, this, node.metrics,
-                   node.flexibleMetrics);
-}
-
-DataEntry TreeData::linkOp(size_t baseEntryId, size_t targetEntryId) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  const auto phase = currentPhase.load(std::memory_order_relaxed);
-  auto *tree = currentPhasePtrAs<Tree>();
-  auto &baseNode = tree->getNode(baseEntryId);
-  auto &linkedMetrics = baseNode.linkedTargetMetrics[targetEntryId];
-  auto &linkedFlexibleMetrics =
-      baseNode.linkedTargetFlexibleMetrics[targetEntryId];
-  return DataEntry(baseEntryId, phase, this, linkedMetrics,
-                   linkedFlexibleMetrics);
+  return DataEntry(newContextId, phase, this, node.metrics, node.flexibleMetrics,
+                   node.linkedTargetMetrics, node.linkedTargetFlexibleMetrics,
+                   node.nodeMutex);
 }
 
 void TreeData::addMetrics(
