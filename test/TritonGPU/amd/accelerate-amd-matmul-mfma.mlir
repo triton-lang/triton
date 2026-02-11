@@ -29,6 +29,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [1, 2], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 2], instrShape = [16, 16, 16], isTransposed = true}>
+// CHECK-LABEL: kwidth_propagation_fp_chain
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kwidth_propagation_fp_chain (
+      %arg0: tensor<128x64xf8E5M2, #blocked>,
+      %arg1: tensor<64x256xf8E4M3FN, #blocked>,
+      %out:  tensor<128x256x!tt.ptr<f32>, #blocked>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %a = ttg.convert_layout %arg0 : tensor<128x64xf8E5M2, #blocked> -> tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %a_fp16 = tt.fp_to_fp %a : tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %b_mma8 = ttg.convert_layout %arg1 : tensor<64x256xf8E4M3FN, #blocked> -> tensor<64x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %b_fp16 = tt.fp_to_fp %b_mma8 : tensor<64x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %res = tt.dot %a_fp16, %b_fp16, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x256xf32, #mma>
+    %res_blocked = ttg.convert_layout %res : tensor<128x256xf32, #mma> -> tensor<128x256xf32, #blocked>
+    tt.store %out, %res_blocked : tensor<128x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// CHECK: %[[A0:.*]] = ttg.convert_layout %arg0
+// CHECK-SAME: -> tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+// CHECK: %[[A1:.*]] = tt.fp_to_fp %[[A0]]
+// CHECK-SAME: -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+
+// CHECK: %[[B0:.*]] = ttg.convert_layout %arg1
+// CHECK-SAME: -> tensor<64x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+// CHECK: %[[B1:.*]] = tt.fp_to_fp %[[B0]]
+// CHECK-SAME: -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+
+// CHECK: %[[DOT:.*]] = tt.dot %[[A1]], %[[B1]]
+// CHECK-SAME: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+// CHECK-SAME: tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+
+// CHECK-NOT: kWidth = 1
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
 // CHECK-LABEL: mfma_dot_fp8e4m3fn_fp8e5m2
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
