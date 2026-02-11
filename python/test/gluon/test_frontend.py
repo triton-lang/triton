@@ -447,10 +447,6 @@ class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
-        self.first = first
-        self.second = second
-
 
 @gluon.jit
 def anchor(x):

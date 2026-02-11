@@ -1373,32 +1373,6 @@ class PartitionArgs:
     N: gl.tensor
     K: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
-                 load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl, BLOCK_M,
-                 BLOCK_N, BLOCK_K, M, N, K):
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        self.c_desc = c_desc
-        self.a_scale_desc = a_scale_desc
-        self.b_scale_desc = b_scale_desc
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.a_scale_bufs = a_scale_bufs
-        self.b_scale_bufs = b_scale_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
-        self.SchedulerImpl = gl.constexpr(SchedulerImpl)
-        self.BLOCK_M = gl.constexpr(BLOCK_M)
-        self.BLOCK_N = gl.constexpr(BLOCK_N)
-        self.BLOCK_K = gl.constexpr(BLOCK_K)
-        self.M = M
-        self.N = N
-        self.K = K
-
 
 @gluon.jit
 def mma_scaled_load_partition(p):
