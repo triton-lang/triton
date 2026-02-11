@@ -9,6 +9,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
+    clc,
     get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
@@ -131,46 +132,101 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
 
 
 @aggregate
-class PersistentTileScheduler:
-    pid_start: gl.tensor
-    num_pid: gl.tensor
+class ClcTileScheduler:
+    has_work: gl.tensor
+    tile_id: gl.tensor
     num_pid_m: gl.tensor
     num_pid_n: gl.tensor
     TILE_M: gl.constexpr
     TILE_N: gl.constexpr
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
+    clc_result_buffers: gl.shared_memory_descriptor
+    clc_barriers: gl.shared_memory_descriptor
+    slot: gl.tensor
+    phase_bits: gl.tensor
 
     @gluon.constexpr_function
-    def __init__(self, pid_start, num_pid, num_pid_m, num_pid_n, TILE_M, TILE_N, MINOR_DIM, GRID_TILE_WIDTH):
-        self.pid_start = pid_start
-        self.num_pid = num_pid
+    def __init__(self, has_work, tile_id, num_pid_m, num_pid_n, TILE_M, TILE_N, MINOR_DIM, GRID_TILE_WIDTH,
+                 clc_result_buffers, clc_barriers, slot, phase_bits):
+        self.has_work = has_work
+        self.tile_id = tile_id
         self.num_pid_m = num_pid_m
         self.num_pid_n = num_pid_n
         self.TILE_M = gl.constexpr(TILE_M)
         self.TILE_N = gl.constexpr(TILE_N)
         self.MINOR_DIM = gl.constexpr(MINOR_DIM)
         self.GRID_TILE_WIDTH = gl.constexpr(GRID_TILE_WIDTH)
+        self.clc_result_buffers = clc_result_buffers
+        self.clc_barriers = clc_barriers
+        self.slot = slot
+        self.phase_bits = phase_bits
 
     @gluon.jit
     def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
-                   GRID_TILE_WIDTH: gl.constexpr):
-        pid_start = gl.program_id(axis=0)
+                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers):
+        tile_id = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, TILE_M)
         num_pid_n = gl.cdiv(N, TILE_N)
-        num_pid = num_pid_m * num_pid_n
-        return PersistentTileScheduler(pid_start, num_pid, num_pid_m, num_pid_n, TILE_M, TILE_N, MINOR_DIM,
-                                       GRID_TILE_WIDTH)
+        has_work = gl.to_tensor(True)
+        slot = gl.to_tensor(0)
+        phase_bits = gl.to_tensor(0)
+        return ClcTileScheduler(
+            has_work,
+            tile_id,
+            num_pid_m,
+            num_pid_n,
+            TILE_M,
+            TILE_N,
+            MINOR_DIM,
+            GRID_TILE_WIDTH,
+            clc_result_buffers,
+            clc_barriers,
+            slot,
+            phase_bits,
+        )
 
     @gluon.jit
-    def get_num_tiles(self):
-        return gl.cdiv(self.num_pid - self.pid_start, gl.num_programs(axis=0))
-
-    @gluon.jit
-    def get_offsets(self, idx):
-        tile_id = self.pid_start + idx * gl.num_programs(axis=0)
-        pid_m, pid_n = _planar_snake(tile_id, self.num_pid_m, self.num_pid_n, self.MINOR_DIM, self.GRID_TILE_WIDTH)
+    def get_offsets(self):
+        pid_m, pid_n = _planar_snake(self.tile_id, self.num_pid_m, self.num_pid_n, self.MINOR_DIM, self.GRID_TILE_WIDTH)
         return pid_m * self.TILE_M, pid_n * self.TILE_N
+
+    @gluon.jit
+    def try_cancel(self):
+        barrier = self.clc_barriers.index(self.slot)
+        result = self.clc_result_buffers.index(self.slot)
+        mbarrier.expect(barrier, 16)
+        clc.try_cancel(result, barrier, multicast=True)
+
+    @gluon.jit
+    def wait_owner(self):
+        barrier = self.clc_barriers.index(self.slot)
+        phase = (self.phase_bits >> self.slot) & 1
+        mbarrier.wait(barrier, phase)
+        return self
+
+    @gluon.jit
+    def advance(self):
+        clc_res = clc.load_result(self.clc_result_buffers.index(self.slot))
+        has_work = clc_res.is_canceled()
+        tile_id = self.tile_id
+        if has_work:
+            tile_id = clc_res.program_id(0)
+        next_phase_bits = self.phase_bits ^ (1 << self.slot)
+        return ClcTileScheduler(
+            has_work,
+            tile_id,
+            self.num_pid_m,
+            self.num_pid_n,
+            self.TILE_M,
+            self.TILE_N,
+            self.MINOR_DIM,
+            self.GRID_TILE_WIDTH,
+            self.clc_result_buffers,
+            self.clc_barriers,
+            self.slot ^ 1,
+            next_phase_bits,
+        )
 
 
 @aggregate
@@ -185,13 +241,17 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
+    scheduler_sync_bar: gl.shared_memory_descriptor
+    clc_result_buffers: gl.shared_memory_descriptor
+    clc_barriers: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
     TWO_CTAS: gl.constexpr
 
     @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, MINOR_DIM, GRID_TILE_WIDTH, TWO_CTAS):
+                 acc_empty_bars, acc_ready_bars, scheduler_sync_bar, clc_result_buffers, clc_barriers, MINOR_DIM,
+                 GRID_TILE_WIDTH, TWO_CTAS):
         self.a_desc = a_desc
         self.b_desc = b_desc
         self.c_desc = c_desc
@@ -202,19 +262,24 @@ class PartitionArgs:
         self.acc_bufs = acc_bufs
         self.acc_empty_bars = acc_empty_bars
         self.acc_ready_bars = acc_ready_bars
+        self.scheduler_sync_bar = scheduler_sync_bar
+        self.clc_result_buffers = clc_result_buffers
+        self.clc_barriers = clc_barriers
         self.MINOR_DIM = gl.constexpr(MINOR_DIM)
         self.GRID_TILE_WIDTH = gl.constexpr(GRID_TILE_WIDTH)
         self.TWO_CTAS = gl.constexpr(TWO_CTAS)
 
     @gluon.jit
     def get_scheduler(self):
-        return PersistentTileScheduler.initialize(
+        return ClcTileScheduler.initialize(
             self.c_desc.shape[0],
             self.c_desc.shape[1],
             self.a_desc.block_shape[0],
             self.b_desc.block_shape[1],
             self.MINOR_DIM,
             self.GRID_TILE_WIDTH,
+            self.clc_result_buffers,
+            self.clc_barriers,
         )
 
 
@@ -245,6 +310,50 @@ class Counter:
 
 
 @gluon.jit
+def scheduler_sync(sync_bar, phase):
+    mbarrier.arrive(sync_bar)
+    mbarrier.wait(sync_bar, phase)
+    return phase ^ 1
+
+
+@aggregate
+class PartitionScheduler:
+    scheduler: ClcTileScheduler
+    sync_phase: gl.tensor
+
+    @gluon.constexpr_function
+    def __init__(self, scheduler, sync_phase):
+        self.scheduler = scheduler
+        self.sync_phase = sync_phase
+
+    @gluon.jit
+    def initialize(scheduler):
+        sync_phase = gl.to_tensor(0)
+        return PartitionScheduler(scheduler, sync_phase)
+
+    @gluon.jit
+    def has_work(self):
+        return self.scheduler.has_work
+
+    @gluon.jit
+    def get_offsets(self):
+        return self.scheduler.get_offsets()
+
+    @gluon.jit
+    def try_cancel(self):
+        self.scheduler.try_cancel()
+        return self
+
+    @gluon.jit
+    def advance(self, sync_bar):
+        sync_phase = scheduler_sync(sync_bar, self.sync_phase)
+        scheduler = self.scheduler.wait_owner()
+        sync_phase = scheduler_sync(sync_bar, sync_phase)
+        scheduler = scheduler.advance()
+        return PartitionScheduler(scheduler, sync_phase)
+
+
+@gluon.jit
 def matmul_load_partition(p):
     if p.TWO_CTAS:
         mbarrier.sync_cluster_init()
@@ -254,18 +363,22 @@ def matmul_load_partition(p):
 
     concurrent_loads: gl.constexpr = p.load_ready_bars.shape[0]
     state = Counter.create(1, concurrent_loads)
-    scheduler = p.get_scheduler()
+    scheduler = PartitionScheduler.initialize(p.get_scheduler())
 
-    for idx in range(scheduler.get_num_tiles()):
-        off_m, off_n = scheduler.get_offsets(idx)
+    i = 0
+    while scheduler.has_work():
+        scheduler.try_cancel()
+        off_m, off_n = scheduler.get_offsets()
         for k in range(0, K, BLOCK_K):
-            pred = (idx > 0) or (k >= BLOCK_K * concurrent_loads)
+            pred = (i > 0) or (k >= BLOCK_K * concurrent_loads)
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
             tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
             tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
+        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        i += 1
 
 
 @gluon.jit
@@ -278,9 +391,10 @@ def matmul_mma_partition(p):
 
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
-    scheduler = p.get_scheduler()
+    scheduler = PartitionScheduler.initialize(p.get_scheduler())
 
-    for i in range(scheduler.get_num_tiles()):
+    i = 0
+    while scheduler.has_work():
         acc_buf = p.acc_bufs.index(acc_state.index)
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i > 1))
         use_acc = False
@@ -292,6 +406,8 @@ def matmul_mma_partition(p):
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
+        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        i += 1
 
 
 @gluon.jit
@@ -308,10 +424,10 @@ def matmul_epilogue_partition(p):
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     acc_smems = gl.allocate_shared_memory(dtype, [2, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
     sub_acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    scheduler = p.get_scheduler()
+    scheduler = PartitionScheduler.initialize(p.get_scheduler())
 
-    for idx in range(scheduler.get_num_tiles()):
-        off_m, off_n = scheduler.get_offsets(idx)
+    while scheduler.has_work():
+        off_m, off_n = scheduler.get_offsets()
 
         # TODO: we are not emitting read=True
         tma.store_wait(pendings=0)
@@ -338,12 +454,16 @@ def matmul_epilogue_partition(p):
         # Signal that the accumulator slot can be reused only after all stores are done.
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
         acc_state = acc_state.next()
+        scheduler = scheduler.advance(p.scheduler_sync_bar)
 
 
 @gluon.jit
 def matmul_sync_partition(p):
     if p.TWO_CTAS:
         mbarrier.sync_cluster_init()
+    scheduler = PartitionScheduler.initialize(p.get_scheduler())
+    while scheduler.has_work():
+        scheduler = scheduler.advance(p.scheduler_sync_bar)
 
 
 @gluon.jit
@@ -363,8 +483,6 @@ def _matmul_kernel(
     TWO_CTAS: gl.constexpr,
     EPILOGUE_SIZE_N: gl.constexpr,
 ):
-    gl.static_assert(STAGES >= 2, "Expected at least 2 stages")
-    gl.static_assert(gl.num_ctas() == (2 if TWO_CTAS else 1), "num_ctas mismatch with TWO_CTAS")
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
     BLOCK_N: gl.constexpr = b_desc.block_shape[1]
 
@@ -397,6 +515,15 @@ def _matmul_kernel(
         # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
+    scheduler_sync_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(scheduler_sync_bar, count=4)
+
+    clc_barriers = mbarrier.allocate_mbarrier(batch=2)
+    for i in gl.static_range(2):
+        mbarrier.init(clc_barriers.index(i), count=1)
+
+    clc_result_buffers = gl.allocate_shared_memory(gl.int128, clc_barriers.shape, scheduler_sync_bar.layout)
+
     p = PartitionArgs(
         a_desc,
         b_desc,
@@ -408,6 +535,9 @@ def _matmul_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
+        scheduler_sync_bar,
+        clc_result_buffers,
+        clc_barriers,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
         TWO_CTAS,
@@ -483,8 +613,6 @@ def matmul_with_config(
         "EPILOGUE_SIZE_N": epilogue_size_n,
     })
 
-    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
-
     def grid(meta):
         tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
@@ -492,7 +620,7 @@ def matmul_with_config(
         if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
             raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
-        return (min(num_sms, num_tiles), )
+        return (num_tiles, )
 
     _matmul_kernel[grid](
         a_desc,
@@ -530,8 +658,6 @@ def matmul(a, b):
     b_desc = TensorDescriptor.from_tensor(b, dummy_block, dummy_layout)
     c_desc = TensorDescriptor.from_tensor(c, dummy_block, dummy_layout)
 
-    num_sms = torch.cuda.get_device_properties(a.device).multi_processor_count
-
     def grid(meta):
         tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
@@ -539,7 +665,7 @@ def matmul(a, b):
         if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
             raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
-        return (min(num_sms, num_tiles), )
+        return (num_tiles, )
 
     matmul_kernel[grid](a_desc, b_desc, c_desc, M, N, K)
     return c
