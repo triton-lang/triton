@@ -33,9 +33,13 @@ const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
 struct MetricSummary {
+  // Whether we observed at least one kernel metric.
   bool hasKernelMetric = false;
+  // Whether we observed at least one PC sampling metric.
   bool hasPCSamplingMetric = false;
+  // Whether we observed at least one cycle metric.
   bool hasCycleMetric = false;
+  // device_type -> bitmask of observed device ids.
   std::array<uint32_t, static_cast<size_t>(DeviceType::COUNT)> deviceIdMasks{};
 
   void updateDeviceIdMask(uint64_t deviceType, uint64_t deviceId) {
@@ -117,6 +121,7 @@ public:
     size_t id = DummyId;
     std::vector<ChildEntry> children = {};
     std::unordered_map<std::string_view, size_t> childIndex = {};
+    // Direct and linked metrics associated with this tree node.
     DataEntry::MetricSet metricSet{};
     friend class Tree;
   };

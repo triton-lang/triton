@@ -2,7 +2,6 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
-#include <map>
 #include <memory>
 #include <unordered_map>
 

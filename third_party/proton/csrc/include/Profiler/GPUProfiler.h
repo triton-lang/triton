@@ -60,6 +60,7 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
+    // Active entries for each data sink associated with this extern launch.
     std::vector<DataEntry> dataEntries;
     // Sometimes the kernel name cannot be retrieved in application threads
     // for reasons like uninitialize CUDA context.
@@ -71,6 +72,7 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeState {
+      // Per-node launch status bits (missing-name / metric-node).
       NodeStatus status{};
 
       // If the node is launched as a metric kernel, ignore its timing data.
@@ -86,12 +88,13 @@ public:
           fn(entry);
       }
 
+      // Entries in the launched graph phase for each data sink.
       std::vector<DataEntry> dataEntries;
     };
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
 
-    // graphNodeId -> (per-Data entry)
+    // graphNodeId -> per-node entries across active data sinks
     GraphNodeStateTable graphNodeIdToState;
   };
 
@@ -139,6 +142,7 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
+    // Active entries for the currently open op, one per data sink.
     std::vector<DataEntry> dataEntries;
     bool isApiExternOp{false};
     bool isStreamCapturing{false};

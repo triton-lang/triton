@@ -50,6 +50,7 @@ public:
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
+    // Direct and linked metrics emitted for this trace event.
     DataEntry::MetricSet metricSet{};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
@@ -200,6 +201,7 @@ namespace {
 // Structure to pair CycleMetric with its context for processing
 struct CycleMetricWithContext {
   const CycleMetric *cycleMetric;
+  // Full call path captured for this cycle metric event.
   std::vector<Context> contexts;
 
   CycleMetricWithContext(const CycleMetric *metric, std::vector<Context> ctx)
@@ -208,6 +210,7 @@ struct CycleMetricWithContext {
 
 struct KernelMetricWithContext {
   const KernelMetric *kernelMetric;
+  // Full call path captured for this kernel metric event.
   std::vector<Context> contexts;
 
   KernelMetricWithContext(const KernelMetric *metric, std::vector<Context> ctx)
@@ -447,15 +450,10 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   if (!staticTargetEntryIds.empty()) {
     tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *staticTrace) {
       for (auto targetEntryId : staticTargetEntryIds) {
-        if (!staticTrace->hasEvent(targetEntryId)) {
-          continue;
-        }
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = staticTrace->getEvent(targetEntryId);
         auto contexts = staticTrace->getContexts(targetEvent.contextId);
-        if (!contexts.empty() && contexts.front().name == "ROOT") {
-          contexts.erase(contexts.begin());
-        }
+        contexts.erase(contexts.begin());
         targetIdToStaticContexts.emplace(targetEntryId, std::move(contexts));
       }
     });
@@ -499,12 +497,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       processMetricMaps(event.metricSet.metrics, baseContexts);
       for (const auto &[targetEntryId, linkedMetrics] :
            event.metricSet.linkedMetrics) {
-        auto staticContextsIt = targetIdToStaticContexts.find(targetEntryId);
-        if (staticContextsIt == targetIdToStaticContexts.end()) {
-          continue;
-        }
         auto contexts = baseContexts;
-        auto &staticContexts = staticContextsIt->second;
+        auto &staticContexts = targetIdToStaticContexts[targetEntryId];
         contexts.insert(contexts.end(), staticContexts.begin(),
                         staticContexts.end());
         processMetricMaps(linkedMetrics, contexts);

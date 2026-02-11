@@ -24,9 +24,12 @@ class Runtime;
 struct NodeStatus {
   using Status = uint8_t;
 
+  // Bit that marks nodes whose kernel name is unavailable at capture time.
   static constexpr Status kMissingName = 1u << 0;
+  // Bit that marks nodes launched as metric kernels.
   static constexpr Status kMetric = 1u << 1;
 
+  // Bit-packed node flags.
   Status status{};
 
   constexpr NodeStatus() = default;
@@ -82,6 +85,7 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
+    // Metric target entries aligned with graph metric-node order.
     std::vector<DataEntry> dataEntries;
   };
 

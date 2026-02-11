@@ -29,26 +29,34 @@ class Data;
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
+  // Direct metric accumulators keyed by metric kind.
   using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
+  // Direct flexible metric accumulators keyed by metric name.
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
+  // Linked metric accumulators keyed by linked entry id.
   using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
+  // Linked flexible metric accumulators keyed by linked entry id.
   using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
   struct MetricSet {
+    // Direct metrics associated with this entry.
     MetricMap metrics{};
+    // Direct flexible metrics associated with this entry.
     FlexibleMetricMap flexibleMetrics{};
+    // Metrics associated with linked entries.
     LinkedMetricMap linkedMetrics{};
+    // Flexible metrics associated with linked entries.
     LinkedFlexibleMetricMap linkedFlexibleMetrics{};
   };
 
-  /// `entryId` is a unique identifier for the entry in the data.
-  /// When `phase` is a virtual phase, `entryId` refers to the linked entry id
+  /// `id` is a unique identifier for the entry in the data.
+  /// When `phase` is a virtual phase, `id` refers to the linked entry id
   /// for the node entry.
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
   /// `data` points to the owning data object for this entry.
   Data *data{nullptr};
-  /// Per-node storage that owns all metric maps and the lock.
+  /// Per-entry storage for direct and linked metric maps.
   std::reference_wrapper<MetricSet> metricSet;
 
   explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
@@ -77,8 +85,10 @@ struct DataEntry {
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
+  // A special phase used for static/captured graph metadata.
   static constexpr size_t kVirtualPhase =
       std::numeric_limits<size_t>::max() - 1;
+  // Sentinel root id used when adding an op from the root.
   static constexpr size_t kRootEntryId = Scope::DummyScopeId;
 
   struct PhaseInfo {
