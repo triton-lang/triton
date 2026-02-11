@@ -19,13 +19,13 @@ void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
   }
 }
 
-void DataEntry::upsertTargetMetric(std::unique_ptr<Metric> metric,
-                                   size_t targetId) const {
+void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
+                                   size_t linkedId) const {
   auto &linkedMetrics = metricSet.get().linkedMetrics;
-  auto &targetMetrics = linkedMetrics[targetId];
-  auto it = targetMetrics.find(metric->getKind());
-  if (it == targetMetrics.end()) {
-    targetMetrics.emplace(metric->getKind(), std::move(metric));
+  auto &linkedMetricMap = linkedMetrics[linkedId];
+  auto it = linkedMetricMap.find(metric->getKind());
+  if (it == linkedMetricMap.end()) {
+    linkedMetricMap.emplace(metric->getKind(), std::move(metric));
   } else {
     it->second->updateMetric(*metric);
   }

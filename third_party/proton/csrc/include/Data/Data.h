@@ -41,8 +41,8 @@ struct DataEntry {
   };
 
   /// `entryId` is a unique identifier for the entry in the data.
-  /// When `phase` is a virtual phase, `entryId` refers to the target entry id
-  /// that the node entry is linked to
+  /// When `phase` is a virtual phase, `entryId` refers to the linked entry id
+  /// for the node entry.
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
@@ -56,8 +56,8 @@ struct DataEntry {
 
   void upsertMetric(std::unique_ptr<Metric> metric) const;
 
-  void upsertTargetMetric(std::unique_ptr<Metric> metric,
-                          size_t targetId) const;
+  void upsertLinkedMetric(std::unique_ptr<Metric> metric,
+                          size_t linkedId) const;
 
   void upsertFlexibleMetric(const std::string &metricName,
                             const MetricValueType &metricValue) const;

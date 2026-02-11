@@ -125,7 +125,7 @@ uint32_t processActivityKernel(
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertTargetMetric(std::move(kernelMetric), entry.id);
+            entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
@@ -135,7 +135,7 @@ uint32_t processActivityKernel(
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             auto childEntry = entry.data->addOp(Data::kVirtualPhase, entry.id,
                                                 {Context(kernel->name)});
-            entry.upsertTargetMetric(std::move(kernelMetric), childEntry.id);
+            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
