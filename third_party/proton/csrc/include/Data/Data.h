@@ -58,11 +58,6 @@ struct DataEntry {
         metrics(&metricSet.metrics),
         flexibleMetrics(&metricSet.flexibleMetrics) {}
 
-  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet,
-                     MetricMap &metrics, FlexibleMetricMap &flexibleMetrics)
-      : id(id), phase(phase), data(data), metricSet(metricSet),
-        metrics(&metrics), flexibleMetrics(&flexibleMetrics) {}
-
   template <typename FnT> decltype(auto) handle(FnT &&fn) const {
     std::lock_guard<std::mutex> lock(metricSet.get().nodeMutex);
     return std::forward<FnT>(fn)(*metrics, *flexibleMetrics,
@@ -81,6 +76,19 @@ struct DataEntry {
             it->second->updateMetric(*metric);
           }
         });
+  }
+
+  void upsertTargetMetric(std::unique_ptr<Metric> metric) const {
+    handle([metric = std::move(metric), id = id](
+               auto &, auto &, LinkedMetricMap &linkedMetrics, auto &) mutable {
+      auto &targetMetrics = linkedMetrics[id];
+      auto it = targetMetrics.find(metric->getKind());
+      if (it == targetMetrics.end()) {
+        targetMetrics.emplace(metric->getKind(), std::move(metric));
+      } else {
+        it->second->updateMetric(*metric);
+      }
+    });
   }
 
   void upsertFlexibleMetric(const std::string &metricName,

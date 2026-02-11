@@ -125,7 +125,7 @@ uint32_t processActivityKernel(
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertMetric(std::move(kernelMetric));
+            entry.upsertTargetMetric(std::move(kernelMetric));
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
@@ -624,11 +624,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 auto &linkedMetrics = linkedMetricsByTarget[targetEntryId];
                 auto &linkedFlexibleMetrics =
                     linkedFlexibleMetricsByTarget[targetEntryId];
-                auto nodeEntry = DataEntry(baseEntry.id, baseEntry.phase,
+                auto nodeEntry = DataEntry(targetEntryId, baseEntry.phase,
                                            baseEntry.data,
-                                           baseEntry.metricSet.get(),
-                                           linkedMetrics,
-                                           linkedFlexibleMetrics);
+                                           baseEntry.metricSet.get());
                 for (const auto &nodeStateRef : nodeStateRefs) {
                   auto &graphNodeState =
                       graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
