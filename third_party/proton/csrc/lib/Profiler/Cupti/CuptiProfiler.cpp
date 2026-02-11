@@ -125,7 +125,7 @@ uint32_t processActivityKernel(
       if (!isMissingName) {
         nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertTargetMetric(std::move(kernelMetric));
+            entry.upsertTargetMetric(std::move(kernelMetric), entry.id);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         });
@@ -135,7 +135,8 @@ uint32_t processActivityKernel(
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
                 auto childEntry = entry.data->addOp(entry.phase, entry.id,
                                                     {Context(kernel->name)});
-                childEntry.upsertMetric(std::move(kernelMetric));
+                entry.upsertTargetMetric(std::move(kernelMetric),
+                                         childEntry.id);
                 detail::updateDataPhases(dataPhases, entry.data, entry.phase);
               }
             });
@@ -613,21 +614,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         }
         auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                      {Context{GraphState::captureTag}});
-        baseEntry.handle(
-            [&](auto &, auto &, auto &linkedMetricsByTarget,
-                auto &linkedFlexibleMetricsByTarget) {
-              for (const auto &[targetEntryId, nodeStateRefs] :
-                   nodeStateIt->second) {
-                for (const auto &nodeStateRef : nodeStateRefs) {
-                  auto &graphNodeState =
-                      graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
-                  graphNodeState.status = nodeStateRef.get().status;
-                  graphNodeState.addEntry(std::move(
-                      DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
-                                baseEntry.metricSet.get())));
-                }
-              }
-            });
+        for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
+          for (const auto &nodeStateRef : nodeStateRefs) {
+            auto &graphNodeState =
+                graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
+            graphNodeState.status = nodeStateRef.get().status;
+            graphNodeState.addEntry(std::move(
+                DataEntry(targetEntryId, Data::kVirtualPhase, baseEntry.data,
+                          baseEntry.metricSet.get())));
+          }
+        }
       }
       if (timingEnabled) {
         auto t1 = Clock::now();

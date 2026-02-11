@@ -41,6 +41,8 @@ struct DataEntry {
   };
 
   /// `entryId` is a unique identifier for the entry in the data.
+  /// When `phase` is a virtual phase, `entryId` refers to the target entry id
+  /// that the node entry is linked to
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
@@ -52,57 +54,15 @@ struct DataEntry {
   explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
       : id(id), phase(phase), data(data), metricSet(metricSet) {}
 
-  template <typename FnT> decltype(auto) handle(FnT &&fn) const {
-    return std::forward<FnT>(fn)(metricSet.get().metrics, metricSet.get().flexibleMetrics,
-                                 metricSet.get().linkedMetrics,
-                                 metricSet.get().linkedFlexibleMetrics);
-  }
+  void upsertMetric(std::unique_ptr<Metric> metric) const;
 
-  void upsertMetric(std::unique_ptr<Metric> metric) const {
-    handle(
-        [metric = std::move(metric)](MetricMap &metrics, auto &, auto &,
-                                     auto &) mutable {
-          auto it = metrics.find(metric->getKind());
-          if (it == metrics.end()) {
-            metrics.emplace(metric->getKind(), std::move(metric));
-          } else {
-            it->second->updateMetric(*metric);
-          }
-        });
-  }
-
-  void upsertTargetMetric(std::unique_ptr<Metric> metric) const {
-    handle([metric = std::move(metric), id = id](
-               auto &, auto &, LinkedMetricMap &linkedMetrics, auto &) mutable {
-      auto &targetMetrics = linkedMetrics[id];
-      auto it = targetMetrics.find(metric->getKind());
-      if (it == targetMetrics.end()) {
-        targetMetrics.emplace(metric->getKind(), std::move(metric));
-      } else {
-        it->second->updateMetric(*metric);
-      }
-    });
-  }
+  void upsertTargetMetric(std::unique_ptr<Metric> metric, size_t targetId) const;
 
   void upsertFlexibleMetric(const std::string &metricName,
-                            const MetricValueType &metricValue) const {
-    handle([&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
-      auto it = flexibleMetrics.find(metricName);
-      if (it == flexibleMetrics.end()) {
-        flexibleMetrics.emplace(metricName,
-                                FlexibleMetric(metricName, metricValue));
-      } else {
-        it->second.updateValue(metricValue);
-      }
-    });
-  }
+                            const MetricValueType &metricValue) const;
 
   void upsertFlexibleMetrics(
-      const std::map<std::string, MetricValueType> &metrics) const {
-    for (const auto &[metricName, metricValue] : metrics) {
-      upsertFlexibleMetric(metricName, metricValue);
-    }
-  }
+      const std::map<std::string, MetricValueType> &metrics) const;
 };
 
 class Data : public ScopeInterface {
