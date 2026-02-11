@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -362,41 +363,41 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
-static PyObject *PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
-  PyCUtensorMapObject *self = NULL;
+static PyObject *PyCUtensorMap_new(PyTypeObject *type, PyObject *args,
+                                   PyObject *kwds) {
   void *mem = NULL;
   size_t size = type->tp_basicsize;
-
   if (posix_memalign(&mem, 128, size) != 0) {
     PyErr_NoMemory();
     return NULL;
   }
-
-  self = (PyCUtensorMapObject *)mem;
-  PyObject_INIT(self, type);
-  return (PyObject *)self;
+  memset(mem, 0, size);
+  PyObject_Init((PyObject *)mem, type);
+  return (PyObject *)mem;
 }
 
 static void PyCUtensorMap_dealloc(PyObject *self) {
-  Py_TYPE(self)->tp_free(self);
+  PyTypeObject *tp = Py_TYPE(self);
+  free(self);
+  Py_DECREF(tp);
 }
 
-static void PyCUtensorMap_free(void *ptr) { free(ptr); }
-
-// clang-format off
-static PyTypeObject PyCUtensorMapType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "triton.backends.nvidia.PyCUtensorMap",
-    .tp_basicsize = sizeof(PyCUtensorMapObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_doc = "<PyCUtensorMap object>",
-    .tp_new = PyType_GenericNew,
-    .tp_alloc = PyCUtensorMap_alloc,
-    .tp_dealloc = (destructor)PyCUtensorMap_dealloc,
-    .tp_free = PyCUtensorMap_free,
+static PyType_Slot PyCUtensorMapType_slots[] = {
+    {Py_tp_doc, (void *)"<PyCUtensorMap object>"},
+    {Py_tp_new, PyCUtensorMap_new},
+    {Py_tp_dealloc, PyCUtensorMap_dealloc},
+    {0, 0},
 };
-// clang-format on
+
+static PyType_Spec PyCUtensorMapType_spec = {
+    .name = "triton.backends.nvidia.PyCUtensorMap",
+    .basicsize = sizeof(PyCUtensorMapObject),
+    .itemsize = 0,
+    .flags = Py_TPFLAGS_DEFAULT,
+    .slots = PyCUtensorMapType_slots,
+};
+
+static PyObject *PyCUtensorMapType = NULL;
 
 static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   unsigned long long global_address;
@@ -413,8 +414,8 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject(
-      (PyObject *)&PyCUtensorMapType, NULL);
+  PyCUtensorMapObject *desc =
+      (PyCUtensorMapObject *)PyObject_CallObject(PyCUtensorMapType, NULL);
   if (!desc) {
     return NULL;
   }
@@ -587,8 +588,8 @@ static PyObject *fillTMADescriptorIm2col(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject(
-      (PyObject *)&PyCUtensorMapType, NULL);
+  PyCUtensorMapObject *desc =
+      (PyCUtensorMapObject *)PyObject_CallObject(PyCUtensorMapType, NULL);
   if (!desc) {
     return NULL;
   }
@@ -1037,7 +1038,7 @@ bool extractTmaDesc(void *ptr, PyObject *obj) {
                     "getTmaDesc() requires 64-bit compilation");
     return false;
   }
-  if (Py_TYPE(obj) != &PyCUtensorMapType) {
+  if (Py_TYPE(obj) != (PyTypeObject *)PyCUtensorMapType) {
     PyErr_Format(PyExc_TypeError,
                  "object must be of type PyCUtensorMap, got %s",
                  Py_TYPE(obj)->tp_name);
@@ -1424,9 +1425,6 @@ static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "cuda_utils",
                                        ModuleMethods};
 
 PyMODINIT_FUNC PyInit_cuda_utils(void) {
-  if (PyType_Ready(&PyCUtensorMapType) < 0) {
-    return NULL;
-  }
   if (PyType_Ready(&PyKernelArgType) < 0) {
     return NULL;
   }
@@ -1435,15 +1433,27 @@ PyMODINIT_FUNC PyInit_cuda_utils(void) {
   if (m == NULL) {
     return NULL;
   }
+
+  PyCUtensorMapType = PyType_FromSpec(&PyCUtensorMapType_spec);
+  if (PyCUtensorMapType == NULL) {
+    Py_DECREF(m);
+    return NULL;
+  }
+
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL) {
+    Py_CLEAR(PyCUtensorMapType);
+    Py_DECREF(m);
     return NULL;
   }
 
   PyModule_AddFunctions(m, ModuleMethods);
 
-  Py_INCREF(&PyCUtensorMapType);
-  PyModule_AddObject(m, "PyCUtensorMap", (PyObject *)&PyCUtensorMapType);
+  if (PyModule_AddObjectRef(m, "PyCUtensorMap", PyCUtensorMapType) < 0) {
+    Py_CLEAR(PyCUtensorMapType);
+    Py_DECREF(m);
+    return NULL;
+  }
 
   Py_INCREF(&PyKernelArgType);
   PyModule_AddObject(m, "PyKernelArg", (PyObject *)&PyKernelArgType);
