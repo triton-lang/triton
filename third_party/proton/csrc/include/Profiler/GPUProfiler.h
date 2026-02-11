@@ -77,7 +77,9 @@ public:
       bool isMetricNode() const { return status.isMetricNode(); }
       bool isMissingName() const { return status.isMissingName(); }
 
-      void addEntry(const DataEntry &entry) { dataEntries.push_back(entry); }
+      void addEntry(DataEntry &&entry) {
+        dataEntries.emplace_back(std::move(entry));
+      }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
         for (auto &entry : dataEntries)

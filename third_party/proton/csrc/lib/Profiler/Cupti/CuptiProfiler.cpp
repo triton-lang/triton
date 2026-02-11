@@ -618,14 +618,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 auto &linkedFlexibleMetricsByTarget) {
               for (const auto &[targetEntryId, nodeStateRefs] :
                    nodeStateIt->second) {
-                auto nodeEntry = DataEntry(targetEntryId, baseEntry.phase,
-                                           baseEntry.data,
-                                           baseEntry.metricSet.get());
                 for (const auto &nodeStateRef : nodeStateRefs) {
                   auto &graphNodeState =
                       graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
                   graphNodeState.status = nodeStateRef.get().status;
-                  graphNodeState.addEntry(nodeEntry);
+                  graphNodeState.addEntry(std::move(
+                      DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
+                                baseEntry.metricSet.get())));
                 }
               }
             });
