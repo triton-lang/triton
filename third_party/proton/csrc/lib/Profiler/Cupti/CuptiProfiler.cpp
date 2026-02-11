@@ -616,14 +616,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         baseEntry.handle(
             [&](auto &, auto &, auto &linkedMetricsByTarget,
                 auto &linkedFlexibleMetricsByTarget) {
-              const auto numTargets = nodeStateIt->second.size();
-              linkedMetricsByTarget.reserve(numTargets);
-              linkedFlexibleMetricsByTarget.reserve(numTargets);
               for (const auto &[targetEntryId, nodeStateRefs] :
                    nodeStateIt->second) {
-                auto &linkedMetrics = linkedMetricsByTarget[targetEntryId];
-                auto &linkedFlexibleMetrics =
-                    linkedFlexibleMetricsByTarget[targetEntryId];
                 auto nodeEntry = DataEntry(targetEntryId, baseEntry.phase,
                                            baseEntry.data,
                                            baseEntry.metricSet.get());
