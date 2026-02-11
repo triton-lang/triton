@@ -279,3 +279,89 @@ tt.func @missing_barrier_reused_allocation(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
 }
 
 }
+
+// -----
+
+// Check that no barrier is inserted between async_tdm_copy_global_to_local and
+// local_load when the local_load's token is loop-carried from async_tdm_wait.
+
+#AL_TDM = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#TDM_SHARED = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: pipelined_tdm_copy_global_to_local
+tt.func @pipelined_tdm_copy_global_to_local(
+    %tensorDesc: !tt.tensordesc<tensor<16x16xf16>>,
+    %mask: i32, %loopIterCount: i32
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #TDM_SHARED, #ttg.shared_memory, mutable>
+
+  %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %alloc, %mask : !tt.tensordesc<tensor<16x16xf16>> -> !ttg.memdesc<16x16xf16, #TDM_SHARED, #ttg.shared_memory, mutable>
+  %2 = amdg.async_tdm_wait %1 {num = 0 : i32}
+
+  // CHECK: cf.br
+  %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %2) -> (!ttg.async.token)  : i32 {
+    // Prefetch next iteration
+    // CHECK: amdg.async_tdm_copy_global_to_local
+    %7 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %alloc, %mask : !tt.tensordesc<tensor<16x16xf16>> -> !ttg.memdesc<16x16xf16, #TDM_SHARED, #ttg.shared_memory, mutable>
+    // Consume previous iteration's data (token from prior wait)
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_load
+    %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #TDM_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL_TDM>
+
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: amdg.async_tdm_wait
+    %8 = amdg.async_tdm_wait %7 {num = 0 : i32}
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NOT: ttg.barrier local
+    scf.yield %8: !ttg.async.token
+  }
+  // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+
+// Check that no barrier is inserted between async_tdm_gather and local_load
+// when the local_load's token is loop-carried from async_tdm_wait.
+
+#AL_GATHER = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#GATHER_SHARED = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: pipelined_tdm_gather
+tt.func @pipelined_tdm_gather(
+    %tensorDesc: !tt.tensordesc<tensor<16x16xf16>>,
+    %row_indices: tensor<16xi32>, %loopIterCount: i32
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #GATHER_SHARED, #ttg.shared_memory, mutable>
+
+  %1 = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %alloc : tensor<16xi32>, !ttg.memdesc<16x16xf16, #GATHER_SHARED, #ttg.shared_memory, mutable> -> !tt.tensordesc<tensor<16x16xf16>>
+  %2 = amdg.async_tdm_wait %1 {num = 0 : i32}
+
+  // CHECK: cf.br
+  %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %2) -> (!ttg.async.token)  : i32 {
+    // Prefetch next iteration
+    // CHECK: amdg.async_tdm_gather
+    %7 = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %alloc : tensor<16xi32>, !ttg.memdesc<16x16xf16, #GATHER_SHARED, #ttg.shared_memory, mutable> -> !tt.tensordesc<tensor<16x16xf16>>
+    // Consume previous iteration's data (token from prior wait)
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_load
+    %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #GATHER_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL_GATHER>
+
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: amdg.async_tdm_wait
+    %8 = amdg.async_tdm_wait %7 {num = 0 : i32}
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NOT: ttg.barrier local
+    scf.yield %8: !ttg.async.token
+  }
+  // CHECK: tt.return
+  tt.return
+}
+}
