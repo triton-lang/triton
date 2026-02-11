@@ -133,7 +133,7 @@ uint32_t processActivityKernel(
         nodeState->forEachEntry([kernel, activity,
                                  &dataPhases](DataEntry &entry) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry = entry.data->addOp(entry.phase, entry.id,
+            auto childEntry = entry.data->addOp(Data::kVirtualPhase, entry.id,
                                                 {Context(kernel->name)});
             entry.upsertTargetMetric(std::move(kernelMetric), childEntry.id);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
@@ -618,7 +618,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
             graphNodeState.status = nodeStateRef.get().status;
             graphNodeState.addEntry(std::move(
-                DataEntry(targetEntryId, Data::kVirtualPhase, baseEntry.data,
+                DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
                           baseEntry.metricSet.get())));
           }
         }
