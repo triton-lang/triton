@@ -20,7 +20,7 @@ namespace proton {
 class Data;
 class Runtime;
 
-struct NodeState {
+struct NodeStatus {
   using Status = uint8_t;
 
   static constexpr Status kMissingName = 1u << 0;
@@ -28,29 +28,43 @@ struct NodeState {
 
   Status status{};
 
-  constexpr NodeState() = default;
-  constexpr explicit NodeState(Status status) : status(status) {}
+  constexpr NodeStatus() = default;
+  constexpr explicit NodeStatus(Status status) : status(status) {}
 
-  constexpr NodeState(bool isMissingName, bool isMetricNode)
+  constexpr NodeStatus(bool isMissingName, bool isMetricNode)
       : status(static_cast<Status>((isMissingName ? kMissingName : 0) |
                                    (isMetricNode ? kMetric : 0))) {}
 
   constexpr bool isMissingName() const { return (status & kMissingName) != 0; }
   constexpr bool isMetricNode() const { return (status & kMetric) != 0; }
+  void setMissingName() { status |= kMissingName; }
+  void setMetricNode() { status |= kMetric; }
 };
+
 
 struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
+  struct NodeState {
+    // The graph node id for this node
+    uint64_t nodeId{};
+    // The entry id of the static entry associated with this node, which is
+    // created at capture time and won't change for the same node id. This is
+    // used to link the graph node to the captured call path in Data.
+    std::map<Data *, size_t> dataToEntryId;
+    // Whether the node has missing name or is a metric node, which is
+    // determined at capture time and won't change for the same node id.
+    NodeStatus status{};
+  };
+  using NodeStateRef = std::reference_wrapper<NodeState>;
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
-  // data -> (static_entry_id -> node_id -> graph-node metadata)
-  std::map<Data *,
-           std::map<
-               /*entry_id=*/size_t, std::map</*node_id=*/uint64_t, NodeState>>>
-      dataToNodeStates;
-  // Node ids that have launch-state entries and the associated static entry id.
-  std::map<uint64_t, /*entry_id=*/size_t> launchNodeIds;
+  // data -> (static_entry_id -> graph-node metadata refs)
+  std::map<Data *, std::map<size_t, std::vector<NodeStateRef>>>
+      dataToEntryIdToNodeStates;
+  // Mapping from node id to node state, has to be ordered based on node id
+  // which is the order of node creation.
+  std::map<uint64_t, NodeState> nodeIdToState;
   // Metric nodes and their per-node metric words, ordered by node id.
   std::map<uint64_t, size_t> metricNodeIdToNumWords;
   // If the graph is launched after profiling started,
