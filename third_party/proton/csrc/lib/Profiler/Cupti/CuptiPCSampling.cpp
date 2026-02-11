@@ -400,9 +400,8 @@ void CuptiPCSampling::processPCSamplingData(
                   stallReason->pcSamplingStallReasonIndex)
                   ? 0
                   : samples;
-          entry.upsertMetric(
-              std::make_unique<PCSamplingMetric>(metricKind, samples,
-                                                 stalledSamples));
+          entry.upsertMetric(std::make_unique<PCSamplingMetric>(
+              metricKind, samples, stalledSamples));
         }
       }
     }

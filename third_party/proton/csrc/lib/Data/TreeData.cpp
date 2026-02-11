@@ -351,8 +351,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(staticNodeId);
               const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(
-                      staticNodeId);
+                  treeNode.metricSet.linkedFlexibleMetrics.find(staticNodeId);
               outNode = json::object();
               outNode["frame"] = {{"name", staticNode.name},
                                   {"type", "function"}};
@@ -714,8 +713,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(staticNodeId);
               const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(
-                      staticNodeId);
+                  treeNode.metricSet.linkedFlexibleMetrics.find(staticNodeId);
               if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
                   flexibleIt !=
                       treeNode.metricSet.linkedFlexibleMetrics.end()) {

@@ -433,8 +433,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   std::set<size_t> staticTargetEntryIds;
   tracePhases.withPtr(phase, [&](Trace *trace) {
     for (const auto &[_, event] : trace->getEvents()) {
-      for (const auto &[targetEntryId, _] :
-           event.metricSet.linkedMetrics) {
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
         staticTargetEntryIds.insert(targetEntryId);
       }
       for (const auto &[targetEntryId, _] :

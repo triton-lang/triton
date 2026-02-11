@@ -130,16 +130,15 @@ uint32_t processActivityKernel(
           }
         });
       } else {
-        nodeState->forEachEntry(
-            [kernel, activity, &dataPhases](DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry = entry.data->addOp(entry.phase, entry.id,
-                                                    {Context(kernel->name)});
-                entry.upsertTargetMetric(std::move(kernelMetric),
-                                         childEntry.id);
-                detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-              }
-            });
+        nodeState->forEachEntry([kernel, activity,
+                                 &dataPhases](DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry = entry.data->addOp(entry.phase, entry.id,
+                                                {Context(kernel->name)});
+            entry.upsertTargetMetric(std::move(kernelMetric), childEntry.id);
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          }
+        });
       }
     }
     // Decrease the expected kernel count
@@ -468,8 +467,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.numNodes--;
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-    graphState.numMetricWords -=
-        graphState.metricNodeIdToNumWords[nodeId];
+    graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
     for (const auto &[data, entryId] :
          graphState.nodeIdToState[nodeId].dataToEntryId) {
       auto &nodeStates = graphState.dataToEntryIdToNodeStates[data][entryId];

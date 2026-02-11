@@ -56,7 +56,8 @@ struct DataEntry {
 
   void upsertMetric(std::unique_ptr<Metric> metric) const;
 
-  void upsertTargetMetric(std::unique_ptr<Metric> metric, size_t targetId) const;
+  void upsertTargetMetric(std::unique_ptr<Metric> metric,
+                          size_t targetId) const;
 
   void upsertFlexibleMetric(const std::string &metricName,
                             const MetricValueType &metricValue) const;

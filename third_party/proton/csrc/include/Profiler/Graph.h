@@ -42,7 +42,6 @@ struct NodeStatus {
   void setMetricNode() { status |= kMetric; }
 };
 
-
 struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";

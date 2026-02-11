@@ -36,7 +36,8 @@ void DataEntry::upsertFlexibleMetric(const std::string &metricName,
   auto &flexibleMetrics = metricSet.get().flexibleMetrics;
   auto it = flexibleMetrics.find(metricName);
   if (it == flexibleMetrics.end()) {
-    flexibleMetrics.emplace(metricName, FlexibleMetric(metricName, metricValue));
+    flexibleMetrics.emplace(metricName,
+                            FlexibleMetric(metricName, metricValue));
   } else {
     it->second.updateValue(metricValue);
   }
