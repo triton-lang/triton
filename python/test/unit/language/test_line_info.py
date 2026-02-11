@@ -7,7 +7,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter, is_cuda
+from triton._internal_testing import is_hopper_or_newer, is_interpreter
 from triton._filecheck import run_filecheck
 
 
@@ -315,21 +315,22 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
     check_template = inspect.getsource(kernel_basic.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
-    @triton.jit
-    def kernel_tensordesc_param(foo):
-        # CHECK-LABEL: tt.func public @kernel_tensordesc_param
-        # CHECK-SAME: %foo: !tt.tensordesc<tensor<32x64xf16>>
-        # CHECK-SAME: %foo.shape.0: i32
-        # CHECK-SAME: %foo.shape.1: i32
-        # CHECK-SAME: %foo.stride.0: i64
-        # CHECK-SAME: %foo.stride.1: i64
-        foo
-
-    if is_cuda():
+    if is_hopper_or_newer():
         # CUDA backend creates aggregate tensor descriptor parameters
+
+        @triton.jit
+        def kernel_tensordesc_param(foo):
+            # CHECK-LABEL: tt.func public @kernel_tensordesc_param
+            # CHECK-SAME: %foo: !tt.tensordesc<tensor<32x64xf16>>
+            # CHECK-SAME: %foo.shape.0: i32
+            # CHECK-SAME: %foo.shape.1: i32
+            # CHECK-SAME: %foo.stride.0: i64
+            # CHECK-SAME: %foo.stride.1: i64
+            foo
+
         h = triton.compile(
-           triton.compiler.ASTSource(fn=kernel_tensordesc_param, signature={"foo": "tensordesc<fp16[32,64]>"},
-                                  constexprs={}))
+            triton.compiler.ASTSource(fn=kernel_tensordesc_param, signature={"foo": "tensordesc<fp16[32,64]>"},
+                                      constexprs={}))
 
         check_template = inspect.getsource(kernel_tensordesc_param.fn)
         run_filecheck("placeholder", h.asm["ttir"], check_template)
