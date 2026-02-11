@@ -9,7 +9,7 @@ from triton.language.core import _aggregate as aggregate
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor, TensorDescriptorIm2Col
-from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
@@ -56,13 +56,13 @@ def make_tensor_desc(x, shape, strides, block_shape):
 
 @aggregate
 class ConvConfig:
-    N: gl.constexpr
-    H: gl.constexpr
-    W: gl.constexpr
+    N: gl.tensor
+    H: gl.tensor
+    W: gl.tensor
     Ci: gl.constexpr
     Co: gl.constexpr
-    R: gl.constexpr
-    S: gl.constexpr
+    R: gl.tensor
+    S: gl.tensor
     out_h: gl.constexpr
     out_w: gl.constexpr
     stride_h: gl.constexpr
@@ -79,32 +79,6 @@ class ConvConfig:
     GROUP_SIZE_M: gl.constexpr
     num_buffers: gl.constexpr
     num_warps: gl.constexpr
-
-    @gluon.constexpr_function
-    def __init__(self, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w, output_stride_n,
-                 output_stride_h, output_stride_w, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, num_buffers, num_warps):
-        self.N = gl.constexpr(N)
-        self.H = gl.constexpr(H)
-        self.W = gl.constexpr(W)
-        self.Ci = gl.constexpr(Ci)
-        self.Co = gl.constexpr(Co)
-        self.R = gl.constexpr(R)
-        self.S = gl.constexpr(S)
-        self.out_h = gl.constexpr(out_h)
-        self.out_w = gl.constexpr(out_w)
-        self.stride_h = gl.constexpr(stride_h)
-        self.stride_w = gl.constexpr(stride_w)
-        self.pad_h = gl.constexpr(pad_h)
-        self.pad_w = gl.constexpr(pad_w)
-        self.output_stride_n = gl.constexpr(output_stride_n)
-        self.output_stride_h = gl.constexpr(output_stride_h)
-        self.output_stride_w = gl.constexpr(output_stride_w)
-        self.BLOCK_M = gl.constexpr(BLOCK_M)
-        self.BLOCK_N = gl.constexpr(BLOCK_N)
-        self.BLOCK_K = gl.constexpr(BLOCK_K)
-        self.GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)
-        self.num_buffers = gl.constexpr(num_buffers)
-        self.num_warps = gl.constexpr(num_warps)
 
     @gluon.jit
     def get_program(self, pid):
@@ -129,12 +103,6 @@ class ConvProgram:
     config: ConvConfig
     pid_m: gl.tensor
     pid_n: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, config, pid_m, pid_n):
-        self.config = config
-        self.pid_m = pid_m
-        self.pid_n = pid_n
 
     @gluon.jit
     def get_m_offsets(self):
@@ -165,21 +133,6 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-
-    @gluon.constexpr_function
-    def __init__(self, config, in_desc, weight_desc, output_ptr, a_bufs, b_bufs, load_empty_bars, load_ready_bars,
-                 acc_bufs, acc_empty_bars, acc_ready_bars):
-        self.config = config
-        self.in_desc = in_desc
-        self.weight_desc = weight_desc
-        self.output_ptr = output_ptr
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
 
 
 # ===-----------------------------------------------------------------------===#
@@ -282,14 +235,11 @@ def epilogue_partition(p):
     BLOCK_N: gl.constexpr = config.BLOCK_N
     M_GEMM = config.N * config.out_h * config.out_w
     N_GEMM = config.Co
-
     pid = gl.program_id(axis=0)
     prog = config.get_program(pid)
 
     # Register layouts
     c_layout: gl.constexpr = gl.BlockedLayout([1, 8], [1, 32], [config.num_warps, 1], [1, 0])
-    c_cols_layout: gl.constexpr = gl.SliceLayout(dim=0, parent=c_layout)
-    c_rows_layout: gl.constexpr = gl.SliceLayout(dim=1, parent=c_layout)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(block=(128, BLOCK_N), col_stride=1)
     acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, config.num_warps)
@@ -317,7 +267,6 @@ def epilogue_partition(p):
                  c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
     c_mask = (offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM)
 
-    fence_async_shared()
     gl.store(p.output_ptr + c_offsets, result, mask=c_mask)
 
     # Clean up barriers
@@ -334,18 +283,24 @@ def epilogue_partition(p):
 # ===-----------------------------------------------------------------------===#
 
 
-@gluon.jit
+@gluon.jit(do_not_specialize=[
+    "N",
+    "H",
+    "W",
+    "R",
+    "S",
+])
 def conv2d_im2col_kernel(
     in_desc,
     weight_desc,
     output,
-    N: gl.constexpr,
-    H: gl.constexpr,
-    W: gl.constexpr,
+    N,
+    H,
+    W,
     Ci: gl.constexpr,
     Co: gl.constexpr,
-    R: gl.constexpr,
-    S: gl.constexpr,
+    R,
+    S,
     out_h: gl.constexpr,
     out_w: gl.constexpr,
     output_stride_n: gl.constexpr,
