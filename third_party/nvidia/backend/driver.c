@@ -1044,12 +1044,13 @@ bool extractTmaDesc(void *ptr, PyObject *obj) {
     return false;
   }
   *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
-  uintptr_t align_128 = (uintptr_t)ptr & (128 - 1);
-  if (align_128 != 0) {
+  const size_t tma_align = alignof(PyCUtensorMapObject);
+  uintptr_t misalign = (uintptr_t)ptr & (tma_align - 1);
+  if (misalign != 0) {
     PyErr_Format(
         PyExc_ValueError,
-        "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld",
-        align_128);
+        "CUtensorMap must be aligned to %zuB, but got (&map) mod %zu = %ld",
+        tma_align, tma_align, (long)misalign);
     return false;
   }
   return true;
@@ -1133,10 +1134,11 @@ Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
     [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
                                          .size = sizeof(uint64_t),
                                          .name = {"fp64"}},
-    [EXTRACTOR_NVTMADESC_INDEX] = (Extractor){.extract = extractTmaDesc,
-                                              .size = sizeof(CUtensorMap),
-                                              .alignment = alignof(CUtensorMap),
-                                              .name = {"nvTmaDesc"}},
+    [EXTRACTOR_NVTMADESC_INDEX] =
+        (Extractor){.extract = extractTmaDesc,
+                    .size = sizeof(CUtensorMap),
+                    .alignment = alignof(PyCUtensorMapObject),
+                    .name = {"nvTmaDesc"}},
 };
 
 Extractor getExtractor(uint8_t index) {
