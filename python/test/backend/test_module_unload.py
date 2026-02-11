@@ -10,12 +10,13 @@ def test_module_load_unload():
         driver = triton.runtime.driver.active
         device = driver.get_current_device()
         backend = 'hip' if is_hip() else 'cuda'
-        warp_size = device_properties['warpSize'] if is_hip() else 32
         if is_hip():
             device_properties = driver.utils.get_device_properties(device)
+            warp_size = device_properties['warpSize']
             arch = knobs.runtime.override_arch or device_properties['arch']
             capability = arch.split(':')[0]
         else:
+            warp_size = 32
             capability = driver.get_device_capability(device)
             capability = capability[0] * 10 + capability[1]
 
