@@ -9,7 +9,7 @@ namespace mlir::triton::AMD {
 namespace {
 
 bool isAsyncWrite(Operation *op) {
-  return op->hasTrait<OpTrait::MemAsyncWriteOpTrait>();
+  return op->hasTrait<OpTrait::MemAsyncLocalWriteOpTrait>();
 }
 
 bool isLocalLoadSyncedViaWait(Operation *op) {
@@ -31,25 +31,18 @@ Value getMemdescValue(Operation *op) {
       .Default([](Operation *) { return Value(); });
 }
 
-// Suppress the barrier that membar analysis would insert between an async DMA
-// write (MemAsyncWriteOpTrait) and a local_load on the same shared buffer.
-//
-// Async DMA writes are not visible until an explicit wait completes.  A plain
-// thread barrier does not provide this guarantee.  When the local_load is
-// already guarded by an async wait, the barrier is redundant.
+// Suppress false-positive RAW/WAR barriers between an async write and a
+// local_load on the same shared allocation in multi-buffered pipelines.
+// See MembarUtility.h for the full rationale.
 //
 // Returns true (suppress barrier) when all three conditions hold:
 //   1. Exactly one op is an async write and the other is not.
 //   2. Both ops access the same shared-memory buffer.
-//   3. The non-async op is a local_load that is synced via an async wait.
+//   3. The non-async op is a local_load whose token chains to an async wait.
 bool filterAsyncWriteDependencies(Operation *op1, Operation *op2,
                                   Allocation *allocation) {
-  // Not relevant if neither op is an async write.
-  if (!isAsyncWrite(op1) && !isAsyncWrite(op2))
-    return false;
-
-  // Two async writes (WAW) — keep the barrier; DMA ordering between
-  // different async ops is not guaranteed by a wait alone.
+  // Exactly one op must be an async write and the other must not.
+  // Neither-async and both-async (WAW) pairs are not handled here.
   if (isAsyncWrite(op1) == isAsyncWrite(op2))
     return false;
 

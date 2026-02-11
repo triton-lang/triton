@@ -44,10 +44,11 @@ class MemWaitOpTrait
   // Optional: Add methods or verification logic here
 };
 
-// Async DMA write to shared memory, visible only after an explicit wait.
+// Marks an op that initiates an asynchronous write to shared memory.
+// Completion is only guaranteed after an explicit wait.
 template <typename ConcreteType>
-class MemAsyncWriteOpTrait
-    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncWriteOpTrait> {};
+class MemAsyncLocalWriteOpTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncLocalWriteOpTrait> {};
 
 } // namespace OpTrait
 } // namespace mlir
