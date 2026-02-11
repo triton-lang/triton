@@ -16,6 +16,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -30,8 +31,8 @@ class Data;
 struct DataEntry {
   using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
-  using LinkedMetricMap = std::map<size_t, MetricMap>;
-  using LinkedFlexibleMetricMap = std::map<size_t, FlexibleMetricMap>;
+  using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
+  using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
   struct MetricSet {
     MetricMap metrics{};
     FlexibleMetricMap flexibleMetrics{};
