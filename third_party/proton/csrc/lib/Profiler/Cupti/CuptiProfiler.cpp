@@ -467,7 +467,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.numNodes--;
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-    auto &graphState = graphStates[graphId];
     graphState.numMetricWords -=
         graphState.metricNodeIdToNumWords[nodeId];
     for (const auto &[data, entryId] :
