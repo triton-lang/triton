@@ -1166,13 +1166,27 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
   if (!int_ty || int_ty.getWidth() != 64) {
     return emitError(loc)
-           << "Expected CLC result buffer to have type int64, but got"
+           << "Expected CLC result buffer to have integer element type int64, "
+              "but got "
            << desc.getElementType();
   }
-  if (desc.getShape().size() != 1 || desc.getShape()[0] != 2) {
-    return emitError(loc)
-           << "Expected CLC result buffer to have shape [2], but got ["
-           << triton::join(desc.getShape(), ", ") << "]";
+  auto layout = desc.getEncoding();
+  auto kBlock = StringAttr::get(desc.getContext(), "block");
+  // TODO put this into a helper function
+  int numCTAs;
+  if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    const auto &ll = sharedLinearEnc.getLinearLayout();
+    numCTAs = ll.getInDimSize(kBlock);
+  } else {
+    numCTAs = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+  }
+
+  auto rank = desc.getRank();
+  if (rank != 1 || desc.getDimSize(0) != 2 * numCTAs) {
+    return emitError(loc) << "Expected CLC result buffer to have rank 1 and a "
+                             "single dimension equal to 2x the number of CTAs, "
+                             "but got "
+                          << desc.getShape() << ".";
   }
   return success();
 }
