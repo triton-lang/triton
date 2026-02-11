@@ -2,6 +2,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -59,6 +60,20 @@ static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
          allocation->isExplicitBuffer(bufferId);
 }
 
+static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
+  auto hasDistributedDependency = [](const BlockInfo::SliceMapT &slices,
+                                     bool isRead) {
+    for (const auto &sliceAndOps : slices)
+      for (Operation *depOp : sliceAndOps.second)
+        if (isDistributedMultiCTAOp(depOp, isRead))
+          return true;
+    return false;
+  };
+
+  return hasDistributedDependency(blockInfo.syncReadSlices, /*isRead=*/true) ||
+         hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
+}
+
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
   ClusterBarrierAnalysis() = default;
@@ -84,6 +99,26 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                     OpBuilder *builder) {
   if (isa<ttng::ClusterWaitOp>(op)) {
     blockInfo->sync();
+    return;
+  }
+
+  // Any path from distributed shared memory use to kernel exit must include a
+  // cluster arrive/wait pair
+  if (op->hasTrait<OpTrait::ReturnLike>() &&
+      isa<FunctionOpInterface>(op->getParentOp())) {
+    // In `freeTMAlloc` we emit a cluster sync during lowering for 2CTA kernels,
+    // as we need to sync before the TMA deallocation
+    // Note that 2CTA kernels must have a tcgen05_mma instruction and thus must
+    // use TensorMemory
+    // According to NVIDIA this is enough, so we don't need an extra
+    // end-of-kernel barrier
+    auto funcOp = dyn_cast<FunctionOpInterface>(op->getParentOp());
+    if (isKernel(funcOp) && hasUnresolvedCrossClusterDependency(*blockInfo) &&
+        !getModuleTwoCTAs(funcOp)) {
+      builder->setInsertionPoint(op);
+      insertClusterBarrier(op, builder);
+      blockInfo->sync();
+    }
     return;
   }
 

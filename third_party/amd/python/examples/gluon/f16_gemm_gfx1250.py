@@ -193,6 +193,9 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 def _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, WARP_BASES, TRANSPOSE_B):
+    """
+    Build all layouts for the GEMM kernel.
+    """
     # If TRANSPOSE_B we need to transpose each basis vector of the CGALayout for the
     # shared allocation because the permute will transpose the basis vectors before we
     # load them for wmmas.
@@ -387,6 +390,12 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
     if num_ctas > 1 and PERSISTENT:
         pytest.skip("Skip tests with multiple CTAs and persistent or prefetch")
+
+    # We scale the problem size and block dims by ctas_per_cga so each CTA works on BLOCK_M/BLOCK_N sized tile
+    M *= ctas_per_cga[0]
+    N *= ctas_per_cga[1]
+    BLOCK_M *= ctas_per_cga[0]
+    BLOCK_N *= ctas_per_cga[1]
 
     torch.manual_seed(42)
 
