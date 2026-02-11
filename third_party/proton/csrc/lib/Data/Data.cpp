@@ -51,21 +51,22 @@ void DataEntry::upsertFlexibleMetrics(
 }
 
 void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
-                                        const MetricValueType &metricValue,
-                                        size_t linkedId) const {
+                                           const MetricValueType &metricValue,
+                                           size_t linkedId) const {
   auto &linkedFlexibleMetrics = metricSet.get().linkedFlexibleMetrics;
   auto &linkedFlexibleMetricMap = linkedFlexibleMetrics[linkedId];
   auto it = linkedFlexibleMetricMap.find(metricName);
   if (it == linkedFlexibleMetricMap.end()) {
     linkedFlexibleMetricMap.emplace(metricName,
-                                   FlexibleMetric(metricName, metricValue));
+                                    FlexibleMetric(metricName, metricValue));
   } else {
     it->second.updateValue(metricValue);
   }
 }
 
 void DataEntry::upsertLinkedFlexibleMetrics(
-    const std::map<std::string, MetricValueType> &metrics, size_t linkedId) const {
+    const std::map<std::string, MetricValueType> &metrics,
+    size_t linkedId) const {
   for (const auto &[metricName, metricValue] : metrics) {
     upsertLinkedFlexibleMetric(metricName, metricValue, linkedId);
   }
