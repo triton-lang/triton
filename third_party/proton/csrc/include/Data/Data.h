@@ -38,7 +38,6 @@ struct DataEntry {
     FlexibleMetricMap flexibleMetrics{};
     LinkedMetricMap linkedMetrics{};
     LinkedFlexibleMetricMap linkedFlexibleMetrics{};
-    std::mutex nodeMutex;
   };
 
   /// `entryId` is a unique identifier for the entry in the data.
@@ -59,7 +58,6 @@ struct DataEntry {
         flexibleMetrics(&metricSet.flexibleMetrics) {}
 
   template <typename FnT> decltype(auto) handle(FnT &&fn) const {
-    std::lock_guard<std::mutex> lock(metricSet.get().nodeMutex);
     return std::forward<FnT>(fn)(*metrics, *flexibleMetrics,
                                  metricSet.get().linkedMetrics,
                                  metricSet.get().linkedFlexibleMetrics);
