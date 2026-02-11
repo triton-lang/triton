@@ -63,6 +63,7 @@ struct DataEntry {
         metrics(&metrics), flexibleMetrics(&flexibleMetrics) {}
 
   template <typename FnT> decltype(auto) handle(FnT &&fn) const {
+    std::lock_guard<std::mutex> lock(metricSet.get().nodeMutex);
     return std::forward<FnT>(fn)(*metrics, *flexibleMetrics,
                                  metricSet.get().linkedMetrics,
                                  metricSet.get().linkedFlexibleMetrics);
@@ -81,33 +82,17 @@ struct DataEntry {
         });
   }
 
-  void
-  upsertFlexibleMetrics(const std::map<std::string, MetricValueType> &metrics)
-      const {
-    handle(
-        [&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
-          for (const auto &[metricName, metricValue] : metrics) {
-            auto it = flexibleMetrics.find(metricName);
-            if (it == flexibleMetrics.end()) {
-              flexibleMetrics.emplace(metricName,
-                                      FlexibleMetric(metricName, metricValue));
-            } else {
-              it->second.updateValue(metricValue);
-            }
-          }
-        });
-  }
-
   void upsertFlexibleMetric(const std::string &metricName,
                             const MetricValueType &metricValue) const {
-    auto &flexibleMetricsRef = *flexibleMetrics;
-    auto it = flexibleMetricsRef.find(metricName);
-    if (it == flexibleMetricsRef.end()) {
-      flexibleMetricsRef.emplace(metricName,
-                                 FlexibleMetric(metricName, metricValue));
-    } else {
-      it->second.updateValue(metricValue);
-    }
+    handle([&](auto &, FlexibleMetricMap &flexibleMetrics, auto &, auto &) {
+      auto it = flexibleMetrics.find(metricName);
+      if (it == flexibleMetrics.end()) {
+        flexibleMetrics.emplace(metricName,
+                                FlexibleMetric(metricName, metricValue));
+      } else {
+        it->second.updateValue(metricValue);
+      }
+    });
   }
 };
 
