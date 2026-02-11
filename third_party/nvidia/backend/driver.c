@@ -26,7 +26,9 @@ typedef struct {
 // Deallocator
 static void PyKernelArg_dealloc(PyKernelArgObject *self) {
   Py_XDECREF(self->nested_tuple);
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  PyTypeObject *tp = Py_TYPE(self);
+  tp->tp_free((PyObject *)self);
+  Py_DECREF(tp);
 }
 
 // Constructor
@@ -45,19 +47,23 @@ static int PyKernelArg_init(PyKernelArgObject *self, PyObject *args,
   return 0;
 }
 
-static void PyKernelArg_free(void *ptr) { free(ptr); }
-
-static PyTypeObject PyKernelArgType = {
-    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "triton.backends.nvidia.PyKernelArg",
-    .tp_basicsize = sizeof(PyKernelArgObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_doc = "Kernel Argument Metadata",
-    .tp_new = PyType_GenericNew,
-    .tp_init = (initproc)PyKernelArg_init,
-    .tp_dealloc = (destructor)PyKernelArg_dealloc,
+static PyType_Slot PyKernelArgType_slots[] = {
+    {Py_tp_doc, (void *)"Kernel Argument Metadata"},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_init, PyKernelArg_init},
+    {Py_tp_dealloc, PyKernelArg_dealloc},
+    {0, 0},
 };
+
+static PyType_Spec PyKernelArgType_spec = {
+    .name = "triton.backends.nvidia.PyKernelArg",
+    .basicsize = sizeof(PyKernelArgObject),
+    .itemsize = 0,
+    .flags = Py_TPFLAGS_DEFAULT,
+    .slots = PyKernelArgType_slots,
+};
+
+static PyObject *PyKernelArgType = NULL;
 
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.
 static bool gpuAssert(CUresult code, const char *file, int line) {
@@ -1425,10 +1431,6 @@ static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "cuda_utils",
                                        ModuleMethods};
 
 PyMODINIT_FUNC PyInit_cuda_utils(void) {
-  if (PyType_Ready(&PyKernelArgType) < 0) {
-    return NULL;
-  }
-
   PyObject *m = PyModule_Create(&ModuleDef);
   if (m == NULL) {
     return NULL;
@@ -1440,8 +1442,16 @@ PyMODINIT_FUNC PyInit_cuda_utils(void) {
     return NULL;
   }
 
+  PyKernelArgType = PyType_FromSpec(&PyKernelArgType_spec);
+  if (PyKernelArgType == NULL) {
+    Py_CLEAR(PyCUtensorMapType);
+    Py_DECREF(m);
+    return NULL;
+  }
+
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL) {
+    Py_CLEAR(PyKernelArgType);
     Py_CLEAR(PyCUtensorMapType);
     Py_DECREF(m);
     return NULL;
@@ -1450,13 +1460,18 @@ PyMODINIT_FUNC PyInit_cuda_utils(void) {
   PyModule_AddFunctions(m, ModuleMethods);
 
   if (PyModule_AddObjectRef(m, "PyCUtensorMap", PyCUtensorMapType) < 0) {
+    Py_CLEAR(PyKernelArgType);
     Py_CLEAR(PyCUtensorMapType);
     Py_DECREF(m);
     return NULL;
   }
 
-  Py_INCREF(&PyKernelArgType);
-  PyModule_AddObject(m, "PyKernelArg", (PyObject *)&PyKernelArgType);
+  if (PyModule_AddObjectRef(m, "PyKernelArg", PyKernelArgType) < 0) {
+    Py_CLEAR(PyKernelArgType);
+    Py_CLEAR(PyCUtensorMapType);
+    Py_DECREF(m);
+    return NULL;
+  }
   PyModule_AddIntConstant(m, "ARG_CONSTEXPR", ARG_CONSTEXPR);
   PyModule_AddIntConstant(m, "ARG_KERNEL", ARG_KERNEL);
   PyModule_AddIntConstant(m, "ARG_TUPLE", ARG_TUPLE);
