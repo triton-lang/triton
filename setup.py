@@ -859,25 +859,4 @@ setup(
     python_requires=PYTHON_REQUIRES,
     classifiers=CLASSIFIERS,
     test_suite="tests",
-    extras_require={
-        "build": [
-            "cmake>=3.20,<4.0",
-            "lit",
-        ],
-        "tests": [
-            "autopep8",
-            "isort",
-            "numpy",
-            "pytest",
-            "pytest-forked",
-            "pytest-xdist",
-            "scipy>=1.7.1",
-            "llnl-hatchet",
-        ],
-        "tutorials": [
-            "matplotlib",
-            "pandas",
-            "tabulate",
-        ],
-    },
 )
