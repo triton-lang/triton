@@ -223,7 +223,9 @@ static PyObject *unloadModule(PyObject *self, PyObject *args) {
     return NULL;
   }
 
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuModuleUnload(mod));
+  Py_END_ALLOW_THREADS;
 
   return Py_None;  
 }
