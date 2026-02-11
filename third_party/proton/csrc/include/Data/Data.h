@@ -48,17 +48,12 @@ struct DataEntry {
   Data *data{nullptr};
   /// Per-node storage that owns all metric maps and the lock.
   std::reference_wrapper<MetricSet> metricSet;
-  /// Active metric maps for this entry view.
-  MetricMap *metrics{nullptr};
-  FlexibleMetricMap *flexibleMetrics{nullptr};
 
   explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
-      : id(id), phase(phase), data(data), metricSet(metricSet),
-        metrics(&metricSet.metrics),
-        flexibleMetrics(&metricSet.flexibleMetrics) {}
+      : id(id), phase(phase), data(data), metricSet(metricSet) {}
 
   template <typename FnT> decltype(auto) handle(FnT &&fn) const {
-    return std::forward<FnT>(fn)(*metrics, *flexibleMetrics,
+    return std::forward<FnT>(fn)(metricSet.get().metrics, metricSet.get().flexibleMetrics,
                                  metricSet.get().linkedMetrics,
                                  metricSet.get().linkedFlexibleMetrics);
   }
