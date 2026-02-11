@@ -103,9 +103,6 @@ jobs:
         sudo apt-get autoremove -y
         sudo apt-get clean
         df -h
-        echo "Removing large directories"
-        # deleting 15GB
-        df -h
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
@@ -125,7 +122,6 @@ jobs:
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-        -DLLVM_ENABLE_TERMINFO=OFF
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
@@ -150,7 +146,6 @@ jobs:
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-        -DLLVM_ENABLE_TERMINFO=OFF
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
@@ -217,7 +212,6 @@ jobs:
         -DCMAKE_SYSROOT=$SYSROOT \
         -DLLVM_INCLUDE_TESTS=OFF \
         -DMLIR_INCLUDE_TESTS=OFF \
-        -DLLVM_ENABLE_TERMINFO=OFF \
         llvm-project/llvm
         ninja -C llvm-project/build install
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
@@ -243,7 +237,6 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
         -DLLVM_USE_HOST_TOOLS=ON
-        -DLLVM_ENABLE_TERMINFO=OFF
         -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
