@@ -88,8 +88,9 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      pendingGraph.dataEntries[i].upsertFlexibleMetric(metricName,
-                                                       metricValueVariant);
+      auto &dataEntry = pendingGraph.dataEntries[i];
+      dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                           dataEntry.id);
     }
   }
 }
