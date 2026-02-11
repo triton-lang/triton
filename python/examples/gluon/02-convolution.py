@@ -305,8 +305,8 @@ def epilogue_partition(p):
     mbarrier.arrive(p.acc_empty_bars.index(0), count=1)
 
     # Compute output addresses: decompose M offsets into (batch, out_y, out_x)
-    offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M, layout=c_rows_layout)
-    offs_n = prog.pid_n * BLOCK_N + gl.arange(0, BLOCK_N, layout=c_cols_layout)
+    offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
+    offs_n = prog.pid_n * BLOCK_N + gl.arange(0, BLOCK_N)
 
     c_batch = offs_m // (config.out_h * config.out_w)
     c_rem = offs_m % (config.out_h * config.out_w)

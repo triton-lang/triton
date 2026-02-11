@@ -409,9 +409,9 @@ def test_tma_im2col_multi_batch():
 #         +----+----+----+----+              +----+----+----+----+
 #     H=0 |  1 |  2 |  3 |  4 |          H=0 |[17]|[18]|[19]|[20]|
 #         +----+----+----+----+              +----+----+----+----+
-#     H=1 |  5 |  6 |  7 |[8]| <-start   H=1 |[21]|[22]|[23]| 24 |
+#     H=1 |  5 |  6 |  7 |[ 8]| <-start  H=1 |[21]|[22]|[23]| 24 |
 #         +----+----+----+----+              +----+----+----+----+
-#     H=2 |[9]|[10]|[11]|[12]|           H=2 | 25 | 26 | 27 | 28 |
+#     H=2 |[ 9]|[10]|[11]|[12]|          H=2 | 25 | 26 | 27 | 28 |
 #         +----+----+----+----+              +----+----+----+----+
 #     H=3 |[13]|[14]|[15]|[16]|          H=3 | 29 | 30 | 31 | 32 |
 #         +----+----+----+----+              +----+----+----+----+
@@ -553,7 +553,8 @@ def test_tma_im2col_multi_batch_padded():
 # Key insight: The access boundary constrains the 4x4 window per batch.
 # When wrapping to the next batch, the boundary resets and padded regions
 # (H=-1 or W=-1) are filled with zeros. This is useful for convolution
-# operations that need to handle image boundaries.
+# operations, where it allows seamlessly processing pixel data across 
+# image boundaries in a single block.
 
 if __name__ == "__main__":
     run_tma_im2col_simple()
@@ -568,7 +569,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 50 + "\n")
 
 # %%
-# What is 2D Convolution?
+# What is a 2D Convolution?
 # =======================
 #
 # A 2D convolution slides a small filter (kernel) across an input image and
@@ -582,7 +583,7 @@ if __name__ == "__main__":
 #     | a | b | c |       | w0 | w1 |          | y0 | y1 |
 #     +---+---+---+       +----+----+          +----+----+
 #     | d | e | f |       | w2 | w3 |          | y2 | y3 |
-#     +---+---+---+                            +----+----+
+#     +---+---+---+       +----+----+          +----+----+
 #     | g | h | i |
 #     +---+---+---+
 #
