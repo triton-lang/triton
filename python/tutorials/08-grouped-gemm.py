@@ -225,7 +225,7 @@ tma_configs = [
 
 @triton.autotune(
     tma_configs,
-    key=['group_a_ptrs', 'group_b_ptrs', 'group_c_ptrs', 'group_size'],
+    key=['group_size'],
 )
 @triton.jit
 def grouped_matmul_tma_kernel(
