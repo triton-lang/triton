@@ -29,13 +29,9 @@ class Data;
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
-  // Direct metric accumulators keyed by metric kind.
   using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
-  // Direct flexible metric accumulators keyed by metric name.
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
-  // Linked metric accumulators keyed by linked entry id.
   using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
-  // Linked flexible metric accumulators keyed by linked entry id.
   using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
   struct MetricSet {
     // Direct metrics associated with this entry.

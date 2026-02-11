@@ -441,6 +441,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
       auto &originalGraphState = graphStates[originalGraphId];
       auto &graphState = graphStates[graphId];
+      graphState.nodeIdToState[nodeId] =
+          originalGraphState.nodeIdToState[originalNodeId];
+      auto &nodeState = graphState.nodeIdToState[nodeId];
+      nodeState.nodeId = nodeId;
+      for (const auto &[data, entryId] : nodeState.dataToEntryId) {
+        graphState.dataToEntryIdToNodeStates[data][entryId].push_back(
+            std::ref(nodeState));
+      }
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToNumWords.find(originalNodeId);
       if (originalMetricNodeIt !=
@@ -449,17 +457,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         graphState.metricNodeIdToNumWords.insert_or_assign(nodeId,
                                                            numMetricWords);
         graphState.numMetricWords += numMetricWords;
-      }
-      auto originalNodeStateIt =
-          originalGraphState.nodeIdToState.find(originalNodeId);
-      if (originalNodeStateIt != originalGraphState.nodeIdToState.end()) {
-        graphState.nodeIdToState[nodeId] = originalNodeStateIt->second;
-        auto &nodeState = graphState.nodeIdToState[nodeId];
-        nodeState.nodeId = nodeId;
-        for (const auto &[data, entryId] : nodeState.dataToEntryId) {
-          graphState.dataToEntryIdToNodeStates[data][entryId].push_back(
-              std::ref(nodeState));
-        }
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {

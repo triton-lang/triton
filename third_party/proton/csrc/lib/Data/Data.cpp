@@ -80,9 +80,7 @@ void Data::initPhaseStore(PhaseStoreBase &store) {
 }
 
 DataEntry Data::addOp(const std::string &opName) {
-  std::vector<Context> contexts;
-  if (contextSource != nullptr)
-    contexts = contextSource->getContexts();
+  std::vector<Context> contexts = contextSource->getContexts();
   if (!opName.empty())
     contexts.emplace_back(opName);
   const auto phase = currentPhase.load(std::memory_order_relaxed);
