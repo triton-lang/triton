@@ -1,4 +1,4 @@
-import triton.compiler.compiler as compiler
+gmport triton.compiler.compiler as compiler
 from triton import knobs
 import triton
 import tempfile
@@ -58,12 +58,9 @@ module {
         with open(tmp_file.name, "w") as fd_in:
             fd_in.write(add_kernel_ttir)
 
-        print(f"tmp_file = {tmp_file.name}")
         target = get_current_target()
-        # compiled_kernel = compiler.compile(str(Path(__file__).parent / "add_kernel.ttir"), target, None, None)
         compiled_kernel = compiler.compile(tmp_file.name, target, None, None)
         compiled_kernel._init_handles()
-        print(f"module = {compiled_kernel.module}")
         assert compiled_kernel.module is not None
         compiled_kernel.__del__()
         assert compiled_kernel.module is None
