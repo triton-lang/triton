@@ -351,8 +351,8 @@ void CuptiPCSampling::start(CUcontext context) {
                     });
 }
 
-void CuptiPCSampling::processPCSamplingData(
-    ConfigureData *configureData, const DataToEntryMap &dataToEntry) {
+void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
+                                            const DataToEntryMap &dataToEntry) {
   auto *pcSamplingData = &configureData->pcSamplingData;
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer
@@ -382,11 +382,11 @@ void CuptiPCSampling::processPCSamplingData(
         for (const auto &[data, baseEntry] : dataToEntry) {
           auto entry = baseEntry;
           if (lineInfo.fileName.size())
-            entry = data->addOp(
-                entry.phase, entry.id,
-                {formatFileLineFunction(
-                    lineInfo.dirName + "/" + lineInfo.fileName,
-                    lineInfo.lineNumber, lineInfo.functionName)});
+            entry =
+                data->addOp(entry.phase, entry.id,
+                            {formatFileLineFunction(
+                                lineInfo.dirName + "/" + lineInfo.fileName,
+                                lineInfo.lineNumber, lineInfo.functionName)});
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);

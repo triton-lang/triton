@@ -131,15 +131,15 @@ uint32_t processActivityKernel(
               }
             });
       } else {
-        nodeState->forEachEntry(
-            [kernel, activity, &dataPhases](Data *data, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry = data->addOp(Data::kVirtualPhase, entry.id,
-                                              {Context(kernel->name)});
-                entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            });
+        nodeState->forEachEntry([kernel, activity,
+                                 &dataPhases](Data *data, DataEntry &entry) {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry = data->addOp(Data::kVirtualPhase, entry.id,
+                                          {Context(kernel->name)});
+            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+            detail::updateDataPhases(dataPhases, data, entry.phase);
+          }
+        });
       }
     }
     // Decrease the expected kernel count
@@ -189,11 +189,11 @@ void materializeGraphNodeEntries(
                                  {Context{GraphState::captureTag}});
     for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
       for (const auto &nodeStateRef : nodeStateRefs) {
-        auto &graphNodeState = graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
+        auto &graphNodeState =
+            graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
         graphNodeState.status = nodeStateRef.get().status;
-        graphNodeState.setEntry(
-            data, DataEntry(targetEntryId, baseEntry.phase,
-                            baseEntry.metricSet.get()));
+        graphNodeState.setEntry(data, DataEntry(targetEntryId, baseEntry.phase,
+                                                baseEntry.metricSet.get()));
       }
     }
   }
@@ -670,8 +670,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
 
       enqueuePendingGraphMetrics(profiler.pendingGraphPool.get(), callbackData,
-                                 graphState,
-                                 graphNodeIdToState);
+                                 graphState, graphNodeIdToState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
