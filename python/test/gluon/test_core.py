@@ -3486,17 +3486,21 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_clc_basic(num_ctas):
+    # Launch a grid with 2x the number of CTAs as the number of SMs
+    # And ask to allocate a big chunk of smem per block (almost all
+    # the smem minus 32 i64 elements to make room for the barriers),
+    # so that we force 1 block per SM
 
     @gluon.jit
     def clc_kernel(WasLaunched, IsCancelled, ProgramId, smem_size: ttgl.constexpr):
-        # Large shared memory allocation to force 1 block per SM
-        cga_layout: ttgl.constexpr = [[0]] if ttgl.num_ctas() == 2 else []
-        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
-        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], layout)
-
-        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        # Allocate clc_mbar before clc_result to make sure that we are indeed aligning
+        # clc_result correctly after a i64 element.
         clc_mbar = mbarrier.allocate_mbarrier()
+        clc_result = ttgl.allocate_shared_memory(ttgl.int128, clc_mbar.shape, clc_mbar.layout)
         mbarrier.init(clc_mbar, count=1)
+
+        # Large shared memory allocation to force 1 block per SM
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
 
         clc.try_cancel(clc_result, clc_mbar, multicast=True)
         mbarrier.expect(clc_mbar, 16)

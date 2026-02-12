@@ -102,6 +102,7 @@ type_canonicalisation_dict = {
     "int": "i32",
     "int32": "i32",
     "int64": "i64",
+    "int128": "i128",
     # unsigned integers:
     "uint8": "u8",
     "uint16": "u16",
@@ -125,9 +126,9 @@ def canonicalize_ptr_dtype(dtype, is_const):
 
 BITWIDTH_DICT: Dict[str, int] = {
     **{f"u{n}": n
-       for n in (1, 8, 16, 32, 64)},
+       for n in (1, 8, 16, 32, 64, 128)},
     **{f"i{n}": n
-       for n in (1, 8, 16, 32, 64)},
+       for n in (1, 8, 16, 32, 64, 128)},
     **{f"fp{n}": n
        for n in (16, 32, 64)},
     **{f"fp8{suffix}": 8
