@@ -17,7 +17,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %4 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #blocked>
     %5 = tt.addptr %3, %2 : tensor<16x16x!tt.ptr<f16>, #blocked>, tensor<16x16xi32, #blocked>
     %6 = tt.addptr %4, %2 : tensor<16x16x!tt.ptr<f16>, #blocked>, tensor<16x16xi32, #blocked>
-    
+
     %7 = scf.for %arg3 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<16x16xf32, #mma>)  : i32 {
       %9 = tt.load %5 {loop.cluster = 0 : i32, loop.stage = 0 : i32} : tensor<16x16x!tt.ptr<f16>, #blocked>
       %10 = tt.load %6 {loop.cluster = 0 : i32, loop.stage = 0 : i32} : tensor<16x16x!tt.ptr<f16>, #blocked>
@@ -26,7 +26,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %13 = tt.dot %11, %12, %arg4 {loop.cluster = 1 : i32, loop.stage = 1 : i32} : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x16xf32, #mma>
       scf.yield %13 : tensor<16x16xf32, #mma>
     } {tt.scheduled_max_stage = 1 : i32}
-    
+
     tt.return
   }
 }

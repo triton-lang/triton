@@ -220,7 +220,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
   // wrap == 0 means padding > contigDim, which is not a valid configuration
-  if (wrap == 0) {    
+  if (wrap == 0) {
     return {};
   }
 
