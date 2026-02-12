@@ -242,7 +242,6 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-    scheduler_sync_bar: gl.shared_memory_descriptor
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
@@ -251,8 +250,8 @@ class PartitionArgs:
 
     @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, scheduler_sync_bar, clc_result_buffers, clc_barriers, MINOR_DIM,
-                 GRID_TILE_WIDTH, TWO_CTAS):
+                 acc_empty_bars, acc_ready_bars, clc_result_buffers, clc_barriers, MINOR_DIM, GRID_TILE_WIDTH,
+                 TWO_CTAS):
         self.a_desc = a_desc
         self.b_desc = b_desc
         self.c_desc = c_desc
@@ -263,7 +262,6 @@ class PartitionArgs:
         self.acc_bufs = acc_bufs
         self.acc_empty_bars = acc_empty_bars
         self.acc_ready_bars = acc_ready_bars
-        self.scheduler_sync_bar = scheduler_sync_bar
         self.clc_result_buffers = clc_result_buffers
         self.clc_barriers = clc_barriers
         self.MINOR_DIM = gl.constexpr(MINOR_DIM)
@@ -310,27 +308,17 @@ class Counter:
         return Counter(index, phase, self.num_barriers)
 
 
-@gluon.jit
-def scheduler_sync(sync_bar, phase):
-    mbarrier.arrive(sync_bar)
-    mbarrier.wait(sync_bar, phase)
-    return phase ^ 1
-
-
 @aggregate
 class PartitionScheduler:
     scheduler: ClcTileScheduler
-    sync_phase: gl.tensor
 
     @gluon.constexpr_function
-    def __init__(self, scheduler, sync_phase):
+    def __init__(self, scheduler):
         self.scheduler = scheduler
-        self.sync_phase = sync_phase
 
     @gluon.jit
     def initialize(scheduler):
-        sync_phase = gl.to_tensor(0)
-        return PartitionScheduler(scheduler, sync_phase)
+        return PartitionScheduler(scheduler)
 
     @gluon.jit
     def has_work(self):
@@ -346,12 +334,10 @@ class PartitionScheduler:
         return self
 
     @gluon.jit
-    def advance(self, sync_bar):
-        sync_phase = scheduler_sync(sync_bar, self.sync_phase)
+    def advance(self):
         scheduler = self.scheduler.wait_owner()
-        sync_phase = scheduler_sync(sync_bar, sync_phase)
         scheduler = scheduler.advance()
-        return PartitionScheduler(scheduler, sync_phase)
+        return PartitionScheduler(scheduler)
 
 
 @gluon.jit
@@ -378,7 +364,7 @@ def matmul_load_partition(p):
             tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
             tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
-        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        scheduler = scheduler.advance()
         i += 1
 
 
@@ -407,7 +393,7 @@ def matmul_mma_partition(p):
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        scheduler = scheduler.advance()
         i += 1
 
 
@@ -455,7 +441,7 @@ def matmul_epilogue_partition(p):
         # Signal that the accumulator slot can be reused only after all stores are done.
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        scheduler = scheduler.advance()
 
 
 @gluon.jit
@@ -464,7 +450,7 @@ def matmul_sync_partition(p):
         mbarrier.sync_cluster_init()
     scheduler = PartitionScheduler.initialize(p.get_scheduler())
     while scheduler.has_work():
-        scheduler = scheduler.advance(p.scheduler_sync_bar)
+        scheduler = scheduler.advance()
 
 
 @gluon.jit
@@ -516,15 +502,12 @@ def _matmul_kernel(
         # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
-    scheduler_sync_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(scheduler_sync_bar, count=4)
-
     clc_barriers = mbarrier.allocate_mbarrier(batch=2)
     for i in gl.static_range(2):
         mbarrier.init(clc_barriers.index(i), count=1)
 
     clc_result_shape: gl.constexpr = [clc_barriers.shape[0], 2 * clc_barriers.shape[1]]
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, scheduler_sync_bar.layout)
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, clc_barriers.layout)
 
     p = PartitionArgs(
         a_desc,
@@ -537,7 +520,6 @@ def _matmul_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
-        scheduler_sync_bar,
         clc_result_buffers,
         clc_barriers,
         GRID_MINOR_DIM,
