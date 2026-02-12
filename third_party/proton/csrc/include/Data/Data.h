@@ -53,9 +53,9 @@ struct DataEntry {
   /// `data` points to the owning data object for this entry.
   Data *data{nullptr};
   /// Per-entry storage for direct and linked metric maps.
-  std::reference_wrapper<MetricSet> metricSet;
+  MetricSet *metricSet{nullptr};
 
-  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
+  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet *metricSet)
       : id(id), phase(phase), data(data), metricSet(metricSet) {}
 
   void upsertMetric(std::unique_ptr<Metric> metric) const;

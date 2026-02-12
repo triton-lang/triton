@@ -10,7 +10,7 @@
 namespace proton {
 
 void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
-  auto &metrics = metricSet.get().metrics;
+  auto &metrics = metricSet->metrics;
   auto it = metrics.find(metric->getKind());
   if (it == metrics.end()) {
     metrics.emplace(metric->getKind(), std::move(metric));
@@ -21,7 +21,7 @@ void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
 
 void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
                                    size_t linkedId) const {
-  auto &linkedMetrics = metricSet.get().linkedMetrics;
+  auto &linkedMetrics = metricSet->linkedMetrics;
   auto &linkedMetricMap = linkedMetrics[linkedId];
   auto it = linkedMetricMap.find(metric->getKind());
   if (it == linkedMetricMap.end()) {
@@ -33,7 +33,7 @@ void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
 
 void DataEntry::upsertFlexibleMetric(const std::string &metricName,
                                      const MetricValueType &metricValue) const {
-  auto &flexibleMetrics = metricSet.get().flexibleMetrics;
+  auto &flexibleMetrics = metricSet->flexibleMetrics;
   auto it = flexibleMetrics.find(metricName);
   if (it == flexibleMetrics.end()) {
     flexibleMetrics.emplace(metricName,
@@ -53,7 +53,7 @@ void DataEntry::upsertFlexibleMetrics(
 void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
                                            const MetricValueType &metricValue,
                                            size_t linkedId) const {
-  auto &linkedFlexibleMetrics = metricSet.get().linkedFlexibleMetrics;
+  auto &linkedFlexibleMetrics = metricSet->linkedFlexibleMetrics;
   auto &linkedFlexibleMetricMap = linkedFlexibleMetrics[linkedId];
   auto it = linkedFlexibleMetricMap.find(metricName);
   if (it == linkedFlexibleMetricMap.end()) {

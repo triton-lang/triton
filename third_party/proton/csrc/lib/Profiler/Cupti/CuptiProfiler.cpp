@@ -571,7 +571,7 @@ void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
         graphNodeState.status = nodeStateRef.get().status;
         graphNodeState.addEntry(
             std::move(DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
-                                baseEntry.metricSet.get())));
+                                baseEntry.metricSet)));
       }
     }
   }
