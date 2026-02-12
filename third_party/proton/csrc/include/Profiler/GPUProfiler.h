@@ -57,6 +57,11 @@ public:
       ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
                     std::unordered_map<uint64_t, size_t>>;
 
+  static const GraphState::NodeStateTable &emptyGraphNodeIdToState() {
+    static const GraphState::NodeStateTable kEmpty{};
+    return kEmpty;
+  }
+
   struct ExternIdState {
     // ----non-graph launch fields----
     // Active entries for each data sink associated with this extern launch.
@@ -70,8 +75,9 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    // Snapshot of graph node states copied from GraphState at launch time.
-    GraphState::NodeStateTable graphNodeIdToState;
+    // Non-owning pointer to graph node states.
+    const GraphState::NodeStateTable *graphNodeIdToState{
+        &emptyGraphNodeIdToState()};
   };
 
   using ExternIdToStateMap =

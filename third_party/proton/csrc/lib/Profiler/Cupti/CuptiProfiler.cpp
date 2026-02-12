@@ -118,8 +118,7 @@ uint32_t processActivityKernel(
     }
     auto &externState = *state;
     // We have a graph creation captured
-    auto &graphNodeIdToState = externState.graphNodeIdToState;
-    auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
+    auto *nodeState = externState.graphNodeIdToState->find(kernel->graphNodeId);
     if (nodeState != nullptr && !nodeState->status.isMetricNode()) {
       const bool isMissingName = nodeState->status.isMissingName();
       if (!isMissingName) {
@@ -328,11 +327,10 @@ private:
   void
   populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
                                    const GraphState &graphState,
-                                   GraphNodeStateMap &graphNodeIdToState,
                                    std::vector<DataEntry> &graphLaunchEntries);
   void enqueueGraphMetricNodes(
       CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-      const GraphState &graphState, GraphNodeStateMap &graphNodeIdToState,
+      const GraphState &graphState, const GraphNodeStateMap &graphNodeIdToState,
       const std::vector<DataEntry> &graphLaunchEntries);
 
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
@@ -551,9 +549,7 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
 
 void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
     const std::vector<DataEntry> &dataEntries, const GraphState &graphState,
-    GraphNodeStateMap &graphNodeIdToState,
     std::vector<DataEntry> &graphLaunchEntries) {
-  graphNodeIdToState = graphState.nodeIdToState;
   for (const auto &launchEntry : dataEntries) {
     auto *data = launchEntry.data;
     if (graphState.dataSet.find(data) == graphState.dataSet.end()) {
@@ -568,7 +564,7 @@ void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
 
 void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
     CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-    const GraphState &graphState, GraphNodeStateMap &graphNodeIdToState,
+    const GraphState &graphState, const GraphNodeStateMap &graphNodeIdToState,
     const std::vector<DataEntry> &graphLaunchEntries) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
@@ -630,6 +626,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
   std::vector<DataEntry> graphLaunchEntries;
+  const GraphNodeStateMap *graphNodeIdToState =
+      &CuptiProfiler::emptyGraphNodeIdToState();
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -652,10 +650,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.
-      auto &graphNodeIdToState =
-          profiler.correlation.externIdToState[scope.scopeId]
-              .graphNodeIdToState;
-      graphNodeIdToState.clear();
+      graphNodeIdToState = &graphState.nodeIdToState;
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
@@ -664,7 +659,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
 
       populateGraphNodeStatesForLaunch(dataEntries, graphState,
-                                       graphNodeIdToState, graphLaunchEntries);
+                                       graphLaunchEntries);
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
@@ -676,7 +671,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
 
       enqueueGraphMetricNodes(profiler, callbackData, graphState,
-                              graphNodeIdToState, graphLaunchEntries);
+                              *graphNodeIdToState, graphLaunchEntries);
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
@@ -687,6 +682,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
     }
   }
+
+  profiler.correlation.externIdToState[scope.scopeId].graphNodeIdToState =
+      graphNodeIdToState;
 
   const auto &entriesForCorrelation =
       graphLaunchEntries.empty() ? dataEntries : graphLaunchEntries;
