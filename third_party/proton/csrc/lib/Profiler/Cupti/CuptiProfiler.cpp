@@ -635,35 +635,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 "[PROTON] Inconsistent phases in graph launch entries");
           }
         }
-        std::vector<std::vector<DataEntry>> metricNodeLaunchEntries;
-        metricNodeLaunchEntries.reserve(graphState.metricNodeIdToDataSet.size());
-        for (const auto &[nodeId, nodeDataSet] :
-             graphState.metricNodeIdToDataSet) {
-          auto *nodeState = graphState.nodeIdToState.find(nodeId);
-          std::vector<DataEntry> nodeLaunchEntries;
-          nodeLaunchEntries.reserve(nodeDataSet.size());
-          for (auto *data : nodeDataSet) {
-            auto launchEntryIt = std::find_if(
-                launchEntries.begin(), launchEntries.end(),
-                [data](const DataEntry &entry) { return entry.data == data; });
-            if (launchEntryIt == launchEntries.end()) {
-              // This data was not enabled at graph capture time
-              continue;
-            }
-            auto linkedEntryIdIt = nodeState->dataToEntryId.find(data);
-            auto linkedLaunchEntry = *launchEntryIt;
-            linkedLaunchEntry.id = linkedEntryIdIt->second;
-            nodeLaunchEntries.push_back(linkedLaunchEntry);
-          }
-          metricNodeLaunchEntries.push_back(std::move(nodeLaunchEntries));
-        }
         const auto numMetricNodes = graphState.metricNodeIdToDataSet.size();
         const auto numMetricWords = graphState.numMetricWords;
         if (callbackData->context != nullptr)
           profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
-        profiler.pendingGraphPool->push(
-            phase, std::move(metricNodeLaunchEntries), numMetricNodes,
-            numMetricWords);
+        profiler.pendingGraphPool->push(phase, launchEntries,
+                                        &graphState.metricNodeIdToDataSet,
+                                        &graphState.nodeIdToState,
+                                        numMetricNodes, numMetricWords);
       }
       if (timingEnabled) {
         auto t1 = Clock::now();
