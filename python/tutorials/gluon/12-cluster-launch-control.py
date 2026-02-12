@@ -64,6 +64,14 @@ class ClcTileScheduler:
     barrier: gl.shared_memory_descriptor
     phase: gl.tensor
 
+    @gluon.constexpr_function
+    def __init__(self, has_work, tile_id, clc_result_buf, barrier, phase):
+        self.has_work = has_work
+        self.tile_id = tile_id
+        self.clc_result_buf = clc_result_buf
+        self.barrier = barrier
+        self.phase = phase
+
     @gluon.jit
     def initialize(M, N, BLOCK_M, BLOCK_N):
         has_work = gl.to_tensor(True)
@@ -99,6 +107,12 @@ class StaticTileScheduler:
     has_work: gl.tensor
     tile_id: gl.tensor
     num_tiles: gl.tensor
+
+    @gluon.constexpr_function
+    def __init__(self, has_work, tile_id, num_tiles):
+        self.has_work = has_work
+        self.tile_id = tile_id
+        self.num_tiles = num_tiles
 
     @gluon.jit
     def initialize(M, N, BLOCK_M, BLOCK_N):

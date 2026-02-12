@@ -123,7 +123,6 @@ class DependenciesFinder(ast.NodeVisitor):
             return
 
         if getattr(val, "__triton_aggregate__", False):
-            self.hasher.update(str(val.__annotations__).encode("utf-8"))
             for attr in val.hash_attrs:
                 self.record_reference(attr)
             return

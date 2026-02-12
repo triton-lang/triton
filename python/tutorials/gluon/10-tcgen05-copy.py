@@ -239,6 +239,28 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     SchedulerImpl: gl.constexpr
 
+    @gluon.constexpr_function
+    def __init__(self, a_desc, b_desc, c_desc, d_ptr, d_stride_m, d_stride_n, a_bufs, b_bufs, load_empty_bars,
+                 load_ready_bars, c_buf, c_empty_bar, c_ready_bar, acc_bufs, acc_empty_bars, acc_ready_bars,
+                 SchedulerImpl):
+        self.a_desc = a_desc
+        self.b_desc = b_desc
+        self.c_desc = c_desc
+        self.d_ptr = d_ptr
+        self.d_stride_m = d_stride_m
+        self.d_stride_n = d_stride_n
+        self.a_bufs = a_bufs
+        self.b_bufs = b_bufs
+        self.load_empty_bars = load_empty_bars
+        self.load_ready_bars = load_ready_bars
+        self.c_buf = c_buf
+        self.c_empty_bar = c_empty_bar
+        self.c_ready_bar = c_ready_bar
+        self.acc_bufs = acc_bufs
+        self.acc_empty_bars = acc_empty_bars
+        self.acc_ready_bars = acc_ready_bars
+        self.SchedulerImpl = gl.constexpr(SchedulerImpl)
+
 
 @gluon.jit
 def matmul_accumulate_load_partition(p):
