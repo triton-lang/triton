@@ -30,7 +30,7 @@ std::optional<SmallVector<unsigned, 3>>
 mmaVersionToInstrShape(int version, const ArrayRef<int64_t> &shape,
                        Type eltType, int numWarps) {
   if (version == 1)
-    return {16, 16};
+    return SmallVector<unsigned, 3>{16, 16};
   else if (version == 2) {
     auto rank = shape.size();
     if (rank < 2)
@@ -67,7 +67,7 @@ mmaVersionToInstrShape(int version, const ArrayRef<int64_t> &shape,
     unsigned maxN = std::max<unsigned>(shape[1] / nWarps, 8);
     for (auto n : validN) {
       if (shape[1] % n == 0 && n <= maxN) {
-        return {m, n, k};
+        return SmallVector<unsigned, 3>{m, n, k};
       }
     }
 
@@ -82,7 +82,7 @@ mmaVersionToInstrShape(int version, const ArrayRef<int64_t> &shape,
     //      m = 64;
     unsigned n = shape[1] >= 256 ? 256 : shape[1];
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();
-    return {m, n, k};
+    return SmallVector<unsigned, 3>{m, n, k};
   }
   return std::nullopt;
 }

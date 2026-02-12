@@ -341,7 +341,8 @@ createMMAEncodingForDot(DotOpInterface dotOp, PatternRewriter &rewriter,
   auto newAcc =
       ConvertLayoutOp::create(rewriter, oldAcc.getLoc(), newRetType, oldAcc);
 
-  return {mmaEnc, newRetType, newAcc, versionMajor, versionMinor};
+  return MMAEncodingResult{
+      mmaEnc, newRetType, newAcc, versionMajor, versionMinor};
 }
 
 // Common operand conversion
