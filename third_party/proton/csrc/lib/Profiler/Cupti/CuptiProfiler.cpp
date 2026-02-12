@@ -125,21 +125,35 @@ uint32_t processActivityKernel(
       // We have a graph creation captured
       if (!nodeState->status.isMetricNode()) {
         const bool isMissingName = nodeState->status.isMissingName();
-        for (auto &entry : state->dataEntries) {
-          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
-          if (linkedIdIt == nodeState->dataToEntryId.end())
-            continue;
+        const auto &dataEntries = state->dataEntries;
+        const auto &dataToEntryId = nodeState->dataToEntryId;
+        auto emitLinkedMetric = [&](const DataEntry &entry, size_t linkedId) {
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             if (isMissingName) {
-              entry.upsertLinkedMetric(std::move(kernelMetric),
-                                       linkedIdIt->second);
+              entry.upsertLinkedMetric(std::move(kernelMetric), linkedId);
             } else {
-              auto childEntry =
-                  entry.data->addOp(Data::kVirtualPhase, linkedIdIt->second,
-                                    {Context(kernel->name)});
+              auto childEntry = entry.data->addOp(Data::kVirtualPhase, linkedId,
+                                                  {Context(kernel->name)});
               entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
             }
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          }
+        };
+
+        // Fast path: common case where both collections contain exactly one item.
+        if (dataEntries.size() == 1 && dataToEntryId.size() == 1) {
+          const auto &entry = dataEntries.front();
+          const auto &[data, linkedId] = *dataToEntryId.begin();
+          if (entry.data == data) {
+            emitLinkedMetric(entry, linkedId);
+          }
+        } else {
+          for (const auto &entry : dataEntries) {
+            auto linkedIdIt = dataToEntryId.find(entry.data);
+            if (linkedIdIt == dataToEntryId.end()) {
+              continue;
+            }
+            emitLinkedMetric(entry, linkedIdIt->second);
           }
         }
       }
