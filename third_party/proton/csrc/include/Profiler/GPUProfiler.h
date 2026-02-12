@@ -9,7 +9,6 @@
 #include "Utility/Atomic.h"
 #include "Utility/Env.h"
 #include "Utility/Map.h"
-#include "Utility/Table.h"
 
 #include <atomic>
 #include <chrono>
@@ -71,31 +70,9 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    struct GraphNodeState {
-      // Per-node launch status bits (missing-name / metric-node).
-      NodeStatus status{};
-
-      // If the node is launched as a metric kernel, ignore its timing data.
-      bool isMetricNode() const { return status.isMetricNode(); }
-      bool isMissingName() const { return status.isMissingName(); }
-
-      void addLinkedEntryId(size_t linkedEntryId) {
-        linkedEntryIds.push_back(linkedEntryId);
-      }
-
-      template <typename FnT> void forEachLinkedEntryId(FnT &&fn) {
-        for (auto linkedEntryId : linkedEntryIds)
-          fn(linkedEntryId);
-      }
-
-      // Graph-node linked ids aligned to ExternIdState::dataEntries.
-      std::vector<size_t> linkedEntryIds;
-    };
-
-    using GraphNodeStateTable = RangeTable<GraphNodeState>;
-
-    // graphNodeId -> per-node entries across active data sinks
-    GraphNodeStateTable graphNodeIdToState;
+    // Snapshot of graph node states copied from GraphState at launch time.
+    // nodeId -> graph node metadata/state
+    std::map<uint64_t, GraphState::NodeState> graphNodeIdToState;
   };
 
   using ExternIdToStateMap =
