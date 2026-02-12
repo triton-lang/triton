@@ -23,7 +23,25 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   };
 
   for (const auto &pendingGraph : pendingGraphs) {
+    if (pendingGraph.metricNodeIdToDataSet == nullptr ||
+        pendingGraph.nodeIdToState == nullptr) {
+      throw std::runtime_error("[PROTON] Missing graph metric-node state");
+    }
+    const auto &metricNodeIdToDataSet = *pendingGraph.metricNodeIdToDataSet;
+    auto metricNodeIt = metricNodeIdToDataSet.begin();
     for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
+      if (metricNodeIt == metricNodeIdToDataSet.end()) {
+        throw std::runtime_error(
+            "[PROTON] Missing graph metric-node mapping for pending graph");
+      }
+      const auto nodeId = metricNodeIt->first;
+      const auto &nodeDataSet = metricNodeIt->second;
+      auto *nodeState = pendingGraph.nodeIdToState->find(nodeId);
+      if (nodeState == nullptr) {
+        throw std::runtime_error("[PROTON] Missing graph node state for node id " +
+                                 std::to_string(nodeId));
+      }
+
       const uint64_t metricId = readWord(wordOffset);
       wordOffset = (wordOffset + 1) % capacityWords;
 
@@ -88,16 +106,18 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      for (size_t j = 0; j < pendingGraph.graphLaunchEntries.size(); ++j) {
-        auto &dataEntry = pendingGraph.graphLaunchEntries[j];
-        if (j >= pendingGraph.linkedEntryIds.size() ||
-            i >= pendingGraph.linkedEntryIds[j].size()) {
-          throw std::runtime_error(
-              "[PROTON] Missing linked entry IDs for graph metric node");
+      for (auto &dataEntry : pendingGraph.graphLaunchEntries) {
+        if (nodeDataSet.find(dataEntry.data) == nodeDataSet.end()) {
+          continue;
+        }
+        auto linkedEntryIdIt = nodeState->dataToEntryId.find(dataEntry.data);
+        if (linkedEntryIdIt == nodeState->dataToEntryId.end()) {
+          throw std::runtime_error("[PROTON] Missing graph linked entry for data");
         }
         dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                             pendingGraph.linkedEntryIds[j][i]);
+                                             linkedEntryIdIt->second);
       }
+      ++metricNodeIt;
     }
   }
 }
@@ -105,7 +125,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
 void PendingGraphPool::push(
     size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
-    const std::vector<std::vector<size_t>> &linkedEntryIds, size_t numNodes,
+    const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
+    const GraphState::NodeStateTable *nodeIdToState, size_t numNodes,
     size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
@@ -125,7 +146,8 @@ void PendingGraphPool::push(
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
-    slot->queue->push(numNodes, numWords, graphLaunchEntries, linkedEntryIds);
+    slot->queue->push(numNodes, numWords, graphLaunchEntries,
+                      metricNodeIdToDataSet, nodeIdToState);
   }
   {
     std::lock_guard<std::mutex> lock(mutex);

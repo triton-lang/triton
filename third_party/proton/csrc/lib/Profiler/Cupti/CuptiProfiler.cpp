@@ -434,8 +434,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           auto metricKernelNumWords =
               threadState.metricKernelNumWordsQueue.front();
           threadState.metricKernelNumWordsQueue.pop_front();
-          graphState.metricNodeIdToNumWords.insert_or_assign(
-              nodeId, metricKernelNumWords);
+          nodeState.numWords = metricKernelNumWords;
           graphState.numMetricWords += metricKernelNumWords;
         }
         for (auto *data : profiler.dataSet) {
@@ -447,6 +446,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           graphState.dataSet.insert(data);
           nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+          if (nodeState.status.isMetricNode()) {
+            graphState.metricNodeIdToDataSet[nodeId].insert(data);
+          }
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
@@ -466,13 +468,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       nodeState.nodeId = nodeId;
       graphState.dataSet = originalGraphState.dataSet;
       auto originalMetricNodeIt =
-          originalGraphState.metricNodeIdToNumWords.find(originalNodeId);
+          originalGraphState.metricNodeIdToDataSet.find(originalNodeId);
       if (originalMetricNodeIt !=
-          originalGraphState.metricNodeIdToNumWords.end()) {
-        const auto numMetricWords = originalMetricNodeIt->second;
-        graphState.metricNodeIdToNumWords.insert_or_assign(nodeId,
-                                                           numMetricWords);
-        graphState.numMetricWords += numMetricWords;
+          originalGraphState.metricNodeIdToDataSet.end()) {
+        graphState.metricNodeIdToDataSet.insert_or_assign(
+            nodeId, originalMetricNodeIt->second);
+        graphState.numMetricWords += nodeState.numWords;
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
@@ -480,9 +481,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.numNodes--;
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-    graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
+    auto *nodeState = graphState.nodeIdToState.find(nodeId);
+    if (nodeState != nullptr) {
+      graphState.numMetricWords -= nodeState->numWords;
+    }
     graphState.nodeIdToState.erase(nodeId);
-    graphState.metricNodeIdToNumWords.erase(nodeId);
+    graphState.metricNodeIdToDataSet.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
@@ -566,11 +570,10 @@ void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
     CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
     const GraphState &graphState, const GraphNodeStateMap &graphNodeIdToState,
     const std::vector<DataEntry> &graphLaunchEntries) {
-  if (graphState.metricNodeIdToNumWords.empty()) {
+  if (graphState.metricNodeIdToDataSet.empty()) {
     return;
   }
 
-  std::vector<std::vector<size_t>> linkedEntryIds(graphLaunchEntries.size());
   auto phase = Data::kNoCompletePhase;
   for (const auto &entry : graphLaunchEntries) {
     if (phase == Data::kNoCompletePhase) {
@@ -580,28 +583,14 @@ void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
           "[PROTON] Inconsistent phases in graph launch entries");
     }
   }
-  for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
-    auto nodeId = metricNode.first;
-    auto *nodeState = graphNodeIdToState.find(nodeId);
-    if (nodeState == nullptr) {
-      throw std::runtime_error("[PROTON] Missing graph node state for node id " +
-                               std::to_string(nodeId));
-    }
-    for (size_t dataIdx = 0; dataIdx < graphLaunchEntries.size(); ++dataIdx) {
-      const auto &entry = graphLaunchEntries[dataIdx];
-      auto linkedEntryIdIt = nodeState->dataToEntryId.find(entry.data);
-      if (linkedEntryIdIt == nodeState->dataToEntryId.end()) {
-        throw std::runtime_error("[PROTON] Missing graph linked entry for data");
-      }
-      linkedEntryIds[dataIdx].push_back(linkedEntryIdIt->second);
-    }
-  }
-  const auto numMetricNodes = graphState.metricNodeIdToNumWords.size();
+  const auto numMetricNodes = graphState.metricNodeIdToDataSet.size();
   const auto numMetricWords = graphState.numMetricWords;
   if (callbackData->context != nullptr)
     profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
-  profiler.pendingGraphPool->push(phase, graphLaunchEntries, linkedEntryIds,
-                                  numMetricNodes, numMetricWords);
+  profiler.pendingGraphPool->push(phase, graphLaunchEntries,
+                                  &graphState.metricNodeIdToDataSet,
+                                  &graphNodeIdToState, numMetricNodes,
+                                  numMetricWords);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(

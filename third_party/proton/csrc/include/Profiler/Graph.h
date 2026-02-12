@@ -56,6 +56,9 @@ struct GraphState {
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
+    // Number of uint64 words written by this node in the metric buffer.
+    // Non-metric nodes keep this at 0.
+    size_t numWords{};
   };
   // Data objects that were enabled during graph capture.
   std::set<Data *> dataSet;
@@ -63,8 +66,9 @@ struct GraphState {
   // This table only grows capacity and never shrinks.
   using NodeStateTable = RangeTable<NodeState, uint64_t>;
   NodeStateTable nodeIdToState;
-  // Metric nodes and their per-node metric words, ordered by node id.
-  std::map<uint64_t, size_t> metricNodeIdToNumWords;
+  // Metric nodes and their participating data sinks, ordered by node id.
+  using MetricNodeIdToDataSetMap = std::map<uint64_t, std::set<Data *>>;
+  MetricNodeIdToDataSetMap metricNodeIdToDataSet;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -80,9 +84,11 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    // data -> metric target entries aligned with graph metric-node order.
+    // Launch entries to receive graph metric updates.
     std::vector<DataEntry> graphLaunchEntries;
-    std::vector<std::vector<size_t>> linkedEntryIds;
+    // Non-owning pointers to graph state used to resolve linked entries.
+    const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet{};
+    const GraphState::NodeStateTable *nodeIdToState{};
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -103,9 +109,12 @@ struct PendingGraphQueue {
 
   void push(size_t numNodes, size_t numWords,
             const std::vector<DataEntry> &graphLaunchEntries,
-            const std::vector<std::vector<size_t>> &linkedEntryIds) {
-    pendingGraphs.emplace_back(
-        PendingGraph{numNodes, numWords, graphLaunchEntries, linkedEntryIds});
+            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
+            const GraphState::NodeStateTable *nodeIdToState) {
+    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords,
+                                            graphLaunchEntries,
+                                            metricNodeIdToDataSet,
+                                            nodeIdToState});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -117,8 +126,9 @@ public:
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
   void push(size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
-            const std::vector<std::vector<size_t>> &linkedEntryIds,
-            size_t numNodes, size_t numWords);
+            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
+            const GraphState::NodeStateTable *nodeIdToState, size_t numNodes,
+            size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
