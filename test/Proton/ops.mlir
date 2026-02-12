@@ -31,7 +31,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-NEXT: proton_gpu.finalize
     // CHECK-NEXT: tt.return
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
-    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, backend = "proton", nbytes = 384 : i32} : !tt.ptr<i32>
+    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, "3p_allocation" = true, nbytes = 384 : i32} : !tt.ptr<i32>
     proton_gpu.initialize %1 : !tt.ptr<i32>
     %seg = proton_gpu.segment_alloc %0 : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> !proton_gpu.segment<256, #shared, warp>
     proton_gpu.init_ctx %1 : !tt.ptr<i32>

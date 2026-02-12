@@ -558,13 +558,14 @@ struct GlobalScratchAllocOpConversion
       return failure();
     }
 
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto offset = opOffsetAttr.getValue().getZExtValue();
+    Value allocOffset = b.i32_val(offset);
+
     ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
     auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx, 1);
-    assert(op->hasAttr("offset"));
-    size_t offset =
-        cast<IntegerAttr>(op->getAttr("offset")).getValue().getZExtValue();
-
-    Value allocOffset = b.i32_val(offset);
 
     // See NOTE: [Additional Function Arguments]
     if (!LLVM::isKernel(funcOp)) {
@@ -585,12 +586,10 @@ struct GlobalScratchAllocOpConversion
     assert(allocSizeAttr);
 
     Value linearId = getLinearId(loc, rewriter);
-
     auto allocSize = allocSizeAttr.getValue().getZExtValue();
     Value gmemOffset =
         b.add(allocOffset, b.mul(linearId, b.i32_val(allocSize)));
-
-    auto ptr = b.gep(ptrTy, i8_ty, gmemBase, gmemOffset);
+    Value ptr = b.gep(ptrTy, i8_ty, gmemBase, gmemOffset);
 
     rewriter.replaceOp(op, ptr);
     return success();

@@ -16,12 +16,46 @@ static int32_t roundUp(int32_t val, int32_t step) {
   return t - (t % step);
 }
 
+struct ScratchMemoryInfo {
+  int32_t offset = 0;
+  uint32_t largestAlignment = 1;
+};
+
+static void assignOffset(Operation *op, OpBuilder &builder,
+                         ScratchMemoryInfo &memInfo, uint32_t nbytes,
+                         uint32_t align, StringRef offsetAttrName) {
+  if (nbytes == 0)
+    return;
+  memInfo.offset = roundUp(memInfo.offset, align);
+  op->setAttr(offsetAttrName, builder.getI32IntegerAttr(memInfo.offset));
+  memInfo.offset += nbytes;
+  memInfo.largestAlignment = std::max(memInfo.largestAlignment, align);
+}
+
+static void setModuleScratchAttrs(Operation *op, OpBuilder &builder,
+                                  const ScratchMemoryInfo &globalMemInfo,
+                                  const ScratchMemoryInfo &profileMemInfo) {
+  int32_t totalGlobalMemorySize =
+      roundUp(globalMemInfo.offset, globalMemInfo.largestAlignment);
+  int32_t totalProfileMemorySize =
+      roundUp(profileMemInfo.offset, profileMemInfo.largestAlignment);
+  op->setAttr("ttg.global_scratch_memory_size",
+              builder.getI32IntegerAttr(totalGlobalMemorySize));
+  op->setAttr("ttg.global_scratch_memory_alignment",
+              builder.getI32IntegerAttr(globalMemInfo.largestAlignment));
+  op->setAttr("ttg.profile_scratch_memory_size",
+              builder.getI32IntegerAttr(totalProfileMemorySize));
+  op->setAttr("ttg.profile_scratch_memory_alignment",
+              builder.getI32IntegerAttr(profileMemInfo.largestAlignment));
+}
+
 static void allocateGMem(Operation *parentOp,
                          llvm::SetVector<Operation *> &callStack) {
   // Recursively visit any dependency functions
   parentOp->walk([&](triton::CallOp call) {
     auto callable = call.resolveCallable();
-    if (!callable->hasAttr("ttg.global_scratch_memory_size")) {
+    if (!callable->hasAttr("ttg.global_scratch_memory_size") ||
+        !callable->hasAttr("ttg.profile_scratch_memory_size")) {
       auto inserted = callStack.insert(parentOp);
       assert(inserted && "call cycle detected");
       allocateGMem(callable, callStack);
@@ -31,45 +65,42 @@ static void allocateGMem(Operation *parentOp,
 
   MLIRContext *ctx = parentOp->getContext();
   OpBuilder builder(ctx);
-  int32_t offset = 0;
-  uint32_t largestAlignment = 1;
+  ScratchMemoryInfo globalMemInfo;
+  ScratchMemoryInfo profileMemInfo;
 
   // Dumb allocation that ignores liveness and makes no attempt to minimize
   // padding
   // TODO: Use a real algorithm
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
-    uint32_t nbytes = 0;
-    uint32_t align = 0;
     if (auto alloc = dyn_cast<triton::gpu::GlobalScratchAllocOp>(op)) {
-      if (alloc.getBackend() != "default")
-        return;
-      nbytes = alloc.getNbytes();
-      align = alloc.getAlignment();
+      ScratchMemoryInfo &memInfo =
+          alloc->hasAttr("3p_allocation") ? profileMemInfo : globalMemInfo;
+      assignOffset(op, builder, memInfo, alloc.getNbytes(),
+                   alloc.getAlignment(), "ttg.global_scratch_memory_offset");
     } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {
       auto callable = callOp.resolveCallable();
-      auto nbytes_attr = callable->getAttrOfType<IntegerAttr>(
+      auto globalNbytesAttr = callable->getAttrOfType<IntegerAttr>(
           "ttg.global_scratch_memory_size");
-      auto align_attr = callable->getAttrOfType<IntegerAttr>(
+      auto globalAlignAttr = callable->getAttrOfType<IntegerAttr>(
           "ttg.global_scratch_memory_alignment");
-      assert(nbytes_attr);
-      assert(align_attr);
+      auto profileNbytesAttr = callable->getAttrOfType<IntegerAttr>(
+          "ttg.profile_scratch_memory_size");
+      auto profileAlignAttr = callable->getAttrOfType<IntegerAttr>(
+          "ttg.profile_scratch_memory_alignment");
+      assert(globalNbytesAttr && globalAlignAttr && profileNbytesAttr &&
+             profileAlignAttr);
 
-      nbytes = nbytes_attr.getValue().getZExtValue();
-      align = align_attr.getValue().getZExtValue();
-    }
-    if (nbytes > 0) {
-      offset = roundUp(offset, align);
-      op->setAttr("ttg.global_scratch_memory_offset",
-                  builder.getI32IntegerAttr(offset));
-      offset += nbytes;
-      largestAlignment = std::max(largestAlignment, align);
+      assignOffset(op, builder, globalMemInfo,
+                   globalNbytesAttr.getValue().getZExtValue(),
+                   globalAlignAttr.getValue().getZExtValue(),
+                   "ttg.global_scratch_memory_offset");
+      assignOffset(op, builder, profileMemInfo,
+                   profileNbytesAttr.getValue().getZExtValue(),
+                   profileAlignAttr.getValue().getZExtValue(),
+                   "ttg.profile_scratch_memory_offset");
     }
   });
-  int32_t totalMemorySize = roundUp(offset, largestAlignment);
-  parentOp->setAttr("ttg.global_scratch_memory_size",
-                    builder.getI32IntegerAttr(totalMemorySize));
-  parentOp->setAttr("ttg.global_scratch_memory_alignment",
-                    builder.getI32IntegerAttr(largestAlignment));
+  setModuleScratchAttrs(parentOp, builder, globalMemInfo, profileMemInfo);
 }
 
 namespace {
@@ -93,10 +124,18 @@ public:
             func->getAttrOfType<IntegerAttr>("ttg.global_scratch_memory_size");
         auto align = func->getAttrOfType<IntegerAttr>(
             "ttg.global_scratch_memory_alignment");
+        auto profileSize =
+            func->getAttrOfType<IntegerAttr>("ttg.profile_scratch_memory_size");
+        auto profileAlign = func->getAttrOfType<IntegerAttr>(
+            "ttg.profile_scratch_memory_alignment");
         assert(size);
         assert(align);
+        assert(profileSize);
+        assert(profileAlign);
         mod->setAttr("ttg.global_scratch_memory_size", size);
         mod->setAttr("ttg.global_scratch_memory_alignment", align);
+        mod->setAttr("ttg.profile_scratch_memory_size", profileSize);
+        mod->setAttr("ttg.profile_scratch_memory_alignment", profileAlign);
       }
     });
     assert(seenKernel);

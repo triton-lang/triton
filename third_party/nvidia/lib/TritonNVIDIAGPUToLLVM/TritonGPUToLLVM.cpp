@@ -74,7 +74,7 @@ public:
     addLegalOp<triton::gpu::WarpReturnOp>();
     addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
         [](triton::gpu::GlobalScratchAllocOp op) {
-          return op.getBackend() != "default";
+          return op->hasAttr("3p_allocation");
         });
   }
 };

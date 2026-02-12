@@ -63,7 +63,7 @@ public:
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
     addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
         [](triton::gpu::GlobalScratchAllocOp op) {
-          return op.getBackend() != "default";
+          return op->hasAttr("3p_allocation");
         });
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();

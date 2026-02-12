@@ -280,7 +280,9 @@ public:
 
     Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
         builder, loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment, "proton");
+        allocProfileScratchSize, profileScratchAlignment);
+    profileMem.getDefiningOp()->setAttr("3p_allocation",
+                                        builder.getBoolAttr(true));
     gpu::InitializeOp::create(builder, loc, profileMem);
 
     Value segment;
