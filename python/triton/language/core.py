@@ -146,9 +146,6 @@ class base_value:
     """
     type: base_type
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        raise NotImplementedError
-
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         """Flatten frontend value into a sequence of mlir handles, which are appended
         to the output list
@@ -222,9 +219,6 @@ class constexpr(base_value):
 
     def __hash__(self):
         return hash((self.value, self.type))
-
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        return
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -887,9 +881,6 @@ class tensor(base_value):
         self.dtype = type.scalar
         self.shape = tuple([constexpr(s) for s in self.shape])
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
-
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
 
@@ -1332,15 +1323,6 @@ class tuple(base_value):
     def __len__(self):
         return len(self.values)
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        fields = self.type.fields
-        if fields is not None:
-            for field, v in zip(fields, self.values):
-                v._set_name(builder, f"{name}.{field}")
-        else:
-            for i, v in enumerate(self.values):
-                v._set_name(builder, f"{name}.{i}")
-
     def _flatten_ir(self, handles: List[ir.value]):
         for v in self.values:
             v._flatten_ir(handles)
@@ -1398,9 +1380,6 @@ class tensor_descriptor_base(base_value):
 
         self.handle = handle  # IR handle
         self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
-
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -1525,13 +1504,8 @@ class tensor_descriptor(tensor_descriptor_base):
             strides_type=self.strides.type,
         )
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        super()._set_name(builder, name)
-        self.shape._set_name(builder, name + ".shape")
-        self.strides._set_name(builder, name + ".stride")
-
     def _flatten_ir(self, handles: List[ir.value]) -> None:
-        super()._flatten_ir(handles)
+        handles.append(self.handle)
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
@@ -1650,10 +1624,6 @@ def _aggregate(cls):
             if not isinstance(value, cls.__annotations__[name]):
                 raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
-
-        def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in cls.__annotations__.keys():
-                getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
             for name in cls.__annotations__.keys():

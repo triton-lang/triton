@@ -7,7 +7,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper_or_newer, is_interpreter
+from triton._internal_testing import is_interpreter
 from triton._filecheck import run_filecheck
 
 
@@ -313,45 +313,6 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
                                   constexprs={"BLOCK_SIZE": 16}))
 
     check_template = inspect.getsource(kernel_basic.fn)
-    run_filecheck("placeholder", h.asm["ttir"], check_template)
-
-    if is_hopper_or_newer():
-        # CUDA backend creates aggregate tensor descriptor parameters
-
-        @triton.jit
-        def kernel_tensordesc_param(foo):
-            # CHECK-LABEL: tt.func public @kernel_tensordesc_param
-            # CHECK-SAME: %foo: !tt.tensordesc<tensor<32x64xf16>>
-            # CHECK-SAME: %foo.shape.0: i32
-            # CHECK-SAME: %foo.shape.1: i32
-            # CHECK-SAME: %foo.stride.0: i64
-            # CHECK-SAME: %foo.stride.1: i64
-            foo
-
-        h = triton.compile(
-            triton.compiler.ASTSource(fn=kernel_tensordesc_param, signature={"foo": "tensordesc<fp16[32,64]>"},
-                                      constexprs={}))
-
-        check_template = inspect.getsource(kernel_tensordesc_param.fn)
-        run_filecheck("placeholder", h.asm["ttir"], check_template)
-
-    from typing import NamedTuple
-
-    @triton.jit
-    def kernel_tuple_param(foo):
-        # CHECK-LABEL: tt.func public @kernel_tuple_param
-        # CHECK-SAME: %foo.x: i32
-        # CHECK-SAME: %foo.y: f64
-        foo
-
-    class Point(NamedTuple):
-        x: str
-        y: str
-
-    foo_tuple = Point("i32", "fp64")
-    h = triton.compile(triton.compiler.ASTSource(fn=kernel_tuple_param, signature={"foo": foo_tuple}, constexprs={}))
-
-    check_template = inspect.getsource(kernel_tuple_param.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
     @triton.jit

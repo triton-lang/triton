@@ -104,11 +104,6 @@ class _tensor_descriptor_value_base(base_value):
         self.strides = ttgl.tuple(strides)
         self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout)
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
-        self.shape._set_name(builder, name + ".shape")
-        self.strides._set_name(builder, name + ".stride")
-
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
         self.shape._flatten_ir(handles)

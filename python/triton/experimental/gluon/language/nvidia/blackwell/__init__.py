@@ -215,9 +215,6 @@ class tensor_memory_descriptor(base_value):
         self.handle = handle
         self.type = tensor_memory_descriptor_type(element_ty, shape, layout, alloc_shape)
 
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
-
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
 
