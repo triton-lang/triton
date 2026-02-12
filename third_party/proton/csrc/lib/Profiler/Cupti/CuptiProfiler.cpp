@@ -177,6 +177,61 @@ uint32_t processActivity(
   return correlationId;
 }
 
+void materializeGraphNodeEntries(
+    const DataToEntryMap &dataToEntry, const GraphState &graphState,
+    CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
+  for (const auto &[data, launchEntry] : dataToEntry) {
+    auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
+    if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
+      // This is a new data which was not enabled during graph capture
+      continue;
+    auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
+                                 {Context{GraphState::captureTag}});
+    for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
+      for (const auto &nodeStateRef : nodeStateRefs) {
+        auto &graphNodeState = graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
+        graphNodeState.status = nodeStateRef.get().status;
+        graphNodeState.setEntry(
+            data, DataEntry(targetEntryId, baseEntry.phase,
+                            baseEntry.metricSet.get()));
+      }
+    }
+  }
+}
+
+void enqueuePendingGraphMetrics(
+    PendingGraphPool *pendingGraphPool, const CUpti_CallbackData *callbackData,
+    const GraphState &graphState,
+    CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
+  if (graphState.metricNodeIdToNumWords.empty()) {
+    return;
+  }
+  std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
+  size_t phase = Data::kNoCompletePhase;
+  for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
+    auto nodeId = metricNode.first;
+    auto *nodeState = graphNodeIdToState.find(nodeId);
+    if (!nodeState) // The node has been skipped during graph capture
+      continue;
+    nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
+      metricNodeEntries[data].push_back(entry);
+      if (phase == Data::kNoCompletePhase) {
+        phase = entry.phase;
+      } else if (phase != entry.phase) {
+        throw std::runtime_error(
+            "[PROTON] Inconsistent phases in graph metric nodes");
+      }
+    });
+  }
+
+  const auto numMetricNodes = graphState.metricNodeIdToNumWords.size();
+  const auto numMetricWords = graphState.numMetricWords;
+  if (callbackData->context != nullptr)
+    pendingGraphPool->flushIfNeeded(numMetricWords);
+  pendingGraphPool->push(phase, metricNodeEntries, numMetricNodes,
+                         numMetricWords);
+}
+
 constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
     CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch,
     CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz,
@@ -602,24 +657,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      for (const auto &[data, launchEntry] : dataToEntry) {
-        auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
-        if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end()) {
-          continue;
-        }
-        auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
-                                     {Context{GraphState::captureTag}});
-        for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
-          for (const auto &nodeStateRef : nodeStateRefs) {
-            auto &graphNodeState =
-                graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
-            graphNodeState.status = nodeStateRef.get().status;
-            graphNodeState.setEntry(
-                data, DataEntry(targetEntryId, baseEntry.phase,
-                                baseEntry.metricSet.get()));
-          }
-        }
-      }
+      materializeGraphNodeEntries(dataToEntry, graphState, graphNodeIdToState);
+
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
@@ -630,33 +669,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
-      if (!graphStates[graphExecId].metricNodeIdToNumWords.empty()) {
-        auto &graphExecState = graphStates[graphExecId];
-        std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
-        auto phase = Data::kNoCompletePhase;
-        for (const auto &metricNode : graphExecState.metricNodeIdToNumWords) {
-          auto nodeId = metricNode.first;
-          auto *nodeState = graphNodeIdToState.find(nodeId);
-          if (!nodeState) // The node has been skipped during graph capture
-            continue;
-          nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
-            metricNodeEntries[data].push_back(entry);
-            if (phase == Data::kNoCompletePhase) {
-              phase = entry.phase;
-            } else if (phase != entry.phase) {
-              throw std::runtime_error(
-                  "[PROTON] Inconsistent phases in graph metric nodes");
-            }
-          });
-        }
-        const auto numMetricNodes =
-            graphExecState.metricNodeIdToNumWords.size();
-        const auto numMetricWords = graphExecState.numMetricWords;
-        if (callbackData->context != nullptr)
-          profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
-        profiler.pendingGraphPool->push(phase, metricNodeEntries,
-                                        numMetricNodes, numMetricWords);
-      }
+      enqueuePendingGraphMetrics(profiler.pendingGraphPool.get(), callbackData,
+                                 graphState,
+                                 graphNodeIdToState);
+
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
