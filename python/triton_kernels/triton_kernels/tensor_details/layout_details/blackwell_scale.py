@@ -152,7 +152,10 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+        N_pad = self.N_pad - self.N
+        K_pad = self.K_pad - self.K
+        if self.K_pad > 0 or self.N_pad > 0:
+            data = torch.nn.functional.pad(data, (0, N_pad, 0, K_pad))
         data = data.transpose(-1, -2).contiguous()
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
                             self.SWIZZLE_K)
