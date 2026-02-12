@@ -319,9 +319,10 @@ struct CuptiProfiler::CuptiProfilerPimpl
 private:
   using GraphNodeStateTable = CuptiProfiler::ExternIdState::GraphNodeStateTable;
 
-  void populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
-                                        const GraphState &graphState,
-                                        GraphNodeStateTable &graphNodeIdToState);
+  void
+  populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
+                                   const GraphState &graphState,
+                                   GraphNodeStateTable &graphNodeIdToState);
   void enqueueGraphMetricNodes(CuptiProfiler &profiler,
                                const CUpti_CallbackData *callbackData,
                                const GraphState &graphState,
@@ -561,12 +562,12 @@ void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
       // The data was not enabled during graph capture.
       continue;
     }
-    auto baseEntry =
-        data->addOp(launchEntry.phase, launchEntry.id,
-                    {Context{GraphState::captureTag}});
+    auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
+                                 {Context{GraphState::captureTag}});
     for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
       for (const auto &nodeStateRef : nodeStateRefs) {
-        auto &graphNodeState = graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
+        auto &graphNodeState =
+            graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
         graphNodeState.status = nodeStateRef.get().status;
         graphNodeState.addEntry(
             std::move(DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
