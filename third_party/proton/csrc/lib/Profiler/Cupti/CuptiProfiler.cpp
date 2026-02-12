@@ -118,7 +118,7 @@ uint32_t processActivityKernel(
     auto &externState = *state;
     // We have a graph creation captured
     auto *nodeState = externState.graphNodeIdToState->find(kernel->graphNodeId);
-    if (!nodeState->status.isMetricNode()) {
+    if (nodeState && !nodeState->status.isMetricNode()) {
       if (nodeState->status.isMissingName()) {
         for (auto &entry : state->dataEntries) {
           auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
@@ -141,6 +141,18 @@ uint32_t processActivityKernel(
             entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
             detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
+        }
+      }
+    } else {
+      // No graph creation captured, correlate based on the number of nodes
+      // launched. This is a best-effort solution and can be inaccurate if the
+      // graph is launched multiple times or has conditional logic.
+      for (auto &entry : state->dataEntries) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          auto childEntry =
+              entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+          childEntry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, entry.data, entry.phase);
         }
       }
     }
