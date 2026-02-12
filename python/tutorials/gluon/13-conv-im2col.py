@@ -921,7 +921,7 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def decompose_m_offset(pid_m, BLOCK_M: ttgl.constexpr, out_h: ttgl.constexpr, out_w: ttgl.constexpr):
+def decompose_m_offset(pid_m, BLOCK_M: ttgl.constexpr, out_h, out_w):
     """Map M-tile index to (offs_m, batch, out_y, out_x) for TMA im2col coordinates."""
     offs_m = pid_m * BLOCK_M
     batch_id = offs_m // (out_h * out_w)
@@ -960,15 +960,15 @@ def conv2d_im2col_kernel(
     in_desc,
     weight_desc,
     out_desc,
-    R: ttgl.constexpr,
-    S: ttgl.constexpr,
-    Ci: ttgl.constexpr,
-    out_h: ttgl.constexpr,
-    out_w: ttgl.constexpr,
+    R,
+    S,
+    Ci,
+    out_h,
+    out_w,
+    pad_h,
+    pad_w,
     stride_h: ttgl.constexpr,
     stride_w: ttgl.constexpr,
-    pad_h: ttgl.constexpr,
-    pad_w: ttgl.constexpr,
     MMAImpl: ttgl.constexpr,
     BLOCK_M: ttgl.constexpr,
     BLOCK_N: ttgl.constexpr,
@@ -1132,10 +1132,10 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
         Ci,
         out_h,
         out_w,
-        stride,
-        stride,
         padding,
         padding,
+        stride,
+        stride,
         MMAImpl=MMAImpl,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
@@ -1154,7 +1154,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 
 @pytest.mark.parametrize("N", [1, 4])
 @pytest.mark.parametrize("H,W", [(16, 16)])
-@pytest.mark.parametrize("Ci,Co", [(64, 64)])
+@pytest.mark.parametrize("Ci,Co", [(64, 64), (96, 96)])
 @pytest.mark.parametrize("R,S", [(3, 3), (1, 1)])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
