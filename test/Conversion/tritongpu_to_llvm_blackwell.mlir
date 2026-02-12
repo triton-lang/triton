@@ -53,7 +53,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
   // CHECK-COUNT-4: @$5 tcgen05.mma.cta_group::1.kind::i8 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
   // CHECK: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
-  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,r" %[[PRED]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [$1];", "b,r" %[[PRED]]
   tt.func @tc_gen5_int8_unsigned_mma(%a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
                        %b: !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
                        %c: !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
@@ -91,7 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
   // CHECK-COUNT-4: @$5 tcgen05.mma.cta_group::1.kind::i8 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
   // CHECK: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
-  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,r" %[[PRED]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [$1];", "b,r" %[[PRED]]
   tt.func @tc_gen5_int8_signed_mma(%a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
                        %b: !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
                        %c: !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
