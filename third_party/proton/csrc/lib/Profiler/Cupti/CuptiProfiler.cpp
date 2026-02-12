@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -594,6 +595,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << std::endl;
     } else if (findGraph) {
       auto &graphState = graphStates[graphExecId];
+      static const bool timingEnabled =
+          getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
+      using Clock = std::chrono::steady_clock;
+      auto t0 = decltype(Clock::now()){};
+      if (timingEnabled)
+        t0 = Clock::now();
 
       // For each unique call path, we generate an entry per data object.
       graphNodeIdToState = &graphState.nodeIdToState;
@@ -608,6 +615,15 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                                      {Context{GraphState::captureTag}});
         launchEntries[i] = baseEntry;
       }
+      if (timingEnabled) {
+        auto t1 = Clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
+                  << " us for graphExecId: " << graphExecId << std::endl;
+        t0 = Clock::now();
+      }
 
       if (!graphState.metricNodeIdToDataSet.empty()) {
         auto phase = Data::kNoCompletePhase;
@@ -619,13 +635,43 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 "[PROTON] Inconsistent phases in graph launch entries");
           }
         }
+        std::vector<std::vector<DataEntry>> metricNodeLaunchEntries;
+        metricNodeLaunchEntries.reserve(graphState.metricNodeIdToDataSet.size());
+        for (const auto &[nodeId, nodeDataSet] :
+             graphState.metricNodeIdToDataSet) {
+          auto *nodeState = graphState.nodeIdToState.find(nodeId);
+          std::vector<DataEntry> nodeLaunchEntries;
+          nodeLaunchEntries.reserve(nodeDataSet.size());
+          for (auto *data : nodeDataSet) {
+            auto launchEntryIt = std::find_if(
+                launchEntries.begin(), launchEntries.end(),
+                [data](const DataEntry &entry) { return entry.data == data; });
+            if (launchEntryIt == launchEntries.end()) {
+              // This data was not enabled at graph capture time
+              continue;
+            }
+            auto linkedEntryIdIt = nodeState->dataToEntryId.find(data);
+            auto linkedLaunchEntry = *launchEntryIt;
+            linkedLaunchEntry.id = linkedEntryIdIt->second;
+            nodeLaunchEntries.push_back(linkedLaunchEntry);
+          }
+          metricNodeLaunchEntries.push_back(std::move(nodeLaunchEntries));
+        }
         const auto numMetricNodes = graphState.metricNodeIdToDataSet.size();
         const auto numMetricWords = graphState.numMetricWords;
         if (callbackData->context != nullptr)
           profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
         profiler.pendingGraphPool->push(
-            phase, launchEntries, &graphState.metricNodeIdToDataSet,
-            &graphState.nodeIdToState, numMetricNodes, numMetricWords);
+            phase, std::move(metricNodeLaunchEntries), numMetricNodes,
+            numMetricWords);
+      }
+      if (timingEnabled) {
+        auto t1 = Clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        std::cerr << "[PROTON] Graph launch metric time: " << elapsed
+                  << " us for graphExecId: " << graphExecId << std::endl;
       }
     }
   }

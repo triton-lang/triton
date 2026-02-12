@@ -13,7 +13,6 @@
 #include <optional>
 #include <set>
 #include <shared_mutex>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -82,11 +81,8 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    // Launch entries to receive graph metric updates.
-    std::vector<DataEntry> graphLaunchEntries;
-    // Non-owning pointers to graph state used to resolve linked entries.
-    const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet{};
-    const GraphState::NodeStateTable *nodeIdToState{};
+    // In metric-node order: launch entries with linked entry id in DataEntry.id.
+    std::vector<std::vector<DataEntry>> metricNodeLaunchEntries;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -106,13 +102,9 @@ struct PendingGraphQueue {
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
   void push(size_t numNodes, size_t numWords,
-            const std::vector<DataEntry> &graphLaunchEntries,
-            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
-            const GraphState::NodeStateTable *nodeIdToState) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords,
-                                            graphLaunchEntries,
-                                            metricNodeIdToDataSet,
-                                            nodeIdToState});
+            std::vector<std::vector<DataEntry>> &&metricNodeLaunchEntries) {
+    pendingGraphs.emplace_back(PendingGraph{
+        numNodes, numWords, std::move(metricNodeLaunchEntries)});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -123,10 +115,9 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
-            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
-            const GraphState::NodeStateTable *nodeIdToState, size_t numNodes,
-            size_t numWords);
+  void push(size_t phase,
+            std::vector<std::vector<DataEntry>> &&metricNodeLaunchEntries,
+            size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
