@@ -449,57 +449,111 @@ class dtype(base_type):
         return 'fp8' in self.name
 
     def is_fp8e4nv(self):
+        """
+        8-bit floating point, as in E4M3FN from https://arxiv.org/pdf/2209.05433
+        """
         return self.name == 'fp8e4nv'
 
     def is_fp8e4b8(self):
+        """
+        8-bit floating point, as in E4M3FNUZ from https://arxiv.org/pdf/2206.02915
+        """
         return self.name == 'fp8e4b8'
 
     def is_fp8e4b15(self):
+        """
+        8-bit floating point E4M3 variant with bias 15
+        """
         return self.name == 'fp8e4b15'
 
     def is_fp8e5(self):
+        """
+        8-bit floating point, as in E5M2 from https://arxiv.org/pdf/2209.05433
+        """
         return self.name == 'fp8e5'
 
     def is_fp8e5b16(self):
+        """
+        8-bit floating point, as in E5M2FNUZ from https://arxiv.org/pdf/2206.02915
+        """
         return self.name == 'fp8e5b16'
 
     def is_fp16(self):
+        """
+        16-bit floating point, defined in https://en.wikipedia.org/wiki/IEEE_754
+        """
         return self.name == 'fp16'
 
     def is_bf16(self):
+        """
+        16-bit brain floating point, defined in https://en.wikipedia.org/wiki/Bfloat16_floating-point_format
+        """
         return self.name == 'bf16'
 
     def is_fp32(self):
+        """
+        32-bit floating point, defined in https://en.wikipedia.org/wiki/IEEE_754
+        """
         return self.name == 'fp32'
 
     def is_fp64(self):
+        """
+        64-bit floating point, as in https://en.wikipedia.org/wiki/IEEE_754
+        """
         return self.name == 'fp64'
 
     def is_int1(self):
+        """
+        1-bit [unsigned] integer, used as boolean
+        """
         return self.name == 'int1'
 
     def is_int8(self):
+        """
+        8-bit [signed] integer
+        """
         return self.name == 'int8'
 
     def is_int16(self):
+        """
+        16-bit [signed] integer
+        """
         return self.name == 'int16'
 
     def is_int32(self):
+        """
+        32-bit [signed] integer
+        """
         return self.name == 'int32'
 
     def is_int64(self):
+        """
+        64-bit [signed] integer
+        """
         return self.name == 'int64'
 
     def is_uint8(self):
+        """
+        8-bit [unsigned] integer
+        """
         return self.name == 'uint8'
 
     def is_uint16(self):
+        """
+        16-bit [unsigned] integer
+        """
         return self.name == 'uint16'
 
     def is_uint32(self):
+        """
+        32-bit [unsigned] integer
+        """
         return self.name == 'uint32'
 
     def is_uint64(self):
+        """
+        64-bit [unsigned] integer
+        """
         return self.name == 'uint64'
 
     def is_floating(self):
@@ -550,6 +604,9 @@ class dtype(base_type):
 
     @staticmethod
     def is_void():
+        """
+        unimplemented NaN type
+        """
         raise RuntimeError("Not implemented")
 
     @staticmethod
