@@ -52,7 +52,7 @@ struct GraphState {
     // The entry id of the static entry associated with this node, which is
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
-    std::map<Data *, size_t> dataToEntryId;
+    std::unordered_map<Data *, size_t> dataToEntryId;
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
@@ -61,13 +61,13 @@ struct GraphState {
     size_t numWords{};
   };
   // Data objects that were enabled during graph capture.
-  std::set<Data *> dataSet;
+  std::unordered_set<Data *> dataSet;
   // Mapping from node id to node state.
   // This table only grows capacity and never shrinks.
   using NodeStateTable = RangeTable<NodeState, uint64_t>;
   NodeStateTable nodeIdToState;
   // Metric nodes and their participating data sinks, ordered by node id.
-  using MetricNodeIdToDataSetMap = std::map<uint64_t, std::set<Data *>>;
+  using MetricNodeIdToDataSetMap = std::map<uint64_t, std::unordered_set<Data *>>;
   MetricNodeIdToDataSetMap metricNodeIdToDataSet;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
