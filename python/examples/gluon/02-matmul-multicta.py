@@ -55,7 +55,7 @@ def matmul_get_configs(pre_hook=None):
             num_ctas=2 if two_cta else 1,
             pre_hook=pre_hook,
         )
-        for BM in (64, 128, 256)
+        for BM in (64, 128)
         for BN in (128, 256)
         for BK in (64, 128)
         for minor_dim in (0, 1)
@@ -794,6 +794,9 @@ def benchmark(*, profile=True):
     max_concurrent_steps = 6
     collective = True
     epilogue_tile_n = 32
+
+    # warmup
+    matmul(a, b)
 
     def run_gluon():
         return matmul_with_config(
