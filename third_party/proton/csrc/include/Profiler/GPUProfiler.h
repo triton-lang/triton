@@ -79,17 +79,17 @@ public:
       bool isMetricNode() const { return status.isMetricNode(); }
       bool isMissingName() const { return status.isMissingName(); }
 
-      void addEntry(DataEntry &&entry) {
-        dataEntries.emplace_back(std::move(entry));
+      void addLinkedEntryId(size_t linkedEntryId) {
+        linkedEntryIds.push_back(linkedEntryId);
       }
 
-      template <typename FnT> void forEachEntry(FnT &&fn) {
-        for (auto &entry : dataEntries)
-          fn(entry);
+      template <typename FnT> void forEachLinkedEntryId(FnT &&fn) {
+        for (auto linkedEntryId : linkedEntryIds)
+          fn(linkedEntryId);
       }
 
-      // Entries in the launched graph phase for each data sink.
-      std::vector<DataEntry> dataEntries;
+      // Graph-node linked ids aligned to ExternIdState::dataEntries.
+      std::vector<size_t> linkedEntryIds;
     };
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;

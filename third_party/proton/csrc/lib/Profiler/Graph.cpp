@@ -88,10 +88,15 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      for (auto &[_, dataEntries] : pendingGraph.dataEntries) {
-        auto &dataEntry = dataEntries[i];
+      for (size_t j = 0; j < pendingGraph.graphLaunchEntries.size(); ++j) {
+        auto &dataEntry = pendingGraph.graphLaunchEntries[j];
+        if (j >= pendingGraph.linkedEntryIds.size() ||
+            i >= pendingGraph.linkedEntryIds[j].size()) {
+          throw std::runtime_error(
+              "[PROTON] Missing linked entry IDs for graph metric node");
+        }
         dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                             dataEntry.id);
+                                             pendingGraph.linkedEntryIds[j][i]);
       }
     }
   }
@@ -99,9 +104,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 } // namespace
 
 void PendingGraphPool::push(size_t phase,
-                            const std::unordered_map<Data *,
-                                                     std::vector<DataEntry>>
-                                &dataEntries,
+                            const std::vector<DataEntry> &graphLaunchEntries,
+                            const std::vector<std::vector<size_t>> &linkedEntryIds,
                             size_t numNodes, size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
@@ -121,7 +125,7 @@ void PendingGraphPool::push(size_t phase,
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
-    slot->queue->push(numNodes, numWords, dataEntries);
+    slot->queue->push(numNodes, numWords, graphLaunchEntries, linkedEntryIds);
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
