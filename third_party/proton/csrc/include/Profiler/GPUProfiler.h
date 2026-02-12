@@ -60,8 +60,7 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
-    // Active entries for each data sink associated with this extern launch.
-    std::vector<DataEntry> dataEntries;
+    DataToEntryMap dataToEntry;
     // Sometimes the kernel name cannot be retrieved in application threads
     // for reasons like uninitialize CUDA context.
     bool isMissingName{true};
@@ -79,17 +78,23 @@ public:
       bool isMetricNode() const { return status.isMetricNode(); }
       bool isMissingName() const { return status.isMissingName(); }
 
-      void addEntry(DataEntry &&entry) {
-        dataEntries.emplace_back(std::move(entry));
+      void setEntry(Data *data, const DataEntry &entry) {
+        dataToEntry.insert_or_assign(data, entry);
+      }
+
+      const DataEntry *findEntry(Data *data) const {
+        auto it = dataToEntry.find(data);
+        if (it == dataToEntry.end())
+          return nullptr;
+        return &it->second;
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
-        for (auto &entry : dataEntries)
-          fn(entry);
+        for (auto &[data, entry] : dataToEntry)
+          fn(data, entry);
       }
 
-      // Entries in the launched graph phase for each data sink.
-      std::vector<DataEntry> dataEntries;
+      DataToEntryMap dataToEntry;
     };
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
@@ -107,13 +112,14 @@ protected:
   void startOp(const Scope &scope) override {
     this->threadState.scopeStack.push_back(scope);
     for (auto *data : dataSet) {
-      threadState.dataEntries.push_back(data->addOp(scope.name));
+      auto entry = data->addOp(scope.name);
+      threadState.dataToEntry.insert_or_assign(data, entry);
     }
   }
 
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
-    threadState.dataEntries.clear();
+    threadState.dataToEntry.clear();
   }
 
   void flushDataPhases(
@@ -142,8 +148,7 @@ protected:
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
-    // Active entries for the currently open op, one per data sink.
-    std::vector<DataEntry> dataEntries;
+    DataToEntryMap dataToEntry;
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
@@ -198,12 +203,11 @@ protected:
 
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   bool isMissingName,
-                   const std::vector<DataEntry> &dataEntries) {
+                   bool isMissingName, const DataToEntryMap &dataToEntry) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
-        state.dataEntries = dataEntries;
+        state.dataToEntry = dataToEntry;
         state.isMissingName = isMissingName;
       });
     }
@@ -268,8 +272,8 @@ protected:
         auto tensorMetricsHost =
             collectTensorMetrics(profiler.metricBuffer->getRuntime(),
                                  tensorMetrics, profiler.metricKernelStream);
-        auto &dataEntries = threadState.dataEntries;
-        if (dataEntries.empty()) {
+        auto &dataToEntry = threadState.dataToEntry;
+        if (dataToEntry.empty()) {
           // Add metrics to a specific scope
           for (auto *data : profiler.dataSet) {
             data->addMetrics(scopeId, scalarMetrics);
@@ -277,7 +281,8 @@ protected:
           }
         } else {
           // Add metrics to the current op
-          for (const auto &entry : dataEntries) {
+          for (const auto &entryIt : dataToEntry) {
+            const auto &entry = entryIt.second;
             entry.upsertFlexibleMetrics(scalarMetrics);
             entry.upsertFlexibleMetrics(tensorMetricsHost);
           }

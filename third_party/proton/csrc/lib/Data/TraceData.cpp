@@ -162,7 +162,7 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
-  return DataEntry(newEventId, phase, this, newEvent.metricSet);
+  return DataEntry(newEventId, phase, newEvent.metricSet);
 }
 
 void TraceData::addMetrics(

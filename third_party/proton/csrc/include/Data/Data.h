@@ -50,13 +50,11 @@ struct DataEntry {
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
-  /// `data` points to the owning data object for this entry.
-  Data *data{nullptr};
   /// Per-entry storage for direct and linked metric maps.
   std::reference_wrapper<MetricSet> metricSet;
 
-  explicit DataEntry(size_t id, size_t phase, Data *data, MetricSet &metricSet)
-      : id(id), phase(phase), data(data), metricSet(metricSet) {}
+  explicit DataEntry(size_t id, size_t phase, MetricSet &metricSet)
+      : id(id), phase(phase), metricSet(metricSet) {}
 
   void upsertMetric(std::unique_ptr<Metric> metric) const;
 
@@ -212,6 +210,8 @@ private:
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
 };
+
+using DataToEntryMap = std::map<Data *, DataEntry>;
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
 

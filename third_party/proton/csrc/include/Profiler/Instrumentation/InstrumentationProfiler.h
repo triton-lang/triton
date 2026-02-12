@@ -44,13 +44,11 @@ protected:
 
   // OpInterface
   void startOp(const Scope &scope) override {
-    dataToEntries.clear();
-    dataToEntries.reserve(dataSet.size());
     for (auto data : dataSet) {
-      dataToEntries.push_back(data->addOp(scope.name));
+      dataToEntryMap.insert_or_assign(data, data->addOp(scope.name));
     }
   }
-  void stopOp(const Scope &scope) override { dataToEntries.clear(); }
+  void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }
 
 private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
@@ -72,7 +70,7 @@ private:
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // Active per-data entries for the current op.
-  std::vector<DataEntry> dataToEntries;
+  DataToEntryMap dataToEntryMap;
 };
 
 } // namespace proton

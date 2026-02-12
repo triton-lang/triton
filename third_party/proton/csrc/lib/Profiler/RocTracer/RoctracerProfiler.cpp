@@ -103,16 +103,16 @@ void processActivityKernel(
   bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
   auto &state = externIdToState[externId];
   if (!isGraph) {
-    for (const auto &entry : state.dataEntries) {
+    for (auto [data, entry] : state.dataToEntry) {
       if (auto metric = convertActivityToMetric(activity)) {
         if (state.isMissingName) {
-          auto childEntry = entry.data->addOp(entry.phase, entry.id,
-                                              {Context(activity->kernel_name)});
+          auto childEntry = data->addOp(entry.phase, entry.id,
+                                        {Context(activity->kernel_name)});
           childEntry.upsertMetric(std::move(metric));
         } else {
           entry.upsertMetric(std::move(metric));
         }
-        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   } else {
@@ -124,12 +124,12 @@ void processActivityKernel(
     // 2. GraphExec -> Graph
     // --- Roctracer thread ---
     // 3. corrId -> numNodes
-    for (const auto &entry : state.dataEntries) {
+    for (auto [data, entry] : state.dataToEntry) {
       if (auto metric = convertActivityToMetric(activity)) {
-        auto childEntry = entry.data->addOp(entry.phase, entry.id,
-                                            {Context(activity->kernel_name)});
+        auto childEntry = data->addOp(entry.phase, entry.id,
+                                      {Context(activity->kernel_name)});
         childEntry.upsertMetric(std::move(metric));
-        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+        detail::updateDataPhases(dataPhases, data, entry.phase);
       }
     }
   }
@@ -250,7 +250,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       // Valid context and outermost level of the kernel launch
       // TODO: Get kernel name from hip_api_data_t
       threadState.enterOp(Scope(""));
-      auto &dataEntries = threadState.dataEntries;
+      auto &dataToEntry = threadState.dataToEntry;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -274,7 +274,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       auto &scope = threadState.scopeStack.back();
       auto isMissingName = scope.name.empty();
       profiler.correlation.correlate(data->correlation_id, scope.scopeId,
-                                     numInstances, isMissingName, dataEntries);
+                                     numInstances, isMissingName, dataToEntry);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       switch (cid) {
       case HIP_API_ID_hipStreamBeginCapture: {

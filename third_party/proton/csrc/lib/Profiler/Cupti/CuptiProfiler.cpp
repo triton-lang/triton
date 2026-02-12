@@ -69,26 +69,26 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isMissingName = false;
-    std::vector<DataEntry> dataEntries;
+    DataToEntryMap dataToEntry;
     externIdToState.withRead(externId,
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isMissingName = state.isMissingName;
-                               dataEntries = state.dataEntries;
+                               dataToEntry = state.dataToEntry;
                              });
     if (!isMissingName) {
-      for (auto &entry : dataEntries) {
+      for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
-      for (const auto &entry : dataEntries) {
+      for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry =
-              entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
           childEntry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     }
@@ -123,22 +123,23 @@ uint32_t processActivityKernel(
     if (nodeState && !nodeState->isMetricNode()) {
       const bool isMissingName = nodeState->isMissingName();
       if (!isMissingName) {
-        nodeState->forEachEntry([activity, &dataPhases](DataEntry &entry) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-          }
-        });
+        nodeState->forEachEntry(
+            [activity, &dataPhases](Data *data, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
+                detail::updateDataPhases(dataPhases, data, entry.phase);
+              }
+            });
       } else {
-        nodeState->forEachEntry([kernel, activity,
-                                 &dataPhases](DataEntry &entry) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry = entry.data->addOp(Data::kVirtualPhase, entry.id,
-                                                {Context(kernel->name)});
-            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-          }
-        });
+        nodeState->forEachEntry(
+            [kernel, activity, &dataPhases](Data *data, DataEntry &entry) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                auto childEntry = data->addOp(Data::kVirtualPhase, entry.id,
+                                              {Context(kernel->name)});
+                entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+                detail::updateDataPhases(dataPhases, data, entry.phase);
+              }
+            });
       }
     }
     // Decrease the expected kernel count
@@ -561,7 +562,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   const auto &scope = threadState.scopeStack.back();
-  auto &dataEntries = threadState.dataEntries;
+  auto &dataToEntry = threadState.dataToEntry;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -601,8 +602,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      for (const auto &launchEntry : dataEntries) {
-        auto *data = launchEntry.data;
+      for (const auto &[data, launchEntry] : dataToEntry) {
         auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
         if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end()) {
           continue;
@@ -614,9 +614,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             auto &graphNodeState =
                 graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
             graphNodeState.status = nodeStateRef.get().status;
-            graphNodeState.addEntry(std::move(
-                DataEntry(targetEntryId, baseEntry.phase, baseEntry.data,
-                          baseEntry.metricSet.get())));
+            graphNodeState.setEntry(
+                data, DataEntry(targetEntryId, baseEntry.phase,
+                                baseEntry.metricSet.get()));
           }
         }
       }
@@ -632,13 +632,15 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
       if (!graphStates[graphExecId].metricNodeIdToNumWords.empty()) {
         auto &graphExecState = graphStates[graphExecId];
-        std::vector<DataEntry> metricNodeEntries;
+        std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
         auto phase = Data::kNoCompletePhase;
         for (const auto &metricNode : graphExecState.metricNodeIdToNumWords) {
           auto nodeId = metricNode.first;
           auto *nodeState = graphNodeIdToState.find(nodeId);
-          nodeState->forEachEntry([&](const DataEntry &entry) {
-            metricNodeEntries.push_back(entry);
+          if (!nodeState) // The node has been skipped during graph capture
+            continue;
+          nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
+            metricNodeEntries[data].push_back(entry);
             if (phase == Data::kNoCompletePhase) {
               phase = entry.phase;
             } else if (phase != entry.phase) {
@@ -667,7 +669,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                 numNodes, scope.name.empty(), dataEntries);
+                                 numNodes, scope.name.empty(), dataToEntry);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }
@@ -679,9 +681,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     return;
 
   if (profiler.pcSamplingEnabled) {
-    auto &dataEntries = threadState.dataEntries;
+    auto &dataToEntry = threadState.dataToEntry;
     // XXX: Conservatively stop every GPU kernel for now.
-    pcSampling.stop(callbackData->context, dataEntries);
+    pcSampling.stop(callbackData->context, dataToEntry);
   }
 
   threadState.exitOp();

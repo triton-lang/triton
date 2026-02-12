@@ -88,17 +88,19 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      auto &dataEntry = pendingGraph.dataEntries[i];
-      dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                           dataEntry.id);
+      for (auto &[data, entries] : pendingGraph.dataToEntries) {
+        auto &dataEntry = entries[i];
+        dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                             dataEntry.id);
+      }
     }
   }
 }
 } // namespace
 
-void PendingGraphPool::push(size_t phase,
-                            const std::vector<DataEntry> &dataEntries,
-                            size_t numNodes, size_t numWords) {
+void PendingGraphPool::push(
+    size_t phase, const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
+    size_t numNodes, size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;
@@ -117,7 +119,7 @@ void PendingGraphPool::push(size_t phase,
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
-    slot->queue->push(numNodes, numWords, dataEntries);
+    slot->queue->push(numNodes, numWords, dataToEntries);
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
