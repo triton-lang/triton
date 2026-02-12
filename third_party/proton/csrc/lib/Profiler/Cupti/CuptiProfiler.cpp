@@ -116,30 +116,33 @@ uint32_t processActivityKernel(
       state = &ref.value().get();
     }
     auto &externState = *state;
-    // We have a graph creation captured
-    auto *nodeState = externState.graphNodeIdToState->find(kernel->graphNodeId);
-    if (nodeState && !nodeState->status.isMetricNode()) {
-      if (nodeState->status.isMissingName()) {
-        for (auto &entry : state->dataEntries) {
-          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
-          if (linkedIdIt == nodeState->dataToEntryId.end())
-            continue;
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            entry.upsertLinkedMetric(std::move(kernelMetric), linkedIdIt->second);
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+    if (externState.graphNodeIdToState) {
+      // We have a graph creation captured
+      auto *nodeState = externState.graphNodeIdToState->find(kernel->nodeId);
+      if (!nodeState->status.isMetricNode()) {
+        if (nodeState->status.isMissingName()) {
+          for (auto &entry : state->dataEntries) {
+            auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
+            if (linkedIdIt == nodeState->dataToEntryId.end())
+              continue;
+            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+              entry.upsertLinkedMetric(std::move(kernelMetric),
+                                       linkedIdIt->second);
+              detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+            }
           }
-        }
-      } else {
-        for (auto &entry : state->dataEntries) {
-          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
-          if (linkedIdIt == nodeState->dataToEntryId.end())
-            continue;
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry = entry.data->addOp(Data::kVirtualPhase,
-                                                linkedIdIt->second,
-                                                {Context(kernel->name)});
-            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+        } else {
+          for (auto &entry : state->dataEntries) {
+            auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
+            if (linkedIdIt == nodeState->dataToEntryId.end())
+              continue;
+            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+              auto childEntry =
+                  entry.data->addOp(Data::kVirtualPhase, linkedIdIt->second,
+                                    {Context(kernel->name)});
+              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+              detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+            }
           }
         }
       }
