@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -70,8 +71,8 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    // Non-owning pointer to graph node states.
-    const GraphState::NodeStateTable *graphNodeIdToState{nullptr};
+    // Snapshot of graph node states at launch correlation time.
+    std::optional<GraphState::NodeStateTable> graphNodeIdToState{};
   };
 
   using ExternIdToStateMap =
@@ -182,7 +183,11 @@ protected:
         state.numNodes = numNodes;
         state.dataEntries = dataEntries;
         state.isMissingName = isMissingName;
-        state.graphNodeIdToState = graphNodeIdToState;
+        if (graphNodeIdToState) {
+          state.graphNodeIdToState = *graphNodeIdToState;
+        } else {
+          state.graphNodeIdToState.reset();
+        }
       });
     }
 
