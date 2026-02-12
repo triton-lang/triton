@@ -423,7 +423,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       if (profiler.isOpInProgress()) {
         auto &graphState = graphStates[graphId];
         auto &nodeState = graphState.nodeIdToState.emplace(nodeId);
-        nodeState.nodeId = nodeId;
         const auto &name = threadState.scopeStack.back().name;
         if (name.empty() || (threadState.isApiExternOp &&
                              threadState.isMetricKernelLaunching)) {
@@ -465,7 +464,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       auto &nodeState = graphState.nodeIdToState.emplace(nodeId);
       nodeState = *originalNodeState;
-      nodeState.nodeId = nodeId;
       graphState.dataSet = originalGraphState.dataSet;
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToDataSet.find(originalNodeId);

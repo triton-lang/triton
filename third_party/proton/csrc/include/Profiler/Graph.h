@@ -47,8 +47,6 @@ struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   struct NodeState {
-    // The graph node id for this node
-    uint64_t nodeId{};
     // The entry id of the static entry associated with this node, which is
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
