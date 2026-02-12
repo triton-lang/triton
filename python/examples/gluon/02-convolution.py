@@ -59,19 +59,20 @@ class ConvConfig:
     N: gl.tensor
     H: gl.tensor
     W: gl.tensor
-    Ci: gl.constexpr
-    Co: gl.constexpr
+    Ci: gl.tensor
+    Co: gl.tensor
     R: gl.tensor
     S: gl.tensor
-    out_h: gl.constexpr
-    out_w: gl.constexpr
-    stride_h: gl.constexpr
-    stride_w: gl.constexpr
-    pad_h: gl.constexpr
-    pad_w: gl.constexpr
-    output_stride_n: gl.constexpr
-    output_stride_h: gl.constexpr
-    output_stride_w: gl.constexpr
+    out_h: gl.tensor
+    out_w: gl.tensor
+    stride_h: gl.tensor
+    stride_w: gl.tensor
+    pad_h: gl.tensor
+    pad_w: gl.tensor
+    output_stride_n: gl.tensor
+    output_stride_h: gl.tensor
+    output_stride_w: gl.tensor
+    M_GEMM: gl.tensor
 
     BLOCK_M: gl.constexpr
     BLOCK_N: gl.constexpr
@@ -83,7 +84,7 @@ class ConvConfig:
     @gluon.jit
     def get_program(self, pid):
         """Compute tile coordinates from program ID with grouped ordering."""
-        M_GEMM = self.N * self.out_h * self.out_w
+        M_GEMM = self.M_GEMM
         N_GEMM = self.Co
 
         num_pid_m = gl.cdiv(M_GEMM, self.BLOCK_M)
@@ -108,10 +109,10 @@ class ConvProgram:
     def get_m_offsets(self):
         """Decompose M-tile offset into (batch, out_y, out_x)."""
         offs_m = self.pid_m * self.config.BLOCK_M
-        batch_id = offs_m // (self.config.out_h * self.config.out_w)
-        m_residual = offs_m % (self.config.out_h * self.config.out_w)
-        out_y = m_residual // self.config.out_w
-        out_x = m_residual % self.config.out_w
+        config = self.config
+        out_x = offs_m % config.out_w
+        out_y = (offs_m // config.out_w) % config.out_h
+        batch_id = (offs_m // config.out_w) // config.out_h
         return batch_id, out_y, out_x
 
 
@@ -233,14 +234,12 @@ def epilogue_partition(p):
     config = p.config
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
-    M_GEMM = config.N * config.out_h * config.out_w
+    M_GEMM = config.M_GEMM
     N_GEMM = config.Co
     pid = gl.program_id(axis=0)
     prog = config.get_program(pid)
 
     # Register layouts
-    c_layout: gl.constexpr = gl.BlockedLayout([1, 8], [1, 32], [config.num_warps, 1], [1, 0])
-
     tmem_layout: gl.constexpr = TensorMemoryLayout(block=(128, BLOCK_N), col_stride=1)
     acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, config.num_warps)
 
@@ -249,7 +248,7 @@ def epilogue_partition(p):
 
     # Load from TMEM and convert to fp16
     acc = p.acc_bufs.index(0).load(acc_reg_layout)
-    result = gl.convert_layout(acc.to(gl.float16), c_layout)
+    result = gl.convert_layout(acc.to(gl.float16), gl.CoalescedLayout())
 
     # Signal that accumulator is consumed
     mbarrier.arrive(p.acc_empty_bars.index(0), count=1)
@@ -258,10 +257,9 @@ def epilogue_partition(p):
     offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
     offs_n = prog.pid_n * BLOCK_N + gl.arange(0, BLOCK_N)
 
-    c_batch = offs_m // (config.out_h * config.out_w)
-    c_rem = offs_m % (config.out_h * config.out_w)
-    c_out_y = c_rem // config.out_w
-    c_out_x = c_rem % config.out_w
+    c_out_x = offs_m % config.out_w
+    c_out_y = (offs_m // config.out_w) % config.out_h
+    c_batch = (offs_m // config.out_w) // config.out_h
 
     c_offsets = (c_batch[:, None] * config.output_stride_n + c_out_y[:, None] * config.output_stride_h +
                  c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
@@ -289,6 +287,8 @@ def epilogue_partition(p):
     "W",
     "R",
     "S",
+    "pad_h",
+    "pad_w",
 ])
 def conv2d_im2col_kernel(
     in_desc,
@@ -297,19 +297,19 @@ def conv2d_im2col_kernel(
     N,
     H,
     W,
-    Ci: gl.constexpr,
-    Co: gl.constexpr,
+    Ci,
+    Co,
     R,
     S,
-    out_h: gl.constexpr,
-    out_w: gl.constexpr,
-    output_stride_n: gl.constexpr,
-    output_stride_h: gl.constexpr,
-    output_stride_w: gl.constexpr,
-    stride_h: gl.constexpr,
-    stride_w: gl.constexpr,
-    pad_h: gl.constexpr,
-    pad_w: gl.constexpr,
+    out_h,
+    out_w,
+    output_stride_n,
+    output_stride_h,
+    output_stride_w,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
@@ -324,6 +324,7 @@ def conv2d_im2col_kernel(
         N = Co                  (output channels)
         K = R * S * Ci          (reduction over filter x input channels)
     """
+    M_GEMM = N * out_h * out_w
     config = ConvConfig(
         N,
         H,
@@ -334,13 +335,14 @@ def conv2d_im2col_kernel(
         S,
         out_h,
         out_w,
-        stride_h,
-        stride_w,
+        gl.to_tensor(stride_h),
+        gl.to_tensor(stride_w),
         pad_h,
         pad_w,
-        output_stride_n,
-        output_stride_h,
-        output_stride_w,
+        gl.to_tensor(output_stride_n),
+        gl.to_tensor(output_stride_h),
+        gl.to_tensor(output_stride_w),
+        M_GEMM,
         BLOCK_M,
         BLOCK_N,
         BLOCK_K,
