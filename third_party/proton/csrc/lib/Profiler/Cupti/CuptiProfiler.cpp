@@ -118,7 +118,7 @@ uint32_t processActivityKernel(
     auto &externState = *state;
     if (externState.graphNodeIdToState) {
       // We have a graph creation captured
-      auto *nodeState = externState.graphNodeIdToState->find(kernel->nodeId);
+      auto *nodeState = externState.graphNodeIdToState->find(kernel->graphNodeId);
       if (!nodeState->status.isMetricNode()) {
         if (nodeState->status.isMissingName()) {
           for (auto &entry : state->dataEntries) {
