@@ -816,10 +816,7 @@ MAX_PYTHON = (3, 14)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta", "Intended Audience :: Developers", "Topic :: Software Development :: Build Tools"
 ]
 PYTHON_CLASSIFIERS = [
     f"Programming Language :: Python :: {MIN_PYTHON[0]}.{m}" for m in range(MIN_PYTHON[1], MAX_PYTHON[1] + 1)
@@ -833,6 +830,7 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
+    license="MIT",
     install_requires=[
         "importlib-metadata; python_version < '3.10'",
     ],
