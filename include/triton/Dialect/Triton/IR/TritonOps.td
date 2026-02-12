@@ -722,14 +722,15 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath,
       DefaultValuedAttr<BoolAttr, "true">:$lhs_k_pack,
-      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack
+      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack,
+      DefaultValuedAttr<I32Attr, "32">:$scale_factor
     );
 
     let results = (outs TT_FloatTensor:$d);
 
     let assemblyFormat = [{
       $a (`scale` $a_scale^)? `,` $b (`scale` $b_scale^)? `,` $c
-      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
+      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type (`scale_factor` `=` $scale_factor^)? attr-dict
       `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `->` type($d)
     }];
     let hasVerifier = 1;

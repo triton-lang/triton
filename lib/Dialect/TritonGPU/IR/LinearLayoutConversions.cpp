@@ -1410,6 +1410,7 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
+                                         unsigned scaleFactor,
                                          LinearLayout ctaLayout,
                                          CGAEncodingAttr cgaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
@@ -1431,9 +1432,9 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   auto dimK = outDimNames[rank - 1];
   auto dimNonK = outDimNames[rank - 2];
 
-  // Each lane holds kWidth=4 consecutive values along the K dim.
-  // The first 16 lanes are distributed along the nonK dim.
-  unsigned scaleKWidth = 4;
+  // Each lane holds kWidth=4(scale32) or kWidth=8(scale16) consecutive values
+  // along the K dim. The first 16 lanes are distributed along the nonK dim.
+  unsigned scaleKWidth = scaleFactor == 32 ? 4 : 8;
   auto kSize = dotOperandShape[1];
   LinearLayout tileLayout =
       LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *

@@ -1,7 +1,7 @@
 from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
-from ..._core import builtin
+from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
 from .._ops import _wmma, _verify_wmma, _mma_scaled
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
@@ -28,6 +28,18 @@ def wmma(a, b, acc, _semantic=None):
         acc (tensor): The accumulator tensor.
     """
     return _wmma(3, a, b, acc, _semantic)
+
+
+# List all valid combinations directly for readability
+_valid_dtype_combinations = set([(dtype_a, dtype_b, "e8m0", "e8m0")
+                                 for dtype_a in ("e4m3", "e5m2", "e2m1")
+                                 for dtype_b in ("e4m3", "e5m2", "e2m1")] + [(dtype_a, "e2m1", "e8m0", dtype_b_scale)
+                                                                             for dtype_a in ("e4m3", "e5m2")
+                                                                             for dtype_b_scale in ("e4m3", )] +
+                                [("e2m1", dtype_b, dtype_a_scale, "e8m0")
+                                 for dtype_b in ("e4m3", "e5m2")
+                                 for dtype_a_scale in ("e4m3", )] + [("e2m1", "e2m1", dtype_scale, dtype_scale)
+                                                                     for dtype_scale in ("e4m3", )])
 
 
 @builtin
@@ -69,6 +81,24 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
+    scale_dtype_to_format = {float8e4nv: "e4m3"}
+
+    # E8M0 scale has various representation in frontend.
+    scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8)})
+
+    a_scale_value = _unwrap_if_constexpr(a_scale)
+    b_scale_value = _unwrap_if_constexpr(b_scale)
+
+    if isinstance(a_scale_value, tensor) and isinstance(b_scale_value, tensor):
+        assert a_scale.dtype in scale_dtype_to_format, f"Unsupported a_scale dtype: {a_scale.dtype}"
+        assert b_scale.dtype in scale_dtype_to_format, f"Unsupported b_scale dtype: {b_scale.dtype}"
+
+        a_scale_format = scale_dtype_to_format[a_scale.dtype]
+        b_scale_format = scale_dtype_to_format[b_scale.dtype]
+
+        assert (a_format.value, b_format.value, a_scale_format, b_scale_format) in _valid_dtype_combinations, \
+            f"Unsupported dtype combination: {a_format.value}, {b_format.value}, {a_scale_format}, {b_scale_format}."
+
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_wmma_scale_layout, _semantic)
 
 
@@ -80,16 +110,18 @@ _get_wmma_scale_layout_impl.__triton_builtin__ = True
 
 
 @constexpr_function
-def get_wmma_scale_layout(dot_operand_layout, shape):
+def get_wmma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     """ Get the scale layout for WMMA scaled operands.
 
     Args:
         dot_operand_layout (DotOperandLayout): The dot operand layout.
         shape (List[int]): The shape of the scale tensor.
+        scale_factor (int): The scale factor, i.e. the number of elements of operand sharing a single scale.
 
     Return:
         layout (DistributedLinearLayout): The scale layout.
     """
+    assert scale_factor in (16, 32), "Only support 16 or 32 scale factor"
     op_idx = dot_operand_layout.operand_index
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDWMMALayout"
@@ -97,4 +129,4 @@ def get_wmma_scale_layout(dot_operand_layout, shape):
     reg_bases = parent.reg_bases
     warp_bases = parent.warp_bases
     cga_bases = parent.cga_layout
-    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases, cga_bases)
+    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, scale_factor, reg_bases, warp_bases, cga_bases)
