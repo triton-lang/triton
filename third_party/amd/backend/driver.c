@@ -500,8 +500,7 @@ static PyObject *unloadModule(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  HIP_CHECK_AND_RETURN_NULL(
-      hipSymbolTable.hipModuleUnload(mod))
+  HIP_CHECK_AND_RETURN_NULL(hipSymbolTable.hipModuleUnload(mod))
 
   return Py_None;
 }
