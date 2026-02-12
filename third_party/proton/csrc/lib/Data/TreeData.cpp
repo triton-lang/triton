@@ -104,15 +104,13 @@ public:
     explicit TreeNode(size_t id, const std::string &name,
                       bool withMetricSet = true)
         : id(id), Context(name),
-          metricSet(withMetricSet
-                        ? std::make_unique<DataEntry::MetricSet>()
-                        : nullptr) {}
+          metricSet(withMetricSet ? std::make_unique<DataEntry::MetricSet>()
+                                  : nullptr) {}
     TreeNode(size_t id, size_t parentId, const std::string &name,
              bool withMetricSet = true)
         : id(id), parentId(parentId), Context(name),
-          metricSet(withMetricSet
-                        ? std::make_unique<DataEntry::MetricSet>()
-                        : nullptr) {}
+          metricSet(withMetricSet ? std::make_unique<DataEntry::MetricSet>()
+                                  : nullptr) {}
     virtual ~TreeNode() = default;
 
     void addChild(std::string_view childName, size_t id) {
@@ -155,9 +153,8 @@ public:
     if (existingChildId != TreeNode::DummyId)
       return existingChildId;
     auto id = nextContextId++;
-    auto [it, inserted] = treeNodeMap.try_emplace(id, id, parentId,
-                                                  context.name,
-                                                  withMetricSet);
+    auto [it, inserted] =
+        treeNodeMap.try_emplace(id, id, parentId, context.name, withMetricSet);
     parent.addChild(it->second.name, id);
     return id;
   }
@@ -346,12 +343,12 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
-        appendMetrics(metricsJson, metricSet.metrics, metricSet.flexibleMetrics);
+        appendMetrics(metricsJson, metricSet.metrics,
+                      metricSet.flexibleMetrics);
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
-        const bool hasLinkedTargets =
-            !metricSet.linkedMetrics.empty() ||
-            !metricSet.linkedFlexibleMetrics.empty();
+        const bool hasLinkedTargets = !metricSet.linkedMetrics.empty() ||
+                                      !metricSet.linkedFlexibleMetrics.empty();
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() +
             (hasLinkedTargets ? staticRootNode.children.size() : 0));
@@ -707,9 +704,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr("metrics");
         packMetrics(metricSet.metrics, metricSet.flexibleMetrics,
                     treeNode.id == TreeData::Tree::TreeNode::RootId);
-        const bool hasLinkedTargets =
-            !metricSet.linkedMetrics.empty() ||
-            !metricSet.linkedFlexibleMetrics.empty();
+        const bool hasLinkedTargets = !metricSet.linkedMetrics.empty() ||
+                                      !metricSet.linkedFlexibleMetrics.empty();
 
         std::function<void(size_t)> packLinkedStaticNode =
             [&](size_t staticNodeId) {
