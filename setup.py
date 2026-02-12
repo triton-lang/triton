@@ -1,17 +1,11 @@
 import os
 import platform
 import re
-import contextlib
 import shlex
 import shutil
 import subprocess
 import sys
 import sysconfig
-import tarfile
-import zipfile
-import urllib.request
-import json
-from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
 from typing import Optional
@@ -165,94 +159,6 @@ def is_offline_build() -> bool:
     return check_env_flag("TRITON_OFFLINE_BUILD", "")
 
 
-# --- third party packages -----
-
-
-@dataclass
-class Package:
-    package: str
-    name: str
-    url: str
-    include_flag: str
-    lib_flag: str
-    syspath_var_name: str
-    sym_name: Optional[str] = None
-
-
-# json
-def get_json_package_info():
-    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
-    return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
-
-
-def is_linux_os(id):
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", "r") as f:
-            os_release_content = f.read()
-            return f'ID="{id}"' in os_release_content
-    return False
-
-
-# llvm
-def get_llvm_package_info():
-    system = platform.system()
-    try:
-        arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
-    except KeyError:
-        arch = platform.machine()
-    if (env_system_suffix := os.environ.get("TRITON_LLVM_SYSTEM_SUFFIX", None)):
-        system_suffix = env_system_suffix
-    elif system == "Darwin":
-        system_suffix = f"macos-{arch}"
-    elif system == "Linux":
-        if arch == 'arm64' and is_linux_os('almalinux'):
-            system_suffix = 'almalinux-arm64'
-        elif arch == 'arm64':
-            system_suffix = 'ubuntu-arm64'
-        elif arch == 'x64':
-            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-            vglibc = vglibc[0] * 100 + vglibc[1]
-            if vglibc > 228:
-                # Ubuntu 24 LTS (v2.39)
-                # Ubuntu 22 LTS (v2.35)
-                # Ubuntu 20 LTS (v2.31)
-                system_suffix = "ubuntu-x64"
-            else:
-                # Manylinux_2.28 (v2.28)
-                # AlmaLinux 8 (v2.28)
-                system_suffix = "almalinux-x64"
-        else:
-            print(
-                f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
-            )
-            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    else:
-        print(
-            f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
-        )
-        return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
-    with open(llvm_hash_path, "r") as llvm_hash_file:
-        rev = llvm_hash_file.read(8)
-    name = f"llvm-{rev}-{system_suffix}"
-    # Create a stable symlink that doesn't include revision
-    sym_name = f"llvm-{system_suffix}"
-    url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH", sym_name=sym_name)
-
-
-def open_url(url):
-    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
-    headers = {
-        'User-Agent': user_agent,
-    }
-    request = urllib.request.Request(url, None, headers)
-    # Set timeout to 300 seconds to prevent the request from hanging forever.
-    return urllib.request.urlopen(request, timeout=300)
-
-
 # ---- package data ---
 
 
@@ -277,94 +183,6 @@ def update_symlink(link_path, source_path):
     print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
     link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
     link_path.symlink_to(source_path.absolute(), target_is_directory=True)
-
-
-def get_thirdparty_packages(packages: list):
-    triton_cache_path = get_triton_cache_path()
-    thirdparty_cmake_args = []
-    for p in packages:
-        package_root_dir = os.path.join(triton_cache_path, p.package)
-        package_dir = os.path.join(package_root_dir, p.name)
-        if os.environ.get(p.syspath_var_name):
-            package_dir = os.environ[p.syspath_var_name]
-        version_file_path = os.path.join(package_dir, "version.txt")
-
-        input_defined = p.syspath_var_name in os.environ
-        input_exists = os.path.exists(version_file_path)
-        input_compatible = input_exists and Path(version_file_path).read_text() == p.url
-
-        if is_offline_build() and not input_defined:
-            raise RuntimeError(f"Requested an offline build but {p.syspath_var_name} is not set")
-        if not is_offline_build() and not input_defined and not input_compatible:
-            with contextlib.suppress(Exception):
-                shutil.rmtree(package_root_dir)
-            os.makedirs(package_root_dir, exist_ok=True)
-            print(f'downloading and extracting {p.url} ...')
-            with open_url(p.url) as response:
-                if p.url.endswith(".zip"):
-                    file_bytes = BytesIO(response.read())
-                    with zipfile.ZipFile(file_bytes, "r") as file:
-                        file.extractall(path=package_root_dir)
-                else:
-                    with tarfile.open(fileobj=response, mode="r|*") as file:
-                        # Use extractall without filter for Python version < 3.12 compatibility
-                        if hasattr(tarfile, 'data_filter'):
-                            file.extractall(path=package_root_dir, filter="data")
-                        else:
-                            file.extractall(path=package_root_dir)
-            # write version url to package_dir
-            with open(os.path.join(package_dir, "version.txt"), "w") as f:
-                f.write(p.url)
-        if p.include_flag:
-            thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
-        if p.lib_flag:
-            thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
-        if p.syspath_var_name:
-            thirdparty_cmake_args.append(f"-D{p.syspath_var_name}={package_dir}")
-        if p.sym_name is not None:
-            sym_link_path = os.path.join(package_root_dir, p.sym_name)
-            update_symlink(sym_link_path, package_dir)
-
-    return thirdparty_cmake_args
-
-
-def download_and_copy(name, src_func, dst_path, variable, version, url_func):
-    if is_offline_build():
-        return
-    triton_cache_path = get_triton_cache_path()
-    if variable in os.environ:
-        return
-    base_dir = os.path.dirname(__file__)
-    system = platform.system()
-    arch = platform.machine()
-    # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
-    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
-    supported = {"Linux": "linux", "Darwin": "linux"}
-    url = url_func(supported[system], arch, version)
-    src_path = src_func(supported[system], arch, version)
-    tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
-    src_path = os.path.join(tmp_path, src_path)
-    download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
-        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
-        curr_version = re.search(r"V([.|\d]+)", curr_version)
-        assert curr_version is not None, f"No version information for {dst_path}"
-        download = download or curr_version.group(1) != version
-    if download:
-        print(f'downloading and extracting {url} ...')
-        with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-            # Use extractall without filter for Python version < 3.12 compatibility
-            if hasattr(tarfile, 'data_filter'):
-                tar_file.extractall(path=tmp_path, filter="data")
-            else:
-                tar_file.extractall(path=tmp_path)
-    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-    print(f'copy {src_path} to {dst_path} ...')
-    if os.path.isdir(src_path):
-        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
-    else:
-        shutil.copy(src_path, dst_path)
 
 
 # ---- cmake extension ----
@@ -405,8 +223,6 @@ class CMakeBuild(build_ext):
         build_ext.finalize_options(self)
 
     def run(self):
-        download_and_copy_dependencies()
-
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
@@ -430,8 +246,7 @@ class CMakeBuild(build_ext):
         return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
 
     def get_proton_cmake_args(self):
-        cmake_args = get_thirdparty_packages([get_json_package_info()])
-        cmake_args += self.get_pybind11_cmake_args()
+        cmake_args = self.get_pybind11_cmake_args()
         cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_INCLUDE_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
@@ -445,9 +260,8 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
-        thirdparty_cmake_args += self.get_pybind11_cmake_args()
+        assert ninja_dir is not None, "ninja not found!"
+        thirdparty_cmake_args = self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         wheeldir = os.path.dirname(extdir)
 
@@ -457,15 +271,20 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
-            "-G", "Ninja",  # Ninja is much faster than make
+            "-G",
+            "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable, "-DPython3_INCLUDE_DIR=" + python_include_dir,
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DLLVM_ENABLE_WERROR=ON",
+            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
+            "-DTRITON_BUILD_PYTHON_MODULE=ON",
+            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DPython3_INCLUDE_DIR=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
-            "-DTRITON_WHEEL_DIR=" + wheeldir
+            "-DTRITON_WHEEL_DIR=" + wheeldir,
+            f"-DTRITON_CACHE_PATH={get_triton_cache_path()}",
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -516,6 +335,19 @@ class CMakeBuild(build_ext):
             "TRITON_BUILD_PROTON",
             "TRITON_BUILD_WITH_CCACHE",
             "TRITON_PARALLEL_LINK_JOBS",
+            "TRITON_OFFLINE_BUILD",
+            "TRITON_LLVM_SYSTEM_SUFFIX",
+            "LLVM_SYSPATH",
+            "JSON_SYSPATH",
+            "TRITON_CUDACRT_PATH",
+            "TRITON_CUDART_PATH",
+            "TRITON_CUOBJDUMP_PATH",
+            "TRITON_CUPTI_INCLUDE_PATH",
+            "TRITON_CUPTI_LIB_PATH",
+            "TRITON_CUPTI_LIB_BLACKWELL_PATH",
+            "TRITON_NVDISASM_PATH",
+            "TRITON_PTXAS_PATH",
+            "TRITON_PTXAS_BLACKWELL_PATH",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
@@ -536,101 +368,6 @@ class CMakeBuild(build_ext):
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
-
-
-def download_and_copy_dependencies():
-    nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
-    with open(nvidia_version_path, "r") as nvidia_version_file:
-        # parse this json file to get the version of the nvidia toolchain
-        NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
-
-    exe_extension = sysconfig.get_config_var("EXE")
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas",
-        variable="TRITON_PTXAS_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-    )
-
-    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas-blackwell",
-        variable="TRITON_PTXAS_BLACKWELL_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cuobjdump",
-        src_func=lambda system, arch, version:
-        f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-        dst_path="bin/cuobjdump",
-        variable="TRITON_CUOBJDUMP_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="nvdisasm",
-        src_func=lambda system, arch, version:
-        f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-        dst_path="bin/nvdisasm",
-        variable="TRITON_NVDISASM_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    crt = "crt" if int(NVIDIA_TOOLCHAIN_VERSION["cudacrt"].split(".")[0]) >= 13 else "nvcc"
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUDACRT_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_{crt}/{system}-{arch}/cuda_{crt}-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cudart",
-        src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUDART_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUPTI_INCLUDE_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-        dst_path="lib/cupti",
-        variable="TRITON_CUPTI_LIB_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-        dst_path="lib/cupti-blackwell",
-        variable="TRITON_CUPTI_LIB_BLACKWELL_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-    )
 
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
