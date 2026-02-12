@@ -153,7 +153,8 @@ def load_partition(p):
     batch_id, out_y, out_x = prog.get_m_offsets()
 
     num_buffers: gl.constexpr = p.a_bufs.type.shape[0]
-    ci_num_blocks = config.Ci // BLOCK_K
+    # Allow Ci not divisible by BLOCK_K; TMA zero-fills out-of-bounds for the partial block.
+    ci_num_blocks = gl.cdiv(config.Ci, BLOCK_K)
     num_rs = config.R * config.S
     num_k_iter = num_rs * ci_num_blocks
 
@@ -161,7 +162,9 @@ def load_partition(p):
         index = k_iter % num_buffers
         phase = k_iter // num_buffers & 1
 
-        # Decompose k_iter into (r, s, ci_block) indices
+        # Decompose k_iter into (r, s, ci_block) indices.
+        # When Ci is not a multiple of BLOCK_K, the last iter_ci block is partial;
+        # we use the same indices (iter_ci * BLOCK_K, k_offset) and TMA zero-fills OOB.
         iter_ci = k_iter // num_rs
         remain_rs = k_iter % num_rs
         iter_s = remain_rs % config.S
@@ -174,7 +177,7 @@ def load_partition(p):
         ready_bar = p.load_ready_bars.index(index)
         mbarrier.expect(ready_bar, p.in_desc.block_type.nbytes + p.weight_desc.block_type.nbytes)
 
-        # Input tile via TMA im2col (offsets must be i16)
+        # Input tile via TMA im2col: channel offset iter_ci*BLOCK_K (OOB channels zero-filled)
         tma.async_copy_global_to_shared_im2col(
             p.in_desc,
             [
@@ -186,8 +189,11 @@ def load_partition(p):
             p.a_bufs.index(index),
         )
 
-        # Weight tile via standard TMA: weight is (Co, R*S*Ci) = (N_GEMM, K_GEMM)
-        k_offset = ((iter_s + iter_r * config.S) * ci_num_blocks + iter_ci) * BLOCK_K
+        # Weight tile: k_offset into (Co, R*S*Ci).  Use Ci (not ci_num_blocks*BLOCK_K) as
+        # the per-(r,s) stride so offsets stay aligned with the flat layout.  When the last
+        # ci block bleeds into the next (r,s) group, those weight elements are multiplied
+        # by zero-filled input channels, so the result is still correct.
+        k_offset = (iter_r * config.S + iter_s) * config.Ci + iter_ci * BLOCK_K
         tma.async_copy_global_to_shared(
             p.weight_desc,
             [prog.pid_n * BLOCK_N, k_offset],
@@ -201,16 +207,17 @@ def mma_partition(p):
     """MMA partition: performs tcgen05 matrix-multiply-accumulate operations."""
     config = p.config
     BLOCK_K: gl.constexpr = config.BLOCK_K
-    K_GEMM = config.R * config.S * config.Ci
 
     num_buffers: gl.constexpr = p.a_bufs.type.shape[0]
+    # Must match the load partition: R*S * ceil(Ci/BLOCK_K), not ceil(R*S*Ci / BLOCK_K).
+    num_k_iter = config.R * config.S * gl.cdiv(config.Ci, BLOCK_K)
 
     # Wait for accumulator buffer
     mbarrier.wait(p.acc_empty_bars.index(0), phase=1)
     acc_buf = p.acc_bufs.index(0)
     use_acc = False
 
-    for k_iter in range(gl.cdiv(K_GEMM, BLOCK_K)):
+    for k_iter in range(num_k_iter):
         index = k_iter % num_buffers
         load_phase = k_iter // num_buffers & 1
 
@@ -429,15 +436,12 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
                          f"stride={stride}, padding={padding}.")
 
     # Tile parameters for this kernel variant.
-    # Current implementation requires Ci to be divisible by BLOCK_K because
-    # load/mma partitions assume full K-tiles without tail handling.
+    # Ci need not be divisible by BLOCK_K: the last channel block is partial and
+    # TMA zero-fills out-of-bounds, so the MMA result remains correct.
     BLOCK_M = 256
     BLOCK_N = 256
     BLOCK_K = 64
     GROUP_SIZE_M = 4
-    if Ci % BLOCK_K != 0:
-        raise ValueError(f"Unsupported Ci={Ci}: this kernel requires Ci % BLOCK_K == 0 "
-                         f"(BLOCK_K={BLOCK_K}).")
 
     output = torch.empty((N, out_h, out_w, Co), device=input_tensor.device, dtype=torch.float16)
 
@@ -518,7 +522,7 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=
 
 @pytest.mark.parametrize("N", [1, 128])
 @pytest.mark.parametrize("H,W", [(64, 64)])
-@pytest.mark.parametrize("Ci,Co", [(384, 384)])
+@pytest.mark.parametrize("Ci,Co", [(384, 384), (416, 416)])
 @pytest.mark.parametrize("R,S", [(3, 3), (4, 4), (5, 5)])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])

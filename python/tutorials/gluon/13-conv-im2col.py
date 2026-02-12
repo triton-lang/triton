@@ -989,8 +989,9 @@ def conv2d_im2col_kernel(
     a_smem, b_smem, mma, tma_bar = init_accumulator(in_desc, weight_desc, MMAImpl, dtype, BLOCK_M, BLOCK_N, num_warps)
     phase = 0
 
-    # for r in range(R): for s in range(S): for ci_blk in range(Ci//BLOCK_K):
-    ci_num_blocks = Ci // BLOCK_K
+    # for r in range(R): for s in range(S): for ci_blk in range(ceil(Ci/BLOCK_K))
+    # When Ci is not a multiple of BLOCK_K, last channel block is partial; TMA zero-fills OOB.
+    ci_num_blocks = ttgl.cdiv(Ci, BLOCK_K)
     total_k_iters = R * S * ci_num_blocks
     for k_iter in range(total_k_iters):
         ci_block, rs_idx = k_iter % ci_num_blocks, k_iter // ci_num_blocks
@@ -1002,7 +1003,6 @@ def conv2d_im2col_kernel(
         #   offsets = [r, s]
         # TMA applies offsets to the spatial coords, so start is:
         #   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
-        k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
         tma.async_copy_global_to_shared_im2col(
             in_desc,
@@ -1011,7 +1011,12 @@ def conv2d_im2col_kernel(
             tma_bar,
             a_smem,
         )
-        # B = load_weight[co_start:…, r, s, ci_blk*BLOCK_K:…]
+        # B = load_weight[co_start:…, k_offset:k_offset+BLOCK_K].  Uses Ci (not
+        # ci_num_blocks*BLOCK_K) as the per-(r,s) stride so offsets stay aligned with the
+        # flat (Co, R*S*Ci) layout.  When the last ci block bleeds into the next (r,s)
+        # group, those weight elements are multiplied by zero-filled input channels (TMA
+        # zero-fills input channels past Ci), so the result is still correct.
+        k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
         tma.async_copy_global_to_shared(weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
@@ -1056,7 +1061,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
     assert Ci == Ci_w, "Channel mismatch"
     assert stride > 0, f"stride must be positive, got {stride}"
     assert padding >= 0, f"padding must be non-negative, got {padding}"
-    assert Ci % BLOCK_K == 0, f"Ci={Ci} must be divisible by BLOCK_K={BLOCK_K}"
+    # Ci may be any positive value; when not divisible by BLOCK_K, last tile is partial (TMA zero-fills OOB).
 
     out_h = (H + 2 * padding - R) // stride + 1
     out_w = (W + 2 * padding - S) // stride + 1
