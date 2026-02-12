@@ -1,3 +1,4 @@
+import argparse
 import importlib
 
 import pytest
@@ -766,7 +767,7 @@ def show_profile(profile_name):
     proton_viewer.print_tree(tree, metrics)
 
 
-def benchmark():
+def benchmark(*, profile=True):
     if not is_blackwell():
         raise RuntimeError("This benchmark requires a Blackwell CUDA GPU.")
 
@@ -841,6 +842,10 @@ def benchmark():
         run_pallas = None
         print(f"Skipping Pallas benchmark: {exc}")
 
+    if not profile:
+        print("Skipping profiling (--no-profile).")
+        return
+
     import triton.profiler as proton
 
     def bench_fn(label, reps, fn):
@@ -889,4 +894,24 @@ def benchmark():
 
 
 if __name__ == "__main__":
-    benchmark()
+    parser = argparse.ArgumentParser(description="Gluon matmul benchmark")
+    """
+    To enable NCU profiling, run the script with the following example command:
+    ```
+    ncu --target-processes all \
+    --set full \
+    --import-source yes \
+    --kernel-name-base function \
+    --kernel-name 'regex:.*_matmul_kernel.*' \
+    --launch-count 1 \
+    -o ncu_triton_matmul \
+    python 02-matmul-multicta.py --no-profile
+    ```
+    """
+    parser.add_argument(
+        "--no-profile",
+        action="store_true",
+        help="Skip Proton profiling and exit after validation.",
+    )
+    args = parser.parse_args()
+    benchmark(profile=not args.no_profile)
