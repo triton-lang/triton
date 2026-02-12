@@ -23,6 +23,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   };
 
   for (const auto &pendingGraph : pendingGraphs) {
+    auto dataEntryIndex = 0;
     for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
       const uint64_t metricId = readWord(wordOffset);
       wordOffset = (wordOffset + 1) % capacityWords;
@@ -88,9 +89,16 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      auto &dataEntry = pendingGraph.dataEntries[i];
-      dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                           dataEntry.id);
+      while (dataEntryIndex < pendingGraph.dataEntries.size()) {
+        auto &dataEntry = pendingGraph.dataEntries[dataEntryIndex];
+        dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                             dataEntry.id);
+        ++dataEntryIndex;
+        if (dataEntryIndex >= pendingGraph.dataEntries.size() ||
+            pendingGraph.dataEntries[dataEntryIndex].id != dataEntry.id) {
+          break;
+        }
+      }
     }
   }
 }
