@@ -387,7 +387,7 @@ def check_bit_width(value, shift_value):
 
 
 class dtype(base_type):
-    SINT_TYPES = ['int8', 'int16', 'int32', 'int64', 'int128']
+    SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
@@ -489,9 +489,6 @@ class dtype(base_type):
 
     def is_int64(self):
         return self.name == 'int64'
-
-    def is_int128(self):
-        return self.name == 'int128'
 
     def is_uint8(self):
         return self.name == 'uint8'
@@ -601,8 +598,6 @@ class dtype(base_type):
             return builder.get_int32_ty()
         elif self.name in ('int64', 'uint64'):
             return builder.get_int64_ty()
-        elif self.name == 'int128':
-            return builder.get_int128_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
         elif self.name == 'fp8e5b16':
@@ -814,7 +809,6 @@ int8 = dtype('int8')
 int16 = dtype('int16')
 int32 = dtype('int32')
 int64 = dtype('int64')
-int128 = dtype('int128')
 uint8 = dtype('uint8')
 uint16 = dtype('uint16')
 uint32 = dtype('uint32')
@@ -851,8 +845,6 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
         return int64
     elif bitwidth == 64 and not signed:
         return uint64
-    elif bitwidth == 128 and signed:
-        return int128
     else:
         raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
 

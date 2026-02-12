@@ -1156,9 +1156,9 @@ LogicalResult TensormapCreateOp::verify() {
 // -- CLCTryCancelOp --
 static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
-  if (!int_ty || int_ty.getWidth() != 128) {
+  if (!int_ty || int_ty.getWidth() != 64) {
     return emitError(loc)
-           << "Expected CLC result buffer to have integer element type int128, "
+           << "Expected CLC result buffer to have integer element type int64, "
               "but got "
            << desc.getElementType();
   }
@@ -1174,9 +1174,9 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   }
 
   auto rank = desc.getRank();
-  if (rank != 1 || desc.getDimSize(0) != numCTAs) {
+  if (rank != 1 || desc.getDimSize(0) != 2 * numCTAs) {
     return emitError(loc) << "Expected CLC result buffer to have rank 1 and a "
-                             "single dimension equal to the number of CTAs, "
+                             "single dimension equal to 2x the number of CTAs, "
                              "but got "
                           << desc.getShape() << ".";
   }

@@ -3496,7 +3496,8 @@ def test_clc_basic(num_ctas):
         # Allocate clc_mbar before clc_result to make sure that we are indeed aligning
         # clc_result correctly after a i64 element.
         clc_mbar = mbarrier.allocate_mbarrier()
-        clc_result = ttgl.allocate_shared_memory(ttgl.int128, clc_mbar.shape, clc_mbar.layout)
+        clc_result_shape: ttgl.constexpr = [clc_mbar.shape[0] * 2]
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, clc_result_shape, clc_mbar.layout)
         mbarrier.init(clc_mbar, count=1)
 
         # Large shared memory allocation to force 1 block per SM
@@ -3515,12 +3516,13 @@ def test_clc_basic(num_ctas):
 
     dev_props = torch.cuda.get_device_properties("cuda")
     num_sms = dev_props.multi_processor_count
+    smem_size = dev_props.shared_memory_per_block_optin
     grid = 2 * (num_sms // num_ctas)
 
     was_launched = torch.zeros([grid], dtype=torch.bool, device="cuda")
     is_cancelled = torch.zeros([grid], dtype=torch.bool, device="cuda")
     program_ids = torch.zeros([grid], dtype=torch.int32, device="cuda")
-    clc_kernel[(grid, )](was_launched, is_cancelled, program_ids, num_ctas=num_ctas)
+    clc_kernel[(grid, )](was_launched, is_cancelled, program_ids, smem_size, num_ctas=num_ctas)
 
     num_launched = torch.sum(was_launched).item()
     assert num_launched < grid

@@ -523,7 +523,8 @@ def _matmul_kernel(
     for i in gl.static_range(2):
         mbarrier.init(clc_barriers.index(i), count=1)
 
-    clc_result_buffers = gl.allocate_shared_memory(gl.int128, clc_barriers.shape, scheduler_sync_bar.layout)
+    clc_result_shape: gl.constexpr = [clc_barriers.shape[0], 2 * clc_barriers.shape[1]]
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, scheduler_sync_bar.layout)
 
     p = PartitionArgs(
         a_desc,
