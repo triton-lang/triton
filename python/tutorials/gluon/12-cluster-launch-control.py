@@ -70,7 +70,8 @@ class ClcTileScheduler:
         starting_tile_id = gl.program_id(0)
 
         barrier = mbarrier.allocate_mbarrier()
-        clc_result_buffer = gl.allocate_shared_memory(gl.int128, barrier.shape, barrier.layout)
+        clc_result_shape: gl.constexpr = [2 * barrier.shape[0]]
+        clc_result_buffer = gl.allocate_shared_memory(gl.int64, clc_result_shape, barrier.layout)
         mbarrier.init(barrier, count=1)
         phase = gl.to_tensor(0)
         return ClcTileScheduler(has_work, starting_tile_id, clc_result_buffer, barrier, phase)

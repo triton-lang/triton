@@ -28,7 +28,7 @@ def try_cancel(result: shared_memory_descriptor, barrier, multicast=False, _sema
     Issue a CLC try_cancel request to atomically cancel a pending cluster launch.
 
     Args:
-        result (shared_memory_descriptor): 16-byte aligned int128 shared memory for the response
+        result (shared_memory_descriptor): 16-byte aligned int64x2 shared memory for the response
         barrier (shared_memory_descriptor): 8-byte aligned mbarrier for completion signaling
         multicast (bool): If True, broadcast result to all CTAs in cluster
 
@@ -43,7 +43,7 @@ def load_result(src, _semantic=None):
     Load the CLC response from shared memory into registers.
 
     Args:
-        src (shared_memory_descriptor): The int128 CLC response buffer
+        src (shared_memory_descriptor): The int64x2 CLC response buffer
 
     Returns:
         CLCResult: Object with is_canceled() and get_first_ctaid(dim) methods
