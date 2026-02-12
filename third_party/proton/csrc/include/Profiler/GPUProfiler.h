@@ -72,7 +72,7 @@ public:
 
     // Snapshot of graph node states copied from GraphState at launch time.
     // nodeId -> graph node metadata/state
-    std::map<uint64_t, GraphState::NodeState> graphNodeIdToState;
+    std::unordered_map<uint64_t, GraphState::NodeState> graphNodeIdToState;
   };
 
   using ExternIdToStateMap =
