@@ -326,7 +326,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
 private:
   using GraphNodeStateMap =
-      std::map<uint64_t, GraphState::NodeState>;
+      std::unordered_map<uint64_t, GraphState::NodeState>;
 
   void
   populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
