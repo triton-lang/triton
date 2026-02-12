@@ -23,7 +23,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   };
 
   for (const auto &pendingGraph : pendingGraphs) {
-    auto dataEntryIndex = 0;
     for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
       const uint64_t metricId = readWord(wordOffset);
       wordOffset = (wordOffset + 1) % capacityWords;
@@ -89,15 +88,10 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      while (dataEntryIndex < pendingGraph.dataEntries.size()) {
-        auto &dataEntry = pendingGraph.dataEntries[dataEntryIndex];
+      for (auto &[_, dataEntries] : pendingGraph.dataEntries) {
+        auto &dataEntry = dataEntries[i];
         dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
                                              dataEntry.id);
-        ++dataEntryIndex;
-        if (dataEntryIndex >= pendingGraph.dataEntries.size() ||
-            pendingGraph.dataEntries[dataEntryIndex].id != dataEntry.id) {
-          break;
-        }
       }
     }
   }
@@ -105,7 +99,9 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 } // namespace
 
 void PendingGraphPool::push(size_t phase,
-                            const std::vector<DataEntry> &dataEntries,
+                            const std::unordered_map<Data *,
+                                                     std::vector<DataEntry>>
+                                &dataEntries,
                             size_t numNodes, size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();

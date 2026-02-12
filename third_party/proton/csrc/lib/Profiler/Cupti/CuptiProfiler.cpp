@@ -584,13 +584,13 @@ void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
     return;
   }
 
-  std::vector<DataEntry> metricNodeEntries;
+  std::unordered_map<Data *, std::vector<DataEntry>> metricNodeEntries;
   auto phase = Data::kNoCompletePhase;
   for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
     auto nodeId = metricNode.first;
     auto &nodeState = graphNodeIdToState.emplace(nodeId);
     nodeState.forEachEntry([&](const DataEntry &entry) {
-      metricNodeEntries.push_back(entry);
+      metricNodeEntries[entry.data].push_back(entry);
       if (phase == Data::kNoCompletePhase) {
         phase = entry.phase;
       } else if (phase != entry.phase) {

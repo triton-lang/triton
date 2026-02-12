@@ -82,8 +82,8 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    // Metric target entries aligned with graph metric-node order.
-    std::vector<DataEntry> dataEntries;
+    // data -> metric target entries aligned with graph metric-node order.
+    std::unordered_map<Data *, std::vector<DataEntry>> dataEntries;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -102,8 +102,9 @@ struct PendingGraphQueue {
                              void *device)
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
-  void push(size_t numNodes, size_t numWords,
-            const std::vector<DataEntry> &dataEntries) {
+  void push(
+      size_t numNodes, size_t numWords,
+      const std::unordered_map<Data *, std::vector<DataEntry>> &dataEntries) {
     pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataEntries});
     this->numNodes += numNodes;
     this->numWords += numWords;
@@ -115,7 +116,8 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase, const std::vector<DataEntry> &dataEntries,
+  void push(size_t phase,
+            const std::unordered_map<Data *, std::vector<DataEntry>> &dataEntries,
             size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
