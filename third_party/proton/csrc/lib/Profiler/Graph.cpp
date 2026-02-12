@@ -25,7 +25,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
   for (const auto &pendingGraph : pendingGraphs) {
     const auto &metricNodeIdToDataSet = *pendingGraph.metricNodeIdToDataSet;
     for (const auto &[nodeId, nodeDataSet] : metricNodeIdToDataSet) {
-      auto *nodeState = pendingGraph.nodeIdToState->find(nodeId);
+      const auto *nodeState = pendingGraph.nodeIdToState->find(nodeId);
 
       const uint64_t metricId = readWord(wordOffset);
       wordOffset = (wordOffset + 1) % capacityWords;
