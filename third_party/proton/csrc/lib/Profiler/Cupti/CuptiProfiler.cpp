@@ -450,9 +450,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             contexts.push_back(name);
           auto staticEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+          graphState.dataSet.insert(data);
           nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].push_back(
-              std::ref(nodeState));
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
@@ -466,10 +465,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           originalGraphState.nodeIdToState[originalNodeId];
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
-      for (const auto &[data, entryId] : nodeState.dataToEntryId) {
-        graphState.dataToEntryIdToNodeStates[data][entryId].push_back(
-            std::ref(nodeState));
-      }
+      graphState.dataSet = originalGraphState.dataSet;
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToNumWords.find(originalNodeId);
       if (originalMetricNodeIt !=
@@ -486,16 +482,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
-    for (const auto &[data, entryId] :
-         graphState.nodeIdToState[nodeId].dataToEntryId) {
-      auto &nodeStates = graphState.dataToEntryIdToNodeStates[data][entryId];
-      nodeStates.erase(
-          std::remove_if(nodeStates.begin(), nodeStates.end(),
-                         [nodeId](const GraphState::NodeStateRef &state) {
-                           return state.get().nodeId == nodeId;
-                         }),
-          nodeStates.end());
-    }
     graphState.nodeIdToState.erase(nodeId);
     graphState.metricNodeIdToNumWords.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
@@ -569,8 +555,7 @@ void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
   graphNodeIdToState = graphState.nodeIdToState;
   for (const auto &launchEntry : dataEntries) {
     auto *data = launchEntry.data;
-    auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
-    if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end()) {
+    if (graphState.dataSet.find(data) == graphState.dataSet.end()) {
       // The data was not enabled during graph capture.
       continue;
     }

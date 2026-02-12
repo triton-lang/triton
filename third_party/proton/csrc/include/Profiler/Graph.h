@@ -6,11 +6,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <utility>
@@ -56,15 +56,11 @@ struct GraphState {
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
   };
-  using NodeStateRef = std::reference_wrapper<NodeState>;
-  // Precomputed per-Data launch links maintained on graph node
-  // create/clone/destroy callbacks.
-  // data -> (static_entry_id -> graph-node metadata refs)
-  std::map<Data *, std::unordered_map<size_t, std::vector<NodeStateRef>>>
-      dataToEntryIdToNodeStates;
+  // Data objects that were enabled during graph capture.
+  std::set<Data *> dataSet;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
-  std::map<uint64_t, NodeState> nodeIdToState;
+  std::unordered_map<uint64_t, NodeState> nodeIdToState;
   // Metric nodes and their per-node metric words, ordered by node id.
   std::map<uint64_t, size_t> metricNodeIdToNumWords;
   // If the graph is launched after profiling started,
