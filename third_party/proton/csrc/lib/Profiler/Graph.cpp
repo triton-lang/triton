@@ -92,14 +92,10 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      for (auto *data : nodeDataSet) {
-        for (auto &launchEntryIt : pendingGraph.graphLaunchEntries) {
-          if (launchEntryIt.data != data)
-            continue;
-          auto linkedId = nodeState->dataToEntryId.at(data);
-          launchEntryIt.upsertLinkedFlexibleMetric(
-              metricName, metricValueVariant, linkedId);
-        }
+      for (auto &launchEntry : pendingGraph.graphLaunchEntries) {
+        auto linkedId = nodeState->dataToEntryId.at(launchEntry.data);
+        launchEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                               linkedId);
       }
     }
   }
