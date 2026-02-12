@@ -118,36 +118,31 @@ uint32_t processActivityKernel(
     }
     auto &externState = *state;
     // We have a graph creation captured
-    auto *graphNodeIdToState = externState.graphNodeIdToState;
-    if (graphNodeIdToState != nullptr) {
-      auto nodeStateIt = graphNodeIdToState->find(kernel->graphNodeId);
-      if (nodeStateIt != graphNodeIdToState->end() &&
-        !nodeStateIt->second.status.isMetricNode()) {
-        const auto &nodeState = nodeStateIt->second;
-        const bool isMissingName = nodeState.status.isMissingName();
-        if (!isMissingName) {
-          for (auto &entry : state->dataEntries) {
-            auto linkedIdIt = nodeState.dataToEntryId.find(entry.data);
-            if (linkedIdIt == nodeState.dataToEntryId.end())
-              continue;
-            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              entry.upsertLinkedMetric(std::move(kernelMetric),
-                                       linkedIdIt->second);
-              detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-            }
+    auto &graphNodeIdToState = externState.graphNodeIdToState;
+    auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
+    if (nodeState != nullptr && !nodeState->status.isMetricNode()) {
+      const bool isMissingName = nodeState->status.isMissingName();
+      if (!isMissingName) {
+        for (auto &entry : state->dataEntries) {
+          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
+          if (linkedIdIt == nodeState->dataToEntryId.end())
+            continue;
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            entry.upsertLinkedMetric(std::move(kernelMetric), linkedIdIt->second);
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
-        } else {
-          for (auto &entry : state->dataEntries) {
-            auto linkedIdIt = nodeState.dataToEntryId.find(entry.data);
-            if (linkedIdIt == nodeState.dataToEntryId.end())
-              continue;
-            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              auto childEntry = entry.data->addOp(Data::kVirtualPhase,
-                                                  linkedIdIt->second,
-                                                  {Context(kernel->name)});
-              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-              detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-            }
+        }
+      } else {
+        for (auto &entry : state->dataEntries) {
+          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
+          if (linkedIdIt == nodeState->dataToEntryId.end())
+            continue;
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry = entry.data->addOp(Data::kVirtualPhase,
+                                                linkedIdIt->second,
+                                                {Context(kernel->name)});
+            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
           }
         }
       }
@@ -328,16 +323,16 @@ struct CuptiProfiler::CuptiProfilerPimpl
   ThreadSafeMap<uint32_t, GraphState> graphStates;
 
 private:
-  using GraphNodeStateMap =
-      std::unordered_map<uint64_t, GraphState::NodeState>;
+  using GraphNodeStateMap = GraphState::NodeStateTable;
 
   void
   populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
                                    const GraphState &graphState,
+                                   GraphNodeStateMap &graphNodeIdToState,
                                    std::vector<DataEntry> &graphLaunchEntries);
   void enqueueGraphMetricNodes(
       CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-      const GraphState &graphState, const GraphNodeStateMap *graphNodeIdToState,
+      const GraphState &graphState, GraphNodeStateMap &graphNodeIdToState,
       const std::vector<DataEntry> &graphLaunchEntries);
 
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
@@ -429,7 +424,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         graphStates[graphId].numNodes++;
       if (profiler.isOpInProgress()) {
         auto &graphState = graphStates[graphId];
-        auto &nodeState = graphState.nodeIdToState[nodeId];
+        auto &nodeState = graphState.nodeIdToState.emplace(nodeId);
         nodeState.nodeId = nodeId;
         const auto &name = threadState.scopeStack.back().name;
         if (name.empty() || (threadState.isApiExternOp &&
@@ -463,9 +458,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
       auto &originalGraphState = graphStates[originalGraphId];
       auto &graphState = graphStates[graphId];
-      graphState.nodeIdToState[nodeId] =
-          originalGraphState.nodeIdToState[originalNodeId];
-      auto &nodeState = graphState.nodeIdToState[nodeId];
+      auto *originalNodeState = originalGraphState.nodeIdToState.find(
+          originalNodeId);
+      if (originalNodeState == nullptr) {
+        throw std::runtime_error("[PROTON] Missing original graph node state");
+      }
+      auto &nodeState = graphState.nodeIdToState.emplace(nodeId);
+      nodeState = *originalNodeState;
       nodeState.nodeId = nodeId;
       graphState.dataSet = originalGraphState.dataSet;
       auto originalMetricNodeIt =
@@ -489,7 +488,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-    // Keep graphExec state alive for deferred CUPTI activity processing.
+    graphStates.erase(graphExecId);
   }
 }
 
@@ -552,7 +551,9 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
 
 void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
     const std::vector<DataEntry> &dataEntries, const GraphState &graphState,
+    GraphNodeStateMap &graphNodeIdToState,
     std::vector<DataEntry> &graphLaunchEntries) {
+  graphNodeIdToState = graphState.nodeIdToState;
   for (const auto &launchEntry : dataEntries) {
     auto *data = launchEntry.data;
     if (graphState.dataSet.find(data) == graphState.dataSet.end()) {
@@ -567,13 +568,10 @@ void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
 
 void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
     CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-    const GraphState &graphState, const GraphNodeStateMap *graphNodeIdToState,
+    const GraphState &graphState, GraphNodeStateMap &graphNodeIdToState,
     const std::vector<DataEntry> &graphLaunchEntries) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
-  }
-  if (graphNodeIdToState == nullptr) {
-    throw std::runtime_error("[PROTON] Missing graph node state table");
   }
 
   std::vector<std::vector<size_t>> linkedEntryIds(graphLaunchEntries.size());
@@ -588,16 +586,15 @@ void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
   }
   for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
     auto nodeId = metricNode.first;
-    auto nodeStateIt = graphNodeIdToState->find(nodeId);
-    if (nodeStateIt == graphNodeIdToState->end()) {
+    auto *nodeState = graphNodeIdToState.find(nodeId);
+    if (nodeState == nullptr) {
       throw std::runtime_error("[PROTON] Missing graph node state for node id " +
                                std::to_string(nodeId));
     }
-    const auto &nodeState = nodeStateIt->second;
     for (size_t dataIdx = 0; dataIdx < graphLaunchEntries.size(); ++dataIdx) {
       const auto &entry = graphLaunchEntries[dataIdx];
-      auto linkedEntryIdIt = nodeState.dataToEntryId.find(entry.data);
-      if (linkedEntryIdIt == nodeState.dataToEntryId.end()) {
+      auto linkedEntryIdIt = nodeState->dataToEntryId.find(entry.data);
+      if (linkedEntryIdIt == nodeState->dataToEntryId.end()) {
         throw std::runtime_error("[PROTON] Missing graph linked entry for data");
       }
       linkedEntryIds[dataIdx].push_back(linkedEntryIdIt->second);
@@ -633,7 +630,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
   std::vector<DataEntry> graphLaunchEntries;
-  const GraphNodeStateMap *graphNodeIdToState = nullptr;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -656,7 +652,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.
-      graphNodeIdToState = &graphState.nodeIdToState;
+      auto &graphNodeIdToState =
+          profiler.correlation.externIdToState[scope.scopeId]
+              .graphNodeIdToState;
+      graphNodeIdToState.clear();
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
@@ -665,7 +664,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
 
       populateGraphNodeStatesForLaunch(dataEntries, graphState,
-                                       graphLaunchEntries);
+                                       graphNodeIdToState, graphLaunchEntries);
       if (timingEnabled) {
         auto t1 = Clock::now();
         auto elapsed =
@@ -688,9 +687,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
     }
   }
-
-  profiler.correlation.externIdToState[scope.scopeId].graphNodeIdToState =
-      graphNodeIdToState;
 
   const auto &entriesForCorrelation =
       graphLaunchEntries.empty() ? dataEntries : graphLaunchEntries;

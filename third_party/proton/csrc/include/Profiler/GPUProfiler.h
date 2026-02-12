@@ -70,10 +70,8 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    // Non-owning pointer to graph node states (owned by GraphState).
-    const std::unordered_map<uint64_t, GraphState::NodeState>
-        *graphNodeIdToState{
-        nullptr};
+    // Snapshot of graph node states copied from GraphState at launch time.
+    GraphState::NodeStateTable graphNodeIdToState;
   };
 
   using ExternIdToStateMap =

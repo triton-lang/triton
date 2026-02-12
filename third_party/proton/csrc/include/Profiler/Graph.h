@@ -3,6 +3,7 @@
 
 #include "Context/Context.h"
 #include "Data/Data.h"
+#include "Utility/Table.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -58,9 +59,10 @@ struct GraphState {
   };
   // Data objects that were enabled during graph capture.
   std::set<Data *> dataSet;
-  // Mapping from node id to node state, has to be ordered based on node id
-  // which is the order of node creation.
-  std::unordered_map<uint64_t, NodeState> nodeIdToState;
+  // Mapping from node id to node state.
+  // This table only grows capacity and never shrinks.
+  using NodeStateTable = RangeTable<NodeState, uint64_t>;
+  NodeStateTable nodeIdToState;
   // Metric nodes and their per-node metric words, ordered by node id.
   std::map<uint64_t, size_t> metricNodeIdToNumWords;
   // If the graph is launched after profiling started,

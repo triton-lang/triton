@@ -1,6 +1,7 @@
 #ifndef PROTON_UTILITY_TABLE_H_
 #define PROTON_UTILITY_TABLE_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -19,32 +20,40 @@ public:
       clear();
       return;
     }
-    minId = minIdValue;
-    auto size = static_cast<size_t>(maxIdValue - minIdValue + 1);
-    nodes.clear();
-    nodes.resize(size);
-    present.assign(size, false);
+    ensureRange(minIdValue, maxIdValue);
+    clear();
   }
 
   void clear() {
-    minId = 0;
-    nodes.clear();
-    present.clear();
+    std::fill(present.begin(), present.end(), false);
+    liveCount = 0;
   }
 
   std::pair<T *, bool> tryEmplace(IdT id) {
-    if (!inRange(id))
-      return {nullptr, false};
+    ensureRange(id, id);
     auto index = indexFor(id);
     bool inserted = !present[index];
-    present[index] = true;
+    if (inserted) {
+      present[index] = true;
+      ++liveCount;
+      nodes[index] = T{};
+    }
     return {&nodes[index], inserted};
   }
 
   T &emplace(IdT id) {
+    return *tryEmplace(id).first;
+  }
+
+  void erase(IdT id) {
+    if (!inRange(id))
+      return;
     auto index = indexFor(id);
-    present[index] = true;
-    return nodes[index];
+    if (!present[index])
+      return;
+    present[index] = false;
+    nodes[index] = T{};
+    --liveCount;
   }
 
   T *find(IdT id) {
@@ -61,9 +70,35 @@ public:
     return present[index] ? &nodes[index] : nullptr;
   }
 
-  bool empty() const { return nodes.empty(); }
+  bool empty() const { return liveCount == 0; }
+
+  size_t size() const { return liveCount; }
 
 private:
+  void ensureRange(IdT minIdValue, IdT maxIdValue) {
+    if (nodes.empty()) {
+      minId = minIdValue;
+      auto size = static_cast<size_t>(maxIdValue - minIdValue + 1);
+      nodes.resize(size);
+      present.assign(size, false);
+      return;
+    }
+
+    if (minIdValue < minId) {
+      auto prefix = static_cast<size_t>(minId - minIdValue);
+      nodes.insert(nodes.begin(), prefix, T{});
+      present.insert(present.begin(), prefix, false);
+      minId = minIdValue;
+    }
+
+    auto maxId = minId + static_cast<IdT>(nodes.size() - 1);
+    if (maxIdValue > maxId) {
+      auto suffix = static_cast<size_t>(maxIdValue - maxId);
+      nodes.resize(nodes.size() + suffix);
+      present.resize(present.size() + suffix, false);
+    }
+  }
+
   bool inRange(IdT id) const {
     if (nodes.empty() || id < minId)
       return false;
@@ -76,6 +111,7 @@ private:
   IdT minId{0};
   std::vector<T> nodes;
   std::vector<bool> present;
+  size_t liveCount{0};
 };
 
 } // namespace proton
