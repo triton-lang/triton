@@ -57,11 +57,6 @@ public:
       ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
                     std::unordered_map<uint64_t, size_t>>;
 
-  static const GraphState::NodeStateTable &emptyGraphNodeIdToState() {
-    static const GraphState::NodeStateTable kEmpty{};
-    return kEmpty;
-  }
-
   struct ExternIdState {
     // ----non-graph launch fields----
     // Active entries for each data sink associated with this extern launch.
@@ -181,12 +176,14 @@ protected:
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
                    bool isMissingName,
-                   const std::vector<DataEntry> &dataEntries) {
+                   const std::vector<DataEntry> &dataEntries,
+                   const GraphState::NodeStateTable *graphNodeIdToState) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
         state.dataEntries = dataEntries;
         state.isMissingName = isMissingName;
+        state.graphNodeIdToState = graphNodeIdToState;
       });
     }
 

@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -119,9 +118,8 @@ uint32_t processActivityKernel(
     auto &externState = *state;
     // We have a graph creation captured
     auto *nodeState = externState.graphNodeIdToState->find(kernel->graphNodeId);
-    if (nodeState != nullptr && !nodeState->status.isMetricNode()) {
-      const bool isMissingName = nodeState->status.isMissingName();
-      if (!isMissingName) {
+    if (!nodeState->status.isMetricNode()) {
+      if (nodeState->status.isMissingName()) {
         for (auto &entry : state->dataEntries) {
           auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
           if (linkedIdIt == nodeState->dataToEntryId.end())
@@ -323,15 +321,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
 private:
   using GraphNodeStateMap = GraphState::NodeStateTable;
-
-  void
-  populateGraphNodeStatesForLaunch(const std::vector<DataEntry> &dataEntries,
-                                   const GraphState &graphState,
-                                   std::vector<DataEntry> &graphLaunchEntries);
-  void enqueueGraphMetricNodes(
-      CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-      const GraphState &graphState, const GraphNodeStateMap &graphNodeIdToState,
-      const std::vector<DataEntry> &graphLaunchEntries);
 
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
                                     CUpti_CallbackId cbId,
@@ -553,48 +542,6 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
   return false;
 }
 
-void CuptiProfiler::CuptiProfilerPimpl::populateGraphNodeStatesForLaunch(
-    const std::vector<DataEntry> &dataEntries, const GraphState &graphState,
-    std::vector<DataEntry> &graphLaunchEntries) {
-  for (const auto &launchEntry : dataEntries) {
-    auto *data = launchEntry.data;
-    if (graphState.dataSet.find(data) == graphState.dataSet.end()) {
-      // The data was not enabled during graph capture.
-      continue;
-    }
-    auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
-                                 {Context{GraphState::captureTag}});
-    graphLaunchEntries.push_back(baseEntry);
-  }
-}
-
-void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
-    CuptiProfiler &profiler, const CUpti_CallbackData *callbackData,
-    const GraphState &graphState, const GraphNodeStateMap &graphNodeIdToState,
-    const std::vector<DataEntry> &graphLaunchEntries) {
-  if (graphState.metricNodeIdToDataSet.empty()) {
-    return;
-  }
-
-  auto phase = Data::kNoCompletePhase;
-  for (const auto &entry : graphLaunchEntries) {
-    if (phase == Data::kNoCompletePhase) {
-      phase = entry.phase;
-    } else if (phase != entry.phase) {
-      throw std::runtime_error(
-          "[PROTON] Inconsistent phases in graph launch entries");
-    }
-  }
-  const auto numMetricNodes = graphState.metricNodeIdToDataSet.size();
-  const auto numMetricWords = graphState.numMetricWords;
-  if (callbackData->context != nullptr)
-    profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
-  profiler.pendingGraphPool->push(phase, graphLaunchEntries,
-                                  &graphState.metricNodeIdToDataSet,
-                                  &graphNodeIdToState, numMetricNodes,
-                                  numMetricWords);
-}
-
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
@@ -616,9 +563,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
-  std::vector<DataEntry> graphLaunchEntries;
-  const GraphNodeStateMap *graphNodeIdToState =
-      &CuptiProfiler::emptyGraphNodeIdToState();
+  std::vector<DataEntry> launchEntries = dataEntries;
+  const GraphNodeStateMap *graphNodeIdToState = nullptr;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -642,46 +588,42 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
       // For each unique call path, we generate an entry per data object.
       graphNodeIdToState = &graphState.nodeIdToState;
-      static const bool timingEnabled =
-          getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
-      using Clock = std::chrono::steady_clock;
-      auto t0 = decltype(Clock::now()){};
-      if (timingEnabled)
-        t0 = Clock::now();
-
-      populateGraphNodeStatesForLaunch(dataEntries, graphState,
-                                       graphLaunchEntries);
-      if (timingEnabled) {
-        auto t1 = Clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
-                  << " us for graphExecId: " << graphExecId << std::endl;
-        t0 = Clock::now();
+      for (size_t i = 0; i < dataEntries.size(); i++) {
+        auto launchEntry = dataEntries[i];
+        auto *data = launchEntry.data;
+        if (graphState.dataSet.find(data) == graphState.dataSet.end()) {
+          // The data was not enabled during graph capture.
+          continue;
+        }
+        auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
+                                     {Context{GraphState::captureTag}});
+        launchEntries[i] = baseEntry;
       }
 
-      enqueueGraphMetricNodes(profiler, callbackData, graphState,
-                              *graphNodeIdToState, graphLaunchEntries);
-      if (timingEnabled) {
-        auto t1 = Clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        std::cerr << "[PROTON] Graph launch metric time: " << elapsed
-                  << " us for graphExecId: " << graphExecId << std::endl;
+      if (!graphState.metricNodeIdToDataSet.empty()) {
+        auto phase = Data::kNoCompletePhase;
+        for (const auto &entry : launchEntries) {
+          if (phase == Data::kNoCompletePhase) {
+            phase = entry.phase;
+          } else if (phase != entry.phase) {
+            throw std::runtime_error(
+                "[PROTON] Inconsistent phases in graph launch entries");
+          }
+        }
+        const auto numMetricNodes = graphState.metricNodeIdToDataSet.size();
+        const auto numMetricWords = graphState.numMetricWords;
+        if (callbackData->context != nullptr)
+          profiler.pendingGraphPool->flushIfNeeded(numMetricWords);
+        profiler.pendingGraphPool->push(
+            phase, launchEntries, &graphState.metricNodeIdToDataSet,
+            &graphState.nodeIdToState, numMetricNodes, numMetricWords);
       }
     }
   }
 
-  profiler.correlation.externIdToState[scope.scopeId].graphNodeIdToState =
-      graphNodeIdToState;
-
-  const auto &entriesForCorrelation =
-      graphLaunchEntries.empty() ? dataEntries : graphLaunchEntries;
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
                                  numNodes, scope.name.empty(),
-                                 entriesForCorrelation);
+                                 launchEntries, graphNodeIdToState);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }
