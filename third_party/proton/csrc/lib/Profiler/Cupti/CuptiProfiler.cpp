@@ -489,9 +489,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.metricNodeIdToDataSet.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
-  } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-    graphStates.erase(graphExecId);
   }
+  // Do not handle CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING; keep GraphExec
+  // state persistent. GraphExec instances cannot have their topology changed
+  // after instantiation, so the current handling of graph node state should be
+  // sufficient. This also avoids additional copies before graph launches.
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
