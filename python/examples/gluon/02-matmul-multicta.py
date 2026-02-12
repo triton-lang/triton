@@ -876,7 +876,7 @@ def benchmark(*, profile=True):
 
     def gluon_profiled():
         with proton.scope(f"gluon [M={M}, N={N}, K={K}]", scope_metrics):
-            run_gluon()
+            matmul(a, b)
 
     bench_fn("torch", reps=100, fn=torch_profiled)
     bench_fn("gluon", reps=100, fn=gluon_profiled)
