@@ -123,14 +123,14 @@ of gemms. The scheduling is static and we do it on device.</p>
         N  cuBLAS (runtime(ms))  Triton (runtime(ms))
 0   128.0              0.022528              0.012288
 1   256.0              0.025600              0.014336
-2   512.0              0.032768              0.019456
+2   512.0              0.033792              0.019456
 3  1024.0              0.074752              0.071680
 group-gemm-performance-m-8192-k-8192:
         M  cuBLAS (runtime(ms))  Triton (runtime(ms))
-0   128.0              0.461824              0.499712
-1   256.0              0.736256              0.874496
-2   512.0              1.957888              1.758208
-3  1024.0              2.673664              3.297280
+0   128.0              0.461824              0.495616
+1   256.0              0.727040              0.865280
+2   512.0              2.026496              1.721344
+3  1024.0              2.714112              3.294208
 </pre></div>
 </div>
 <div class="line-block">
@@ -356,7 +356,7 @@ group-gemm-performance-m-8192-k-8192:
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
     <span class="n">tma_configs</span><span class="p">,</span>
-    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_a_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;group_b_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;gropup_c_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
+    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">grouped_matmul_tma_kernel</span><span class="p">(</span>
@@ -618,7 +618,7 @@ group-gemm-performance-m-8192-k-8192:
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
             <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_tma_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_t_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span>
                                        <span class="n">float16</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">max_ms</span><span class="p">,</span> <span class="n">min_ms</span>
+    <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
@@ -689,14 +689,14 @@ group-gemm-performance-m-8192-k-8192:
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
             <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_tma_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_t_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_t_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span>
                                        <span class="n">float16</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">max_ms</span><span class="p">,</span> <span class="n">min_ms</span>
+    <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span>
 
 
 <span class="n">benchmark_square_matrices</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.340 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.330 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>

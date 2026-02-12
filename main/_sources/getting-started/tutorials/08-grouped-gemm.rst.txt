@@ -53,14 +53,14 @@ of gemms. The scheduling is static and we do it on device.
             N  cuBLAS (runtime(ms))  Triton (runtime(ms))
     0   128.0              0.022528              0.012288
     1   256.0              0.025600              0.014336
-    2   512.0              0.032768              0.019456
+    2   512.0              0.033792              0.019456
     3  1024.0              0.074752              0.071680
     group-gemm-performance-m-8192-k-8192:
             M  cuBLAS (runtime(ms))  Triton (runtime(ms))
-    0   128.0              0.461824              0.499712
-    1   256.0              0.736256              0.874496
-    2   512.0              1.957888              1.758208
-    3  1024.0              2.673664              3.297280
+    0   128.0              0.461824              0.495616
+    1   256.0              0.727040              0.865280
+    2   512.0              2.026496              1.721344
+    3  1024.0              2.714112              3.294208
 
 
 
@@ -292,7 +292,7 @@ of gemms. The scheduling is static and we do it on device.
 
     @triton.autotune(
         tma_configs,
-        key=['group_a_ptrs', 'group_b_ptrs', 'gropup_c_ptrs', 'group_size'],
+        key=['group_size'],
     )
     @triton.jit
     def grouped_matmul_tma_kernel(
@@ -554,7 +554,7 @@ of gemms. The scheduling is static and we do it on device.
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, dtype=torch.
                                            float16), quantiles=quantiles)
-        return ms, max_ms, min_ms
+        return ms, min_ms, max_ms
 
 
     @triton.testing.perf_report(
@@ -625,7 +625,7 @@ of gemms. The scheduling is static and we do it on device.
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_t_lds, group_size, dtype=torch.
                                            float16), quantiles=quantiles)
-        return ms, max_ms, min_ms
+        return ms, min_ms, max_ms
 
 
     benchmark_square_matrices.run(show_plots=True, print_data=True)
@@ -634,7 +634,7 @@ of gemms. The scheduling is static and we do it on device.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 6.340 seconds)
+   **Total running time of the script:** (0 minutes 6.330 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-grouped-gemm.py:
