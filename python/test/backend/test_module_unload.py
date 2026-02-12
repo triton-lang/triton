@@ -1,4 +1,4 @@
-gmport triton.compiler.compiler as compiler
+import triton.compiler.compiler as compiler
 from triton import knobs
 import triton
 import tempfile
