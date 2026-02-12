@@ -121,53 +121,47 @@ uint32_t processActivityKernel(
         externState.graphNodeIdToState
             ? externState.graphNodeIdToState->find(kernel->graphNodeId)
             : nullptr;
-    if (nodeState != nullptr) {
-      // We have a graph creation captured
-      if (!nodeState->status.isMetricNode()) {
-        const bool isMissingName = nodeState->status.isMissingName();
-        const auto &dataEntries = state->dataEntries;
-        const auto &dataToEntryId = nodeState->dataToEntryId;
-        auto emitLinkedMetric = [&](const DataEntry &entry, size_t linkedId) {
-          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            if (isMissingName) {
-              entry.upsertLinkedMetric(std::move(kernelMetric), linkedId);
-            } else {
-              auto childEntry = entry.data->addOp(Data::kVirtualPhase, linkedId,
-                                                  {Context(kernel->name)});
-              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-            }
-            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-          }
-        };
-
-        // Fast path: common case where both collections contain exactly one item.
-        if (dataEntries.size() == 1 && dataToEntryId.size() == 1) {
-          const auto &entry = dataEntries.front();
-          const auto &[data, linkedId] = *dataToEntryId.begin();
-          if (entry.data == data) {
-            emitLinkedMetric(entry, linkedId);
-          }
-        } else {
-          for (const auto &entry : dataEntries) {
-            auto linkedIdIt = dataToEntryId.find(entry.data);
-            if (linkedIdIt == dataToEntryId.end()) {
-              continue;
-            }
-            emitLinkedMetric(entry, linkedIdIt->second);
-          }
-        }
+    auto emitLaunchMetric = [&](const DataEntry &entry) {
+      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        auto childEntry =
+            entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+        childEntry.upsertMetric(std::move(kernelMetric));
+        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
       }
-    } else {
+    };
+    auto emitLinkedMetric = [&](const DataEntry &entry, size_t linkedId,
+                                bool isMissingName) {
+      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (isMissingName) {
+          entry.upsertLinkedMetric(std::move(kernelMetric), linkedId);
+        } else {
+          auto childEntry = entry.data->addOp(Data::kVirtualPhase, linkedId,
+                                              {Context(kernel->name)});
+          entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+        }
+        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+      }
+    };
+
+    if (nodeState == nullptr) {
       // No graph creation captured, correlate based on the number of nodes
       // launched. This is a best-effort solution and can be inaccurate if the
       // graph is launched multiple times or has conditional logic.
-      for (auto &entry : state->dataEntries) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          auto childEntry =
-              entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+      for (const auto &entry : state->dataEntries) {
+        emitLaunchMetric(entry);
+      }
+    } else if (!nodeState->status.isMetricNode()) {
+      // We have a graph creation captured.
+      const bool isMissingName = nodeState->status.isMissingName();
+      for (const auto &entry : state->dataEntries) {
+        auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
+        if (linkedIdIt == nodeState->dataToEntryId.end()) {
+          // This data was not enabled at graph capture time; attribute
+          // the kernel to the launch entry.
+          emitLaunchMetric(entry);
+          continue;
         }
+        emitLinkedMetric(entry, linkedIdIt->second, isMissingName);
       }
     }
     // Decrease the expected kernel count
