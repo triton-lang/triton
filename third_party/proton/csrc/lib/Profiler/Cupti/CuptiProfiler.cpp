@@ -605,9 +605,8 @@ void CuptiProfiler::CuptiProfilerPimpl::enqueueGraphMetricNodes(
     auto nodeId = metricNode.first;
     auto &nodeState = graphNodeIdToState.emplace(nodeId);
     auto dataIdx = 0;
-    nodeState.forEachLinkedEntryId([&](size_t entryId) {
-      linkedEntryIds[dataIdx++].push_back(entryId);
-    });
+    nodeState.forEachLinkedEntryId(
+        [&](size_t entryId) { linkedEntryIds[dataIdx++].push_back(entryId); });
   }
   const auto numMetricNodes = graphState.metricNodeIdToNumWords.size();
   const auto numMetricWords = graphState.numMetricWords;

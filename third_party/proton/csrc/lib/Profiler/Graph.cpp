@@ -103,10 +103,10 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 }
 } // namespace
 
-void PendingGraphPool::push(size_t phase,
-                            const std::vector<DataEntry> &graphLaunchEntries,
-                            const std::vector<std::vector<size_t>> &linkedEntryIds,
-                            size_t numNodes, size_t numWords) {
+void PendingGraphPool::push(
+    size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
+    const std::vector<std::vector<size_t>> &linkedEntryIds, size_t numNodes,
+    size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;

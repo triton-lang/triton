@@ -103,10 +103,9 @@ struct PendingGraphQueue {
                              void *device)
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
-  void push(
-      size_t numNodes, size_t numWords,
-      const std::vector<DataEntry> &graphLaunchEntries,
-      const std::vector<std::vector<size_t>> &linkedEntryIds) {
+  void push(size_t numNodes, size_t numWords,
+            const std::vector<DataEntry> &graphLaunchEntries,
+            const std::vector<std::vector<size_t>> &linkedEntryIds) {
     pendingGraphs.emplace_back(
         PendingGraph{numNodes, numWords, graphLaunchEntries, linkedEntryIds});
     this->numNodes += numNodes;
@@ -119,10 +118,9 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(
-      size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
-      const std::vector<std::vector<size_t>> &linkedEntryIds,
-      size_t numNodes, size_t numWords);
+  void push(size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
+            const std::vector<std::vector<size_t>> &linkedEntryIds,
+            size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
