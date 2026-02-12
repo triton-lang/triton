@@ -219,6 +219,10 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   if (nonContigDim < requiredDim) {
     return {};
   }
+  // wrap == 0 means padding > contigDim, which is not a valid configuration
+  if (wrap == 0) {    
+    return {};
+  }
 
   // Use 16 rows wrap if block large enough
   bool useBestWrap = false;
