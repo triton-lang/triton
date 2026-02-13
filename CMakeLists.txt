@@ -20,9 +20,125 @@ option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
+option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(LLVM_BUILD_SHARED_LIBS
   "Build all libraries as shared libraries instead of static" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+
+set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
+set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
+set(LLVM_SYSPATH "" CACHE PATH "Path to system LLVM installation")
+set(JSON_SYSPATH "" CACHE PATH "Path to system nlohmann/json headers")
+set(TRITON_PTXAS_PATH "" CACHE FILEPATH "Path override for ptxas")
+set(TRITON_PTXAS_BLACKWELL_PATH "" CACHE FILEPATH "Path override for ptxas-blackwell")
+set(TRITON_CUOBJDUMP_PATH "" CACHE FILEPATH "Path override for cuobjdump")
+set(TRITON_NVDISASM_PATH "" CACHE FILEPATH "Path override for nvdisasm")
+set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
+set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
+set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
+set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
+
+if(NOT TRITON_CACHE_PATH)
+  message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")
+endif()
+
+set(TRITON_BUILD_HELPER_COMMON_ARGS --triton-cache-path "${TRITON_CACHE_PATH}")
+if("${TRITON_OFFLINE_BUILD}")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-offline-build)
+endif()
+if(NOT "${TRITON_LLVM_SYSTEM_SUFFIX}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-llvm-system-suffix "${TRITON_LLVM_SYSTEM_SUFFIX}")
+endif()
+if(NOT "${LLVM_SYSPATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --llvm-syspath "${LLVM_SYSPATH}")
+endif()
+if(NOT "${JSON_SYSPATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --json-syspath "${JSON_SYSPATH}")
+endif()
+if(NOT "${TRITON_PTXAS_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-ptxas-path "${TRITON_PTXAS_PATH}")
+endif()
+if(NOT "${TRITON_PTXAS_BLACKWELL_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-ptxas-blackwell-path "${TRITON_PTXAS_BLACKWELL_PATH}")
+endif()
+if(NOT "${TRITON_CUOBJDUMP_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cuobjdump-path "${TRITON_CUOBJDUMP_PATH}")
+endif()
+if(NOT "${TRITON_NVDISASM_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-nvdisasm-path "${TRITON_NVDISASM_PATH}")
+endif()
+if(NOT "${TRITON_CUDACRT_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cudacrt-path "${TRITON_CUDACRT_PATH}")
+endif()
+if(NOT "${TRITON_CUDART_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cudart-path "${TRITON_CUDART_PATH}")
+endif()
+if(NOT "${TRITON_CUPTI_INCLUDE_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-include-path "${TRITON_CUPTI_INCLUDE_PATH}")
+endif()
+if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
+endif()
+
+# Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
+set(TRITON_HAS_LLVM_SYSPATH OFF)
+if(NOT "${LLVM_SYSPATH}" STREQUAL "")
+  set(TRITON_HAS_LLVM_SYSPATH ON)
+  if(NOT DEFINED LLVM_INCLUDE_DIRS)
+    set(LLVM_INCLUDE_DIRS "${LLVM_SYSPATH}/include")
+  endif()
+  if(NOT DEFINED LLVM_LIBRARY_DIR)
+    set(LLVM_LIBRARY_DIR "${LLVM_SYSPATH}/lib")
+  endif()
+endif()
+
+if(NOT "${JSON_SYSPATH}" STREQUAL "" AND NOT DEFINED JSON_INCLUDE_DIR)
+  set(JSON_INCLUDE_DIR "${JSON_SYSPATH}/include")
+endif()
+
+# Regenerate configure outputs during `cmake --build` when helper inputs change.
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/llvm-hash.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/json-version.txt"
+)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(TRITON_THIRD_PARTY_CMAKE_VARS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton-third-party-vars.cmake")
+execute_process(
+  COMMAND
+    ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
+    write_thirdparty_cmake_vars
+    ${TRITON_BUILD_HELPER_COMMON_ARGS}
+    --output
+    "${TRITON_THIRD_PARTY_CMAKE_VARS_FILE}"
+    --packages llvm json
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMAND_ERROR_IS_FATAL ANY
+)
+include("${TRITON_THIRD_PARTY_CMAKE_VARS_FILE}")
+
+if(TRITON_BUILD_PYTHON_MODULE)
+  set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/nvidia-toolchain-version.json"
+  )
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  execute_process(
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py
+            download_and_copy_dependencies
+            ${TRITON_BUILD_HELPER_COMMON_ARGS}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY
+  )
+endif()
 
 if(TRITON_BUILD_WITH_CCACHE)
   find_program(CCACHE_PROGRAM ccache)
