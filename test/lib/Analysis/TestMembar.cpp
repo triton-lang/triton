@@ -1,6 +1,7 @@
 #include "../third_party/nvidia/include/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Allocation.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Analysis/Allocation.h"
@@ -20,6 +21,10 @@ struct TestMembarPass
   StringRef getArgument() const final { return "test-print-membar"; }
   StringRef getDescription() const final {
     return "print the result of the allocation pass";
+  }
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvgpu::NVGPUDialect>();
   }
 
   void runOnOperation() override {

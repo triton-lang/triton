@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -6,6 +7,8 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
+
+namespace ttn = ::mlir::triton::nvgpu;
 
 namespace mlir {
 
@@ -247,6 +250,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             OpBuilder *builder) {
   auto containsLocalBarrier = [](Operation *op) {
     if (isa<gpu::BarrierOp>(op))
+      return true;
+    if (isa<ttn::ClusterBarrierOp>(op))
       return true;
     if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
       return true;

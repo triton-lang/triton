@@ -110,6 +110,20 @@ def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def NVGPU_ClusterBarrierOp : NVGPU_Op<"cluster_barrier", []> {
+  let arguments = (ins I1Attr:$relaxed);
+  let summary = "Synchronize all warps at cluster scope";
+  let description = [{
+    Lowers to a cluster arrive/wait pair.
+
+    In warp-specialized kernels, lowering wraps the barrier in a synthetic
+    `ttg.warp_specialize` region so worker warps also execute the barrier.
+    This op cannot be placed inside an existing `ttg.warp_specialize`.
+  }];
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
 def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead]>]> {
   let arguments = (
     ins LLVM_PointerGlobal:$addr,
