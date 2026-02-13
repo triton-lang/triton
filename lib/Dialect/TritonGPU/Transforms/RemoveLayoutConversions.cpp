@@ -93,6 +93,8 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
+  Type getTypeBeforeRewrite(Value value) const;
+  void setTypeInPlace(Value value, Type newType);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -108,6 +110,8 @@ public:
 private:
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
+  // original types of values rewritten in place.
+  DenseMap<Value, Type> originalTypes;
   // map of the values rewrite based on their encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
   SetVector<Operation *> opToDelete;
@@ -427,8 +431,12 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           auto it = layouts.find(operand.get());
           if (it == layouts.end())
             continue;
+          auto typeBeforeRewrite =
+              dyn_cast<RankedTensorType>(getTypeBeforeRewrite(operand.get()));
+          if (!typeBeforeRewrite)
+            continue;
           Attribute encoding =
-              cast<RankedTensorType>(operand.get().getType()).getEncoding();
+              typeBeforeRewrite.getEncoding();
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
@@ -479,6 +487,18 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   return value;
 }
 
+Type LayoutPropagation::getTypeBeforeRewrite(Value value) const {
+  if (auto it = originalTypes.find(value); it != originalTypes.end())
+    return it->second;
+  return value.getType();
+}
+
+void LayoutPropagation::setTypeInPlace(Value value, Type newType) {
+  if (!originalTypes.count(value))
+    originalTypes[value] = value.getType();
+  value.setType(newType);
+}
+
 Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Operation *op,
                                                Attribute encoding) {
@@ -518,127 +538,66 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
 }
 
 Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
-  SmallVector<Value> operands;
-  OpBuilder rewriter(forOp);
-  for (auto [operand, result] :
-       llvm::zip(forOp.getInitArgs(), forOp.getResults())) {
-    Value convertedOperand = operand;
-    if (layouts.count(result))
-      convertedOperand =
-          getValueAs(operand, *layouts[result].encodings.begin());
-    operands.push_back(convertedOperand);
-  }
-  auto newForOp =
-      scf::ForOp::create(rewriter, forOp.getLoc(), forOp.getLowerBound(),
-                         forOp.getUpperBound(), forOp.getStep(), operands);
-  newForOp->setAttrs(forOp->getAttrs());
-  newForOp.getBody()->getOperations().splice(
-      newForOp.getBody()->getOperations().begin(),
-      forOp.getBody()->getOperations());
-
-  for (auto [oldResult, newResult] :
-       llvm::zip(forOp.getResults(), newForOp.getResults())) {
-    if (oldResult.getType() == newResult.getType()) {
-      oldResult.replaceAllUsesWith(newResult);
+  for (auto [i, operand, result, regionArg] :
+       llvm::enumerate(forOp.getInitArgs(), forOp.getResults(),
+                       forOp.getRegionIterArgs())) {
+    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
+    auto argTy = dyn_cast<RankedTensorType>(regionArg.getType());
+    if (!resultTy || !argTy)
       continue;
-    }
-    map(oldResult, newResult);
+    Attribute encoding = resultTy.getEncoding();
+    if (auto it = layouts.find(result); it != layouts.end())
+      encoding = *it->second.encodings.begin();
+    Value convertedOperand = getValueAs(operand, encoding);
+    forOp.getInitArgsMutable()[i].assign(convertedOperand);
+    auto newType = resultTy.cloneWithEncoding(encoding);
+    setTypeInPlace(result, newType);
+    setTypeInPlace(regionArg, newType);
   }
-
-  for (auto [oldArg, newArg] : llvm::zip(forOp.getBody()->getArguments(),
-                                         newForOp.getBody()->getArguments())) {
-    if (oldArg.getType() == newArg.getType()) {
-      oldArg.replaceAllUsesWith(newArg);
-      continue;
-    }
-    map(oldArg, newArg);
-  }
-  return newForOp.getOperation();
+  return forOp.getOperation();
 }
 
 Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
-  SmallVector<Value> operands;
-  SmallVector<Type> returnTypes;
-  OpBuilder rewriter(whileOp);
-  for (auto [operand, arg] :
-       llvm::zip(whileOp->getOperands(), whileOp.getBeforeArguments())) {
+  for (auto [i, operand, beforeArg] :
+       llvm::enumerate(whileOp->getOperands(), whileOp.getBeforeArguments())) {
     Value convertedOperand = operand;
-    if (layouts.count(arg))
-      convertedOperand = getValueAs(operand, *layouts[arg].encodings.begin());
-    operands.push_back(convertedOperand);
+    if (layouts.count(beforeArg))
+      convertedOperand =
+          getValueAs(operand, *layouts[beforeArg].encodings.begin());
+    whileOp->setOperand(i, convertedOperand);
+    if (beforeArg.getType() != convertedOperand.getType())
+      setTypeInPlace(beforeArg, convertedOperand.getType());
   }
-  for (Value ret : whileOp.getResults()) {
-    auto it = layouts.find(ret);
-    if (it == layouts.end()) {
-      returnTypes.push_back(ret.getType());
+
+  for (auto [result, afterArg] :
+       llvm::zip(whileOp.getResults(), whileOp.getAfterArguments())) {
+    auto it = layouts.find(result);
+    if (it == layouts.end())
       continue;
-    }
-    auto origType = dyn_cast<RankedTensorType>(ret.getType());
+    auto origType = dyn_cast<RankedTensorType>(result.getType());
+    auto afterArgType = dyn_cast<RankedTensorType>(afterArg.getType());
+    if (!origType || !afterArgType)
+      continue;
     auto newType = origType.cloneWithEncoding(it->second.encodings[0]);
-    returnTypes.push_back(newType);
+    setTypeInPlace(result, newType);
+    setTypeInPlace(afterArg, newType);
   }
 
-  auto newWhileOp =
-      scf::WhileOp::create(rewriter, whileOp.getLoc(), returnTypes, operands);
-  SmallVector<Type> argsTypesBefore;
-  for (Value operand : operands)
-    argsTypesBefore.push_back(operand.getType());
-  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(),
-                                        whileOp.getLoc());
-  SmallVector<Location> bbArgLocsAfter(returnTypes.size(), whileOp.getLoc());
-  rewriter.createBlock(&newWhileOp.getBefore(), {}, argsTypesBefore,
-                       bbArgLocsBefore);
-  rewriter.createBlock(&newWhileOp.getAfter(), {}, returnTypes, bbArgLocsAfter);
-
-  for (int i = 0; i < whileOp.getNumRegions(); ++i) {
-    newWhileOp->getRegion(i).front().getOperations().splice(
-        newWhileOp->getRegion(i).front().getOperations().begin(),
-        whileOp->getRegion(i).front().getOperations());
-  }
-
-  auto remapArg = [&](Value oldVal, Value newVal) {
-    if (oldVal.getType() == newVal.getType())
-      oldVal.replaceAllUsesWith(newVal);
-    else
-      map(oldVal, newVal);
-  };
-  for (auto [oldResult, newResult] :
-       llvm::zip(whileOp.getResults(), newWhileOp.getResults()))
-    remapArg(oldResult, newResult);
-  for (auto [oldArg, newArg] :
-       llvm::zip(whileOp.getBeforeArguments(), newWhileOp.getBeforeArguments()))
-    remapArg(oldArg, newArg);
-  for (auto [oldArg, newArg] :
-       llvm::zip(whileOp.getAfterArguments(), newWhileOp.getAfterArguments()))
-    remapArg(oldArg, newArg);
-  return newWhileOp.getOperation();
+  return whileOp.getOperation();
 }
 
 Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
-  SmallVector<Value> operands;
-  OpBuilder rewriter(ifOp);
-  SmallVector<Type> newResultTypes(ifOp->getResultTypes());
   for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
-    auto it = layouts.find(ifOp->getResult(i));
+    auto it = layouts.find(ifOp.getResult(i));
     if (it == layouts.end())
       continue;
-    auto origType = cast<RankedTensorType>(ifOp->getResult(i).getType());
-    Attribute encoding = *(it->second.encodings.begin());
-    newResultTypes[i] = origType.cloneWithEncoding(encoding);
-  }
-  auto newIfOp = scf::IfOp::create(rewriter, ifOp.getLoc(), newResultTypes,
-                                   ifOp.getCondition(), true, true);
-  newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
-  newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
-  for (auto [oldResult, newResult] :
-       llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
-    if (oldResult.getType() == newResult.getType()) {
-      oldResult.replaceAllUsesWith(newResult);
+    auto origType = dyn_cast<RankedTensorType>(ifOp.getResult(i).getType());
+    if (!origType)
       continue;
-    }
-    map(oldResult, newResult);
+    Attribute encoding = *(it->second.encodings.begin());
+    setTypeInPlace(ifOp.getResult(i), origType.cloneWithEncoding(encoding));
   }
-  return newIfOp.getOperation();
+  return ifOp.getOperation();
 }
 
 void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
@@ -704,13 +663,13 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
-  opToDelete.insert(op);
   if (auto forOp = dyn_cast<scf::ForOp>(op))
     return rewriteForOp(forOp);
   if (auto whileOp = dyn_cast<scf::WhileOp>(op))
     return rewriteWhileOp(whileOp);
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
+  opToDelete.insert(op);
   OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
