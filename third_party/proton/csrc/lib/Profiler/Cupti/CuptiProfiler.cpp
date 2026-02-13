@@ -116,35 +116,18 @@ uint32_t processActivityKernel(
       externIdToStateCache.emplace(externId, ref.value());
       state = &ref.value().get();
     }
-    auto emitLaunchMetric = [&](const DataEntry &entry) {
-      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-        auto childEntry =
-            entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-        childEntry.upsertMetric(std::move(kernelMetric));
-        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-      }
-    };
-    auto emitLinkedMetric = [&](const DataEntry &entry, size_t linkedId,
-                                bool isMissingName) {
-      if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-        if (isMissingName) {
-          entry.upsertLinkedMetric(std::move(kernelMetric), linkedId);
-        } else {
-          auto childEntry = entry.data->addOp(Data::kVirtualPhase, linkedId,
-                                              {Context(kernel->name)});
-          entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-        }
-        detail::updateDataPhases(dataPhases, entry.data, entry.phase);
-      }
-    };
-
     auto &externState = *state;
     if (externState.graphNodeIdToState == nullptr) {
       // No graph creation captured, correlate based on the number of nodes
       // launched. This is a best-effort solution and can be inaccurate if the
       // graph is launched multiple times or has conditional logic.
       for (const auto &entry : state->dataEntries) {
-        emitLaunchMetric(entry);
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          auto childEntry =
+              entry.data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+          childEntry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+        }
       }
     } else {
       const auto *nodeState =
@@ -157,10 +140,26 @@ uint32_t processActivityKernel(
           if (linkedIdIt == nodeState->dataToEntryId.end()) {
             // This data was not enabled at graph capture time; attribute
             // the kernel to the launch entry.
-            emitLaunchMetric(entry);
+            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+              auto childEntry = entry.data->addOp(entry.phase, entry.id,
+                                                  {Context(kernel->name)});
+              childEntry.upsertMetric(std::move(kernelMetric));
+              detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+            }
             continue;
           }
-          emitLinkedMetric(entry, linkedIdIt->second, isMissingName);
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            if (isMissingName) {
+              entry.upsertLinkedMetric(std::move(kernelMetric),
+                                       linkedIdIt->second);
+            } else {
+              auto childEntry =
+                  entry.data->addOp(Data::kVirtualPhase, linkedIdIt->second,
+                                    {Context(kernel->name)});
+              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+            }
+            detail::updateDataPhases(dataPhases, entry.data, entry.phase);
+          }
         }
       } // else ignore metric node
     }
