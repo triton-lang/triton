@@ -16,7 +16,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tensor_memory_descriptor,
 )
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import cluster, fence_async_shared, mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
@@ -342,9 +342,6 @@ class PartitionScheduler:
 
 @gluon.jit
 def matmul_load_partition(p):
-    if p.TWO_CTAS:
-        mbarrier.sync_cluster_init()
-
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
 
@@ -370,9 +367,6 @@ def matmul_load_partition(p):
 
 @gluon.jit
 def matmul_mma_partition(p):
-    if p.TWO_CTAS:
-        mbarrier.sync_cluster_init()
-
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
 
@@ -399,9 +393,6 @@ def matmul_mma_partition(p):
 
 @gluon.jit
 def matmul_epilogue_partition(p):
-    if p.TWO_CTAS:
-        mbarrier.sync_cluster_init()
-
     TILE_M: gl.constexpr = p.a_desc.block_shape[0]
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
@@ -441,15 +432,6 @@ def matmul_epilogue_partition(p):
         # Signal that the accumulator slot can be reused only after all stores are done.
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.advance()
-
-
-@gluon.jit
-def matmul_sync_partition(p):
-    if p.TWO_CTAS:
-        mbarrier.sync_cluster_init()
-    scheduler = PartitionScheduler.initialize(p.get_scheduler())
-    while scheduler.has_work():
         scheduler = scheduler.advance()
 
 
@@ -509,6 +491,9 @@ def _matmul_kernel(
     clc_result_shape: gl.constexpr = [clc_barriers.shape[0], 2 * clc_barriers.shape[1]]
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, clc_barriers.layout)
 
+    if TWO_CTAS:
+        mbarrier.fence_init_release_cluster()
+        cluster.barrier(relaxed=True)
     p = PartitionArgs(
         a_desc,
         b_desc,
@@ -531,8 +516,7 @@ def _matmul_kernel(
         (matmul_epilogue_partition, (p, )),
         (matmul_load_partition, (p, )),
         (matmul_mma_partition, (p, )),
-        (matmul_sync_partition, (p, )),
-    ], [1, 1, 2], [24, 24, 24])
+    ], [1, 1], [24, 24])
 
 
 matmul_kernel = triton.autotune(

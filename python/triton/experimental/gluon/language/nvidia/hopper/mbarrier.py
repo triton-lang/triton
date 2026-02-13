@@ -60,6 +60,9 @@ def fence_init_release_cluster(_semantic=None):
 def sync_cluster_init():
     """
     Ensure mbarrier initialization is visible across the CTA cluster.
+
+    Due to limitations in the Gluon inliner, this function cannot be used in a warp_specialize region.
+    Inline the two operations instead
     """
     fence_init_release_cluster()
     cluster.barrier(relaxed=True)
