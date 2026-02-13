@@ -600,8 +600,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
   tt.func private @triton.experimental.gluon.language.nvidia.hopper.mbarrier.sync_cluster_init__() attributes {noinline = false} {
     ttng.fence_mbarrier_init_release_cluster
-    ttng.cluster_arrive {relaxed = true}
-    ttng.cluster_wait
+    nvg.cluster_barrier {relaxed = true}
     tt.return
   }
 }
@@ -1611,8 +1610,7 @@ def test_cluster_barrier_multi_cta():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
-    ttng.cluster_arrive {relaxed = false}
-    ttng.cluster_wait
+    nvg.cluster_barrier {relaxed = false}
     tt.return
   }
 }
@@ -1633,6 +1631,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
     ttng.cluster_arrive {relaxed = false}
     ttng.cluster_wait
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def cluster_barrier_relaxed_kernel():
+    cluster.barrier(relaxed=True)
+
+
+def test_cluster_barrier_relaxed():
+    mod = run_parser(cluster_barrier_relaxed_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cluster_barrier_relaxed_kernel() attributes {noinline = false} {
+    nvg.cluster_barrier {relaxed = true}
     tt.return
   }
 }

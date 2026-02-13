@@ -10,6 +10,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -29,6 +30,7 @@ namespace py = pybind11;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+namespace ttn = triton::nvgpu;
 namespace gluon = mlir::triton::gluon;
 namespace ttag = mlir::triton::amdgpu;
 
@@ -862,6 +864,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_cluster_wait",
            [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
+      .def("create_cluster_barrier",
+           [](GluonOpBuilder &self, bool relaxed) {
+             self.create<ttn::ClusterBarrierOp>(relaxed);
+           })
       // CLC (Cluster Launch Control) ops - SM100+
       .def("create_clc_try_cancel",
            [](GluonOpBuilder &self, Value result, Value mbarrier,
@@ -955,8 +961,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_cluster_sync",
            [](GluonOpBuilder &self) {
-             self.create<ttng::ClusterArriveOp>(/*relaxed=*/false);
-             self.create<ttng::ClusterWaitOp>();
+             self.create<ttn::ClusterBarrierOp>(/*relaxed=*/false);
            })
 
       .def("create_broadcast",

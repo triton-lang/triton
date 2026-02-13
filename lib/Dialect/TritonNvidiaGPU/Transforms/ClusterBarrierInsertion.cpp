@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
@@ -19,6 +20,7 @@ namespace {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+namespace ttn = mlir::triton::nvgpu;
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
@@ -83,27 +85,18 @@ public:
 private:
   void update(Operation *op, BlockInfo *blockInfo,
               FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
-
-  void insertClusterBarrier(Operation *op, OpBuilder *builder);
 };
-
-void ClusterBarrierAnalysis::insertClusterBarrier(Operation *op,
-                                                  OpBuilder *builder) {
-  OpBuilder::InsertionGuard guard(*builder);
-  ttng::ClusterArriveOp::create(*builder, op->getLoc(), /*relaxed=*/false);
-  ttng::ClusterWaitOp::create(*builder, op->getLoc());
-}
 
 void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                     FuncBlockInfoMapT *funcBlockInfoMap,
                                     OpBuilder *builder) {
-  if (isa<ttng::ClusterWaitOp>(op)) {
+  if (isa<ttn::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
     blockInfo->sync();
     return;
   }
 
   // Any path from distributed shared memory use to kernel exit must include a
-  // cluster arrive/wait pair
+  // cluster barrier.
   if (op->hasTrait<OpTrait::ReturnLike>() &&
       isa<FunctionOpInterface>(op->getParentOp())) {
     // In `freeTMAlloc` we emit a cluster sync during lowering for 2CTA kernels,
@@ -112,11 +105,11 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // use TensorMemory
     // According to NVIDIA this is enough, so we don't need an extra
     // end-of-kernel barrier
-    auto funcOp = dyn_cast<FunctionOpInterface>(op->getParentOp());
+    auto funcOp = cast<FunctionOpInterface>(op->getParentOp());
     if (isKernel(funcOp) && hasUnresolvedCrossClusterDependency(*blockInfo) &&
         !getModuleTwoCTAs(funcOp)) {
       builder->setInsertionPoint(op);
-      insertClusterBarrier(op, builder);
+      ttn::ClusterBarrierOp::create(*builder, op->getLoc(), /*relaxed=*/false);
       blockInfo->sync();
     }
     return;
@@ -178,7 +171,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
         curBlockInfo, filter, allocation, isPreAllocAliasSliceFilter);
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
-      insertClusterBarrier(op, builder);
+      ttn::ClusterBarrierOp::create(*builder, op->getLoc(), /*relaxed=*/false);
     }
 
     // Clear prior distributed dependencies if we have inserted a cluster
@@ -191,7 +184,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation,
                                       isPreAllocAliasSliceFilter)) {
     builder->setInsertionPoint(op);
-    insertClusterBarrier(op, builder);
+    ttn::ClusterBarrierOp::create(*builder, op->getLoc(), /*relaxed=*/false);
     blockInfo->sync();
   }
 
@@ -214,9 +207,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
     // aliasing was already present in TTGIR is handled per-allocation slice.
     bool lhsDist = isDistributedMultiCTAOp(lhs, lhsIsRead);
     bool rhsDist = isDistributedMultiCTAOp(rhs, rhsIsRead);
-    if (!lhsDist && !rhsDist)
-      return true;
-    return false;
+    return !lhsDist && !rhsDist;
   };
 
   ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(
