@@ -88,6 +88,20 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
   let hasVerifier = 1;
 }
 
+def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
+  let arguments = (ins I1Attr:$relaxed);
+  let summary = "Synchronize all warps at cluster scope";
+  let description = [{
+    Lowers to a cluster arrive/wait pair.
+
+    In warp-specialized kernels, lowering wraps the barrier in a synthetic
+    `ttg.warp_specialize` region so worker warps also execute the barrier.
+    This op cannot be placed inside an existing `ttg.warp_specialize`.
+  }];
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
 //
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //

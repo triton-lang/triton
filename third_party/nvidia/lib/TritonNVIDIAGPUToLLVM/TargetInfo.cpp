@@ -153,8 +153,8 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
 }
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
-  triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, /*relaxed=*/false);
-  triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
+  triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc,
+                                               /*relaxed=*/false);
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
