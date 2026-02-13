@@ -46,6 +46,12 @@ def _check_env(backend: str) -> None:
             if val is not None:
                 if env_val := triton.knobs.toenv(val):
                     triton.knobs.setenv(key, env_val[0])
+    
+    if backend == "cupti":
+        if triton.runtime.driver.active.get_current_target().arch >= 100:
+            # For Blackwell+ GPUs, use the cupti library built for Blackwell
+            cupti_lib_path = triton.knobs.proton.cupti_lib_blackwell_dir
+            triton.knobs.setenv("TRITON_CUPTI_LIB_PATH", cupti_lib_path)
 
 
 def start(

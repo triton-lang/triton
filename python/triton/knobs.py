@@ -528,6 +528,9 @@ class proton_knobs(base_knobs):
     cupti_lib_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))
+    cupti_lib_blackwell_dir: env_str = env_str(
+        "TRITON_CUPTI_LIB_BLACKWELL_PATH",
+        str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
     # This knob is effective only on Blackwell+ GPUs.
