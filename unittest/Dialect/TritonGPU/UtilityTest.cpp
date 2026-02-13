@@ -43,15 +43,12 @@ TEST_F(MMAInstrShapeTest, Version3ReturnsExpectedShape) {
 
 TEST_F(MMAInstrShapeTest, RejectsInsufficientRank) {
   Type i8 = IntegerType::get(&ctx, 8);
-  EXPECT_FALSE(
-      mmaVersionToInstrShape(/*version=*/2, {128}, i8, /*numWarps=*/4)
-          .has_value());
-  EXPECT_FALSE(
-      mmaVersionToInstrShape(/*version=*/3, {128}, i8, /*numWarps=*/4)
-          .has_value());
-  EXPECT_FALSE(
-      mmaVersionToInstrShape(/*version=*/5, {128}, i8, /*numWarps=*/4)
-          .has_value());
+  EXPECT_FALSE(mmaVersionToInstrShape(/*version=*/2, {128}, i8, /*numWarps=*/4)
+                   .has_value());
+  EXPECT_FALSE(mmaVersionToInstrShape(/*version=*/3, {128}, i8, /*numWarps=*/4)
+                   .has_value());
+  EXPECT_FALSE(mmaVersionToInstrShape(/*version=*/5, {128}, i8, /*numWarps=*/4)
+                   .has_value());
 }
 
 TEST_F(MMAInstrShapeTest, RejectsUnsupportedVersion) {

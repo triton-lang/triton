@@ -324,25 +324,24 @@ createMMAEncodingForDot(DotOpInterface dotOp, PatternRewriter &rewriter,
 
   auto CGALayout = getCGALayout(oldRetType.getEncoding());
   auto retShapePerCTA = getShapePerCTA(oldRetType);
-  auto instrShape = mmaVersionToInstrShape(
-      versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
+  auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
+                                           oldAType.getElementType(), numWarps);
   if (!instrShape)
     return std::nullopt;
   auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                       numWarps, *instrShape);
 
-  auto mmaEnc = NvidiaMmaEncodingAttr::get(oldRetType.getContext(),
-                                           versionMajor, versionMinor,
-                                           warpsPerTile, CGALayout,
-                                           *instrShape);
+  auto mmaEnc = NvidiaMmaEncodingAttr::get(
+      oldRetType.getContext(), versionMajor, versionMinor, warpsPerTile,
+      CGALayout, *instrShape);
   auto newRetType = oldRetType.cloneWithEncoding(mmaEnc);
 
   auto oldAcc = dotOp->getOperand(2);
   auto newAcc =
       ConvertLayoutOp::create(rewriter, oldAcc.getLoc(), newRetType, oldAcc);
 
-  return MMAEncodingResult{
-      mmaEnc, newRetType, newAcc, versionMajor, versionMinor};
+  return MMAEncodingResult{mmaEnc, newRetType, newAcc, versionMajor,
+                           versionMinor};
 }
 
 // Common operand conversion
@@ -439,9 +438,8 @@ public:
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult->newRetType,
                                   rewriter);
-      newDot = DotOp::create(rewriter, dotOp.getLoc(), mmaResult->newRetType,
-                             a, b, mmaResult->newAcc,
-                             dotOp.getInputPrecision(),
+      newDot = DotOp::create(rewriter, dotOp.getLoc(), mmaResult->newRetType, a,
+                             b, mmaResult->newAcc, dotOp.getInputPrecision(),
                              dotOp.getMaxNumImpreciseAcc());
     }
 
