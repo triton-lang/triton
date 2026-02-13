@@ -685,13 +685,11 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     return cvt.getOperation();
   }
   if (canFoldIntoConversion(op, encoding)) {
-    Operation *newOp = rewriter.clone(*op);
     auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
-    auto cvt = ConvertLayoutOp::create(rewriter, op->getLoc(), newType,
-                                       newOp->getResult(0));
-    map(op->getResult(0), cvt.getResult());
-    return cvt.getOperation();
+    opToDelete.remove(op);
+    setTypeInPlace(op->getResult(0), newType);
+    return op;
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
