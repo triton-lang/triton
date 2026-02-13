@@ -179,6 +179,7 @@ class HIPUtils(object):
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
         mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
+        self.unload_module = mod.unload_module
         self.get_device_properties = mod.get_device_properties
         self.create_tdm_descriptor = mod.create_tdm_descriptor
         self.launch = mod.launch
