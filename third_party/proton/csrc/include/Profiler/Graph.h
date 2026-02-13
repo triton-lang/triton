@@ -21,27 +21,6 @@ namespace proton {
 class Data;
 class Runtime;
 
-struct NodeStatus {
-  using Status = uint8_t;
-
-  static constexpr Status kMissingName = 1u << 0;
-  static constexpr Status kMetric = 1u << 1;
-
-  Status status{};
-
-  constexpr NodeStatus() = default;
-  constexpr explicit NodeStatus(Status status) : status(status) {}
-
-  constexpr NodeStatus(bool isMissingName, bool isMetricNode)
-      : status(static_cast<Status>((isMissingName ? kMissingName : 0) |
-                                   (isMetricNode ? kMetric : 0))) {}
-
-  constexpr bool isMissingName() const { return (status & kMissingName) != 0; }
-  constexpr bool isMetricNode() const { return (status & kMetric) != 0; }
-  void setMissingName() { status |= kMissingName; }
-  void setMetricNode() { status |= kMetric; }
-};
-
 struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
@@ -50,11 +29,14 @@ struct GraphState {
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
     std::map<Data *, size_t> dataToEntryId;
-    // Whether the node has missing name or is a metric node, which is
-    // determined at capture time and won't change for the same node id.
-    NodeStatus status{};
-    // Number of uint64 words written by this node in the metric buffer.
-    // Non-metric nodes keep this at 0.
+    // Whether the node has a missing name, determined at capture time and
+    // stable for the same node id.
+    bool isMissingName{};
+  };
+  struct MetricNodeState {
+    // The entry id of the static entry associated with this metric node.
+    std::map<Data *, size_t> dataToEntryId;
+    // Number of uint64 words written by this metric node in the metric buffer.
     size_t numWords{};
   };
   // Data objects that were enabled during graph capture.
@@ -63,9 +45,10 @@ struct GraphState {
   // This table only grows capacity and never shrinks.
   using NodeStateTable = RangeTable<NodeState, uint64_t>;
   NodeStateTable nodeIdToState;
-  // Metric nodes and their participating data sinks, ordered by node id.
-  using MetricNodeIdToDataSetMap = std::map<uint64_t, std::set<Data *>>;
-  MetricNodeIdToDataSetMap metricNodeIdToDataSet;
+  // Mapping from metric node id to metric node state.
+  // This table only grows capacity and never shrinks.
+  using MetricNodeStateTable = RangeTable<MetricNodeState, uint64_t>;
+  MetricNodeStateTable metricNodeIdToState;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -83,9 +66,8 @@ struct PendingGraphQueue {
     size_t numWords;
     // Launch entries to receive graph metric updates.
     std::vector<DataEntry> graphLaunchEntries;
-    // Non-owning pointers to graph state used to resolve linked entries.
-    const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet{};
-    const GraphState::NodeStateTable *nodeIdToState{};
+    // Ordered metric-node linked entries reconstructed at launch time.
+    std::vector<std::map<Data *, size_t>> metricNodeDataToEntryIdQueue;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -106,12 +88,11 @@ struct PendingGraphQueue {
 
   void push(size_t numNodes, size_t numWords,
             const std::vector<DataEntry> &graphLaunchEntries,
-            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
-            const GraphState::NodeStateTable *nodeIdToState) {
+            const std::vector<std::map<Data *, size_t>>
+                &metricNodeDataToEntryIdQueue) {
     pendingGraphs.emplace_back(PendingGraph{numNodes, numWords,
                                             graphLaunchEntries,
-                                            metricNodeIdToDataSet,
-                                            nodeIdToState});
+                                            metricNodeDataToEntryIdQueue});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -123,8 +104,9 @@ public:
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
   void push(size_t phase, const std::vector<DataEntry> &graphLaunchEntries,
-            const GraphState::MetricNodeIdToDataSetMap *metricNodeIdToDataSet,
-            const GraphState::NodeStateTable *nodeIdToState, size_t numNodes,
+            const std::vector<std::map<Data *, size_t>>
+                &metricNodeDataToEntryIdQueue,
+            size_t numNodes,
             size_t numWords);
 
   // No GPU synchronization, No CPU locks

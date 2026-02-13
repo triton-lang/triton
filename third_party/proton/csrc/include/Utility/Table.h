@@ -74,6 +74,14 @@ public:
 
   size_t size() const { return liveCount; }
 
+  template <typename FnT> void forEach(FnT &&fn) const {
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      if (!present[i])
+        continue;
+      fn(static_cast<IdT>(minId + static_cast<IdT>(i)), nodes[i]);
+    }
+  }
+
 private:
   void ensureRange(IdT minIdValue, IdT maxIdValue) {
     if (nodes.empty()) {
