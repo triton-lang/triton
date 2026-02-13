@@ -7,4 +7,6 @@ add_triton_library(NVGPUIR
 
   LINK_LIBS PUBLIC
   MLIRLLVMDialect
+  TritonIR
+  TritonGPUIR
 )
