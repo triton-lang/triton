@@ -1,10 +1,8 @@
-import importlib.util
 import torch
 import math
 import pytest
 import re
 from itertools import product
-from pathlib import Path
 
 import triton
 import triton.language as tl
@@ -3495,14 +3493,74 @@ def test_clc_basic(num_ctas):
             assert not was_launched[program_ids[pid]]
 
 
-# Load tutorial 11 block-scaled helpers.
-# Distinct module name + exec_module populates t11 without replacing this module.
-if __name__ == "__main__" or "test_core" in __name__:
-    TUTORIAL_11_PATH = Path(
-        __file__).resolve().parent.parent.parent / "tutorials" / "gluon" / "11-tcgen05-mma-scaled.py"
-    t11_spec = importlib.util.spec_from_file_location("tutorial_11_helpers", TUTORIAL_11_PATH)
-    t11 = importlib.util.module_from_spec(t11_spec)
-    t11_spec.loader.exec_module(t11)
+def align_to(a, b):
+    return triton.cdiv(a, b) * b
+
+
+def make_operand_descriptor(value, BLOCK_MN, BLOCK_K, MIXED_PREC, cga_layout=None):
+    IS_FP4 = value.dtype == torch.uint8
+    ELEM_PER_BYTE = 2 if IS_FP4 else 1
+    IS_MIXED_PREC_FP4 = MIXED_PREC and IS_FP4
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE],
+        ttgl.uint8 if IS_FP4 else ttgl.float8e4nv,
+        fp4_padded=IS_MIXED_PREC_FP4,
+        cga_layout=cga_layout,
+    )
+    return TensorDescriptor.from_tensor(value, [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE], layout)
+
+
+def make_output_descriptor(M, N, dtype, BLOCK_M, BLOCK_N, cga_layout=None):
+    C = torch.empty(M, N, device="cuda", dtype=dtype)
+    C_dtype = getattr(ttgl, str(dtype).split('.')[1])
+    C_desc_layout = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype, cga_layout=cga_layout)
+    return TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], C_desc_layout)
+
+
+def random_quantized_tensor(MN, K, format):
+    assert format in ["mxfp4", "mxfp8", "nvfp4"]
+    VEC_SIZE = 16 if format == "nvfp4" else 32
+    base = MXFP4Tensor(size=(MN, K), device="cuda").random()
+    scale = MXScaleTensor(size=(MN, K // VEC_SIZE), device="cuda").random(low=1 / 128, high=2.0)
+    ref = base.to(torch.float32)
+    scale_ref = scale.to(torch.float32)
+    value = ref * scale_ref.repeat_interleave(VEC_SIZE, dim=1)
+    if format == "mxfp8":
+        return ref.to(torch.float8_e4m3fn), scale.data, value
+    elif format == "mxfp4":
+        return base.to_packed_tensor(dim=1), scale.data, value
+    else:
+        return base.to_packed_tensor(dim=1), scale_ref.to(torch.float8_e4m3fn), value
+
+
+def swizzle_scales_packed_block(scales, VEC_SIZE):
+    PAD_MN = align_to(scales.shape[0], 128) - scales.shape[0]
+    PAD_K = align_to(scales.shape[1], 4) - scales.shape[1]
+    scales = torch.nn.functional.pad(scales, (0, PAD_K, 0, PAD_MN))
+    MN, SCALE_K = scales.shape[0], scales.shape[1]
+    REP_MN = MN // 128
+    REP_K = SCALE_K // 4
+    scales = scales.reshape(REP_MN, 4, 32, REP_K, 4)
+    scales = scales.permute(0, 3, 2, 1, 4)
+    return scales.contiguous()
+
+
+def make_scales_descriptor(scales, BLOCK_MN, BLOCK_K, VEC_SIZE, cga_layout=None):
+    REP_MN = BLOCK_MN // 128
+    REP_K = BLOCK_K // (VEC_SIZE * 4)
+    block_shape = [1, REP_MN, REP_K, 2, 256]
+    scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
+    IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
+    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, ttgl.float8e4nv if IS_NVFP4 else ttgl.uint8,
+                                                    cga_layout=cga_layout)
+    return TensorDescriptor.from_tensor(scales, block_shape, layout)
+
+
+@gluon.jit
+def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl.constexpr, VEC_SIZE: ttgl.constexpr):
+    smem = smem.reshape((smem.shape[1], smem.shape[2], 32, 4, 4))
+    smem = smem.permute((0, 3, 2, 1, 4))
+    return smem.reshape((BLOCK_MN, BLOCK_K // VEC_SIZE))
 
 
 @gluon.jit
@@ -3569,8 +3627,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         mbarrier.wait(tma_bar, phase_tma, deps=[a_smem, b_smem, a_scale_smem, b_scale_smem])
         phase_tma ^= 1
 
-        a_scale = t11.unswizzle_scales_shared_memory(a_scale_smem, BLOCK_M, BLOCK_K, VEC_SIZE)
-        b_scale = t11.unswizzle_scales_shared_memory(b_scale_smem, BLOCK_N, BLOCK_K, VEC_SIZE)
+        a_scale = unswizzle_scales_shared_memory(a_scale_smem, BLOCK_M, BLOCK_K, VEC_SIZE)
+        b_scale = unswizzle_scales_shared_memory(b_scale_smem, BLOCK_N, BLOCK_K, VEC_SIZE)
         fence_async_shared()
         tcgen05_copy(a_scale, a_scale_tmem)
         tcgen05_copy(b_scale, b_scale_tmem)
@@ -3622,11 +3680,11 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
     cga_layout_a_scale = [[0, 1, 0, 0, 0]] if two_ctas else None
     cga_layout_b_scale = [[0, 0, 0, 0, 0]] if two_ctas else None
 
-    A_desc = t11.make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_a)
-    B_desc = t11.make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_b)
-    C_desc = t11.make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout_c)
-    A_scale_desc = t11.make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
-    B_scale_desc = t11.make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
+    A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_a)
+    B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_b)
+    C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout_c)
+    A_scale_desc = make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
+    B_scale_desc = make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
 
     a_scale_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
                                             cga_layout=cga_layout_a_scale)
@@ -3658,11 +3716,11 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_N, BLOCK_K, a_format, b_format, num_ctas, multicast):
     BLOCK_M = 256 if num_ctas == 2 else 128
     torch.manual_seed(0)
-    A, A_scale, A_ref = t11.random_quantized_tensor(M, K, a_format)
-    B, B_scale, B_ref = t11.random_quantized_tensor(N, K, b_format)
+    A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
+    B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
     VEC_SIZE = 16 if a_format == "nvfp4" else 32
-    A_scale = t11.swizzle_scales_packed_block(A_scale, VEC_SIZE)
-    B_scale = t11.swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
+    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, num_ctas, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
