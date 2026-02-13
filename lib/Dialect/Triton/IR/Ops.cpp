@@ -1,6 +1,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -10,6 +11,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+
+#include <array>
 
 namespace mlir {
 namespace triton {
@@ -1362,6 +1365,179 @@ LogicalResult GatherOp::inferReturnTypes(
 
   // Shape and encoding of the indices with the element type of the src.
   inferredReturnTypes.push_back(indicesType.clone(srcType.getElementType()));
+  return success();
+}
+
+// -- ScatterOp --
+LogicalResult ScatterOp::verify() {
+  RankedTensorType dstTy = getDst().getType();
+  RankedTensorType indicesTy = getIndices().getType();
+  RankedTensorType srcTy = getSrc().getType();
+  RankedTensorType resTy = getResult().getType();
+  if (auto reduceKindAttr = getReduceKindAttr()) {
+    StringRef reduceKind = reduceKindAttr.getValue();
+    static constexpr std::array<StringLiteral, 11> kSupportedReduceKinds = {
+        "add",  "fadd", "max", "fmax", "min", "fmin",
+        "umax", "umin", "and", "or",   "xor"};
+    if (!llvm::is_contained(kSupportedReduceKinds, reduceKind)) {
+      return emitOpError() << "unsupported reduce_kind \"" << reduceKind
+                           << "\"";
+    }
+  }
+
+  if (dstTy.getShape() != resTy.getShape()) {
+    return emitOpError("destination and output shapes must match");
+  }
+  if (dstTy.getEncoding() != resTy.getEncoding()) {
+    return emitOpError("destination and output encodings must match");
+  }
+  if (dstTy.getElementType() != resTy.getElementType()) {
+    return emitOpError("destination and output element types must match");
+  }
+  if (srcTy.getShape() != indicesTy.getShape()) {
+    return emitOpError("source and indices shapes must match");
+  }
+  if (srcTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitOpError("source and indices encodings must match");
+  }
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitOpError("source and destination element types must match");
+  }
+  if (dstTy.getRank() != indicesTy.getRank() ||
+      srcTy.getRank() != dstTy.getRank()) {
+    return emitOpError("destination, source, and indices ranks must all match");
+  }
+  if (getAxis() >= dstTy.getRank()) {
+    return emitOpError(
+        "scatter dimension must be less than the destination rank");
+  }
+  for (uint32_t dim = 0; dim < indicesTy.getRank(); ++dim) {
+    if (dim == getAxis())
+      continue;
+    if (indicesTy.getShape()[dim] != dstTy.getShape()[dim]) {
+      return emitOpError("indices dimension ")
+             << dim << " must match the corresponding destination dimension";
+    }
+  }
+
+  return success();
+}
+
+ParseResult ScatterOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand dst;
+  OpAsmParser::UnresolvedOperand indices;
+  OpAsmParser::UnresolvedOperand src;
+  if (parser.parseOperand(dst) || parser.parseLSquare() ||
+      parser.parseOperand(indices) || parser.parseRSquare() ||
+      parser.parseEqual() || parser.parseOperand(src))
+    return failure();
+
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs))
+    return failure();
+
+  FunctionType fnType;
+  if (parser.parseColonType(fnType))
+    return failure();
+
+  if (fnType.getNumInputs() != 3 || fnType.getNumResults() != 1)
+    return parser.emitError(
+        parser.getCurrentLocation(),
+        "expected function type with 3 inputs and 1 result");
+
+  SmallVector<OpAsmParser::UnresolvedOperand, 3> operands{dst, indices, src};
+  if (parser.resolveOperands(operands, fnType.getInputs(),
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+
+  result.addTypes(fnType.getResults());
+  result.addAttributes(attrs);
+
+  Region *combineOp = result.addRegion();
+  OptionalParseResult regionResult = parser.parseOptionalRegion(*combineOp);
+  if (regionResult.has_value() && failed(*regionResult))
+    return failure();
+
+  return success();
+}
+
+void ScatterOp::print(OpAsmPrinter &printer) {
+  printer << " " << getDst() << "[" << getIndices() << "] = " << getSrc();
+
+  NamedAttrList attrs(getOperation()->getAttrs());
+  if (!attrs.get("axis"))
+    attrs.append("axis", getAxisAttr());
+  if (getIncludeSelf()) {
+    if (attrs.get("include_self"))
+      attrs.erase("include_self");
+  } else if (!attrs.get("include_self")) {
+    attrs.append("include_self", getIncludeSelfAttr());
+  }
+  if (!attrs.get("efficient_layout") && getEfficientLayoutAttr())
+    attrs.append("efficient_layout", getEfficientLayoutAttr());
+
+  printer.printOptionalAttrDict(attrs);
+  printer << " : ";
+  printer.printFunctionalType(getOperation()->getOperands().getTypes(),
+                              getOperation()->getResultTypes());
+
+  if (!getCombineOp().empty()) {
+    printer << " ";
+    printer.printRegion(getCombineOp(), /*printEntryBlockArgs=*/true);
+  }
+}
+
+LogicalResult ScatterOp::verifyRegions() {
+  if (getReduceKindAttr() && !getCombineOp().empty()) {
+    return emitOpError()
+           << "reduce_kind attribute cannot be used with a combine region";
+  }
+  if (getCombineOp().empty())
+    return success();
+
+  if (!llvm::hasSingleElement(getCombineOp()))
+    return emitOpError() << "combine operation must have exactly 1 block";
+
+  Block &block = getCombineOp().front();
+  if (block.getNumArguments() != 2) {
+    return emitOpError() << "combine operation must take 2 arguments but got "
+                         << block.getNumArguments();
+  }
+
+  Type elemTy = getDst().getType().getElementType();
+  if (block.getArgument(0).getType() != elemTy ||
+      block.getArgument(1).getType() != elemTy) {
+    return emitOpError() << "combine operation arguments must have type "
+                         << elemTy;
+  }
+
+  auto terminator = dyn_cast<ScatterReturnOp>(block.getTerminator());
+  if (!terminator) {
+    return emitOpError() << "combine operation must be terminated with a "
+                            "ScatterReturnOp but got "
+                         << block.getTerminator();
+  }
+
+  auto results = terminator->getOperands();
+  if (results.size() != 1) {
+    return emitOpError() << "combine operation must return 1 value but got "
+                         << results.size();
+  }
+  if (results[0].getType() != elemTy) {
+    return emitOpError() << "combine operation result must have type " << elemTy
+                         << " but got " << results[0].getType();
+  }
+
+  return success();
+}
+
+LogicalResult ScatterOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  ScatterOpAdaptor adaptor(operands, attributes, properties, regions);
+  auto dstType = cast<RankedTensorType>(adaptor.getDst().getType());
+  inferredReturnTypes.push_back(dstType);
   return success();
 }
 

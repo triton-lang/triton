@@ -402,6 +402,11 @@ static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
   return dstEnc;
 }
 
+static Attribute inferSrcEncoding(ScatterOp op, Attribute dstEnc) {
+  // The destination encoding is the same as the output encoding.
+  return dstEnc;
+}
+
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
                                          ArrayRef<int64_t> shape,
                                          ArrayRef<int32_t> order) {
@@ -494,6 +499,11 @@ static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
   return encoding;
 }
 
+static Attribute inferDstEncoding(ScatterOp op, Attribute encoding) {
+  // The output encoding matches the destination encoding.
+  return encoding;
+}
+
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
@@ -549,6 +559,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferSrcEncoding(gather, encoding);
+  if (auto scatter = dyn_cast<triton::ScatterOp>(op))
+    return inferSrcEncoding(scatter, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferSrcEncoding(fp4ToFp, encoding);
 
@@ -583,6 +595,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferDstEncoding(gather, encoding);
+  if (auto scatter = dyn_cast<triton::ScatterOp>(op))
+    return inferDstEncoding(scatter, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferDstEncoding(fp4ToFp, encoding);
 
@@ -942,6 +956,14 @@ LogicalResult getConvertBackwardSlice(
         if (!srcEncoding)
           return failure();
         enqueue(gather.getIndicesMutable(), srcEncoding);
+        continue;
+      }
+      if (auto scatter = dyn_cast<ScatterOp>(definingOp)) {
+        // The result and destination encodings must match.
+        auto srcEncoding = inferSrcEncoding(scatter, encoding);
+        if (!srcEncoding)
+          return failure();
+        enqueue(scatter.getDstMutable(), srcEncoding);
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {

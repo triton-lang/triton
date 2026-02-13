@@ -961,6 +961,56 @@ def TT_GatherOp : TT_Op<"gather", [Pure,
 }
 
 //
+// Scatter Op
+//
+def TT_ScatterOp : TT_Op<"scatter", [Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "local scatter operation";
+  let description = [{
+    Scatter elements from the source tensor into the destination tensor using
+    the indices tensor along a single specified axis. The source and indices
+    tensors must have the same shape. The output tensor has the same shape as
+    the destination tensor.
+
+    For each source position I, this writes:
+      out[I[0], ..., indices[I], ..., I[n]] = src[I]
+
+    If a reduction region is provided, then multiple source elements that map
+    to the same destination are combined using the region. When `include_self`
+    is true, the original destination value is included in the reduction for
+    indices that are written. When it is false, only source values are
+    combined, and destinations with no writes keep their original values.
+
+    The `efficient_layout` attribute is set when the compiler has determined an
+    optimized layout for the operation, indicating that it should not be
+    changed.
+  }];
+
+  let arguments = (ins
+    TT_Tensor:$dst,
+    TT_IntTensor:$indices,
+    TT_Tensor:$src,
+    I32Attr:$axis,
+    DefaultValuedAttr<BoolAttr, "true">:$include_self,
+    OptionalAttr<StrAttr>:$reduce_kind,
+    UnitAttr:$efficient_layout
+  );
+  let results = (outs TT_Tensor:$result);
+  let regions = (region AnyRegion:$combineOp);
+
+  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def TT_ScatterReturnOp: TT_Op<"scatter.return",
+                              [HasParent<"ScatterOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for scatter reduction operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
+}
+
+//
 // Print Op
 //
 def TT_PrintOp : TT_Op<"print", [SameVariadicOperandSize, MemoryEffects<[MemWrite<GlobalMemory>]>]> {

@@ -15,6 +15,10 @@ public:
 
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
+  // Returns the subset of lanes in `activeMask` that have the same `value` as
+  // the current lane. Backends may override with native match-any support.
+  virtual Value matchAny(RewriterBase &rewriter, Location loc, Type maskType,
+                         Value value, Value activeMask) const = 0;
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space

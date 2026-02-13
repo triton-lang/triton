@@ -18,6 +18,7 @@ add_triton_library(TritonGPUToLLVM
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
+    ScatterOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp

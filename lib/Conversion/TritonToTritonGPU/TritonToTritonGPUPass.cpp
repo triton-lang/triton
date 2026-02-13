@@ -475,6 +475,34 @@ struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
   }
 };
 
+struct TritonScatterPattern : public OpConversionPattern<triton::ScatterOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Type> retTypes;
+    if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
+                                                      retTypes)))
+      return failure();
+
+    auto newScatter = triton::ScatterOp::create(
+        rewriter, op.getLoc(), retTypes, adaptor.getDst(), adaptor.getIndices(),
+        adaptor.getSrc(), op.getAxis(), op.getIncludeSelf(),
+        op.getReduceKindAttr(), op.getEfficientLayout());
+    addNamedAttrs(newScatter, adaptor.getAttributes());
+
+    if (!op.getCombineOp().empty()) {
+      auto &newCombineOp = newScatter.getCombineOp();
+      rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
+                                 newCombineOp.end());
+    }
+
+    rewriter.replaceOp(op, newScatter.getResult());
+    return success();
+  }
+};
+
 struct TritonMapElementwisePattern
     : public OpConversionPattern<triton::MapElementwiseOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -590,6 +618,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::StoreOp>,
       GenericOpPattern<triton::HistogramOp>,
       GenericOpPattern<triton::GatherOp>,
+      TritonScatterPattern,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>,
       GenericOpPattern<triton::AssertOp>,

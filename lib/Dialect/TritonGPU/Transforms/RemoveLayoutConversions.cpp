@@ -192,6 +192,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
+  if (auto scatterOp = dyn_cast<ScatterOp>(op))
+    return scatterOp.getEfficientLayout();
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -303,6 +305,17 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       if (!gatherOp.getEfficientLayout() &&
           &use == &gatherOp.getIndicesMutable()) {
         setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
+    if (auto scatterOp = dyn_cast<ScatterOp>(user)) {
+      // Propagate through destination always; allow source/index driven
+      // propagation only when no optimized layout has been fixed.
+      if (&use == &scatterOp.getDstMutable() ||
+          (!scatterOp.getEfficientLayout() &&
+           (&use == &scatterOp.getIndicesMutable() ||
+            &use == &scatterOp.getSrcMutable()))) {
+        setEncoding(scatterOp.getResult(), info, changed, user);
         continue;
       }
     }
@@ -737,7 +750,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
+          ScatterOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
@@ -760,6 +773,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto scatter = dyn_cast<ScatterOp>(op))
+    return !scatter.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;

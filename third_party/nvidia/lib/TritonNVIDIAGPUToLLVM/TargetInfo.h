@@ -16,6 +16,8 @@ public:
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
+  Value matchAny(RewriterBase &rewriter, Location loc, Type maskType,
+                 Value value, Value activeMask) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;

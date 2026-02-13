@@ -661,6 +661,81 @@ class InterpreterBuilder:
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
 
+    def create_scatter(self, dst, indices, src, axis, include_self=True, reduce_kind=None):
+        rank = src.data.ndim
+        axis = axis if axis >= 0 else axis + rank
+        result = np.array(dst.data, copy=True)
+
+        coord = np.indices(src.data.shape, sparse=False)
+        scatter_indices = [coord[d] for d in range(rank)]
+        scatter_indices[axis] = indices.data.astype(np.intp, copy=False)
+        scatter_indices = tuple(scatter_indices)
+
+        if reduce_kind is None:
+            np.put_along_axis(result, indices.data, src.data, axis=axis)
+            return TensorHandle(result, dst.dtype.scalar)
+
+        if reduce_kind == "sum":
+            reduce_kind = "add"
+        if reduce_kind == "add":
+            reduce_kind = "fadd" if src.dtype.scalar.is_floating() else "add"
+        elif reduce_kind == "max":
+            if src.dtype.scalar.is_floating():
+                reduce_kind = "fmax"
+            else:
+                reduce_kind = "umax" if src.dtype.scalar.is_int_unsigned() else "max"
+        elif reduce_kind == "min":
+            if src.dtype.scalar.is_floating():
+                reduce_kind = "fmin"
+            else:
+                reduce_kind = "umin" if src.dtype.scalar.is_int_unsigned() else "min"
+
+        if include_self:
+            base = result
+        else:
+            if reduce_kind in {"add", "fadd", "or", "xor"}:
+                identity = np.array(0, dtype=result.dtype)
+            elif reduce_kind in {"max", "umax"}:
+                if np.issubdtype(result.dtype, np.floating):
+                    identity = np.array(-np.inf, dtype=result.dtype)
+                else:
+                    identity = np.array(np.iinfo(result.dtype).min, dtype=result.dtype)
+            elif reduce_kind in {"min", "umin"}:
+                if np.issubdtype(result.dtype, np.floating):
+                    identity = np.array(np.inf, dtype=result.dtype)
+                else:
+                    identity = np.array(np.iinfo(result.dtype).max, dtype=result.dtype)
+            elif reduce_kind == "and":
+                if np.issubdtype(result.dtype, np.integer):
+                    identity = np.array(np.iinfo(result.dtype).max, dtype=result.dtype)
+                else:
+                    identity = np.array(True, dtype=result.dtype)
+            else:
+                raise ValueError(f"unsupported scatter reduce kind '{reduce_kind}'")
+            base = np.full(result.shape, identity, dtype=result.dtype)
+
+        if reduce_kind in {"add", "fadd"}:
+            np.add.at(base, scatter_indices, src.data)
+        elif reduce_kind in {"max", "umax", "fmax"}:
+            np.maximum.at(base, scatter_indices, src.data)
+        elif reduce_kind in {"min", "umin", "fmin"}:
+            np.minimum.at(base, scatter_indices, src.data)
+        elif reduce_kind == "and":
+            np.bitwise_and.at(base, scatter_indices, src.data)
+        elif reduce_kind == "or":
+            np.bitwise_or.at(base, scatter_indices, src.data)
+        elif reduce_kind == "xor":
+            np.bitwise_xor.at(base, scatter_indices, src.data)
+        else:
+            raise ValueError(f"unsupported scatter reduce kind '{reduce_kind}'")
+
+        if include_self:
+            return TensorHandle(base, dst.dtype.scalar)
+
+        written = np.zeros(result.shape, dtype=np.bool_)
+        np.logical_or.at(written, scatter_indices, True)
+        return TensorHandle(np.where(written, base, result), dst.dtype.scalar)
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
