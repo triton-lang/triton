@@ -28,7 +28,7 @@ struct GraphState {
     // The entry id of the static entry associated with this node, which is
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
-    std::map<Data *, size_t> dataToEntryId;
+    std::vector<std::pair<Data *, size_t>> dataToEntryId;
     // Whether the node has a missing name, determined at capture time and
     // stable for the same node id.
     bool isMissingName{};

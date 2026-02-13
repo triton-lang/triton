@@ -49,6 +49,28 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
   return metric;
 }
 
+void upsertDataEntryId(std::vector<std::pair<Data *, size_t>> &dataToEntryId,
+                       Data *data, size_t entryId) {
+  auto it = std::find_if(dataToEntryId.begin(), dataToEntryId.end(),
+                         [data](const auto &pair) { return pair.first == data; });
+  if (it == dataToEntryId.end()) {
+    dataToEntryId.emplace_back(data, entryId);
+  } else {
+    it->second = entryId;
+  }
+}
+
+const size_t *
+findLinkedEntryId(const GraphState::NodeState &nodeState, Data *data) {
+  auto it = std::find_if(
+      nodeState.dataToEntryId.begin(), nodeState.dataToEntryId.end(),
+      [data](const auto &pair) { return pair.first == data; });
+  if (it == nodeState.dataToEntryId.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
@@ -117,7 +139,7 @@ uint32_t processActivityKernel(
       state = &ref.value().get();
     }
     auto &externState = *state;
-    if (externState.graphNodeIdToState.empty()) {
+    if (externState.graphNodeIdToState == nullptr) {
       // No graph creation captured, correlate based on the number of nodes
       // launched. This is a best-effort solution and can be inaccurate if the
       // graph is launched multiple times or has conditional logic.
@@ -131,13 +153,13 @@ uint32_t processActivityKernel(
       }
     } else {
       const auto *nodeState =
-          externState.graphNodeIdToState.find(kernel->graphNodeId);
+          externState.graphNodeIdToState->find(kernel->graphNodeId);
       if (nodeState) {
         // We have a graph creation captured.
         const bool isMissingName = nodeState->isMissingName;
         for (const auto &entry : state->dataEntries) {
-          auto linkedIdIt = nodeState->dataToEntryId.find(entry.data);
-          if (linkedIdIt == nodeState->dataToEntryId.end()) {
+          const auto *linkedId = findLinkedEntryId(*nodeState, entry.data);
+          if (linkedId == nullptr) {
             // This data was not enabled at graph capture time; attribute
             // the kernel to the launch entry.
             if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
@@ -150,11 +172,10 @@ uint32_t processActivityKernel(
           }
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             if (isMissingName) {
-              entry.upsertLinkedMetric(std::move(kernelMetric),
-                                       linkedIdIt->second);
+              entry.upsertLinkedMetric(std::move(kernelMetric), *linkedId);
             } else {
               auto childEntry =
-                  entry.data->addOp(Data::kVirtualPhase, linkedIdIt->second,
+                  entry.data->addOp(Data::kVirtualPhase, *linkedId,
                                     {Context(kernel->name)});
               entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
             }
@@ -453,7 +474,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           graphState.dataSet.insert(data);
           if (nodeState != nullptr)
-            nodeState->dataToEntryId.insert_or_assign(data, staticEntry.id);
+            upsertDataEntryId(nodeState->dataToEntryId, data, staticEntry.id);
           if (metricNodeState != nullptr)
             metricNodeState->dataToEntryId.insert_or_assign(data, staticEntry.id);
         }
@@ -611,7 +632,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto &graphNodeIdToState =
           profiler.correlation.externIdToState[scope.scopeId]
               .graphNodeIdToState;
-      graphNodeIdToState = graphState.nodeIdToState;
+      graphNodeIdToState = &graphState.nodeIdToState;
       for (size_t i = 0; i < dataEntries.size(); i++) {
         auto launchEntry = dataEntries[i];
         auto *data = launchEntry.data;

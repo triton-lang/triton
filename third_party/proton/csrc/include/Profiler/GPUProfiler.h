@@ -71,7 +71,7 @@ public:
     size_t numNodes{1};
 
     // Non-owning pointer to graph node states.
-    GraphState::NodeStateTable graphNodeIdToState;
+    const GraphState::NodeStateTable *graphNodeIdToState{};
   };
 
   using ExternIdToStateMap =
