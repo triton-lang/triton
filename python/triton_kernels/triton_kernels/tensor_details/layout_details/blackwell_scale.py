@@ -92,14 +92,14 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         if self.mode == "batched":
-            padded_data = torch.nn.functional.pad(
-                data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+            K_pad = self.K_pad - self.K
+            M_pad = self.M_pad - self.M
+            if K_pad > 0 or M_pad > 0:
+                # value of padding on left, right, top, bottom
+                data = torch.nn.functional.pad(data, (0, K_pad, 0, M_pad))
         else:
             # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-            padded_data = pad_segments_triton(
+            data = pad_segments_triton(
                 data,
                 self.ragged_metadata,
                 self.ALIGN_M,
@@ -108,11 +108,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
                 self.K_pad,
             )
 
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-
-        return padded_data
+        data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+        data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        return data
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
@@ -154,7 +153,10 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+        N_pad = self.N_pad - self.N
+        K_pad = self.K_pad - self.K
+        if N_pad > 0 or K_pad > 0:
+            data = torch.nn.functional.pad(data, (0, N_pad, 0, K_pad))
         data = data.transpose(-1, -2).contiguous()
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
                             self.SWIZZLE_K)
