@@ -141,6 +141,17 @@ uint32_t processActivityKernel(
           }
         });
       }
+    } else if (!nodeState) {
+      // This can happen when graph creation is not captured, or the node is
+      // skipped during capture. In both cases we don't have per-node info, so
+      // we just attach the kernel metric to the graph launch entry without
+      // creating a child entry for the node.
+      for (auto &[data, entry] : externState.dataToEntry) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
+        }
+      }
     }
     // Decrease the expected kernel count
     if (externState.numNodes > 0) {
