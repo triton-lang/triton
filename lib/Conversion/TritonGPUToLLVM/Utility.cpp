@@ -487,7 +487,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 SmallVector<std::pair<unsigned, unsigned>>
 getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes) {
-  auto padded = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(enc);
+  auto padded = triton::gpu::getPaddedEncoding(enc);
   if (!padded)
     return {};
 
@@ -532,7 +532,7 @@ uint32_t applyPadding(uint32_t baseOffset,
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
+                Type llvmElemTy, ArrayRef<Value> smemBases,
                 ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
@@ -561,15 +561,29 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
     }
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
+  return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                    paddingShifts, affineOffset, maskSpanAffineOffset, laneId,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
+}
+
+// Build a vector containing multiple base pointers for dynamic indexing.
+static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                                ArrayRef<Value> smemBases) {
+  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ptrTy = smemBases[0].getType();
+  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
+  Value basesVec = b.undef(vecTy);
+  for (size_t i = 0; i < smemBases.size(); ++i) {
+    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
+  }
+  return basesVec;
 }
 
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
-          Type llvmElemTy, Value smemBase,
+          Type llvmElemTy, ArrayRef<Value> smemBases,
           ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
           Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
           Value warpId, RewriterBase &rewriter,
@@ -578,6 +592,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                            ArrayRef<Value>, Value, int,
                                            VectorType, std::optional<Value>)>
               lowerInst) {
+  assert(!smemBases.empty() && "smemBases cannot be empty");
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -587,7 +602,30 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
   auto kOffset = str_attr("offset");
+  auto kPartition = str_attr("partition");
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+
+  // Either we have multiple bases with a matching partition dimension,
+  // or we have a single base.
+  assert((smemBases.size() == 1 ||
+          (cvt.hasOutDim(kPartition) &&
+           cvt.getOutDimSize(kPartition) == smemBases.size())) &&
+         "smemBases size must match partition dimension size");
+  bool isPartitioned = smemBases.size() > 1;
+
+  // Extract the partition sublayout before stripping it for vectorization.
+  auto inDimNames = to_vector(cvt.getInDimNames());
+  LinearLayout partitionLayout;
+  Value basesVec;
+  if (isPartitioned) {
+    partitionLayout = cvt.sublayout(inDimNames, {kPartition});
+    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
+  }
+
+  // Strip kPartition output for vectorization analysis.
+  SmallVector<StringAttr> outDims = to_vector(cvt.getOutDimNames());
+  llvm::erase(outDims, kPartition);
+  cvt = cvt.sublayout(inDimNames, outDims);
 
   auto [elemsPerVec, permutation] =
       largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
@@ -610,6 +648,11 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto [nAdditive, permStrides] =
       actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
   reps = permStrides.apply(reps);
+
+  if (isPartitioned) {
+    partitionLayout = permutation.apply(partitionLayout);
+    partitionLayout = permStrides.apply(partitionLayout);
+  }
   if (isStore) {
     vals = permStrides.apply(vals);
   }
@@ -665,6 +708,20 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
       // disjoint, so we can calculate their padding contributions separately.
       regIdxAddI8 = applyPadding(regIdxAddI8, paddingShifts);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
+
+      // Select the appropriate base pointer for partitioned tensors
+      Value smemBase = smemBases[0];
+      if (isPartitioned) {
+        // Compute the partition index dynamically.
+        auto partitionResult = applyLinearLayout(loc, rewriter, partitionLayout,
+                                                 {{kReg, b.i32_val(i + j)},
+                                                  {kLane, laneId},
+                                                  {kWarp, warpId},
+                                                  {kBlock, blockId}});
+        Value partitionIdx = partitionResult[0].second;
+        smemBase = b.extract_element(basesVec, partitionIdx);
+      }
+
       std::optional<Value> innerCtaOffset;
       if (useBlockId) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
@@ -688,7 +745,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
 SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,
-               LinearLayout cvt,          // Map from registers to offset
+               LinearLayout cvt, // Map from registers to offset[, partition]
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
@@ -713,20 +770,25 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
 
+  // Extract padding info from padded encoding (standalone or inside
+  // partitioned)
   std::optional<int> maybeMaxVecElems;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
-  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-          srcTy.getEncoding())) {
-    maybeMaxVecElems = paddedEnc.getMinInterval();
+  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
+    maybeMaxVecElems = triton::gpu::getMinInterval(srcTy.getEncoding());
     auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-    paddingShifts = getPaddedSharedShifts(paddedEnc, bitwidth,
+    paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
   }
 
-  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
-                         smemObj.getBase(), paddingShifts, affineOffset,
-                         maskSpanAffineOffset, rewriter, targetInfo,
-                         maybeMaxVecElems, localLoadOp);
+  // Get shared memory bases from the SharedMemoryObject.
+  // For non-partitioned tensors, this returns a single base.
+  // For partitioned tensors, this returns all bases (one per partition).
+  SmallVector<Value> smemBases(smemObj.getBases().begin(),
+                               smemObj.getBases().end());
+  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
+                         paddingShifts, affineOffset, maskSpanAffineOffset,
+                         rewriter, targetInfo, maybeMaxVecElems, localLoadOp);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
@@ -996,38 +1058,50 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 
 SharedMemoryObject::SharedMemoryObject(Value base, Type baseElemType,
                                        ArrayRef<Value> offsets)
-    : base(base), baseElemType(baseElemType),
+    : bases({base}), baseElemType(baseElemType),
       offsets(offsets.begin(), offsets.end()) {}
+
+SharedMemoryObject::SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType,
+                                       ArrayRef<Value> offsets)
+    : bases(bases.begin(), bases.end()), baseElemType(baseElemType),
+      offsets(offsets.begin(), offsets.end()) {
+  assert(!bases.empty() && "SharedMemoryObject must have at least one base");
+}
 
 SharedMemoryObject::SharedMemoryObject(Value base, Type baseElemType,
                                        int64_t rank, Location loc,
                                        RewriterBase &rewriter)
-    : base(base), baseElemType(baseElemType) {
+    : bases({base}), baseElemType(baseElemType) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  offsets.append(rank, b.i32_val(0));
+}
+
+SharedMemoryObject::SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType,
+                                       int64_t rank, Location loc,
+                                       RewriterBase &rewriter)
+    : bases(bases.begin(), bases.end()), baseElemType(baseElemType) {
+  assert(!bases.empty() && "SharedMemoryObject must have at least one base");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   offsets.append(rank, b.i32_val(0));
 }
 
 SmallVector<Value> SharedMemoryObject::getElems() const {
   SmallVector<Value> elems;
-  elems.push_back(base);
+  // All bases come first, then offsets
+  elems.append(bases.begin(), bases.end());
   elems.append(offsets.begin(), offsets.end());
   return elems;
 }
 
 SmallVector<Type> SharedMemoryObject::getTypes() const {
   SmallVector<Type> types;
-  types.push_back(base.getType());
-  types.append(offsets.size(), IntegerType::get(base.getContext(), 32));
+  // All base pointer types first
+  for (Value base : bases) {
+    types.push_back(base.getType());
+  }
+  // Then all offset types (i32)
+  types.append(offsets.size(), IntegerType::get(bases[0].getContext(), 32));
   return types;
-}
-
-Value SharedMemoryObject::getBaseBeforeSlice(int dim, Location loc,
-                                             RewriterBase &rewriter) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value cSwizzleOffset = getCSwizzleOffset(dim);
-  Value offset = b.sub(b.i32_val(0), cSwizzleOffset);
-  Type type = base.getType();
-  return b.gep(type, baseElemType, base, offset);
 }
 
 uint64_t
@@ -1043,12 +1117,11 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-          srcTy.getEncoding())) {
+  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
     // Mask is used in fusion of constant part of memory operation address as
     // immediate operand. Padded layout has additional address computations
     // between main offset computation and actual memory access, which breaks
-    // constand fusing. Full mask disables this optimization.
+    // constant fusing. Full mask disables this optimization.
     return ~uint64_t(0);
   }
   auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
@@ -1086,13 +1159,11 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     return b.i32_val(0);
   }
 
-  LinearLayout ll;
   // We return the offset without the padding. The padding will be added in the
   // lowering
-  if (auto paddedSharedEncoding =
-          dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-              srcTy.getEncoding())) {
-    ll = paddedSharedEncoding.getLinearComponent();
+  LinearLayout ll;
+  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
+    ll = triton::gpu::paddedLinearLayout(srcTy);
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
@@ -1114,9 +1185,11 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
 Value SharedMemoryObject::getShmemAffineBase(
     Location loc, RewriterBase &rewriter,
     triton::gpu::MemDescType srcTy) const {
+  assert(bases.size() == 1 &&
+         "getShmemAffineBase does not support partitioned shared memory");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value offset = getShmemOffset(loc, rewriter, srcTy);
-  return b.gep(base.getType(), baseElemType, base, offset);
+  return b.gep(bases[0].getType(), baseElemType, bases[0], offset);
 }
 
 Value getStructFromSharedMemoryObject(Location loc,
@@ -1148,9 +1221,18 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
     Type type = types[i];
     elems[i] = b.extract_val(type, llvmStruct, i);
   }
-  return {/*base=*/elems[0],
+
+  // Determine how many bases there are by counting pointer types at the start.
+  // The struct layout is: [base0, base1, ..., baseN-1, offset0, offset1, ...]
+  // All bases are pointer types, all offsets are i32.
+  size_t numBases = llvm::count_if(
+      types, [](Type t) { return isa<LLVM::LLVMPointerType>(t); });
+  assert(numBases > 0 &&
+         "SharedMemoryObject struct must have at least one base");
+
+  return {/*bases=*/{elems.begin(), elems.begin() + numBases},
           /*baseElemType=*/elemTy,
-          /*offsets=*/{elems.begin() + 1, elems.end()}};
+          /*offsets=*/{elems.begin() + numBases, elems.end()}};
 }
 
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
@@ -1244,14 +1326,57 @@ Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
     func = cast<FunctionOpInterface>(op);
 
   assert(op->hasAttr("allocation.offset"));
-  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                      .getValue()
-                      .getZExtValue();
+  auto offsetAttr = op->getAttr("allocation.offset");
+  assert(isa<IntegerAttr>(offsetAttr) &&
+         "getSharedMemoryBase() called on partitioned tensor. "
+         "Use getSharedMemoryBases() instead.");
+  size_t offset = cast<IntegerAttr>(offsetAttr).getValue().getZExtValue();
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value offVal = b.i32_val(offset);
   Value base =
       b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
+}
+
+SmallVector<int64_t> getPartitionOffsets(Operation *op) {
+  SmallVector<int64_t> offsets;
+  if (!op->hasAttr("allocation.offset"))
+    return offsets;
+
+  auto offsetAttr = op->getAttr("allocation.offset");
+  if (auto intAttr = dyn_cast<IntegerAttr>(offsetAttr)) {
+    // Single offset (non-partitioned tensor)
+    offsets.push_back(intAttr.getValue().getZExtValue());
+  } else if (auto arrayAttr = dyn_cast<ArrayAttr>(offsetAttr)) {
+    // Multiple offsets (partitioned tensor)
+    for (auto elem : arrayAttr) {
+      offsets.push_back(cast<IntegerAttr>(elem).getValue().getZExtValue());
+    }
+  }
+  return offsets;
+}
+
+SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                                        const TargetInfoBase &target,
+                                        Operation *op) {
+  SmallVector<Value> bases;
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
+  auto func = op->template getParentOfType<FunctionOpInterface>();
+  if (!func)
+    func = cast<FunctionOpInterface>(op);
+
+  auto offsets = getPartitionOffsets(op);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value stackPtr = LLVM::getStackPointer(rewriter, func);
+
+  for (int64_t offset : offsets) {
+    Value offVal = b.i32_val(offset);
+    Value base = b.gep(ptrTy, i8_ty, stackPtr, offVal);
+    bases.push_back(base);
+  }
+  return bases;
 }
 
 // Extract the bits of `a` that are set in `mask`
@@ -1684,16 +1809,18 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   };
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
+  SmallVector<Value> smemBases = {smemBase};
+  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBases,
             /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
   b.barrier(triton::gpu::AddrSpace::Local);
 
-  resultVals = lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBase,
-                         /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
-                         /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
-                         targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
+  resultVals =
+      lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBases,
+                /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
+                /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
+                targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
 
   // Create the result struct and replace the operation
   Value resultStruct =
