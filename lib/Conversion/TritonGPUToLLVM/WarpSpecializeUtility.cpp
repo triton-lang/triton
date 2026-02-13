@@ -72,8 +72,11 @@ lowerKernelBarriers(LLVM::LLVMFuncOp func,
       return WalkResult::skip();
     }
     if (barrierHelper.isBarrierOp(op)) {
-      return WalkResult(lowerBarrier(op, defaultNumWarps, /*partitionIdx=*/{},
-                                     barrierHelper));
+      auto barRes =
+          lowerBarrier(op, defaultNumWarps, /*partitionIdx=*/{}, barrierHelper);
+      // Since this is a PreOrder walk, we have to return skip() on success so
+      // we do not attempt to visit the regions in the now deleted op.
+      return barRes.succeeded() ? WalkResult::skip() : WalkResult::interrupt();
     }
     if (auto callOp = dyn_cast<LLVM::CallOp>(op)) {
       if (!innerFunctions.contains(callOp.getCalleeAttr().getAttr()))
