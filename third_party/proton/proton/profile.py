@@ -38,20 +38,20 @@ def _check_env(backend: str) -> None:
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
 
+    use_blackwell_cupti = backend == "cupti" and triton.runtime.driver.active.get_current_target().arch >= 100
+
     # Ensure default envs are set for Proton knobs if not already set by the user.
     for attr, desc in triton.knobs.proton.knob_descriptors.items():
         key = desc.key
         if getenv(key, None) is None:
+            if key == "TRITON_CUPTI_LIB_PATH" and use_blackwell_cupti:
+                # For Blackwell+ GPUs, use the cupti library built for Blackwell.
+                triton.knobs.setenv(key, triton.knobs.proton.cupti_lib_blackwell_dir)
+                continue
             val = getattr(triton.knobs.proton, attr)
             if val is not None:
                 if env_val := triton.knobs.toenv(val):
                     triton.knobs.setenv(key, env_val[0])
-
-    if backend == "cupti":
-        if triton.runtime.driver.active.get_current_target().arch >= 100:
-            # For Blackwell+ GPUs, use the cupti library built for Blackwell
-            cupti_lib_path = triton.knobs.proton.cupti_lib_blackwell_dir
-            triton.knobs.setenv("TRITON_CUPTI_LIB_PATH", cupti_lib_path)
 
 
 def start(
