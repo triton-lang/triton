@@ -9,10 +9,82 @@
 
 namespace proton {
 
+void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
+  auto &metrics = metricSet.get().metrics;
+  auto it = metrics.find(metric->getKind());
+  if (it == metrics.end()) {
+    metrics.emplace(metric->getKind(), std::move(metric));
+  } else {
+    it->second->updateMetric(*metric);
+  }
+}
+
+void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
+                                   size_t linkedId) const {
+  auto &linkedMetrics = metricSet.get().linkedMetrics;
+  auto &linkedMetricMap = linkedMetrics[linkedId];
+  auto it = linkedMetricMap.find(metric->getKind());
+  if (it == linkedMetricMap.end()) {
+    linkedMetricMap.emplace(metric->getKind(), std::move(metric));
+  } else {
+    it->second->updateMetric(*metric);
+  }
+}
+
+void DataEntry::upsertFlexibleMetric(const std::string &metricName,
+                                     const MetricValueType &metricValue) const {
+  auto &flexibleMetrics = metricSet.get().flexibleMetrics;
+  auto it = flexibleMetrics.find(metricName);
+  if (it == flexibleMetrics.end()) {
+    flexibleMetrics.emplace(metricName,
+                            FlexibleMetric(metricName, metricValue));
+  } else {
+    it->second.updateValue(metricValue);
+  }
+}
+
+void DataEntry::upsertFlexibleMetrics(
+    const std::map<std::string, MetricValueType> &metrics) const {
+  for (const auto &[metricName, metricValue] : metrics) {
+    upsertFlexibleMetric(metricName, metricValue);
+  }
+}
+
+void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
+                                           const MetricValueType &metricValue,
+                                           size_t linkedId) const {
+  auto &linkedFlexibleMetrics = metricSet.get().linkedFlexibleMetrics;
+  auto &linkedFlexibleMetricMap = linkedFlexibleMetrics[linkedId];
+  auto it = linkedFlexibleMetricMap.find(metricName);
+  if (it == linkedFlexibleMetricMap.end()) {
+    linkedFlexibleMetricMap.emplace(metricName,
+                                    FlexibleMetric(metricName, metricValue));
+  } else {
+    it->second.updateValue(metricValue);
+  }
+}
+
+void DataEntry::upsertLinkedFlexibleMetrics(
+    const std::map<std::string, MetricValueType> &metrics,
+    size_t linkedId) const {
+  for (const auto &[metricName, metricValue] : metrics) {
+    upsertLinkedFlexibleMetric(metricName, metricValue, linkedId);
+  }
+}
+
 void Data::initPhaseStore(PhaseStoreBase &store) {
   phaseStore = &store;
   currentPhasePtr = phaseStore->createPtr(0);
+  phaseStore->createPtr(kVirtualPhase);
   activePhases.insert(0);
+}
+
+DataEntry Data::addOp(const std::string &opName) {
+  std::vector<Context> contexts = contextSource->getContexts();
+  if (!opName.empty())
+    contexts.emplace_back(opName);
+  const auto phase = currentPhase.load(std::memory_order_relaxed);
+  return addOp(phase, kRootEntryId, contexts);
 }
 
 size_t Data::advancePhase() {
