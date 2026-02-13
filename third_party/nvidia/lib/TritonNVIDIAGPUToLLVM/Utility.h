@@ -63,6 +63,9 @@ LogicalResult lowerLdStMatrix(
 // group
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
                              uint16_t broadcastBits);
+
+/// Create a predicate where only the lead CTA is active for two CTA mode.
+Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter, Value pred);
 } // namespace NVIDIA
 } // namespace LLVM
 

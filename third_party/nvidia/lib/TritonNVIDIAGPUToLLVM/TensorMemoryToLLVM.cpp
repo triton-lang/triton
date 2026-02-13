@@ -751,7 +751,13 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
            strideRow * (64 / 8));
   }
 
+  // Only copy scale columns that map to block=0 (this CTA's slice).
+  auto kBlock = str_attr("block");
+  const int blockIdx = cvtWarp.getOutDimIndex(kBlock);
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
+    auto offsetBlock = cvtWarp.apply({{kRow, 0}, {kCol, col}});
+    if (offsetBlock[blockIdx].second != 0)
+      continue;
     auto desc = loader->smemLoad(0, col, rewriter, loc);
     auto tmemAddr =
         b.add(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32));
@@ -767,10 +773,12 @@ struct TensorMemoryCopyOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     bool twoCTAs = getModuleTwoCTAs(op);
+    if (twoCTAs)
+      pred = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter, pred);
+
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))
       return failure();
