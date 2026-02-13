@@ -25,6 +25,20 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
+static bool isValueAvailableInScope(Value value, Region *scope) {
+  if (!scope)
+    return false;
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    Region *argRegion = arg.getOwner()->getParent();
+    return argRegion == scope || scope->isAncestor(argRegion);
+  }
+  if (Operation *def = value.getDefiningOp()) {
+    Region *defRegion = def->getParentRegion();
+    return defRegion == scope || scope->isAncestor(defRegion);
+  }
+  return false;
+}
+
 constexpr int64_t kTileM = 8;
 constexpr int64_t kTileN = 8;
 
@@ -162,6 +176,8 @@ public:
           return std::nullopt;
       }
 
+      ptr = remapToScope(ptr, rewriter, scope, loc);
+
       ScratchInfo info{ptr, tensorTy};
       scratchMap[memdesc][scope] = info;
       return info;
@@ -189,8 +205,9 @@ public:
           rewriter, loc, rewriter.getI32IntegerAttr(stride));
       auto offsetEls = arith::MulIOp::create(
           rewriter, loc, rewriter.getI32Type(), offsetVal, strideVal);
-      auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
-                                      baseInfo->ptr, offsetEls);
+      Value ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
+                                       baseInfo->ptr, offsetEls);
+      ptr = remapToScope(ptr, rewriter, scope, loc);
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
@@ -218,8 +235,9 @@ public:
           rewriter, loc, rewriter.getI32IntegerAttr(stride));
       auto offset = arith::MulIOp::create(rewriter, loc, rewriter.getI32Type(),
                                           idx, strideVal);
-      auto ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
-                                      baseInfo->ptr, offset);
+      Value ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
+                                       baseInfo->ptr, offset);
+      ptr = remapToScope(ptr, rewriter, scope, loc);
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
@@ -241,6 +259,7 @@ public:
       if (ptr.getType() != ptrTy) {
         ptr = tt::BitcastOp::create(rewriter, loc, ptrTy, ptr);
       }
+      ptr = remapToScope(ptr, rewriter, scope, loc);
 
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
@@ -254,6 +273,36 @@ public:
   }
 
 private:
+  Value remapToScope(Value value, PatternRewriter &rewriter, Region *scope,
+                     Location loc) {
+    if (!scope || isValueAvailableInScope(value, scope))
+      return value;
+
+    auto *parentOp = scope->getParentOp();
+    auto partitions = dyn_cast_or_null<ttg::WarpSpecializePartitionsOp>(
+        parentOp ? parentOp : nullptr);
+    if (!partitions)
+      return value;
+
+    unsigned captureIdx = partitions.getNumOperands();
+    for (auto [i, capture] :
+         llvm::enumerate(partitions.getExplicitCaptures())) {
+      if (capture == value) {
+        captureIdx = i;
+        break;
+      }
+    }
+
+    if (captureIdx == partitions.getNumOperands()) {
+      partitions->insertOperands(captureIdx, value);
+      for (Region &region : partitions.getPartitionRegions()) {
+        region.addArgument(value.getType(), loc);
+      }
+    }
+
+    return scope->getArgument(captureIdx);
+  }
+
   DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
 };
 

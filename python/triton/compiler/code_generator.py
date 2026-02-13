@@ -424,10 +424,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(val, (ir.value, ir.block_argument)):
             val.set_loc(self.builder.create_name_loc(name, val.get_loc()))
         elif _is_triton_value(val):
-            handles = []
-            val._flatten_ir(handles)
-            for handle in handles:
-                handle.set_loc(self.builder.create_name_loc(name, handle.get_loc()))
+            val._set_name(self.builder, name)
 
     def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:

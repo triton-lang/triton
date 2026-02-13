@@ -32,7 +32,7 @@ class BlackwellMXScaleLayout(Layout):
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayout(Layout):
 
-    ragged_metadata: RaggedTensorMetadata
+    ragged_metadata: RaggedTensorMetadata | None
 
     @property
     def name(self):
@@ -54,24 +54,31 @@ class BlackwellActMXScaleLayout(Layout):
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
-    ragged_metadata: RaggedTensorMetadata
+    ragged_metadata: RaggedTensorMetadata | None
+    added_leading_batch_dim: bool = False
     ALIGN_K: int = 8
     ALIGN_M: int = 128
     SWIZZLE_K: int = 4
 
     def __post_init__(self):
         assert len(self.shape) in [2, 3]
+        added_leading_batch_dim = False
         if len(self.shape) == 2:
             B, M, K = 1, *self.shape
-            # In ragged mode, input often include padded tokens
-            # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
-            # And the rest of rows are padded tokens
-            n_slices = self.ragged_metadata.slice_sizes.shape[0]
-            # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
-            max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
-            # create a static size scratchpad for output
-            M_pad = self.ALIGN_M * max_n_blocks
-            mode = "ragged"
+            added_leading_batch_dim = True
+            if self.ragged_metadata is None:
+                M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+                mode = "batched"
+            else:
+                # In ragged mode, input often include padded tokens
+                # Out of M rows, the number of valid rows is the sum of ragged_metadata.slice_sizes
+                # And the rest of rows are padded tokens
+                n_slices = self.ragged_metadata.slice_sizes.shape[0]
+                # this estimates the number of blocks (each block has ALIGN_M rows) we need if we have all M valid tokens
+                max_n_blocks = self.ragged_metadata.n_blocks(n_slices, M, self.ALIGN_M)
+                # create a static size scratchpad for output
+                M_pad = self.ALIGN_M * max_n_blocks
+                mode = "ragged"
         else:
             B, M, K = self.shape
             M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
@@ -84,30 +91,28 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "M_pad", M_pad)
         object.__setattr__(self, "K_pad", K_pad)
         object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
     def swizzle_data(self, data):
-        if self.mode == "batched":
-            padded_data = torch.nn.functional.pad(
-                data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))  # value of padding on left, right, top, bottom
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-        else:
-            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-            padded_data = pad_segments_triton(
-                data,
-                self.ragged_metadata,
-                self.ALIGN_M,
-                self.M_pad,
-                self.K,
-                self.K_pad,
-            )
+        if data.numel():
+            if self.mode == "batched":
+                # value of padding on left, right, top, bottom
+                data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
+            else:
+                # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+                data = pad_segments_triton(
+                    data,
+                    self.ragged_metadata,
+                    self.ALIGN_M,
+                    self.M_pad,
+                    self.K,
+                    self.K_pad,
+                )
 
-            padded_data = padded_data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
-            padded_data = padded_data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-            padded_data = padded_data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-
-        return padded_data
+        data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
+        data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
+        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        return data
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
@@ -115,7 +120,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(self.B, self.M_pad, self.K_pad)
 
         if self.mode == "batched":
-            return data[..., :self.M, :self.K]
+            data = data[..., :self.M, :self.K]
+            if self.added_leading_batch_dim:
+                return data.squeeze(0)
+            return data
 
         # ragged path: map padded blocks back into the original ragged rows
         assert self.B == 1, "ragged scale layout only supports 2D input"
@@ -146,7 +154,8 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+        if data.numel():
+            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
         data = data.transpose(-1, -2).contiguous()
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
                             self.SWIZZLE_K)

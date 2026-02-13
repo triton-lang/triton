@@ -80,12 +80,12 @@ def get_ptx_version_from_options(options, arch: int):
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.6 is the max version supported by llvm c1188642.
+    # PTX 8.6 is the max version supported by llvm 979132a0.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(86, ptx_version)
+    llvm_ptx_version = min(90, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -499,7 +499,7 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             # Use -Ofc mid to compile ConSan code, if nothing else is specified.
-            if "consan" in knobs.compilation.instrumentation_mode:
+            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
                 ptx_extra_options += ["-Ofc", "mid"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
