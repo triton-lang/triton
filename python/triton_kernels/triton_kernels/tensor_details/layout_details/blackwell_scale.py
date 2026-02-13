@@ -91,22 +91,20 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
     def swizzle_data(self, data):
-        if self.mode == "batched":
-            K_pad = self.K_pad - self.K
-            M_pad = self.M_pad - self.M
-            if K_pad > 0 or M_pad > 0:
+        if data.numel():
+            if self.mode == "batched":
                 # value of padding on left, right, top, bottom
-                data = torch.nn.functional.pad(data, (0, K_pad, 0, M_pad))
-        else:
-            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-            data = pad_segments_triton(
-                data,
-                self.ragged_metadata,
-                self.ALIGN_M,
-                self.M_pad,
-                self.K,
-                self.K_pad,
-            )
+                data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
+            else:
+                # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+                data = pad_segments_triton(
+                    data,
+                    self.ragged_metadata,
+                    self.ALIGN_M,
+                    self.M_pad,
+                    self.K,
+                    self.K_pad,
+                )
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
@@ -153,10 +151,8 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        N_pad = self.N_pad - self.N
-        K_pad = self.K_pad - self.K
-        if N_pad > 0 or K_pad > 0:
-            data = torch.nn.functional.pad(data, (0, N_pad, 0, K_pad))
+        if data.numel():
+            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
         data = data.transpose(-1, -2).contiguous()
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
                             self.SWIZZLE_K)
