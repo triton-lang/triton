@@ -660,12 +660,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     return rewriteIfOp(ifOp);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-    Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
-    auto it = layouts.find(convertOp.getSrc());
-    if (it != layouts.end())
-      srcEncoding = *(it->second.encodings.begin());
-    Value src = getValueAs(convertOp.getSrc(), srcEncoding);
-    convertOp->setOperand(0, src);
     auto tensorType = cast<RankedTensorType>(convertOp.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
     setTypeInPlace(convertOp.getResult(), newType);
