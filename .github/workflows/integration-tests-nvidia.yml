@@ -90,6 +90,8 @@ jobs:
         run: make test-lit
       - name: Run python tests on CUDA
         run: make NUM_PROCS=24 test-unit
+      - name: Run gsan tests
+        run: make test-gsan
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret
