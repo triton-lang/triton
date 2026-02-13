@@ -478,10 +478,12 @@ class HIPBackend(BaseBackend):
                                   dump_file_id)
         llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                             dump_file_id)
+        if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
+            raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
-            amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir,
-                                                            dump_file_id + '.txt'), amd.TARGET_TRIPLE, options.arch,
-                                               features, flags, options.enable_fp_fusion, False)
+            amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'),
+                                               amd.TARGET_TRIPLE, options.arch, features, flags,
+                                               options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
         else:
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
                                            options.enable_fp_fusion, False)
@@ -495,6 +497,8 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
+        if 'gfx11' in options.arch:
+            target_features += ',-real-true16'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
