@@ -175,16 +175,12 @@ protected:
     // Correlate the correlationId with the last externId
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
                    bool isMissingName,
-                   const std::vector<DataEntry> &dataEntries,
-                   const GraphState::NodeStateTable *graphNodeIdToState) {
+                   const std::vector<DataEntry> &dataEntries) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
         state.dataEntries = dataEntries;
         state.isMissingName = isMissingName;
-        state.graphNodeIdToState = graphNodeIdToState == nullptr
-                                       ? GraphState::NodeStateTable()
-                                       : *graphNodeIdToState;
       });
     }
 

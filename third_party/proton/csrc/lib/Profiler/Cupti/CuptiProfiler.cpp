@@ -580,7 +580,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
   std::vector<DataEntry> launchEntries = dataEntries;
-  const GraphState::NodeStateTable *graphNodeIdToState = nullptr;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -609,7 +608,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
 
       // For each unique call path, we generate an entry per data object.
-      graphNodeIdToState = &graphState.nodeIdToState;
+      auto &graphNodeIdToState =
+          profiler.correlation.externIdToState[scope.scopeId]
+              .graphNodeIdToState;
+      graphNodeIdToState = graphState.nodeIdToState;
       for (size_t i = 0; i < dataEntries.size(); i++) {
         auto launchEntry = dataEntries[i];
         auto *data = launchEntry.data;
@@ -669,8 +671,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                 numNodes, scope.name.empty(), launchEntries,
-                                 graphNodeIdToState);
+                                 numNodes, scope.name.empty(), launchEntries);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }
