@@ -502,8 +502,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: scf.for
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: ttng.cluster_arrive {relaxed = false}
-  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NOT: ttng.cluster_arrive {relaxed = false}
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NOT: ttng.cluster_arrive {relaxed = false}
   // CHECK: ttng.wait_barrier
