@@ -533,8 +533,7 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
        llvm::enumerate(forOp.getInitArgs(), forOp.getResults(),
                        forOp.getRegionIterArgs())) {
     auto resultTy = dyn_cast<RankedTensorType>(result.getType());
-    auto argTy = dyn_cast<RankedTensorType>(regionArg.getType());
-    if (!resultTy || !argTy)
+    if (!resultTy)
       continue;
     Attribute encoding = resultTy.getEncoding();
     if (auto it = layouts.find(result); it != layouts.end())
@@ -566,10 +565,6 @@ Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
        llvm::zip(whileOp.getResults(), whileOp.getAfterArguments())) {
     auto it = layouts.find(result);
     if (it == layouts.end())
-      continue;
-    auto origType = dyn_cast<RankedTensorType>(result.getType());
-    auto afterArgType = dyn_cast<RankedTensorType>(afterArg.getType());
-    if (!origType || !afterArgType)
       continue;
     Attribute encoding = it->second.encodings[0];
     setEncodingInPlace(result, encoding);
