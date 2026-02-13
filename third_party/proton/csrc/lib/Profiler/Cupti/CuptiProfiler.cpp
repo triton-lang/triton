@@ -636,7 +636,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << ", and t may cause memory leak. To avoid this problem, "
                    "please start profiling before the graph is created."
                 << std::endl;
-    } else if (findGraph) {
+    } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.

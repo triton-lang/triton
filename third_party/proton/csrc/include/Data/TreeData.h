@@ -42,9 +42,9 @@ private:
   // the background threads concurrently, so methods that access them should be
   // protected by a (shared) mutex.
   class Tree;
-  json buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *staticTree) const;
+  json buildHatchetJson(TreeData::Tree *tree, TreeData::Tree *virtualTree) const;
   std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree,
-                                           TreeData::Tree *staticTree) const;
+                                           TreeData::Tree *virtualTree) const;
 
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
