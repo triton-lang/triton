@@ -91,19 +91,20 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
     def swizzle_data(self, data):
-        if self.mode == "batched" and data.numel():
-            # value of padding on left, right, top, bottom
-            data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
-        else:
-            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-            data = pad_segments_triton(
-                data,
-                self.ragged_metadata,
-                self.ALIGN_M,
-                self.M_pad,
-                self.K,
-                self.K_pad,
-            )
+        if data.numel():
+            if self.mode == "batched":
+                # value of padding on left, right, top, bottom
+                data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
+            else:
+                # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+                data = pad_segments_triton(
+                    data,
+                    self.ragged_metadata,
+                    self.ALIGN_M,
+                    self.M_pad,
+                    self.K,
+                    self.K_pad,
+                )
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
