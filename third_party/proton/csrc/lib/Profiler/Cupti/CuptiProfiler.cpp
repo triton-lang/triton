@@ -148,8 +148,10 @@ uint32_t processActivityKernel(
       // creating a child entry for the node.
       for (auto &[data, entry] : externState.dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
-          detail::updateDataPhases(dataPhases, data, entry.phase);
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+          childEntry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, data, childEntry.phase);
         }
       }
     }
