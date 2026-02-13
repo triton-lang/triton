@@ -95,8 +95,7 @@ public:
   void rewriteAssertOp(AssertOp assertOp);
   Type getTypeBeforeRewrite(Value value) const;
   void setTypeInPlace(Value value, Type newType);
-  Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
-                              Attribute encoding);
+  Operation *rewriteElementwiseInPlace(Operation *op, Attribute encoding);
   // Map the original value to the rewritten one.
   void map(Value old, Value newV);
   // Return the mapped value in the given encoding. This will insert a convert
@@ -499,16 +498,12 @@ void LayoutPropagation::setTypeInPlace(Value value, Type newType) {
   value.setType(newType);
 }
 
-Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
-                                               Operation *op,
-                                               Attribute encoding) {
-  Operation *newOp = rewriter.clone(*op);
-
+Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
+                                                        Attribute encoding) {
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
-    for (auto operand : op->getOperands()) {
-      auto ty =
-          dyn_cast<RankedTensorType>(getRewrittenValue(operand).getType());
+    for (Value operand : op->getOperands()) {
+      auto ty = dyn_cast<RankedTensorType>(getTypeBeforeRewrite(operand));
       if (!ty)
         continue;
       auto enc = ty.getEncoding();
@@ -521,20 +516,17 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
       operandEnc = inferSrcEncoding(op, encoding);
     assert(operandEnc);
   }
-
   for (OpOperand &operand : op->getOpOperands()) {
-    newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), operandEnc));
+    op->setOperand(operand.getOperandNumber(),
+                   getValueAs(operand.get(), operandEnc));
   }
-
-  for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
-    auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
-    if (!origType)
+  for (Value result : op->getResults()) {
+    auto tensorType = dyn_cast<RankedTensorType>(result.getType());
+    if (!tensorType)
       continue;
-    auto newType = origType.cloneWithEncoding(encoding);
-    newOp->getResult(i).setType(newType);
+    setTypeInPlace(result, tensorType.cloneWithEncoding(encoding));
   }
-  return newOp;
+  return op;
 }
 
 Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
@@ -669,10 +661,10 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     return rewriteWhileOp(whileOp);
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
-  opToDelete.insert(op);
-  OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
+  OpBuilder rewriter(op);
   if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
+    opToDelete.insert(op);
     Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
     auto it = layouts.find(convertOp.getSrc());
     if (it != layouts.end())
@@ -687,7 +679,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (canFoldIntoConversion(op, encoding)) {
     auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
-    opToDelete.remove(op);
     setTypeInPlace(op->getResult(0), newType);
     return op;
   }
@@ -695,16 +686,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
-    Operation *newOp = cloneElementwise(rewriter, op, encoding);
-    for (auto [oldResult, newResult] :
-         llvm::zip(op->getResults(), newOp->getResults())) {
-      if (oldResult.getType() == newResult.getType()) {
-        oldResult.replaceAllUsesWith(newResult);
-        continue;
-      }
-      map(oldResult, newResult);
-    }
-    return newOp;
+    return rewriteElementwiseInPlace(op, encoding);
   }
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
