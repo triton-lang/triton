@@ -275,7 +275,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       auto isMissingName = scope.name.empty();
       profiler.correlation.correlate(data->correlation_id, scope.scopeId,
                                      numInstances, isMissingName, dataEntries,
-                                     GraphState::NodeStateTable{});
+                                     nullptr);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       switch (cid) {
       case HIP_API_ID_hipStreamBeginCapture: {

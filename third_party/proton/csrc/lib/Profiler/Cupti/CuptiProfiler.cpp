@@ -580,7 +580,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
   std::vector<DataEntry> launchEntries = dataEntries;
-  GraphState::NodeStateTable *graphNodeIdToState = nullptr;
+  const GraphState::NodeStateTable *graphNodeIdToState = nullptr;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -669,8 +669,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
-                                 numNodes, scope.name.empty(),
-                                 launchEntries, *graphNodeIdToState);
+                                 numNodes, scope.name.empty(), launchEntries,
+                                 graphNodeIdToState);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }

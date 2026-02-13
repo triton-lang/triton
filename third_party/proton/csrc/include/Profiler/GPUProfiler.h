@@ -176,13 +176,15 @@ protected:
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
                    bool isMissingName,
                    const std::vector<DataEntry> &dataEntries,
-                   const GraphState::NodeStateTable &graphNodeIdToState) {
+                   const GraphState::NodeStateTable *graphNodeIdToState) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
         state.dataEntries = dataEntries;
         state.isMissingName = isMissingName;
-        state.graphNodeIdToState = graphNodeIdToState;
+        state.graphNodeIdToState = graphNodeIdToState == nullptr
+                                       ? GraphState::NodeStateTable()
+                                       : *graphNodeIdToState;
       });
     }
 
