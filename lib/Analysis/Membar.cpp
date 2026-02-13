@@ -7,9 +7,6 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
-namespace ttg = ::mlir::triton::gpu;
-namespace ttng = ::mlir::triton::nvidia_gpu;
-
 namespace mlir {
 
 AllocationSlice::AllocationSlice(Value value,
@@ -245,25 +242,21 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
-static bool containsLocalBarrier(Operation *op) {
-  if (isa<mlir::gpu::BarrierOp>(op))
-    return true;
-  if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
-    return true;
-  if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
-    return true;
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
-    return barrier.hasLocal();
-  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
-    return !wgWait.getWarpGroupLocal() && ttg::lookupNumWarps(op) > 4;
-  if (isa<ttng::ArriveBarrierOp>(op))
-    return true;
-  return false;
-}
-
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
+  auto containsLocalBarrier = [](Operation *op) {
+    if (isa<gpu::BarrierOp>(op))
+      return true;
+    if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
+      return true;
+    if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
+      return true;
+    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
+      return barrier.hasLocal();
+    return false;
+  };
+
   if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();

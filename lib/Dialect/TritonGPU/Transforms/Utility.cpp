@@ -1601,8 +1601,7 @@ void replaceUsesAndPropagateType(
       auto operands = llvm::to_vector(wait.getOperands());
       operands[operand->getOperandNumber()] = val;
       auto newWait = ttng::WarpGroupDotWaitOp::create(
-          builder, wait.getLoc(), operands, wait.getPendingsAttr(),
-          wait.getWarpGroupLocalAttr());
+          builder, wait.getLoc(), operands, wait.getPendings());
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {
