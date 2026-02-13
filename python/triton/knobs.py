@@ -521,6 +521,8 @@ class amd_knobs(base_knobs):
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
     # Path to externally-provided MIR files to use instead of generated ones
     swap_mir: env_opt_str = env_opt_str("TRITON_SWAP_MIR")
+    # Enable machine instruction scheduler in MIR swap mode
+    swap_mir_enable_misched: env_bool = env_bool("TRITON_SWAP_MIR_ENABLE_MISCHED", False)
 
 
 class proton_knobs(base_knobs):
