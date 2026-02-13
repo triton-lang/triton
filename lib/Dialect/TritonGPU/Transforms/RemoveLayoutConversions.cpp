@@ -93,8 +93,8 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
-  Type getTypeBeforeRewrite(Value value) const;
-  void setTypeInPlace(Value value, Type newType);
+  Attribute getEncodingBeforeRewrite(Value value) const;
+  void setEncodingInPlace(Value value, Attribute encoding);
   Operation *rewriteElementwiseInPlace(Operation *op, Attribute encoding);
   // Map the original value to the rewritten one.
   void map(Value old, Value newV);
@@ -109,8 +109,8 @@ public:
 private:
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
-  // original types of values rewritten in place.
-  DenseMap<Value, Type> originalTypes;
+  // original encodings of tensor values rewritten in place.
+  DenseMap<Value, Attribute> originalEncodings;
   // map of the values rewrite based on their encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
   FuncOp funcOp;
@@ -429,12 +429,9 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           auto it = layouts.find(operand.get());
           if (it == layouts.end())
             continue;
-          auto typeBeforeRewrite =
-              dyn_cast<RankedTensorType>(getTypeBeforeRewrite(operand.get()));
-          if (!typeBeforeRewrite)
+          Attribute encoding = getEncodingBeforeRewrite(operand.get());
+          if (!encoding)
             continue;
-          Attribute encoding =
-              typeBeforeRewrite.getEncoding();
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
@@ -483,16 +480,22 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   return value;
 }
 
-Type LayoutPropagation::getTypeBeforeRewrite(Value value) const {
-  if (auto it = originalTypes.find(value); it != originalTypes.end())
+Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return {};
+  if (auto it = originalEncodings.find(value); it != originalEncodings.end())
     return it->second;
-  return value.getType();
+  return tensorType.getEncoding();
 }
 
-void LayoutPropagation::setTypeInPlace(Value value, Type newType) {
-  if (!originalTypes.count(value))
-    originalTypes[value] = value.getType();
-  value.setType(newType);
+void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return;
+  if (!originalEncodings.count(value))
+    originalEncodings[value] = tensorType.getEncoding();
+  value.setType(tensorType.cloneWithEncoding(encoding));
 }
 
 Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
@@ -500,10 +503,9 @@ Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
     for (Value operand : op->getOperands()) {
-      auto ty = dyn_cast<RankedTensorType>(getTypeBeforeRewrite(operand));
-      if (!ty)
+      Attribute enc = getEncodingBeforeRewrite(operand);
+      if (!enc)
         continue;
-      auto enc = ty.getEncoding();
       if (inferDstEncoding(op, enc) == encoding) {
         operandEnc = enc;
         break;
@@ -521,7 +523,7 @@ Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
     auto tensorType = dyn_cast<RankedTensorType>(result.getType());
     if (!tensorType)
       continue;
-    setTypeInPlace(result, tensorType.cloneWithEncoding(encoding));
+    setEncodingInPlace(result, encoding);
   }
   return op;
 }
@@ -539,9 +541,8 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
       encoding = *it->second.encodings.begin();
     Value convertedOperand = getValueAs(operand, encoding);
     forOp.getInitArgsMutable()[i].assign(convertedOperand);
-    auto newType = resultTy.cloneWithEncoding(encoding);
-    setTypeInPlace(result, newType);
-    setTypeInPlace(regionArg, newType);
+    setEncodingInPlace(result, encoding);
+    setEncodingInPlace(regionArg, encoding);
   }
   return forOp.getOperation();
 }
@@ -554,8 +555,11 @@ Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
       convertedOperand =
           getValueAs(operand, *layouts[beforeArg].encodings.begin());
     whileOp->setOperand(i, convertedOperand);
-    if (beforeArg.getType() != convertedOperand.getType())
-      setTypeInPlace(beforeArg, convertedOperand.getType());
+    auto beforeArgTy = dyn_cast<RankedTensorType>(beforeArg.getType());
+    auto convertedTy = dyn_cast<RankedTensorType>(convertedOperand.getType());
+    if (beforeArgTy && convertedTy &&
+        beforeArgTy.getEncoding() != convertedTy.getEncoding())
+      setEncodingInPlace(beforeArg, convertedTy.getEncoding());
   }
 
   for (auto [result, afterArg] :
@@ -567,9 +571,9 @@ Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     auto afterArgType = dyn_cast<RankedTensorType>(afterArg.getType());
     if (!origType || !afterArgType)
       continue;
-    auto newType = origType.cloneWithEncoding(it->second.encodings[0]);
-    setTypeInPlace(result, newType);
-    setTypeInPlace(afterArg, newType);
+    Attribute encoding = it->second.encodings[0];
+    setEncodingInPlace(result, encoding);
+    setEncodingInPlace(afterArg, encoding);
   }
 
   return whileOp.getOperation();
@@ -584,7 +588,7 @@ Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
     if (!origType)
       continue;
     Attribute encoding = *(it->second.encodings.begin());
-    setTypeInPlace(ifOp.getResult(i), origType.cloneWithEncoding(encoding));
+    setEncodingInPlace(ifOp.getResult(i), encoding);
   }
   return ifOp.getOperation();
 }
@@ -660,15 +664,11 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     return rewriteIfOp(ifOp);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-    auto tensorType = cast<RankedTensorType>(convertOp.getType());
-    auto newType = tensorType.cloneWithEncoding(encoding);
-    setTypeInPlace(convertOp.getResult(), newType);
+    setEncodingInPlace(convertOp.getResult(), encoding);
     return op;
   }
   if (canFoldIntoConversion(op, encoding)) {
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
-    auto newType = tensorType.cloneWithEncoding(encoding);
-    setTypeInPlace(op->getResult(0), newType);
+    setEncodingInPlace(op->getResult(0), encoding);
     return op;
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
