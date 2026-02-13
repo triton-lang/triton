@@ -134,6 +134,8 @@ struct ArefValue {
   Value fullMbars;
   int depth;
   SmallVector<Value> buffers;
+  bool emptyIsPerWarp;
+  bool fullIsPerWarp;
 };
 
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
@@ -159,6 +161,10 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
 struct BarrierCount {
   int producerPendingCount{0};
   int consumerPendingCount{0};
+  SmallVector<int> producerPartitionIds;
+  SmallVector<int> consumerPartitionIds;
+  bool consumerIsPerWarp{false};
+  bool producerIsPerWarp{false};
 };
 
 SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
@@ -185,11 +191,15 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
+      count.producerPartitionIds.push_back(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
+          count.producerPendingCount += 1;
+          break;
         case AsyncOp::NONE:
+          count.producerIsPerWarp = true;
           count.producerPendingCount += 1;
           break;
         default:
@@ -201,11 +211,15 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         continue;
       }
       consumerGroups.insert(partitionIds.front());
+      count.consumerPartitionIds.push_back(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
+          count.consumerPendingCount += 1;
+          break;
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
+          count.consumerIsPerWarp = true;
           count.consumerPendingCount += 1;
           break;
         default:
@@ -225,11 +239,18 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 }
 
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount) {
+                     int numBarriers, int arrivalCount,
+                     SmallVector<int> dependentPartitionIds, bool IsPerWarp) {
   Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    InitBarrierOp::create(b1, barrierView, arrivalCount);
+    if (dependentPartitionIds.empty() || !IsPerWarp) {
+      InitBarrierOp::create(b1, barrierView, arrivalCount);
+    } else {
+      InitBarrierOp::create(
+          b1, barrierView, arrivalCount,
+          DenseI32ArrayAttr::get(b1.getContext(), dependentPartitionIds));
+    }
   }
   // Invalidate and deallocate the barriers.
   for (unsigned i = 0; i < numBarriers; i++) {
@@ -257,11 +278,19 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
-  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto emptyMbars =
+      createBarriers(b1, b2, depth, count.consumerPendingCount,
+                     count.consumerPartitionIds, count.consumerIsPerWarp);
+  auto fullMbars =
+      createBarriers(b1, b2, depth, count.producerPendingCount,
+                     count.producerPartitionIds, count.producerIsPerWarp);
 
-  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
-                   op.getOperands()};
+  return ArefValue{emptyMbars,
+                   fullMbars,
+                   static_cast<int>(depth),
+                   op.getOperands(),
+                   count.consumerIsPerWarp,
+                   count.producerIsPerWarp};
 }
 
 SmallVector<Value>
@@ -467,7 +496,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
 }
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
-                         PatternRewriter &rewriter, Value mbar,
+                         PatternRewriter &rewriter, Value mbar, bool isPerWarp,
                          std::optional<PartitionWsTagIds> partitionWsTagIds,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
@@ -475,7 +504,8 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1);
+      arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1,
+                                                     isPerWarp);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
@@ -537,8 +567,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionWsTagIds(op),
-                      getStageCluster(op));
+                      fullBarrier, arefVal.fullIsPerWarp,
+                      getPartitionWsTagIds(op), getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -576,7 +606,8 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      getPartitionWsTagIds(op), stageCluster);
+                      arefVal.emptyIsPerWarp, getPartitionWsTagIds(op),
+                      stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {

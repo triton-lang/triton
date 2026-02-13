@@ -67,6 +67,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.arrive_barrier %alloc, 2, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
+
+  // CHECK-LABEL: arrive_barrier_per_warp
+  tt.func @arrive_barrier_per_warp(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK: [[LANE:%.*]] = llvm.urem %{{.*}}, [[C32]]
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+    // CHECK: [[IS_LANE0:%.*]] = llvm.icmp "eq" [[LANE]], [[C0]]
+    // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[IS_LANE0]], %arg0
+    ttng.arrive_barrier %alloc, 2 frequency = per_warp : !ttg.memdesc<1xi64, #shared0, #smem>
+    tt.return
+  }
+
+  // CHECK-LABEL: arrive_barrier_per_warp_pred
+  tt.func @arrive_barrier_per_warp_pred(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK: [[LANE:%.*]] = llvm.urem %{{.*}}, [[C32]]
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+    // CHECK: [[IS_LANE0:%.*]] = llvm.icmp "eq" [[LANE]], [[C0]]
+    // CHECK: [[PRED:%.*]] = llvm.and [[IS_LANE0]], %arg1
+    // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], %arg0
+    ttng.arrive_barrier %alloc, 2, %pred frequency = per_warp : !ttg.memdesc<1xi64, #shared0, #smem>
+    tt.return
+  }
 }
 
 
