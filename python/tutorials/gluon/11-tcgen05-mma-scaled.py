@@ -1250,13 +1250,11 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     acc_idx = 0
 
-    # We double buffer the mma barriers so we can have 2 in flight simultaneously
-    num_mma_bars: gl.constexpr = 2
-    mma_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_mma_bars):
+    mma_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_acc_buffers):
         mbarrier.init(mma_bars.index(i), count=1)
-    mma_producer = t8.Counter.create(0, num_mma_bars)
-    mma_consumer = t8.Counter.create(0, num_mma_bars)
+    mma_producer = t8.Counter.create(0, num_acc_buffers)
+    mma_consumer = t8.Counter.create(0, num_acc_buffers)
 
     scheduler = SchedulerImpl.initialize(c_desc.shape[0], c_desc.shape[1], BLOCK_M, BLOCK_N)
     num_tiles = scheduler.get_num_tiles()
@@ -1322,8 +1320,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
         mma_consumer = mma_consumer.next()
         acc = cur_acc_buf.load(acc_reg_layout)
         if num_acc_buffers == 1:
-            # Wait for all threads to finish loading from accumulator
-            gl.barrier()
             load_consumer, mma_producer = issue_mma(load_consumer, load_bars, a_bufs, b_bufs,
                                                     a_scale_bufs, b_scale_bufs, mma_producer, mma_bars,
                                                     acc_bufs.index(acc_idx), use_acc=False, pred=has_next_tile)
@@ -1339,7 +1335,7 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     tma.store_wait(0)
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(load_bars.index(i))
-    for i in gl.static_range(num_mma_bars):
+    for i in gl.static_range(num_acc_buffers):
         mbarrier.invalidate(mma_bars.index(i))
 
 

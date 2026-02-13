@@ -323,11 +323,6 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Arrive has block-level semantics, so we must synchronize
-    // Technically, this should be MemBar's job but it can include TMEM
-    // accesses which doesn't have a MemBar equivalent :/
-    ttg::BarrierOp::create(rewriter, op.getLoc(), ttg::AddrSpace::Local);
-
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
