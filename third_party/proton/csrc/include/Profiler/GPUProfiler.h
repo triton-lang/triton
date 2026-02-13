@@ -71,7 +71,7 @@ public:
     size_t numNodes{1};
 
     // Non-owning pointer to graph node states.
-    const GraphState::NodeStateTable *graphNodeIdToState{nullptr};
+    GraphState::NodeStateTable graphNodeIdToState;
   };
 
   using ExternIdToStateMap =
@@ -176,7 +176,7 @@ protected:
     void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
                    bool isMissingName,
                    const std::vector<DataEntry> &dataEntries,
-                   const GraphState::NodeStateTable *graphNodeIdToState) {
+                   const GraphState::NodeStateTable &graphNodeIdToState) {
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;

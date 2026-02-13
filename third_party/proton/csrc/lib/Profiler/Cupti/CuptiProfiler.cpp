@@ -117,7 +117,7 @@ uint32_t processActivityKernel(
       state = &ref.value().get();
     }
     auto &externState = *state;
-    if (externState.graphNodeIdToState == nullptr) {
+    if (externState.graphNodeIdToState.empty()) {
       // No graph creation captured, correlate based on the number of nodes
       // launched. This is a best-effort solution and can be inaccurate if the
       // graph is launched multiple times or has conditional logic.
@@ -131,7 +131,7 @@ uint32_t processActivityKernel(
       }
     } else {
       const auto *nodeState =
-          externState.graphNodeIdToState->find(kernel->graphNodeId);
+          externState.graphNodeIdToState.find(kernel->graphNodeId);
       if (nodeState) {
         // We have a graph creation captured.
         const bool isMissingName = nodeState->isMissingName;
@@ -580,7 +580,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   const auto &scope = threadState.scopeStack.back();
   auto &dataEntries = threadState.dataEntries;
   std::vector<DataEntry> launchEntries = dataEntries;
-  const GraphNodeStateMap *graphNodeIdToState = nullptr;
+  GraphState::NodeStateTable *graphNodeIdToState = nullptr;
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -670,7 +670,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
                                  numNodes, scope.name.empty(),
-                                 launchEntries, graphNodeIdToState);
+                                 launchEntries, *graphNodeIdToState);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
 }
