@@ -663,10 +663,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-    setEncodingInPlace(convertOp.getResult(), encoding);
-    return op;
-  }
   if (canFoldIntoConversion(op, encoding)) {
     setEncodingInPlace(op->getResult(0), encoding);
     return op;
