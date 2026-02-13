@@ -9,9 +9,12 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace ttn = mlir::triton::nvgpu;
+namespace ttg = mlir::triton::gpu;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 
@@ -241,6 +244,83 @@ class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
     // already know about the range of the cluster ID.
     Value res = NVVM::ClusterId::create(rewriter, op.getLoc(), i32_ty);
     rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+class ClusterBarrierOpPattern : public OpRewritePattern<ttn::ClusterBarrierOp> {
+public:
+  using OpRewritePattern<ttn::ClusterBarrierOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::ClusterBarrierOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto unitAttr = UnitAttr::get(rewriter.getContext());
+    auto mod = op->getParentOfType<ModuleOp>();
+    if (!mod)
+      return rewriter.notifyMatchFailure(op, "expected parent module");
+
+    auto defaultNumWarps = triton::gpu::maybeLookupNumWarps(op);
+    if (!defaultNumWarps)
+      return rewriter.notifyMatchFailure(op, "missing contextual num-warps");
+    int totalNumWarps = *defaultNumWarps;
+    if (auto totalNumWarpsAttr =
+            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+      totalNumWarps = totalNumWarpsAttr.getInt();
+    int workerNumWarps = totalNumWarps - *defaultNumWarps;
+
+    rewriter.setInsertionPoint(op);
+    auto createClusterBarrier = [&](OpBuilder &b) {
+      if (op.getRelaxed()) {
+        NVVM::ClusterArriveRelaxedOp::create(b, loc, unitAttr);
+      } else {
+        NVVM::ClusterArriveOp::create(b, loc, unitAttr);
+      }
+      NVVM::ClusterWaitOp::create(b, loc, unitAttr);
+    };
+
+    if (workerNumWarps <= 0) {
+      createClusterBarrier(rewriter);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    SmallVector<int32_t> partitionNumWarps;
+    for (int remainingWarps = workerNumWarps; remainingWarps > 0;) {
+      int32_t partitionWarps =
+          llvm::bit_floor(static_cast<uint32_t>(remainingWarps));
+      partitionNumWarps.push_back(partitionWarps);
+      remainingWarps -= partitionWarps;
+    }
+
+    auto wsOp = ttg::WarpSpecializeOp::create(rewriter, loc, TypeRange{},
+                                              partitionNumWarps);
+    SmallVector<int32_t> startIds;
+    int startId = *defaultNumWarps;
+    for (int32_t partitionWarps : partitionNumWarps) {
+      startIds.push_back(startId);
+      startId += partitionWarps;
+    }
+    wsOp.setWarpGroupStartIds(startIds);
+
+    Block *defaultBlock = rewriter.createBlock(&wsOp.getDefaultRegion());
+    rewriter.setInsertionPointToEnd(defaultBlock);
+    createClusterBarrier(rewriter);
+    ttg::WarpYieldOp::create(rewriter, loc, TypeRange(), ValueRange());
+
+    Block *partitionHolder = rewriter.createBlock(&wsOp.getPartitionOpHolder());
+    rewriter.setInsertionPointToStart(partitionHolder);
+    auto partitions = ttg::WarpSpecializePartitionsOp::create(
+        rewriter, loc, ValueRange(),
+        /*numPartitionRegions=*/partitionNumWarps.size());
+    for (Region &partitionRegion : partitions.getPartitionRegions()) {
+      Block *partitionBlock = rewriter.createBlock(&partitionRegion);
+      rewriter.setInsertionPointToEnd(partitionBlock);
+      createClusterBarrier(rewriter);
+      ttg::WarpReturnOp::create(rewriter, loc);
+    }
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -568,15 +648,8 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    auto voidTy = void_ty(ctx);
     if (twoCTAs) {
-      // In warp-specialized kernels, worker warps are parked in the switch
-      // loop and do not execute return epilogues. Emitting a cluster barrier
-      // here deadlocks because only the default warpgroup reaches it.
-      if (!warpSpecialized) {
-        NVVM::ClusterArriveRelaxedOp::create(b, loc, UnitAttr::get(ctx));
-        NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
-      }
+      ttn::ClusterBarrierOp::create(b, loc, /*relaxed=*/true);
     } else {
       NVVM::Barrier0Op::create(b, loc);
     }
@@ -662,13 +735,16 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
-                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+    lowerTensorMemoryAlloc(mod);
+
+    patterns
+        .add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+             WGMMAWaitGroupOpPattern, WarpIdOpPattern, ClusterBarrierOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    lowerTensorMemoryAlloc(mod);
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };

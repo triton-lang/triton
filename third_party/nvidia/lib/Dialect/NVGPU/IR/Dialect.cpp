@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 
@@ -47,3 +48,13 @@ void mlir::triton::nvgpu::NVGPUDialect::initialize() {
 #define GET_OP_CLASSES
 #include "Dialect/NVGPU/IR/Ops.cpp.inc"
 #include "Dialect/NVGPU/IR/OpsEnums.cpp.inc"
+
+LogicalResult ClusterBarrierOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  if ((*this)->getParentOfType<mlir::triton::gpu::WarpSpecializePartitionsOp>())
+    return emitOpError(
+        "cannot be used inside `ttg.warp_specialize.partitions`");
+  return success();
+}

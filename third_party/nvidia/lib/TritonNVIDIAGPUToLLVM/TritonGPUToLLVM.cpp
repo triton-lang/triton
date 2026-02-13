@@ -88,6 +88,11 @@ struct ConvertTritonGPUToLLVM
   ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
       : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    ConvertTritonGPUToLLVMBase::getDependentDialects(registry);
+    registry.insert<triton::nvgpu::NVGPUDialect>();
+  }
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();

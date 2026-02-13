@@ -272,6 +272,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_barrier_invalid() {
+    // expected-error @below {{requires ttg.num-ctas > 1}}
+    nvg.cluster_barrier {relaxed = false}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_barrier_in_partition_invalid() {
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      // expected-error @below {{cannot be used inside `ttg.warp_specialize.partitions`}}
+      nvg.cluster_barrier {relaxed = false}
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @+1 {{After removing the zero bases the layout must be bijective}}
 #linear = #ttg.linear<{register = [[0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1]], warp = [[16, 0], [8, 0]], block = []}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
