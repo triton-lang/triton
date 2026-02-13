@@ -113,7 +113,6 @@ private:
   DenseMap<Value, Type> originalTypes;
   // map of the values rewrite based on their encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
-  SetVector<Operation *> opToDelete;
   FuncOp funcOp;
 };
 
@@ -444,8 +443,6 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       }
     }
   }
-  for (Operation *op : llvm::reverse(opToDelete))
-    op->erase();
 }
 
 void LayoutPropagation::map(Value old, Value newV) {
@@ -662,19 +659,17 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  OpBuilder rewriter(op);
   if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-    opToDelete.insert(op);
     Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
     auto it = layouts.find(convertOp.getSrc());
     if (it != layouts.end())
       srcEncoding = *(it->second.encodings.begin());
     Value src = getValueAs(convertOp.getSrc(), srcEncoding);
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
+    convertOp->setOperand(0, src);
+    auto tensorType = cast<RankedTensorType>(convertOp.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
-    auto cvt = ConvertLayoutOp::create(rewriter, op->getLoc(), newType, src);
-    map(op->getResult(0), cvt.getResult());
-    return cvt.getOperation();
+    setTypeInPlace(convertOp.getResult(), newType);
+    return op;
   }
   if (canFoldIntoConversion(op, encoding)) {
     auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
