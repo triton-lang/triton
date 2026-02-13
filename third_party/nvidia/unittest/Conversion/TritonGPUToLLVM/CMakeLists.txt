@@ -5,4 +5,8 @@ add_triton_ut(
     TritonGPUToLLVM
     TritonNVIDIAGPUToLLVM
     NVGPUIR MLIRUBToLLVM
+
+   DEPENDS
+   triton
+   TritonGPUToLLVM
 )

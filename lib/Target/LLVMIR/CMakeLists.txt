@@ -7,22 +7,6 @@ add_triton_library(TritonLLVMIR
         DEPENDS
         LLVMIRIncGen
 
-        LINK_LIBS
-        ${CMAKE_DL_LIBS}
-        PUBLIC
-        MLIRArithToLLVM
-        MLIRBuiltinToLLVMIRTranslation
-        MLIRIndexToLLVM
-        MLIRIR
-        MLIRLLVMDialect
-        MLIRNVVMToLLVM
-        MLIRLLVMToLLVMIRTranslation
-        MLIRNVVMToLLVMIRTranslation
-        MLIRROCDLToLLVMIRTranslation
-        MLIRSCFToControlFlow
-        MLIRSupport
-        MLIRTargetLLVMIRExport
-        TritonGPUToLLVM
         )
 
 set_source_files_properties(

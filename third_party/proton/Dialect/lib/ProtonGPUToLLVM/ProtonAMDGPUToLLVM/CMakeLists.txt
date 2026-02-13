@@ -8,8 +8,4 @@ add_triton_library(ProtonAMDGPUToLLVM
 
     DEPENDS
     ProtonAMDGPUConversionPassIncGen
-
-    LINK_LIBS PUBLIC
-    ProtonGPUToLLVM
-    TritonAMDGPUToLLVM
 )

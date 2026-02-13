@@ -7,8 +7,4 @@ add_triton_library(ProtonGPUIR
   ProtonGPUTableGen
   ProtonGPUAttrDefsIncGen
   ProtonGPUTypesIncGen
-
-  LINK_LIBS PUBLIC
-  TritonGPUIR
-  ProtonIR
 )

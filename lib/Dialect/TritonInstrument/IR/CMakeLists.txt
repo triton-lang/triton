@@ -7,8 +7,4 @@ add_triton_library(TritonInstrumentIR
   DEPENDS
     TritonInstrumentTableGen
 
-  LINK_LIBS PUBLIC
-    MLIRIR
-    TritonIR
-    TritonGPUIR
 )

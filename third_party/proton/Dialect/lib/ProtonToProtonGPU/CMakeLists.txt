@@ -3,9 +3,4 @@ add_triton_library(ProtonToProtonGPU
 
   DEPENDS
   ProtonToProtonGPUIncGen
-  LINK_LIBS PUBLIC
-  TritonIR
-  TritonGPUIR
-  ProtonIR
-  ProtonGPUIR
 )

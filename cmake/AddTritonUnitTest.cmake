@@ -14,12 +14,20 @@ function(add_triton_ut)
   add_executable(
           ${__NAME}
           ${__SRCS})
+  # When TRITON_BUILD_PYTHON_MODULE is ON, libtriton.so contains pybind11 code
+  # with Python C API references (e.g. _Py_NoneStruct). Standalone executables
+  # must link against libpython so the dynamic linker can resolve these at runtime.
+  if(TRITON_BUILD_PYTHON_MODULE AND TARGET Python3::Python)
+    set(_PYTHON_LIBS Python3::Python)
+  endif()
+
   target_link_libraries(
           ${__NAME}
           PRIVATE
           GTest::gtest_main
           gmock
-          ${__LIBS})
+          triton
+          ${_PYTHON_LIBS})
 
   if(NOT MSVC)
     target_compile_options(${__NAME} PRIVATE -fno-rtti)

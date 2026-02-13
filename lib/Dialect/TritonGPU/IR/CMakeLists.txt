@@ -11,8 +11,4 @@ add_triton_library(TritonGPUIR
   TritonGPUTypeInterfacesIncGen
   TritonGPUOpInterfacesIncGen
 
-  LINK_LIBS PUBLIC
-  MLIRGPUDialect
-  TritonIR
-  TritonTools
 )

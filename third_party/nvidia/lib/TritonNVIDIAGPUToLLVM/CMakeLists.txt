@@ -25,11 +25,4 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonNVIDIAGPUConversionPassIncGen
     NVGPUAttrDefsIncGen
 
-    LINK_LIBS PUBLIC
-    TritonAnalysis
-    TritonGPUToLLVM
-    TritonInstrumentToLLVM
-    MLIRReconcileUnrealizedCasts
-    NVGPUIR
-    MLIRUBToLLVM
 )

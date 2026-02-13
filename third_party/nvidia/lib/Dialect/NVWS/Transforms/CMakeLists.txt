@@ -10,10 +10,4 @@ add_triton_library(NVWSTransforms
   DEPENDS
   NVWSTransformsIncGen
 
-  LINK_LIBS PUBLIC
-  TritonIR
-  TritonGPUIR
-  TritonNvidiaGPUIR
-  NVWSIR
-  MLIRTransformUtils
 )

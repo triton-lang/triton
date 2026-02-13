@@ -36,11 +36,4 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonAMDGPUConversionPassIncGen
     LLVMIRIncGen
 
-    LINK_LIBS PUBLIC
-    MLIRReconcileUnrealizedCasts
-    TritonGPUToLLVM
-    TritonAMDGPUIR
-    LLVMCore
-    LLVMPasses
-    LLVMSupport
 )

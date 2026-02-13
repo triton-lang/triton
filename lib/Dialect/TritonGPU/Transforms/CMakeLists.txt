@@ -40,17 +40,4 @@ add_triton_library(TritonGPUTransforms
   DEPENDS
   TritonGPUTransformsIncGen
 
-  LINK_LIBS PUBLIC
-  MLIRTransforms
-  MLIRTransformUtils
-  TritonAnalysis
-  TritonIR
-  TritonTransforms
-  TritonGPUIR
-  TritonNvidiaGPUIR
-  NVWSIR
-  NVWSTransforms
-  TritonToTritonGPU
-  TritonInstrumentIR
-  MLIRTransformUtils
 )

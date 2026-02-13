@@ -10,5 +10,5 @@ add_dependencies(TritonAMDGPUTestAnalysis
   TritonGPUTypeInterfacesIncGen
   TritonGPUOpInterfacesIncGen
 )
-target_link_libraries(TritonAMDGPUTestAnalysis MLIRPass)
+target_link_libraries(TritonAMDGPUTestAnalysis triton)
 target_compile_options(TritonAMDGPUTestAnalysis PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})

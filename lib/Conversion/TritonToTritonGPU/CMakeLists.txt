@@ -6,11 +6,4 @@ add_triton_library(TritonToTritonGPU
     DEPENDS
     TritonConversionPassIncGen
 
-    LINK_LIBS PUBLIC
-    MLIRIR
-    MLIRPass
-    MLIRTransforms
-    TritonIR
-    ProtonIR
-    TritonGPUIR
 )

@@ -7,8 +7,4 @@ add_triton_library(ProtonNVIDIAGPUToLLVM
 
     DEPENDS
     ProtonNvidiaGPUConversionPassIncGen
-
-    LINK_LIBS PUBLIC
-    ProtonGPUToLLVM
-    TritonNVIDIAGPUToLLVM
 )

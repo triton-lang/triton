@@ -3,8 +3,4 @@ add_triton_library(ProtonAnalysis
 
   DEPENDS
 	ProtonTableGen
-
-  LINK_LIBS PUBLIC
-	ProtonIR
-	TritonAnalysis
 )

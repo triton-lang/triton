@@ -15,8 +15,4 @@ add_triton_library(NVHopperTransforms
   DEPENDS
   NVHopperTransformsIncGen
 
-  LINK_LIBS PUBLIC
-  TritonIR
-  TritonGPUIR
-  MLIRTransformUtils
 )

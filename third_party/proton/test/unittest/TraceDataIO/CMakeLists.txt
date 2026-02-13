@@ -7,6 +7,8 @@ add_triton_ut(
 	LIBS ProtonTraceDataIO
 )
 
+target_link_libraries(TraceDataIO PUBLIC ProtonTraceDataIO)
+
 target_include_directories(TraceDataIO
 PRIVATE
     "${JSON_INCLUDE_DIR}"

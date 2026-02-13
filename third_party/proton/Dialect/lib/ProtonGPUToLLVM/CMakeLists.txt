@@ -6,11 +6,6 @@ add_triton_library(ProtonGPUToLLVM
 
     DEPENDS
     ProtonGPUConversionPassIncGen
-
-    LINK_LIBS PUBLIC
-    ProtonIR
-    ProtonGPUIR
-    ProtonAnalysis
 )
 
 add_subdirectory(ProtonNvidiaGPUToLLVM)

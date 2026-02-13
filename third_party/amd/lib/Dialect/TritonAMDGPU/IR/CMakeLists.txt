@@ -5,8 +5,4 @@ add_triton_library(TritonAMDGPUIR
   TritonAMDGPUTableGen
   TritonAMDGPUAttrDefsIncGen
 
-  LINK_LIBS PUBLIC
-  MLIRLLVMDialect
-  TritonIR
-  TritonGPUIR
 )

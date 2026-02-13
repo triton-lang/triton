@@ -132,19 +132,29 @@ function(add_triton_library name)
   set_property(GLOBAL APPEND PROPERTY TRITON_LIBS ${name})
   add_triton_object(${name} ${ARGN})
   target_compile_options(${name} PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
+  # Override the global -fvisibility=hidden so that symbols from OBJECT
+  # libraries are exported when linked into libtriton.so.
+  if(NOT MSVC)
+    target_compile_options(${name} PRIVATE -fvisibility=default)
+  endif()
 endfunction()
 
 set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
 function(add_triton_plugin name)
   set_property(GLOBAL APPEND PROPERTY TRITON_PLUGINS ${name})
   add_triton_object(${name} ${ARGN})
+  # Override the global -fvisibility=hidden so that symbols from OBJECT
+  # libraries are exported when linked into libtriton.so.
+  if(NOT MSVC)
+    target_compile_options(${name} PRIVATE -fvisibility=default)
+  endif()
 endfunction()
 
 
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=default")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
@@ -178,7 +188,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   include_directories(${PYTHON_SRC_PATH})
 
   # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+  # Development (= Development.Module + Development.Embed) is required so that
+  # both Python3::Module (for building extension modules without libpython) and
+  # Python3::Python (libpython, for standalone tools that load libtriton.so) are
+  # available. libtriton.so contains pybind11 code with Python C API references;
+  # standalone tools like triton-opt need libpython to resolve those at runtime.
+  find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
   find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
@@ -208,13 +223,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
       add_subdirectory(${PLUGIN_DIR} ${PLUGIN_DIR_BUILD_OUTPUT})
     endforeach()
   endif()
+endif()
 
-  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
+### TODO: This is strange, that we need to add the f2reduce subdir before
+### # Add f2reduce before collecting libraries
+### # This is important to keep it out of libtriton.so
+add_subdirectory(third_party/f2reduce)
+
+  ### intentionally indented to reduce diff churn
+  get_property(TRITON_OBJECT_LIBS GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
   set(TRITON_LIBRARIES
-    ${triton_libs}
-    ${triton_plugins}
-
     # mlir
     MLIRAMDGPUDialect
     MLIRNVVMDialect
@@ -239,15 +258,30 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRUBToLLVM
     MLIRPluginsLib
 
+    MLIRReconcileUnrealizedCasts
+    MLIRRegisterAllDialects
+    MLIROptLib
+    MLIRRegisterAllPasses
+    MLIRAnalysis
+    MLIRArithDialect
+    MLIRMathDialect
+    MLIRParser
+    MLIRTransformUtils
+    MLIRArithToLLVM
+    MLIRBuiltinToLLVMIRTranslation
+    MLIRNVVMToLLVM
+    MLIRLLVMToLLVMIRTranslation
+    MLIRLLVMIRTransforms
+    MLIRSCFDialect
+
     # LLVM
     LLVMPasses
     LLVMNVPTXCodeGen
+    LLVMSupport
+
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
-
-    Python3::Module
-    pybind11::headers
 
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
@@ -280,6 +314,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   message(STATUS "Triton backends tuple: ${TRITON_BACKENDS_TUPLE}")
 
+if(TRITON_BUILD_PYTHON_MODULE)
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
@@ -290,6 +325,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
+  target_link_libraries(triton PRIVATE Python3::Module pybind11::headers)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
@@ -300,8 +336,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
+endif()
+
+target_link_libraries(triton PRIVATE ${TRITON_OBJECT_LIBS})
+if(TRITON_BUILD_PYTHON_MODULE)
+  target_link_libraries(triton PRIVATE ${triton_plugins})
+endif()
+target_link_libraries(triton PRIVATE
+  $<LINK_LIBRARY:WHOLE_ARCHIVE,${TRITON_LIBRARIES}>
+)
+
+  ### intentionally indented to reduce diff churn
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+if(TRITON_BUILD_PYTHON_MODULE)
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
   endif()
@@ -315,10 +363,26 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
+else()
+  # Ensure a dummy source exists in the build tree and use it for the library.
+  set(DUMMY_CC_PATH "${CMAKE_CURRENT_BINARY_DIR}/dummy.cc")
+  file(WRITE "${DUMMY_CC_PATH}" "// Auto-generated dummy source for triton\n")
+  add_library(triton SHARED "${DUMMY_CC_PATH}")
+  # Put libtriton in lib/ subdirectory so the default rpath works
+  set_target_properties(triton PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  )
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
+  add_subdirectory(third_party/proton/Dialect)
 endif()
 
+# Note: --exclude-libs,ALL is intentionally omitted. libtriton.so is a
+# monolithic shared library and consumers (triton-opt, plugins) need access
+# to both Triton and MLIR/LLVM symbols it exports.
 if (UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl")
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
@@ -330,6 +394,15 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_options(triton PRIVATE ${PYTHON_LDFLAGS})
+
+  # libtriton.so is a Python extension module that intentionally leaves Python
+  # C API symbols (e.g. PyErr_Fetch) unresolved — they are provided at runtime
+  # by the Python interpreter. Propagate --allow-shlib-undefined to any
+  # executable that links against libtriton.so so the linker does not reject
+  # these intentionally-unresolved symbols.
+  if(UNIX AND NOT APPLE)
+    target_link_options(triton INTERFACE "LINKER:--allow-shlib-undefined")
+  endif()
 endif()
 
 if(NOT TRITON_BUILD_PYTHON_MODULE)
@@ -341,7 +414,17 @@ endif()
 
 find_package(Threads REQUIRED)
 
-add_subdirectory(third_party/f2reduce)
+# Expose backend include directories at root scope so that consumers of
+# libtriton.so (executables in bin/, plugins) can find tablegen-generated
+# headers like TritonAMDGPUTransforms/Passes.h.inc.
+foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+  include_directories(${PROJECT_SOURCE_DIR}/third_party/${CODEGEN_BACKEND}/include)
+  include_directories(${PROJECT_BINARY_DIR}/third_party/${CODEGEN_BACKEND}/include)
+endforeach()
+
+### TODO: This is strange, that we need to add the f2reduce subdir before
+### See Above where we add the subdir before hand
+### add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
 add_subdirectory(examples)

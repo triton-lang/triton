@@ -4,7 +4,4 @@ add_triton_library(GluonIR
   DEPENDS
   GluonTableGen
 
-  LINK_LIBS PUBLIC
-  TritonIR
-  TritonGPUIR
 )
