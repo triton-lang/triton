@@ -26,23 +26,25 @@ namespace mlir {
 
 using namespace triton;
 
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                const ArrayRef<int64_t> &shape,
-                                                Type eltType, int numWarps) {
+std::optional<SmallVector<unsigned, 3>>
+mmaVersionToInstrShape(int version, const ArrayRef<int64_t> &shape,
+                       Type eltType, int numWarps) {
   if (version == 1)
-    return {16, 16};
+    return SmallVector<unsigned, 3>{16, 16};
   else if (version == 2) {
     auto rank = shape.size();
+    if (rank < 2)
+      return std::nullopt;
     SmallVector<unsigned, 3> ret(rank, 1);
     ret[rank - 1] = 8;
     ret[rank - 2] = 16;
     return ret;
   } else if (version == 3) {
+    if (shape.size() < 2)
+      return std::nullopt;
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();
-    if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
-      assert(false && "type not supported");
-      return {0, 0, 0};
-    }
+    if (shape[0] % 64 != 0 || shape[1] % 8 != 0)
+      return std::nullopt;
     SmallVector<unsigned> validN;
 
     // MMAv3 with larger instruction shape is preferred.
@@ -65,13 +67,14 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     unsigned maxN = std::max<unsigned>(shape[1] / nWarps, 8);
     for (auto n : validN) {
       if (shape[1] % n == 0 && n <= maxN) {
-        return {m, n, k};
+        return SmallVector<unsigned, 3>{m, n, k};
       }
     }
 
-    assert(false && "type not supported");
-    return {0, 0, 0};
+    return std::nullopt;
   } else if (version == 5) {
+    if (shape.size() < 2)
+      return std::nullopt;
     unsigned m = shape[0] >= 128 ? 128 : 64;
     // Right now default to distributing along N. TODO: For cases where we have
     // dot followed by reduction we need to be able to distribute along M.
@@ -79,11 +82,9 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     //      m = 64;
     unsigned n = shape[1] >= 256 ? 256 : shape[1];
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();
-    return {m, n, k};
-  } else {
-    assert(false && "version not supported");
-    return {0, 0};
+    return SmallVector<unsigned, 3>{m, n, k};
   }
+  return std::nullopt;
 }
 
 bool isLoadFromTensorPtr(triton::LoadOp op) {

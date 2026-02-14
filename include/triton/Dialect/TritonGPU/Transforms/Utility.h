@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
+#include <optional>
 
 namespace mlir {
 class DominanceInfo;
@@ -28,9 +29,9 @@ class SwizzledSharedEncodingAttr;
 // Version = 1: <m, n>
 // Version = 2: <1, m, n>
 // Version = 3: <m, n, k>
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                const ArrayRef<int64_t> &shape,
-                                                Type type, int numWarps);
+std::optional<SmallVector<unsigned, 3>>
+mmaVersionToInstrShape(int version, const ArrayRef<int64_t> &shape, Type type,
+                       int numWarps);
 
 // Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
