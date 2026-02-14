@@ -231,7 +231,12 @@ void queueGraphMetrics(
       if (nodeState->dataToEntry.count(data)) {
         metricNodeEntries[data].emplace_back(nodeState->dataToEntry.at(data));
       } else {
-        metricNodeEntries[data].emplace_back(launchEntry);
+        // Indicate that we'll call upsertFlexibleMetric instead of
+        // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
+        // metric can be attached to the graph launch entry when node entry is
+        // not found.
+        metricNodeEntries[data].emplace_back(
+            DataEntry(phase, Scope::DummyScopeId, launchEntry.metricSet.get()));
       }
     }
   }
