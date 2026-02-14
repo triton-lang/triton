@@ -503,7 +503,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           auto staticEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].push_back(
+          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
               std::ref(nodeState));
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
@@ -519,7 +519,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
       for (const auto &[data, entryId] : nodeState.dataToEntryId) {
-        graphState.dataToEntryIdToNodeStates[data][entryId].push_back(
+        graphState.dataToEntryIdToNodeStates[data][entryId].insert(
             std::ref(nodeState));
       }
       auto originalMetricNodeIt =
