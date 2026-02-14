@@ -190,7 +190,7 @@ uint32_t processActivity(
   return correlationId;
 }
 
-void materializeGraphNodeEntries(
+void buildGraphNodeEntries(
     const DataToEntryMap &dataToEntry, const GraphState &graphState,
     CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
   for (const auto &[data, launchEntry] : dataToEntry) {
@@ -212,7 +212,7 @@ void materializeGraphNodeEntries(
   }
 }
 
-void enqueuePendingGraphMetrics(
+void queueGraphMetrics(
     PendingGraphPool *pendingGraphPool, const CUpti_CallbackData *callbackData,
     const GraphState &graphState,
     CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
@@ -228,12 +228,6 @@ void enqueuePendingGraphMetrics(
       continue;
     nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
       metricNodeEntries[data].push_back(entry);
-      if (phase == Data::kNoCompletePhase) {
-        phase = entry.phase;
-      } else if (phase != entry.phase) {
-        throw std::runtime_error(
-            "[PROTON] Inconsistent phases in graph metric nodes");
-      }
     });
   }
 
@@ -670,7 +664,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      materializeGraphNodeEntries(dataToEntry, graphState, graphNodeIdToState);
+      buildGraphNodeEntries(dataToEntry, graphState, graphNodeIdToState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
@@ -682,8 +676,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
-      enqueuePendingGraphMetrics(profiler.pendingGraphPool.get(), callbackData,
-                                 graphState, graphNodeIdToState);
+      queueGraphMetrics(profiler.pendingGraphPool.get(), callbackData,
+                        graphState, graphNodeIdToState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
