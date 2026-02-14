@@ -60,7 +60,7 @@ struct GraphState {
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
   // data -> (static_entry_id -> graph-node metadata refs)
-  std::map<Data *, std::unordered_map<size_t, std::vector<NodeStateRef>>>
+  std::map<Data *, std::unordered_map<size_t, std::set<NodeStateRef>>>
       dataToEntryIdToNodeStates;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
