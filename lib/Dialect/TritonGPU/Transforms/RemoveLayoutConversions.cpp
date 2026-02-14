@@ -549,16 +549,13 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
 Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
   for (auto [i, operand, beforeArg] :
        llvm::enumerate(whileOp->getOperands(), whileOp.getBeforeArguments())) {
-    Value convertedOperand = operand;
-    if (layouts.count(beforeArg))
-      convertedOperand =
-          getValueAs(operand, *layouts[beforeArg].encodings.begin());
+    auto it = layouts.find(beforeArg);
+    if (it == layouts.end())
+      continue;
+    Attribute encoding = it->second.encodings[0];
+    Value convertedOperand = getValueAs(operand, encoding);
     whileOp->setOperand(i, convertedOperand);
-    auto beforeArgTy = dyn_cast<RankedTensorType>(beforeArg.getType());
-    auto convertedTy = dyn_cast<RankedTensorType>(convertedOperand.getType());
-    if (beforeArgTy && convertedTy &&
-        beforeArgTy.getEncoding() != convertedTy.getEncoding())
-      setEncodingInPlace(beforeArg, convertedTy.getEncoding());
+    setEncodingInPlace(beforeArg, encoding);
   }
 
   for (auto [result, afterArg] :
@@ -578,9 +575,6 @@ Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
     auto it = layouts.find(ifOp.getResult(i));
     if (it == layouts.end())
-      continue;
-    auto origType = dyn_cast<RankedTensorType>(ifOp.getResult(i).getType());
-    if (!origType)
       continue;
     Attribute encoding = *(it->second.encodings.begin());
     setEncodingInPlace(ifOp.getResult(i), encoding);
@@ -658,7 +652,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  if (canFoldIntoConversion(op, encoding)) {
+  if (canUseResultEncoding(op, encoding)) {
     setEncodingInPlace(op->getResult(0), encoding);
     return op;
   }
