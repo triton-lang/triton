@@ -203,7 +203,7 @@ protected:
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
         for (const auto &[data, entry] : dataToEntry) {
-          state.dataToEntry.emplace_back(data, entry);
+          state.addEntry(data, entry);
         }
         state.isMissingName = isMissingName;
       });
