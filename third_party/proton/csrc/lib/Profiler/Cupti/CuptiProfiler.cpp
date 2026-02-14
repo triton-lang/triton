@@ -69,7 +69,7 @@ uint32_t processActivityKernel(
                               // actually it refers to graphExecId
     // Non-graph kernels
     bool isMissingName = false;
-    DataToEntryMap dataToEntry;
+    CuptiProfiler::ExternIdState::DataToEntryList dataToEntry;
     externIdToState.withRead(externId,
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isMissingName = state.isMissingName;
@@ -205,7 +205,7 @@ void materializeGraphNodeEntries(
         auto &graphNodeState =
             graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
         graphNodeState.status = nodeStateRef.get().status;
-        graphNodeState.setEntry(data, DataEntry(targetEntryId, baseEntry.phase,
+        graphNodeState.addEntry(data, DataEntry(targetEntryId, baseEntry.phase,
                                                 baseEntry.metricSet.get()));
       }
     }
@@ -236,7 +236,13 @@ void enqueuePendingGraphMetrics(
       }
     });
   }
-
+  size_t numDataEntries = metricNodeEntries.begin()->second.size();
+  for (auto &[data, entries] : metricNodeEntries) {
+    if (entries.size() != numDataEntries) {
+      throw std::runtime_error("[PROTON] Inconsistent number of entries in "
+                               "graph metric nodes across data");
+    }
+  }
   const auto numMetricNodes = graphState.metricNodeIdToNumWords.size();
   const auto numMetricWords = graphState.numMetricWords;
   if (callbackData->context != nullptr)

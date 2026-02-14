@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace proton {
@@ -59,8 +60,9 @@ public:
                     std::unordered_map<uint64_t, size_t>>;
 
   struct ExternIdState {
+    using DataToEntryList = std::vector<std::pair<Data *, DataEntry>>;
     // ----non-graph launch fields----
-    DataToEntryMap dataToEntry;
+    DataToEntryList dataToEntry;
     // Sometimes the kernel name cannot be retrieved in application threads
     // for reasons like uninitialize CUDA context.
     bool isMissingName{true};
@@ -78,15 +80,8 @@ public:
       bool isMetricNode() const { return status.isMetricNode(); }
       bool isMissingName() const { return status.isMissingName(); }
 
-      void setEntry(Data *data, const DataEntry &entry) {
-        dataToEntry.insert_or_assign(data, entry);
-      }
-
-      const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
-          return nullptr;
-        return &it->second;
+      void addEntry(Data *data, const DataEntry &entry) {
+        dataToEntry.emplace_back(data, entry);
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
@@ -94,7 +89,7 @@ public:
           fn(data, entry);
       }
 
-      DataToEntryMap dataToEntry;
+      DataToEntryList dataToEntry;
     };
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
@@ -207,7 +202,9 @@ protected:
       corrIdToExternId.insert(correlationId, externId);
       externIdToState.upsert(externId, [&](ExternIdState &state) {
         state.numNodes = numNodes;
-        state.dataToEntry = dataToEntry;
+        for (const auto &[data, entry] : dataToEntry) {
+          state.addEntry(data, entry);
+        }
         state.isMissingName = isMissingName;
       });
     }
