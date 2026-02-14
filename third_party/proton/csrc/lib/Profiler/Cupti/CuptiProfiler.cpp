@@ -540,13 +540,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
     for (const auto &[data, entryId] :
          graphState.nodeIdToState[nodeId].dataToEntryId) {
-      auto &nodeStates = graphState.dataToEntryIdToNodeStates[data][entryId];
-      nodeStates.erase(
-          std::remove_if(nodeStates.begin(), nodeStates.end(),
-                         [nodeId](const GraphState::NodeStateRef &state) {
-                           return state.get().nodeId == nodeId;
-                         }),
-          nodeStates.end());
+      graphState.dataToEntryIdToNodeStates[data][entryId].erase(
+          std::ref(graphState.nodeIdToState[nodeId]));
     }
     graphState.nodeIdToState.erase(nodeId);
     graphState.metricNodeIdToNumWords.erase(nodeId);
