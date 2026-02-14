@@ -222,6 +222,24 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// Verify that we use mmav2 when mmav3's M-dimension requirements are not met.
+// CHECK: #[[MMA_FALLBACK:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mmav3_unsupported_m_falls_back_to_mmav2
+  // CHECK-NOT: ttng.warp_group_dot
+  // CHECK: tt.dot {{.*}} -> tensor<32x128xf32, #[[MMA_FALLBACK]]>
+  tt.func @mmav3_unsupported_m_falls_back_to_mmav2(
+    %a: tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %b: tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<32x128xf32, #blocked> {
+    %zero_f32 = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #blocked>
+    %result = tt.dot %a, %b, %zero_f32 : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x128xf32, #blocked>
+    tt.return %result : tensor<32x128xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
