@@ -22,9 +22,6 @@ def kernel2(BLOCK_SIZE: tl.constexpr):
 
 
 def test_op(capfd, device: str):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
-        return
-
     size = 98432
     x = torch.rand(size, device=device)
     output = torch.empty_like(x)

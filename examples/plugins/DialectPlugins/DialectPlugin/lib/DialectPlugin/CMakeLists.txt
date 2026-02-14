@@ -13,18 +13,11 @@ add_mlir_dialect_library(MLIRDialectPlugin
         ${PROJECT_SOURCE_DIR}/plugins/include/
 
         DEPENDS
-        TritonIR
-        TritonTableGen
-        TritonCanonicalizeIncGen
-        TritonNVIDIAGPUConversionPassIncGen
+        triton
         MLIRDialectPluginPassesIncGen
 
         LINK_LIBS PUBLIC
-        MLIRPass
-        LLVMSupport
-        MLIRSupport
-        TritonNVIDIAGPUToLLVM
-        "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
+        triton
         )
 
 target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=hidden)

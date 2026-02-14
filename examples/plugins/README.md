@@ -17,7 +17,7 @@ long as the libtriton.so is linked to the plugin and the Triton include passes a
 
 ## Example 1: Developing a custom pass and running triton-opt to inspect the modified IR
 ``` bash
-export LLVM_BUILD_SHARED_LIBS=1;  make dev-install-llvm
+make dev-install-llvm
 TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so triton-opt -tritongpu-plugin test/Plugins/test-plugin.mlir
 ```
 ``` MLIR

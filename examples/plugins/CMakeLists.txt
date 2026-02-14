@@ -19,11 +19,6 @@ add_subdirectory(DialectPlugins)
 
 foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_library(${plugin} SHARED ${${plugin}_SOURCES})
-    add_dependencies(${plugin}
-      TritonTableGen
-      TritonCanonicalizeIncGen
-      TritonPluginsIncGen
-    )
     target_link_libraries(${plugin} triton)
 
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
