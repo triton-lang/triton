@@ -1002,6 +1002,7 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   uint64_t _stream;
   uint64_t _function;
   int launch_cooperative_grid;
+  PyObject *global_scratch_obj = NULL;
   PyObject *profile_scratch_obj = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
@@ -1011,12 +1012,12 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
-  if (!PyArg_ParseTuple(args, "piiiKKO(iii)OOOiOy*O", &launch_cooperative_grid,
+  if (!PyArg_ParseTuple(args, "piiiKKOO(iii)OOOiOy*O", &launch_cooperative_grid,
                         &gridX, &gridY, &gridZ, &_stream, &_function,
-                        &profile_scratch_obj, &num_warps, &num_ctas,
-                        &shared_memory, &launch_metadata, &launch_enter_hook,
-                        &launch_exit_hook, &warp_size, &arg_annotations,
-                        &signature, &kernel_args)) {
+                        &global_scratch_obj, &profile_scratch_obj, &num_warps,
+                        &num_ctas, &shared_memory, &launch_metadata,
+                        &launch_enter_hook, &launch_exit_hook, &warp_size,
+                        &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
 
@@ -1058,9 +1059,9 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
       goto cleanup;
     }
   }
-  // Add global scratch object (nullptr).
+  // Add global scratch object.
   params[params_idx] = alloca(sizeof(void *));
-  if (!extractPointer(params[params_idx++], Py_None)) {
+  if (!extractPointer(params[params_idx++], global_scratch_obj)) {
     goto cleanup;
   }
   // Add profile scratch object.
