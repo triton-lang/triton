@@ -213,8 +213,8 @@ void buildGraphNodeEntries(
 }
 
 void queueGraphMetrics(
-    const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool, const CUpti_CallbackData *callbackData,
-    const GraphState &graphState,
+    const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool,
+    const CUpti_CallbackData *callbackData, const GraphState &graphState,
     CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
@@ -686,8 +686,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
-      queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(), callbackData,
-                        graphState, graphNodeIdToState);
+      queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
+                        callbackData, graphState, graphNodeIdToState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
