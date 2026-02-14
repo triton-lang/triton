@@ -213,7 +213,7 @@ void buildGraphNodeEntries(
 }
 
 void queueGraphMetrics(
-    PendingGraphPool *pendingGraphPool, const CUpti_CallbackData *callbackData,
+    const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool, const CUpti_CallbackData *callbackData,
     const GraphState &graphState,
     CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
@@ -221,14 +221,19 @@ void queueGraphMetrics(
   }
   std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
   size_t phase = Data::kNoCompletePhase;
-  for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
-    auto nodeId = metricNode.first;
-    auto *nodeState = graphNodeIdToState.find(nodeId);
-    if (!nodeState) // The node has been skipped during graph capture
-      continue;
-    nodeState->forEachEntry([&](Data *data, const DataEntry &entry) {
-      metricNodeEntries[data].push_back(entry);
-    });
+  for (const auto [data, launchEntry] : dataToEntry) {
+    phase = launchEntry.phase;
+    for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
+      auto nodeId = metricNode.first;
+      auto *nodeState = graphNodeIdToState.find(nodeId);
+      if (!nodeState) // The node has been skipped during graph capture
+        continue;
+      if (nodeState->dataToEntry.count(data)) {
+        metricNodeEntries[data].emplace_back(nodeState->dataToEntry.at(data));
+      } else {
+        metricNodeEntries[data].emplace_back(launchEntry);
+      }
+    }
   }
 
   const auto numMetricNodes = graphState.metricNodeIdToNumWords.size();
@@ -676,7 +681,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
-      queueGraphMetrics(profiler.pendingGraphPool.get(), callbackData,
+      queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(), callbackData,
                         graphState, graphNodeIdToState);
 
       if (timingEnabled) {
