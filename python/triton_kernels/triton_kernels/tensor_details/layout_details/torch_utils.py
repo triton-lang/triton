@@ -41,7 +41,13 @@ import torch
 #     return ret
 
 
-def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=None) -> torch.Tensor:
+def repack(
+    data: torch.Tensor,
+    old_dim: int,
+    new_dim: int,
+    is_fp4: bool,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
     old_dim %= data.ndim
     new_dim %= data.ndim
     if (not is_fp4) or (old_dim == new_dim):

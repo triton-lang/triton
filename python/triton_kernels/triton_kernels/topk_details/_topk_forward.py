@@ -1,6 +1,8 @@
 import triton
 import triton.language as tl
 
+from triton_kernels.tensor_details.sharding import range_for_rank_triton
+
 
 @triton.jit
 def get_topmask_and_fullmask(x):
@@ -89,15 +91,16 @@ def _topk_forward(X, stride_xm,  # inputs
                   PeerYvs, PeerYis, stride_ym,  # topk values/indices
                   USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm: tl.constexpr,
                   stride_rn: tl.constexpr,  # bitmatrix
-                  n_rows, n_expts_tot,  # shape
-                  dst_offs_m, APPLY_SOFTMAX: tl.constexpr,  # constant
+                  size, n_expts_tot,  # shape
+                  rank, APPLY_SOFTMAX: tl.constexpr,  # constant
+                  SHARDING_TYPE: tl.constexpr, REPLICATION_FACTOR: tl.constexpr, WORLD_SIZE: tl.constexpr,
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
     N_PEERS: tl.constexpr = len(PeerYvs)
 
     pid = tl.program_id(0)
-    if isinstance(n_rows, tl.tensor) and n_rows.dtype.is_ptr():
-        n_rows = tl.load(n_rows)
+    start_row, end_row = range_for_rank_triton(rank, size, SHARDING_TYPE, REPLICATION_FACTOR, WORLD_SIZE)
+    n_rows = end_row - start_row
 
     if pid * BLOCK_M >= n_rows:
         # early exit:
@@ -113,7 +116,7 @@ def _topk_forward(X, stride_xm,  # inputs
     mask_m = offs_m[:, None] < n_rows
     if USE_PROVIDED_INDX:
         tl.static_assert(len(PeerYis) == 1)
-        Yi_ptrs = PeerYis[0] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
+        Yi_ptrs = PeerYis[0] + (start_row + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
         y_indices = tl.load(Yi_ptrs, mask=mask_m)
         Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
         y_values = tl.load(Xv_ptrs, mask=mask_m)
@@ -127,11 +130,11 @@ def _topk_forward(X, stride_xm,  # inputs
 
     # write back
     for rank in tl.static_range(N_PEERS):
-        Yv_ptrs = PeerYvs[rank] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
+        Yv_ptrs = PeerYvs[rank] + (start_row + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
         tl.store(Yv_ptrs, y_values, mask=mask_m)
     if not USE_PROVIDED_INDX:
         for rank in tl.static_range(N_PEERS):
-            Yi_ptrs = PeerYis[rank] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
+            Yi_ptrs = PeerYis[rank] + (start_row + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
             tl.store(Yi_ptrs, y_indices, mask=mask_m)
 
     # pack into bitmatrix
@@ -143,5 +146,5 @@ def _topk_forward(X, stride_xm,  # inputs
         y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
         r = tl.reduce_or(y2, axis=1)
         for rank in tl.static_range(N_PEERS):
-            BitsPtrs = PeerBits[rank] + (dst_offs_m + offs_m[:, None]) * stride_rm + offs_r_n[None, :] * stride_rn
+            BitsPtrs = PeerBits[rank] + (start_row + offs_m[:, None]) * stride_rm + offs_r_n[None, :] * stride_rn
             tl.store(BitsPtrs, r, mask=mask_m)

@@ -1,22 +1,35 @@
 from dataclasses import dataclass
+from typing import Optional
+
 import torch
 import triton
 import triton.language as tl
+from torch.autograd.function import FunctionCtx
+
 from triton_kernels.numerics_details.mxfp import quantize_mxfp8_fn
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from typing import Optional
+from triton_kernels.numerics import (
+    InFlexData,
+    OutFlexData,
+    MAX_FINITE_FLOAT8E4B8,
+    MAX_FINITE_FLOAT8E4NV,
+    MAX_FINITE_FLOAT8E5,
+)
 from .specialize import SpecializationModule, ClosureArg, FnSpecs
 
 
 @dataclass(frozen=True)
 class PostprocessFn:
     specs: FnSpecs = FnSpecs.default()
-    fn_args: tuple[object] = tuple()
+    fn_args: tuple[object, ...] = tuple()
 
 
 # Return strides in this order: (reduction dim, non-reduction dim #0, non-reduction dim #1).
-def _get_strides(t, dim, strides=None):
+def _get_strides(
+    t: torch.Tensor | None,
+    dim: int,
+    strides: tuple[int, int, int] | None = None,
+) -> tuple[int, int, int]:
     if t is None:
         return 0, 0, 0
 
@@ -28,7 +41,11 @@ def _get_strides(t, dim, strides=None):
     return strides[dim], strides[nonred[0]], strides[nonred[1]]
 
 
-def reduce_launch_metadata(grid, kernel, args):
+def reduce_launch_metadata(
+    grid: tuple[int, ...],
+    kernel: object,
+    args: dict[str, object],
+) -> dict[str, int | str]:
     from .proton_opts import launch_metadata_allow_sync
     ret = dict()
     X, Y, Mask, dim = args["X"], args["Y"], args["Mask"], args["DIM"]
@@ -408,7 +425,7 @@ def reduce_backward(
     scale_strides: Optional[tuple[int, int, int]],
     dx: torch.Tensor,
     unpadded_batch_size: Optional[torch.Tensor] = None,
-):
+) -> None:
     # Shapes/axes handling mirrors `reduce(...)`
     if dim < 0:
         dim += 3
@@ -499,7 +516,8 @@ class _ReduceAutograd(torch.autograd.Function):
                 x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], x_global_scale: Optional[torch.Tensor],
                 y_dtype: Optional[torch.dtype], y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool,
                 y_has_mx: Optional[bool], y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
-                postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
+                postprocess_fn2: Optional[PostprocessFn],
+                unpadded_batch_size: Optional[torch.Tensor]) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
             x=x,
@@ -539,7 +557,11 @@ class _ReduceAutograd(torch.autograd.Function):
         return y, y_mx
 
     @staticmethod
-    def backward(ctx, grad_y: torch.Tensor, grad_y_mxscale: Optional[torch.Tensor] = None):
+    def backward(
+        ctx: FunctionCtx,
+        grad_y: torch.Tensor,
+        grad_y_mxscale: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor | None, None, None, None, None, None, None, None, None, None, None, None, None]:
         # We do not support grads through MX-quantized outputs (no torch compute in bwd)
         if ctx.y_has_mx:
             raise NotImplementedError("Backward with y_mxscale (MX-quantized outputs) is not supported.")
@@ -582,7 +604,7 @@ def reduce(
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
     unpadded_batch_size: Optional[torch.Tensor] = None,
-):
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, x_global_scale, y_dtype, y_flex,  #
                                  y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2,
                                  unpadded_batch_size)
@@ -591,7 +613,11 @@ def reduce(
 # ------------------------------------------------------------
 
 
-def compute_actual_scale(x, dtype, per_batch_scale=False):
+def compute_actual_scale(
+    x: torch.Tensor,
+    dtype: torch.dtype,
+    per_batch_scale: bool = False,
+) -> torch.Tensor:
     max_finite = {
         torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
         torch.float8_e4m3fn: MAX_FINITE_FLOAT8E4NV,
@@ -606,7 +632,7 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
                  x_mxscale: Optional[torch.Tensor] = None,  #
                  x_flex: Optional[InFlexData] = InFlexData(), y_flex: Optional[OutFlexData] = OutFlexData(),
                  y_flex_saturate_inf: bool = False, postprocess_fn1: Optional[callable] = None,
-                 unpadded_batch_size: Optional[torch.Tensor] = None):
+                 unpadded_batch_size: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     from triton_kernels.numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
     x_dtype = x.dtype
     # upcast input

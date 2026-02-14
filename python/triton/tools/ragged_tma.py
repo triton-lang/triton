@@ -5,7 +5,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 # fmt: off
 
 
-def create_ragged_descriptor(T, block_shape, ragged_dim=0):
+def create_ragged_descriptor(T, block_shape, ragged_dim=0) -> TensorDescriptor:
     """
     Given a 2- or 3-dimensional tensor T, this creates a 'ragged descriptor'
     which behaves like a concatenation (along the first axis) of subarrays
