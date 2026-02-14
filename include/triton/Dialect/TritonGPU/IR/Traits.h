@@ -44,6 +44,13 @@ class MemWaitOpTrait
   // Optional: Add methods or verification logic here
 };
 
+// Marks an op that initiates an asynchronous write to shared memory.
+// Completion is only guaranteed after an explicit wait.
+template <typename ConcreteType>
+class MemAsyncLocalWriteOpTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncLocalWriteOpTrait> {
+};
+
 } // namespace OpTrait
 } // namespace mlir
 
