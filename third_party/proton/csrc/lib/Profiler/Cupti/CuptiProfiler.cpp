@@ -200,11 +200,10 @@ void buildGraphNodeEntries(
       continue;
     auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
                                  {Context{GraphState::captureTag}});
-    for (const auto &[targetEntryId, nodeStateRefs] : nodeStateIt->second) {
-      for (const auto &nodeStateRef : nodeStateRefs) {
-        auto &graphNodeState =
-            graphNodeIdToState.emplace(nodeStateRef.get().nodeId);
-        graphNodeState.status = nodeStateRef.get().status;
+    for (const auto &[targetEntryId, nodeStates] : nodeStateIt->second) {
+      for (const auto *nodeState : nodeStates) {
+        auto &graphNodeState = graphNodeIdToState.emplace(nodeState->nodeId);
+        graphNodeState.status = nodeState->status;
         graphNodeState.setEntry(data, DataEntry(targetEntryId, baseEntry.phase,
                                                 baseEntry.metricSet.get()));
       }
@@ -504,7 +503,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
           graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
-              std::ref(nodeState));
+              &nodeState);
         }
       } // else no op in progress; creation triggered by graph clone/instantiate
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
@@ -520,7 +519,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       nodeState.nodeId = nodeId;
       for (const auto &[data, entryId] : nodeState.dataToEntryId) {
         graphState.dataToEntryIdToNodeStates[data][entryId].insert(
-            std::ref(nodeState));
+            &nodeState);
       }
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToNumWords.find(originalNodeId);
@@ -541,7 +540,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     for (const auto &[data, entryId] :
          graphState.nodeIdToState[nodeId].dataToEntryId) {
       graphState.dataToEntryIdToNodeStates[data][entryId].erase(
-          std::ref(graphState.nodeIdToState[nodeId]));
+          &graphState.nodeIdToState[nodeId]);
     }
     graphState.nodeIdToState.erase(nodeId);
     graphState.metricNodeIdToNumWords.erase(nodeId);
