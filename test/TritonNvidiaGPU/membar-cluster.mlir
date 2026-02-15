@@ -26,6 +26,57 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#slice1 = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // If there is a cross-CTA read dependency at kernel exit, we must end with a cluster barrier.
+  // CHECK-LABEL: @end_cluster_barrier_after_cross_reduce
+  // CHECK: "tt.reduce"{{.*}}axis = 1
+  // CHECK: ttng.cluster_arrive {relaxed = false}
+  // CHECK-NEXT: ttng.cluster_wait
+  // CHECK-NEXT: tt.return
+  tt.func @end_cluster_barrier_after_cross_reduce(%arg0: tensor<256x128xf16, #blocked>) -> tensor<256xf16, #slice1> {
+    %red = "tt.reduce"(%arg0) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 1 : i32} : (tensor<256x128xf16, #blocked>) -> tensor<256xf16, #slice1>
+    tt.return %red : tensor<256xf16, #slice1>
+  }
+}
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CTASplitM = 2, twoCTAs = true>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Negative test: in 2CTA kernels with non-zero tensor memory size, TMEM
+  // teardown sync at kernel exit means we should not add an extra cluster barrier.
+  // CHECK-LABEL: @no_end_cluster_barrier_for_mma_with_tmem_teardown
+  // CHECK: ttng.tmem_alloc
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: ttng.cluster_arrive {relaxed = false}
+  // CHECK-NOT: ttng.cluster_wait
+  // CHECK: tt.return
+  tt.func @no_end_cluster_barrier_for_mma_with_tmem_teardown() {
+    %true = arith.constant true
+    %a = ttg.local_alloc : () -> !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true {two_ctas} :
+       !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
+       !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>,
+       !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 #slice0 = #ttg.slice<{dim = 0, parent = #blocked}>
 #slice1 = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
@@ -388,16 +439,20 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // Wait included to model the end of the async lifetime. No extra cluster
-  // barriers should appear after the wait when reusing the same alloc.
+  // NB. Testing only. Note that in this program async_tma_copy_global
+  //     and local_store are racing!
+  // Even though we have a wait_barrier, we should still emit a cluster
+  // barrier at the end of the kernel, as a in that wait just one CTA is waiting
+  // for both the CTAs. It could be that CTA1 exits the kernel before CTA0,
+  // otherwise!
   // CHECK-LABEL: @no_cluster_when_same_allocation
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_arrive {relaxed = true}
   // CHECK-NEXT: ttng.cluster_wait
   // CHECK: ttng.wait_barrier
-  // CHECK-NOT: ttng.cluster_arrive
-  // CHECK-NOT: ttng.cluster_wait
+  // CHECK: ttng.cluster_arrive {relaxed = false}
+  // CHECK-NEXT: ttng.cluster_wait
   // CHECK: tt.return
   tt.func @no_cluster_when_same_allocation(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma>>) -> tensor<64x128xf16, #blocked> {
     %c0 = arith.constant 0 : i32

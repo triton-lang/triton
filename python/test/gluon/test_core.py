@@ -2181,22 +2181,30 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
 
 @pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()),
                     reason="Correctness tests for special cases on AMD architectures")
-@pytest.mark.parametrize("reg_bases", [
-    [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]],
-    [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]],
-    [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]],
+@pytest.mark.parametrize("src_reg_bases, dst_reg_bases", [
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 0], [0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 0], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 1], [0, 0], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 0], [0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]
+                                                                ]),
+    ([[0, 1], [0, 2], [0, 4], [0, 0], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 0], [0, 4], [1, 0], [4, 0], [2, 0]
+                                                                ]),
 ])
-def test_in_thread_convert_layout_8bit(reg_bases):
+def test_in_thread_convert_layout_8bit(src_reg_bases, dst_reg_bases):
     torch.manual_seed(0)
     dtype = torch.int8
-    first_layout = ttgl.BlockedLayout([8, 8], [1, THREADS_PER_WARP], warps_per_cta=[1, 1], order=[1, 0])
-    M = first_layout.size_per_thread[0] * first_layout.threads_per_warp[0] * first_layout.warps_per_cta[0]
-    N = first_layout.size_per_thread[1] * first_layout.threads_per_warp[1] * first_layout.warps_per_cta[1]
+    M = 8
+    N = 8 * THREADS_PER_WARP
 
     numLaneBases = int(math.log2(THREADS_PER_WARP))
     lane_bases = [[0, 8 * (2**baseNo)] for baseNo in range(numLaneBases)]
     warp_bases = []
-    second_layout = ttgl.DistributedLinearLayout(reg_bases=reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
+    first_layout = ttgl.DistributedLinearLayout(reg_bases=src_reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
+                                                block_bases=[], shape=[M, N])
+
+    second_layout = ttgl.DistributedLinearLayout(reg_bases=dst_reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
                                                  block_bases=[], shape=[M, N])
 
     shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0, 1])

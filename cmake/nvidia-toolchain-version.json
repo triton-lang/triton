@@ -5,5 +5,6 @@
   "nvdisasm": "13.1.80",
   "cudacrt": "13.1.80",
   "cudart": "13.1.80",
-  "cupti": "12.8.90"
+  "cupti": "12.8.90",
+  "cupti-blackwell": "13.1.115"
 }

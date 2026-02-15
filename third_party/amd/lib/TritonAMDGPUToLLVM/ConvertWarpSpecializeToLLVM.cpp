@@ -45,7 +45,7 @@ public:
       : module(module), targetInfo(targetInfo) {}
 
   bool isBarrierOp(Operation *op) const override {
-    return isa<ROCDL::BarrierOp>(op);
+    return isa<ROCDL::BarrierOp, ROCDL::SBarrierOp>(op);
   }
 
   Type getBarrierHandleType(MLIRContext *ctx) const override {
