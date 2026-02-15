@@ -55,10 +55,6 @@ struct GraphState {
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
-
-    bool operator<(const NodeState &other) const {
-      return nodeId < other.nodeId;
-    }
   };
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
